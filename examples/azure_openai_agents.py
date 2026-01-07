@@ -10,7 +10,8 @@ from agents import set_default_openai_client, set_default_openai_api
 import os
 
 # Initialize neatlogs
-init(api_key="test-key", enable_otel=True, instrumentations=["openai-agents"])
+init(api_key=os.getenv("NEATLOGS_API_KEY"), instrumentations=[
+     "openai-agents"], tags=["openai-agents", "v3"])
 
 
 print("=" * 60)
@@ -53,7 +54,8 @@ try:
     # - Span 1: Agent thinking
     # - Span 2: Tool execution (get_weather)
     # - Span 3: Agent final response
-    result = Runner.run_sync(agent, "What is the weather like in San Francisco?")
+    result = Runner.run_sync(
+        agent, "What is the weather like in San Francisco?")
 
     print(f"\nResponse: {result.final_output}")
     print("\n✓ Success!")

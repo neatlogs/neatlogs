@@ -88,6 +88,7 @@ def instrument_all(instrumentations: Optional[List[str]] = None):
                     )
 
                     LangChainInstrumentor().instrument()
+                    
                     logger.info("Neatlogs: LangChain instrumentation enabled.")
                 except Exception as e:
                     logger.warning(

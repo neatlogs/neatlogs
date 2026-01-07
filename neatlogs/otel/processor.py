@@ -47,6 +47,21 @@ def serialize_span(span: ReadableSpan) -> dict:
             else:
                 resource_attrs[k] = str(v)
 
+    events = []
+    for event in span.events:
+        evt_attrs = {}
+        for k, v in (event._attributes or {}).items():
+            if isinstance(v, (str, int, float, bool, list, dict)) or v is None:
+                evt_attrs[k] = v
+            else:
+                evt_attrs[k] = str(v)
+
+        events.append({
+            "name": event.name,
+            "timestamp": event.timestamp,
+            "attributes": evt_attrs
+        })
+
     return {
         "name": span.name,
         "context": {
@@ -60,6 +75,7 @@ def serialize_span(span: ReadableSpan) -> dict:
         "resource": {
             "attributes": resource_attrs
         },
+        "events": events,
         "status": {
             "status_code": span.status.status_code.name
             if span.status else "UNSET"
@@ -113,6 +129,16 @@ class NeatlogsSpanProcessor(SpanProcessor):
                 return
 
             serialized = serialize_span(span)
+
+            # Add tags to the resource attributes of the span
+            with self.tracker._lock:
+                if self.tracker.tags:
+                    if "attributes" not in serialized.get("resource", {}):
+                        if "resource" not in serialized:
+                            serialized["resource"] = {}
+                        serialized["resource"]["attributes"] = {}
+                    serialized["resource"]["attributes"]["neatlogs.tags"] = self.tracker.tags
+
             external_trace_id = choose_external_trace_id(serialized)
 
             call_data = LLMCallData(

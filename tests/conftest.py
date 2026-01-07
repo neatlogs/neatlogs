@@ -33,6 +33,26 @@ def mock_openai_response():
 
 
 @pytest.fixture
+def mock_gemini_response():
+    """Create a mock Gemini response."""
+    response = Mock()
+    # Gemini response format
+    candidate = Mock()
+    candidate.content.parts = [Mock(text="I am Gemini, helpful AI.")]
+    candidate.content.role = "model"
+
+    response.text = "I am Gemini, helpful AI."
+    response.candidates = [candidate]
+
+    # Mock usage metadata usually comes in usage_metadata
+    response.usage_metadata.prompt_token_count = 15
+    response.usage_metadata.candidates_token_count = 10
+    response.usage_metadata.total_token_count = 25
+
+    return response
+
+
+@pytest.fixture
 def in_memory_span_exporter():
     """Create an in-memory span exporter for testing."""
     return InMemorySpanExporter()

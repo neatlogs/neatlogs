@@ -57,7 +57,7 @@ langgraph = [
     "openinference-instrumentation-langchain>=0.1.0",
 ]
 crewai = [
-    "crewai[azure-ai-inference]==1.5.0",
+    "crewai[azure-ai-inference]>=1.5.0,<2.0.0",
     "litellm>=1.80.11",
     "openinference-instrumentation-crewai>=0.1.17",
 ]

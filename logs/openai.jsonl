@@ -1,0 +1,158 @@
+[{
+  "name": "ChatCompletion",
+  "context": {
+    "trace_id": "1de48f3003a436e5302a973a8a310024",
+    "span_id": "6555e3d1594352b6"
+  },
+  "parent_id": null,
+  "start_time": 1766152180047052900,
+  "end_time": 1766152181849835700,
+  "attributes": {
+    "llm.provider": "azure",
+    "llm.system": "openai",
+    "input.value": "{\"messages\": [{\"role\": \"user\", \"content\": \"hola\"}], \"model\": \"gpt-4o-mini\"}",
+    "input.mime_type": "application/json",
+    "output.value": "{\"id\":\"chatcmpl-CoV9I1d17Ox9yobatXHtae1nT4YCy\",\"choices\":[{\"finish_reason\":\"stop\",\"index\":0,\"logprobs\":null,\"message\":{\"content\":\"\u00a1Hola! \u00bfC\u00f3mo puedo ayudarte hoy?\",\"refusal\":null,\"role\":\"assistant\",\"annotations\":[]},\"content_filter_results\":{\"hate\":{\"filtered\":false,\"severity\":\"safe\"},\"protected_material_code\":{\"detected\":false,\"filtered\":false},\"protected_material_text\":{\"detected\":false,\"filtered\":false},\"self_harm\":{\"filtered\":false,\"severity\":\"safe\"},\"sexual\":{\"filtered\":false,\"severity\":\"safe\"},\"violence\":{\"filtered\":false,\"severity\":\"safe\"}}}],\"created\":1766152172,\"model\":\"gpt-4o-mini-2024-07-18\",\"object\":\"chat.completion\",\"system_fingerprint\":\"fp_f97eff32c5\",\"usage\":{\"completion_tokens\":10,\"prompt_tokens\":8,\"total_tokens\":18,\"completion_tokens_details\":{\"accepted_prediction_tokens\":0,\"audio_tokens\":0,\"reasoning_tokens\":0,\"rejected_prediction_tokens\":0},\"prompt_tokens_details\":{\"audio_tokens\":0,\"cached_tokens\":0}},\"prompt_filter_results\":[{\"prompt_index\":0,\"content_filter_results\":{\"hate\":{\"filtered\":false,\"severity\":\"safe\"},\"jailbreak\":{\"detected\":false,\"filtered\":false},\"self_harm\":{\"filtered\":false,\"severity\":\"safe\"},\"sexual\":{\"filtered\":false,\"severity\":\"safe\"},\"violence\":{\"filtered\":false,\"severity\":\"safe\"}}}]}",
+    "output.mime_type": "application/json",
+    "llm.invocation_parameters": "{\"model\": \"gpt-4o-mini\"}",
+    "llm.input_messages.0.message.role": "user",
+    "llm.input_messages.0.message.content": "hola",
+    "llm.model_name": "gpt-4o-mini-2024-07-18",
+    "llm.token_count.total": 18,
+    "llm.token_count.prompt": 8,
+    "llm.token_count.completion": 10,
+    "llm.token_count.prompt_details.cache_read": 0,
+    "llm.token_count.prompt_details.audio": 0,
+    "llm.token_count.completion_details.reasoning": 0,
+    "llm.token_count.completion_details.audio": 0,
+    "llm.output_messages.0.message.role": "assistant",
+    "llm.output_messages.0.message.content": "\u00a1Hola! \u00bfC\u00f3mo puedo ayudarte hoy?",
+    "openinference.span.kind": "LLM"
+  },
+  "resource": {
+    "attributes": {
+      "telemetry.sdk.language": "python",
+      "telemetry.sdk.name": "opentelemetry",
+      "telemetry.sdk.version": "1.39.0",
+      "service.name": "neatlogs",
+      "service.version": "1.1.7",
+      "neatlogs.session_id": "76346dec-596b-4ca3-860f-b4a0409d00a4",
+      "neatlogs.agent_id": "default-agent",
+      "neatlogs.thread_id": "a7c6e274-9e7d-436e-b954-16012a3c90a1",
+      "neatlogs.tags": [
+        "v3",
+        "azure-openai",
+        "demo"
+      ]
+    }
+  },
+  "events": [],
+  "status": {
+    "status_code": "OK"
+  }
+},{
+  "name": "ChatCompletion",
+  "context": {
+    "trace_id": "7a60d3e5b9d451d68f340f22b19cce3a",
+    "span_id": "ef041f13e98c17fb"
+  },
+  "parent_id": null,
+  "start_time": 1766152183320909400,
+  "end_time": 1766152185408640200,
+  "attributes": {
+    "llm.provider": "azure",
+    "llm.system": "openai",
+    "input.value": "{\"messages\": [{\"role\": \"user\", \"content\": \"great\"}], \"model\": \"gpt-4o-mini\"}",
+    "input.mime_type": "application/json",
+    "output.value": "{\"id\":\"chatcmpl-CoV9LBbp8kLqbL4C6cfKfMSeUmEsP\",\"choices\":[{\"finish_reason\":\"stop\",\"index\":0,\"logprobs\":null,\"message\":{\"content\":\"I'm glad you think so! How can I assist you today?\",\"refusal\":null,\"role\":\"assistant\",\"annotations\":[]},\"content_filter_results\":{\"hate\":{\"filtered\":false,\"severity\":\"safe\"},\"protected_material_code\":{\"detected\":false,\"filtered\":false},\"protected_material_text\":{\"detected\":false,\"filtered\":false},\"self_harm\":{\"filtered\":false,\"severity\":\"safe\"},\"sexual\":{\"filtered\":false,\"severity\":\"safe\"},\"violence\":{\"filtered\":false,\"severity\":\"safe\"}}}],\"created\":1766152175,\"model\":\"gpt-4o-mini-2024-07-18\",\"object\":\"chat.completion\",\"system_fingerprint\":\"fp_f97eff32c5\",\"usage\":{\"completion_tokens\":14,\"prompt_tokens\":8,\"total_tokens\":22,\"completion_tokens_details\":{\"accepted_prediction_tokens\":0,\"audio_tokens\":0,\"reasoning_tokens\":0,\"rejected_prediction_tokens\":0},\"prompt_tokens_details\":{\"audio_tokens\":0,\"cached_tokens\":0}},\"prompt_filter_results\":[{\"prompt_index\":0,\"content_filter_results\":{\"hate\":{\"filtered\":false,\"severity\":\"safe\"},\"jailbreak\":{\"detected\":false,\"filtered\":false},\"self_harm\":{\"filtered\":false,\"severity\":\"safe\"},\"sexual\":{\"filtered\":false,\"severity\":\"safe\"},\"violence\":{\"filtered\":false,\"severity\":\"safe\"}}}]}",
+    "output.mime_type": "application/json",
+    "llm.invocation_parameters": "{\"model\": \"gpt-4o-mini\"}",
+    "llm.input_messages.0.message.role": "user",
+    "llm.input_messages.0.message.content": "great",
+    "llm.model_name": "gpt-4o-mini-2024-07-18",
+    "llm.token_count.total": 22,
+    "llm.token_count.prompt": 8,
+    "llm.token_count.completion": 14,
+    "llm.token_count.prompt_details.cache_read": 0,
+    "llm.token_count.prompt_details.audio": 0,
+    "llm.token_count.completion_details.reasoning": 0,
+    "llm.token_count.completion_details.audio": 0,
+    "llm.output_messages.0.message.role": "assistant",
+    "llm.output_messages.0.message.content": "I'm glad you think so! How can I assist you today?",
+    "openinference.span.kind": "LLM"
+  },
+  "resource": {
+    "attributes": {
+      "telemetry.sdk.language": "python",
+      "telemetry.sdk.name": "opentelemetry",
+      "telemetry.sdk.version": "1.39.0",
+      "service.name": "neatlogs",
+      "service.version": "1.1.7",
+      "neatlogs.session_id": "76346dec-596b-4ca3-860f-b4a0409d00a4",
+      "neatlogs.agent_id": "default-agent",
+      "neatlogs.thread_id": "a7c6e274-9e7d-436e-b954-16012a3c90a1",
+      "neatlogs.tags": [
+        "v3",
+        "azure-openai",
+        "demo"
+      ]
+    }
+  },
+  "events": [],
+  "status": {
+    "status_code": "OK"
+  }
+},{
+  "name": "ChatCompletion",
+  "context": {
+    "trace_id": "d40cb3d2bc4d28871b25b630da89ac64",
+    "span_id": "47a6228ec183b038"
+  },
+  "parent_id": null,
+  "start_time": 1766152192289471600,
+  "end_time": 1766152194138713500,
+  "attributes": {
+    "llm.provider": "azure",
+    "llm.system": "openai",
+    "input.value": "{\"messages\": [{\"role\": \"user\", \"content\": \"what\"}], \"model\": \"gpt-4o-mini\"}",
+    "input.mime_type": "application/json",
+    "output.value": "{\"id\":\"chatcmpl-CoV9Uj6dvRbXj9xGAKw5pxqFOaDY8\",\"choices\":[{\"finish_reason\":\"stop\",\"index\":0,\"logprobs\":null,\"message\":{\"content\":\"It looks like you might be looking for information or clarification on something specific. Could you provide more details or context so I can assist you better?\",\"refusal\":null,\"role\":\"assistant\",\"annotations\":[]},\"content_filter_results\":{\"hate\":{\"filtered\":false,\"severity\":\"safe\"},\"protected_material_code\":{\"detected\":false,\"filtered\":false},\"protected_material_text\":{\"detected\":false,\"filtered\":false},\"self_harm\":{\"filtered\":false,\"severity\":\"safe\"},\"sexual\":{\"filtered\":false,\"severity\":\"safe\"},\"violence\":{\"filtered\":false,\"severity\":\"safe\"}}}],\"created\":1766152184,\"model\":\"gpt-4o-mini-2024-07-18\",\"object\":\"chat.completion\",\"system_fingerprint\":\"fp_f97eff32c5\",\"usage\":{\"completion_tokens\":30,\"prompt_tokens\":8,\"total_tokens\":38,\"completion_tokens_details\":{\"accepted_prediction_tokens\":0,\"audio_tokens\":0,\"reasoning_tokens\":0,\"rejected_prediction_tokens\":0},\"prompt_tokens_details\":{\"audio_tokens\":0,\"cached_tokens\":0}},\"prompt_filter_results\":[{\"prompt_index\":0,\"content_filter_results\":{\"hate\":{\"filtered\":false,\"severity\":\"safe\"},\"jailbreak\":{\"detected\":false,\"filtered\":false},\"self_harm\":{\"filtered\":false,\"severity\":\"safe\"},\"sexual\":{\"filtered\":false,\"severity\":\"safe\"},\"violence\":{\"filtered\":false,\"severity\":\"safe\"}}}]}",
+    "output.mime_type": "application/json",
+    "llm.invocation_parameters": "{\"model\": \"gpt-4o-mini\"}",
+    "llm.input_messages.0.message.role": "user",
+    "llm.input_messages.0.message.content": "what",
+    "llm.model_name": "gpt-4o-mini-2024-07-18",
+    "llm.token_count.total": 38,
+    "llm.token_count.prompt": 8,
+    "llm.token_count.completion": 30,
+    "llm.token_count.prompt_details.cache_read": 0,
+    "llm.token_count.prompt_details.audio": 0,
+    "llm.token_count.completion_details.reasoning": 0,
+    "llm.token_count.completion_details.audio": 0,
+    "llm.output_messages.0.message.role": "assistant",
+    "llm.output_messages.0.message.content": "It looks like you might be looking for information or clarification on something specific. Could you provide more details or context so I can assist you better?",
+    "openinference.span.kind": "LLM"
+  },
+  "resource": {
+    "attributes": {
+      "telemetry.sdk.language": "python",
+      "telemetry.sdk.name": "opentelemetry",
+      "telemetry.sdk.version": "1.39.0",
+      "service.name": "neatlogs",
+      "service.version": "1.1.7",
+      "neatlogs.session_id": "76346dec-596b-4ca3-860f-b4a0409d00a4",
+      "neatlogs.agent_id": "default-agent",
+      "neatlogs.thread_id": "a7c6e274-9e7d-436e-b954-16012a3c90a1",
+      "neatlogs.tags": [
+        "v3",
+        "azure-openai",
+        "demo"
+      ]
+    }
+  },
+  "events": [],
+  "status": {
+    "status_code": "OK"
+  }
+}
+]

@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 2
 requires-python = ">=3.10"
 resolution-markers = [
     "python_full_version >= '3.14'",
@@ -3770,7 +3770,7 @@ requires-dist = [
     { name = "anthropic", marker = "extra == 'anthropic'", specifier = ">=0.75.0" },
     { name = "boto3", marker = "extra == 'bedrock'", specifier = ">=1.42.11" },
     { name = "chromadb", marker = "extra == 'langchain'", specifier = ">=1.1.1" },
-    { name = "crewai", extras = ["azure-ai-inference"], marker = "extra == 'crewai'", specifier = "==1.5.0" },
+    { name = "crewai", extras = ["azure-ai-inference"], marker = "extra == 'crewai'", specifier = ">=1.5.0,<2.0.0" },
     { name = "dspy", marker = "extra == 'dspy'", specifier = ">=2.6.13" },
     { name = "google-adk", marker = "extra == 'google-adk'", specifier = ">=1.14.1" },
     { name = "google-genai", marker = "extra == 'google-genai'", specifier = ">=1.55.0" },

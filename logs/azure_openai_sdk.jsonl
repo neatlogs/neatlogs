@@ -1,0 +1,55 @@
+FO:dev_server:Trace: {
+  "name": "ChatCompletion",
+  "context": {
+    "trace_id": "0xaf19945ec601d430878d3ea348c8bd5c",
+    "span_id": "0x4054a95fd52c80fe",
+    "trace_state": "[]"
+  },
+  "kind": "SpanKind.INTERNAL",
+  "parent_id": null,
+  "start_time": "2025-12-12T07:07:52.692295Z",
+  "end_time": "2025-12-12T07:07:53.686097Z",
+  "status": {
+    "status_code": "OK"
+  },
+  "attributes": {
+    "llm.provider": "azure",
+    "llm.system": "openai",
+    "input.value": "{\"messages\": [{\"role\": \"system\", \"content\": \"You are a helpful assistant.\"}, {\"role\": \"user\", \"content\": \"Say hello in 5 words or less\"}], \"model\": \"gpt-3.5-turbo\", \"max_tokens\": 50, \"temperature\": 0.7}",
+    "input.mime_type": "application/json",
+    "output.value": "{\"id\":\"chatcmpl-ClrXilF8fwDxPzEJY9fbMx9ucSd6v\",\"choices\":[{\"finish_reason\":\"stop\",\"index\":0,\"logprobs\":null,\"message\":{\"content\":\"Hello! How can I help?\",\"refusal\":null,\"role\":\"assistant\",\"annotations\":[]},\"content_filter_results\":{\"hate\":{\"filtered\":false,\"severity\":\"safe\"},\"protected_material_code\":{\"filtered\":false,\"detected\":false},\"protected_material_text\":{\"filtered\":false,\"detected\":false},\"self_harm\":{\"filtered\":false,\"severity\":\"safe\"},\"sexual\":{\"filtered\":false,\"severity\":\"safe\"},\"violence\":{\"filtered\":false,\"severity\":\"safe\"}}}],\"created\":1765523270,\"model\":\"gpt-4o-mini-2024-07-18\",\"object\":\"chat.completion\",\"system_fingerprint\":\"fp_efad92c60b\",\"usage\":{\"completion_tokens\":8,\"prompt_tokens\":25,\"total_tokens\":33,\"completion_tokens_details\":{\"accepted_prediction_tokens\":0,\"audio_tokens\":0,\"reasoning_tokens\":0,\"rejected_prediction_tokens\":0},\"prompt_tokens_details\":{\"audio_tokens\":0,\"cached_tokens\":0}},\"prompt_filter_results\":[{\"prompt_index\":0,\"content_filter_results\":{\"hate\":{\"filtered\":false,\"severity\":\"safe\"},\"jailbreak\":{\"filtered\":false,\"detected\":false},\"self_harm\":{\"filtered\":false,\"severity\":\"safe\"},\"sexual\":{\"filtered\":false,\"severity\":\"safe\"},\"violence\":{\"filtered\":false,\"severity\":\"safe\"}}}]}",
+    "output.mime_type": "application/json",
+    "llm.invocation_parameters": "{\"model\": \"gpt-3.5-turbo\", \"max_tokens\": 50, \"temperature\": 0.7}",
+    "llm.input_messages.0.message.role": "system",
+    "llm.input_messages.0.message.content": "You are a helpful assistant.",
+    "llm.input_messages.1.message.role": "user",
+    "llm.input_messages.1.message.content": "Say hello in 5 words or less",
+    "llm.model_name": "gpt-4o-mini-2024-07-18",
+    "llm.token_count.total": 33,
+    "llm.token_count.prompt": 25,
+    "llm.token_count.completion": 8,
+    "llm.token_count.prompt_details.cache_read": 0,
+    "llm.token_count.prompt_details.audio": 0,
+    "llm.token_count.completion_details.reasoning": 0,
+    "llm.token_count.completion_details.audio": 0,
+    "llm.output_messages.0.message.role": "assistant",
+    "llm.output_messages.0.message.content": "Hello! How can I help?",
+    "openinference.span.kind": "LLM"
+  },
+  "events": [],
+  "links": [],
+  "resource": {
+    "attributes": {
+      "telemetry.sdk.language": "python",
+      "telemetry.sdk.name": "opentelemetry",
+      "telemetry.sdk.version": "1.39.0",
+      "service.name": "neatlogs",
+      "service.version": "1.1.7",
+      "neatlogs.session_id": "5b691c3b-c8ec-4285-93bf-c26d3ab9e39d",
+      "neatlogs.agent_id": "default-agent",
+      "neatlogs.thread_id": "f3387951-c2fd-4208-9213-610dad45aec6"
+    },
+    "schema_url": ""
+  }
+}
+INFO:     127.0.0.1:54534 - "POST /api/data/v2 HTTP/1.1" 200 OK

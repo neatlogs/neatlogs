@@ -42,5 +42,5 @@ Thumbs.db
 .venv
 docs
 neatlogs.jsonl
-logs/
-examples/example.jsonc
+# logs/
+# examples/example.jsonc

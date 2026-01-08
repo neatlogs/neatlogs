@@ -1,0 +1,220 @@
+INFO:dev_server:Trace: {
+  "name": "generation",
+  "context": {
+    "trace_id": "0x12c9e4fe698240dde93814180d05f282",
+    "span_id": "0xb91ab26a6501d481",
+    "trace_state": "[]"
+  },
+  "kind": "SpanKind.INTERNAL",
+  "parent_id": "0xd8cc2fa5235cc7ec",
+  "start_time": "2025-12-12T06:05:12.578546Z",
+  "end_time": "2025-12-12T06:05:14.553386Z",
+  "status": {
+    "status_code": "OK"
+  },
+  "attributes": {
+    "llm.system": "openai",
+    "llm.model_name": "gpt-4o-mini",
+    "llm.invocation_parameters": "{\"base_url\": \"https://hambe.openai.azure.com/openai/deployments/gpt-4o-mini/\"}",
+    "input.value": "[{\"content\": \"You are a helpful assistant that can check the weather.\", \"role\": \"system\"}, {\"role\": \"user\", \"content\": \"What is the weather like in San Francisco?\"}]",
+    "input.mime_type": "application/json",
+    "llm.input_messages.0.message.role": "system",
+    "llm.input_messages.0.message.content": "You are a helpful assistant that can check the weather.",
+    "llm.input_messages.1.message.role": "user",
+    "llm.input_messages.1.message.content": "What is the weather like in San Francisco?",
+    "output.value": "[{\"content\": null, \"refusal\": null, \"role\": \"assistant\", \"annotations\": [], \"audio\": null, \"function_call\": null, \"tool_calls\": [{\"id\": \"call_1dBYScpYdwBqzAbyY2jlgrhc\", \"function\": {\"arguments\": \"{\\\"city\\\":\\\"San Francisco\\\"}\", \"name\": \"get_weather\"}, \"type\": \"function\"}]}]",
+    "output.mime_type": "application/json",
+    "llm.output_messages.0.message.role": "assistant",
+    "llm.output_messages.0.message.tool_calls.0.tool_call.id": "call_1dBYScpYdwBqzAbyY2jlgrhc",
+    "llm.output_messages.0.message.tool_calls.0.tool_call.function.name": "get_weather",
+    "llm.output_messages.0.message.tool_calls.0.tool_call.function.arguments": "{\"city\":\"San Francisco\"}",
+    "llm.token_count.prompt": 73,
+    "llm.token_count.completion": 16,
+    "openinference.span.kind": "LLM"
+  },
+  "events": [],
+  "links": [],
+  "resource": {
+    "attributes": {
+      "telemetry.sdk.language": "python",
+      "telemetry.sdk.name": "opentelemetry",
+      "telemetry.sdk.version": "1.39.0",
+      "service.name": "neatlogs",
+      "service.version": "1.1.7",
+      "neatlogs.session_id": "3d36d54c-4d4c-4c6f-a829-3bc75397bab6",
+      "neatlogs.agent_id": "default-agent",
+      "neatlogs.thread_id": "dbe85afc-014b-425b-8924-e69f0ae3757a"
+    },
+    "schema_url": ""
+  }
+}
+INFO:     127.0.0.1:57405 - "POST /api/data/v2 HTTP/1.1" 200 OK
+Request Received: <starlette.requests.Request object at 0x000002056E985B20>
+INFO:dev_server:Trace: {
+  "name": "get_weather",
+  "context": {
+    "trace_id": "0x12c9e4fe698240dde93814180d05f282",
+    "span_id": "0xb9ab3dab430abc13",
+    "trace_state": "[]"
+  },
+  "kind": "SpanKind.INTERNAL",
+  "parent_id": "0xd8cc2fa5235cc7ec",
+  "start_time": "2025-12-12T06:05:14.553956Z",
+  "end_time": "2025-12-12T06:05:14.553956Z",
+  "status": {
+    "status_code": "OK"
+  },
+  "attributes": {
+    "llm.system": "openai",
+    "tool.name": "get_weather",
+    "input.value": "{\"city\":\"San Francisco\"}",
+    "input.mime_type": "application/json",
+    "output.value": "The weather in San Francisco is sunny and 75\u00b0F.",
+    "openinference.span.kind": "TOOL"
+  },
+  "events": [],
+  "links": [],
+  "resource": {
+    "attributes": {
+      "telemetry.sdk.language": "python",
+      "telemetry.sdk.name": "opentelemetry",
+      "telemetry.sdk.version": "1.39.0",
+      "service.name": "neatlogs",
+      "service.version": "1.1.7",
+      "neatlogs.session_id": "3d36d54c-4d4c-4c6f-a829-3bc75397bab6",
+      "neatlogs.agent_id": "default-agent",
+      "neatlogs.thread_id": "dbe85afc-014b-425b-8924-e69f0ae3757a"
+    },
+    "schema_url": ""
+  }
+}
+INFO:     127.0.0.1:57406 - "POST /api/data/v2 HTTP/1.1" 200 OK
+Request Received: <starlette.requests.Request object at 0x000002056E985CD0>
+INFO:dev_server:Trace: {
+  "name": "generation",
+  "context": {
+    "trace_id": "0x12c9e4fe698240dde93814180d05f282",
+    "span_id": "0x0ae21e6a4971cb9e",
+    "trace_state": "[]"
+  },
+  "kind": "SpanKind.INTERNAL",
+  "parent_id": "0xd8cc2fa5235cc7ec",
+  "start_time": "2025-12-12T06:05:14.555002Z",
+  "end_time": "2025-12-12T06:05:15.232598Z",
+  "status": {
+    "status_code": "OK"
+  },
+  "attributes": {
+    "llm.system": "openai",
+    "llm.model_name": "gpt-4o-mini",
+    "llm.invocation_parameters": "{\"base_url\": \"https://hambe.openai.azure.com/openai/deployments/gpt-4o-mini/\"}",
+    "input.value": "[{\"content\": \"You are a helpful assistant that can check the weather.\", \"role\": \"system\"}, {\"role\": \"user\", \"content\": \"What is the weather like in San Francisco?\"}, {\"role\": \"assistant\", \"tool_calls\": [{\"id\": \"call_1dBYScpYdwBqzAbyY2jlgrhc\", \"type\": \"function\", \"function\": {\"name\": \"get_weather\", \"arguments\": \"{\\\"city\\\":\\\"San Francisco\\\"}\"}}]}, {\"role\": \"tool\", \"tool_call_id\": \"call_1dBYScpYdwBqzAbyY2jlgrhc\", \"content\": \"The weather in San Francisco is sunny and 75\u00b0F.\"}]",
+    "input.mime_type": "application/json",
+    "llm.input_messages.0.message.role": "system",
+    "llm.input_messages.0.message.content": "You are a helpful assistant that can check the weather.",
+    "llm.input_messages.1.message.role": "user",
+    "llm.input_messages.1.message.content": "What is the weather like in San Francisco?",
+    "llm.input_messages.2.message.role": "assistant",
+    "llm.input_messages.2.message.tool_calls.0.tool_call.id": "call_1dBYScpYdwBqzAbyY2jlgrhc",
+    "llm.input_messages.2.message.tool_calls.0.tool_call.function.name": "get_weather",
+    "llm.input_messages.2.message.tool_calls.0.tool_call.function.arguments": "{\"city\":\"San Francisco\"}",
+    "llm.input_messages.3.message.role": "tool",
+    "llm.input_messages.3.message.content": "The weather in San Francisco is sunny and 75\u00b0F.",
+    "llm.input_messages.3.message.tool_call_id": "call_1dBYScpYdwBqzAbyY2jlgrhc",
+    "output.value": "[{\"content\": \"The weather in San Francisco is sunny with a temperature of 75\u00b0F.\", \"refusal\": null, \"role\": \"assistant\", \"annotations\": [], \"audio\": null, \"function_call\": null, \"tool_calls\": null}]",
+    "output.mime_type": "application/json",
+    "llm.output_messages.0.message.role": "assistant",
+    "llm.output_messages.0.message.content": "The weather in San Francisco is sunny with a temperature of 75\u00b0F.",
+    "llm.token_count.prompt": 108,
+    "llm.token_count.completion": 17,
+    "openinference.span.kind": "LLM"
+  },
+  "events": [],
+  "links": [],
+  "resource": {
+    "attributes": {
+      "telemetry.sdk.language": "python",
+      "telemetry.sdk.name": "opentelemetry",
+      "telemetry.sdk.version": "1.39.0",
+      "service.name": "neatlogs",
+      "service.version": "1.1.7",
+      "neatlogs.session_id": "3d36d54c-4d4c-4c6f-a829-3bc75397bab6",
+      "neatlogs.agent_id": "default-agent",
+      "neatlogs.thread_id": "dbe85afc-014b-425b-8924-e69f0ae3757a"
+    },
+    "schema_url": ""
+  }
+}
+INFO:     127.0.0.1:57411 - "POST /api/data/v2 HTTP/1.1" 200 OK
+Request Received: <starlette.requests.Request object at 0x000002056E985CD0>
+INFO:dev_server:Trace: {
+  "name": "WeatherAssistant",
+  "context": {
+    "trace_id": "0x12c9e4fe698240dde93814180d05f282",
+    "span_id": "0xd8cc2fa5235cc7ec",
+    "trace_state": "[]"
+  },
+  "kind": "SpanKind.INTERNAL",
+  "parent_id": "0x09c0801074db6468",
+  "start_time": "2025-12-12T06:05:12.578546Z",
+  "end_time": "2025-12-12T06:05:15.233604Z",
+  "status": {
+    "status_code": "OK"
+  },
+  "attributes": {
+    "llm.system": "openai",
+    "graph.node.id": "WeatherAssistant",
+    "openinference.span.kind": "AGENT"
+  },
+  "events": [],
+  "links": [],
+  "resource": {
+    "attributes": {
+      "telemetry.sdk.language": "python",
+      "telemetry.sdk.name": "opentelemetry",
+      "telemetry.sdk.version": "1.39.0",
+      "service.name": "neatlogs",
+      "service.version": "1.1.7",
+      "neatlogs.session_id": "3d36d54c-4d4c-4c6f-a829-3bc75397bab6",
+      "neatlogs.agent_id": "default-agent",
+      "neatlogs.thread_id": "dbe85afc-014b-425b-8924-e69f0ae3757a"
+    },
+    "schema_url": ""
+  }
+}
+INFO:     127.0.0.1:57412 - "POST /api/data/v2 HTTP/1.1" 200 OK
+Request Received: <starlette.requests.Request object at 0x000002056E985CD0>
+INFO:dev_server:Trace: {
+  "name": "Agent workflow",
+  "context": {
+    "trace_id": "0x12c9e4fe698240dde93814180d05f282",
+    "span_id": "0x09c0801074db6468",
+    "trace_state": "[]"
+  },
+  "kind": "SpanKind.INTERNAL",
+  "parent_id": null,
+  "start_time": "2025-12-12T06:05:12.578546Z",
+  "end_time": "2025-12-12T06:05:15.234910Z",
+  "status": {
+    "status_code": "OK"
+  },
+  "attributes": {
+    "openinference.span.kind": "AGENT"
+  },
+  "events": [],
+  "links": [],
+  "resource": {
+    "attributes": {
+      "telemetry.sdk.language": "python",
+      "telemetry.sdk.name": "opentelemetry",
+      "telemetry.sdk.version": "1.39.0",
+      "service.name": "neatlogs",
+      "service.version": "1.1.7",
+      "neatlogs.session_id": "3d36d54c-4d4c-4c6f-a829-3bc75397bab6",
+      "neatlogs.agent_id": "default-agent",
+      "neatlogs.thread_id": "dbe85afc-014b-425b-8924-e69f0ae3757a"
+    },
+    "schema_url": ""
+  }
+}
+INFO:     127.0.0.1:57410 - "POST /api/data/v2 HTTP/1.1" 200 OK

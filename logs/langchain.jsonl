@@ -1,0 +1,216 @@
+{
+  "trace_id": "355c9e33204afe17355cf2a5ab13736a",
+  "session_id": "8b3f2887-8d25-42c1-aeab-9d7c813b9e8e",
+  "thread_id": "d1a2b291-5c3b-42dd-98e3-ede78db71887",
+  "total_spans": 6,
+  "spans": [
+    {
+      "name": "ChatPromptTemplate",
+      "span_id": "4602db0d87a84bdb",
+      "parent_id": "474585952a1c98e5",
+      "start_time": 1765802543962880000,
+      "end_time": 1765802543963883008,
+      "node_type": "prompt_template",
+      "status": "OK",
+      "attributes": {
+        "input.value": "MacBook Pro",
+        "output.value": {
+          "messages": [
+            {
+              "content": "You are an expert product reviewer.",
+              "additional_kwargs": {},
+              "response_metadata": {},
+              "type": "system",
+              "name": null,
+              "id": null
+            },
+            {
+              "content": "List the main features of the product MacBook Pro.",
+              "additional_kwargs": {},
+              "response_metadata": {},
+              "type": "human",
+              "name": null,
+              "id": null
+            }
+          ]
+        },
+        "llm.prompt_template.template": "You are an expert product reviewer.",
+        "openinference.span.kind": "UNKNOWN"
+      }
+    },
+    {
+      "name": "AzureChatOpenAI",
+      "span_id": "b07b5c2c95980ca8",
+      "parent_id": "474585952a1c98e5",
+      "start_time": 1765802543986342912,
+      "end_time": 1765802576737792000,
+      "node_type": "llm_call",
+      "status": "OK",
+      "attributes": {
+        "llm.provider": "azure",
+        "llm.system": "openai",
+        "llm.model_name": "gpt-4o-mini-2024-07-18",
+        "token_usage": {
+          "prompt_tokens": 29,
+          "completion_tokens": 541,
+          "total_tokens": 570
+        },
+        "input_messages": [
+          {
+            "role": "system",
+            "content": "You are an expert product reviewer."
+          },
+          {
+            "role": "user",
+            "content": "List the main features of the product MacBook Pro."
+          }
+        ],
+        "output_messages": [
+          {
+            "role": "assistant",
+            "content": "The MacBook Pro is a high-performance laptop from Apple, popular among professionals and creatives. As of my last knowledge update in October 2023, here are the main features typically associated with the MacBook Pro:\n\n1. **Design**: \n   - Sleek aluminum chassis.\n   - Available in multiple sizes (13-inch, 14-inch, and 16-inch).\n   - Thin and lightweight for portability.\n\n2. **Display**: \n   - Retina display with high resolution and wide color (P3) support.\n   - True Tone technology for adaptive color temperature.\n   - Liquid Retina XDR (in higher-end models) offering extreme brightness and contrast.\n\n3. **Performance**: \n   - Powered by Apple\u2019s M-series chips (e.g., M1 Pro, M1 Max, and M2 chips in newer models).\n   - At least 8-core CPU and up to 10-core GPU configurations.\n   - Unified memory architecture providing fast access to memory resources.\n\n4. **Storage**: \n   - SSD options ranging from 256GB to 8TB.\n   - Fast read and write speeds.\n\n5. **Battery Life**: \n   - All-day battery life (up to 17-21 hours depending on the model and usage).\n   - Fast charging capabilities via USB-C.\n\n6. **Keyboard and Trackpad**: \n   - Magic Keyboard with a scissor mechanism for improved typing experience.\n   - Large Force Touch trackpad for precise control and multi-touch gestures.\n\n7. **Connectivity**: \n   - Multiple Thunderbolt 4 ports for high-speed data transfer and peripheral connections.\n   - MagSafe 3 charging port.\n   - HDMI port and an SDXC card slot in newer models.\n\n8. **Audio and Video**: \n   - High-fidelity six-speaker sound system with force-canceling woofers.\n   - Studio-quality microphones for clear audio capture.\n   - 1080p FaceTime HD camera.\n\n9. **Operating System**: \n   - macOS, with features optimized for performance and productivity.\n   - Compatibility with a wide range of professional software.\n\n10. **Security and Privacy**: \n    - Touch ID sensor for secure login and transactions.\n    - T2 security chip in older models, replaced by the security features of the M-series chips.\n\n11. **Software Integration**: \n    - Seamless integration with other Apple devices and services, such as iCloud, Handoff, and AirDrop.\n\nThese features may vary slightly by model and configuration, so it's always a good idea to check the specifications for the exact version of the MacBook Pro you're interested in."
+          }
+        ],
+        "metadata": {
+          "ls_provider": "azure",
+          "ls_model_name": "gpt-4o-mini",
+          "ls_model_type": "chat",
+          "ls_temperature": null
+        },
+        "openinference.span.kind": "LLM"
+      }
+    },
+    {
+      "name": "StrOutputParser",
+      "span_id": "c52945dc3228e39b",
+      "parent_id": "474585952a1c98e5",
+      "start_time": 1765802576743442176,
+      "end_time": 1765802576743442176,
+      "node_type": "output_parser",
+      "status": "OK",
+      "attributes": {
+        "output.value": "The MacBook Pro is a high-performance laptop from Apple, popular among professionals and creatives. As of my last knowledge update in October 2023, here are the main features typically associated with the MacBook Pro:\n\n1. **Design**: \n   - Sleek aluminum chassis.\n   - Available in multiple sizes (13-inch, 14-inch, and 16-inch).\n   - Thin and lightweight for portability.\n\n2. **Display**: \n   - Retina display with high resolution and wide color (P3) support.\n   - True Tone technology for adaptive color temperature.\n   - Liquid Retina XDR (in higher-end models) offering extreme brightness and contrast.\n\n3. **Performance**: \n   - Powered by Apple\u2019s M-series chips (e.g., M1 Pro, M1 Max, and M2 chips in newer models).\n   - At least 8-core CPU and up to 10-core GPU configurations.\n   - Unified memory architecture providing fast access to memory resources.\n\n4. **Storage**: \n   - SSD options ranging from 256GB to 8TB.\n   - Fast read and write speeds.\n\n5. **Battery Life**: \n   - All-day battery life (up to 17-21 hours depending on the model and usage).\n   - Fast charging capabilities via USB-C.\n\n6. **Keyboard and Trackpad**: \n   - Magic Keyboard with a scissor mechanism for improved typing experience.\n   - Large Force Touch trackpad for precise control and multi-touch gestures.\n\n7. **Connectivity**: \n   - Multiple Thunderbolt 4 ports for high-speed data transfer and peripheral connections.\n   - MagSafe 3 charging port.\n   - HDMI port and an SDXC card slot in newer models.\n\n8. **Audio and Video**: \n   - High-fidelity six-speaker sound system with force-canceling woofers.\n   - Studio-quality microphones for clear audio capture.\n   - 1080p FaceTime HD camera.\n\n9. **Operating System**: \n   - macOS, with features optimized for performance and productivity.\n   - Compatibility with a wide range of professional software.\n\n10. **Security and Privacy**: \n    - Touch ID sensor for secure login and transactions.\n    - T2 security chip in older models, replaced by the security features of the M-series chips.\n\n11. **Software Integration**: \n    - Seamless integration with other Apple devices and services, such as iCloud, Handoff, and AirDrop.\n\nThese features may vary slightly by model and configuration, so it's always a good idea to check the specifications for the exact version of the MacBook Pro you're interested in.",
+        "openinference.span.kind": "UNKNOWN"
+      }
+    },
+    {
+      "name": "RunnableLambda (pros)",
+      "span_id": "ce745cd769c9fd40",
+      "parent_id": "df0e1de0c374dc7e",
+      "start_time": 1765802576745950976,
+      "end_time": 1765802576746465024,
+      "node_type": "chain_node",
+      "status": "OK",
+      "attributes": {
+        "input.value": "The MacBook Pro is a high-performance laptop from Apple, popular among professionals and creatives. As of my last knowledge update in October 2023, here are the main features typically associated with the MacBook Pro:\n\n1. **Design**: \n   - Sleek aluminum chassis.\n   - Available in multiple sizes (13-inch, 14-inch, and 16-inch).\n   - Thin and lightweight for portability.\n\n2. **Display**: \n   - Retina display with high resolution and wide color (P3) support.\n   - True Tone technology for adaptive color temperature.\n   - Liquid Retina XDR (in higher-end models) offering extreme brightness and contrast.\n\n3. **Performance**: \n   - Powered by Apple\u2019s M-series chips (e.g., M1 Pro, M1 Max, and M2 chips in newer models).\n   - At least 8-core CPU and up to 10-core GPU configurations.\n   - Unified memory architecture providing fast access to memory resources.\n\n4. **Storage**: \n   - SSD options ranging from 256GB to 8TB.\n   - Fast read and write speeds.\n\n5. **Battery Life**: \n   - All-day battery life (up to 17-21 hours depending on the model and usage).\n   - Fast charging capabilities via USB-C.\n\n6. **Keyboard and Trackpad**: \n   - Magic Keyboard with a scissor mechanism for improved typing experience.\n   - Large Force Touch trackpad for precise control and multi-touch gestures.\n\n7. **Connectivity**: \n   - Multiple Thunderbolt 4 ports for high-speed data transfer and peripheral connections.\n   - MagSafe 3 charging port.\n   - HDMI port and an SDXC card slot in newer models.\n\n8. **Audio and Video**: \n   - High-fidelity six-speaker sound system with force-canceling woofers.\n   - Studio-quality microphones for clear audio capture.\n   - 1080p FaceTime HD camera.\n\n9. **Operating System**: \n   - macOS, with features optimized for performance and productivity.\n   - Compatibility with a wide range of professional software.\n\n10. **Security and Privacy**: \n    - Touch ID sensor for secure login and transactions.\n    - T2 security chip in older models, replaced by the security features of the M-series chips.\n\n11. **Software Integration**: \n    - Seamless integration with other Apple devices and services, such as iCloud, Handoff, and AirDrop.\n\nThese features may vary slightly by model and configuration, so it's always a good idea to check the specifications for the exact version of the MacBook Pro you're interested in.",
+        "output.value": {
+          "messages": [
+            {
+              "content": "You are an expert product reviewer.",
+              "additional_kwargs": {},
+              "response_metadata": {},
+              "type": "system",
+              "name": null,
+              "id": null
+            },
+            {
+              "content": "Given these features: The MacBook Pro is a high-performance laptop from Apple, popular among professionals and creatives. As of my last knowledge update in October 2023, here are the main features typically associated with the MacBook Pro:\n\n1. **Design**: \n   - Sleek aluminum chassis.\n   - Available in multiple sizes (13-inch, 14-inch, and 16-inch).\n   - Thin and lightweight for portability.\n\n2. **Display**: \n   - Retina display with high resolution and wide color (P3) support.\n   - True Tone technology for adaptive color temperature.\n   - Liquid Retina XDR (in higher-end models) offering extreme brightness and contrast.\n\n3. **Performance**: \n   - Powered by Apple\u2019s M-series chips (e.g., M1 Pro, M1 Max, and M2 chips in newer models).\n   - At least 8-core CPU and up to 10-core GPU configurations.\n   - Unified memory architecture providing fast access to memory resources.\n\n4. **Storage**: \n   - SSD options ranging from 256GB to 8TB.\n   - Fast read and write speeds.\n\n5. **Battery Life**: \n   - All-day battery life (up to 17-21 hours depending on the model and usage).\n   - Fast charging capabilities via USB-C.\n\n6. **Keyboard and Trackpad**: \n   - Magic Keyboard with a scissor mechanism for improved typing experience.\n   - Large Force Touch trackpad for precise control and multi-touch gestures.\n\n7. **Connectivity**: \n   - Multiple Thunderbolt 4 ports for high-speed data transfer and peripheral connections.\n   - MagSafe 3 charging port.\n   - HDMI port and an SDXC card slot in newer models.\n\n8. **Audio and Video**: \n   - High-fidelity six-speaker sound system with force-canceling woofers.\n   - Studio-quality microphones for clear audio capture.\n   - 1080p FaceTime HD camera.\n\n9. **Operating System**: \n   - macOS, with features optimized for performance and productivity.\n   - Compatibility with a wide range of professional software.\n\n10. **Security and Privacy**: \n    - Touch ID sensor for secure login and transactions.\n    - T2 security chip in older models, replaced by the security features of the M-series chips.\n\n11. **Software Integration**: \n    - Seamless integration with other Apple devices and services, such as iCloud, Handoff, and AirDrop.\n\nThese features may vary slightly by model and configuration, so it's always a good idea to check the specifications for the exact version of the MacBook Pro you're interested in., list the pros of these features.",
+              "additional_kwargs": {},
+              "response_metadata": {},
+              "type": "human",
+              "name": null,
+              "id": null
+            }
+          ]
+        },
+        "openinference.span.kind": "CHAIN"
+      }
+    },
+    {
+      "name": "RunnableLambda (cons)",
+      "span_id": "44cc83ec0f5afd2f",
+      "parent_id": "734ccc77645575cd",
+      "start_time": 1765802576748529920,
+      "end_time": 1765802576749533952,
+      "node_type": "chain_node",
+      "status": "OK",
+      "attributes": {
+        "input.value": "The MacBook Pro is a high-performance laptop from Apple, popular among professionals and creatives. As of my last knowledge update in October 2023, here are the main features typically associated with the MacBook Pro:\n\n1. **Design**: \n   - Sleek aluminum chassis.\n   - Available in multiple sizes (13-inch, 14-inch, and 16-inch).\n   - Thin and lightweight for portability.\n\n2. **Display**: \n   - Retina display with high resolution and wide color (P3) support.\n   - True Tone technology for adaptive color temperature.\n   - Liquid Retina XDR (in higher-end models) offering extreme brightness and contrast.\n\n3. **Performance**: \n   - Powered by Apple\u2019s M-series chips (e.g., M1 Pro, M1 Max, and M2 chips in newer models).\n   - At least 8-core CPU and up to 10-core GPU configurations.\n   - Unified memory architecture providing fast access to memory resources.\n\n4. **Storage**: \n   - SSD options ranging from 256GB to 8TB.\n   - Fast read and write speeds.\n\n5. **Battery Life**: \n   - All-day battery life (up to 17-21 hours depending on the model and usage).\n   - Fast charging capabilities via USB-C.\n\n6. **Keyboard and Trackpad": " \
+   - Magic Keyboard with a scissor mechanism for improved typing experience.\n   - Large Force Touch trackpad for precise control and multi-touch gestures.\n\n7. **Connectivity**: \n   - Multiple Thunderbolt 4 ports for high-speed data transfer and peripheral connections.\n   - MagSafe 3 charging port.\n   - HDMI port and an SDXC card slot in newer models.\n\n8. **Audio and Video**: \n   - High-fidelity six-speaker sound system with force-canceling woofers.\n   - Studio-quality microphones for clear audio capture.\n   - 1080p FaceTime HD camera.\n\n9. **Operating System**: \n   - macOS, with features optimized for performance and productivity.\n   - Compatibility with a wide range of professional software.\n\n10. **Security and Privacy**: \n    - Touch ID sensor for secure login and transactions.\n    - T2 security chip in older models, replaced by the security features of the M-series chips.\n\n11. **Software Integration**: \n    - Seamless integration with other Apple devices and services, such as iCloud, Handoff, and AirDrop.\n\nThese features may vary slightly by model and configuration, so it's always a good idea to check the specifications for the exact version of the MacBook Pro you're interested in.",
+        "output.value": {
+          "messages": [
+            {
+              "content": "You are an expert product reviewer.",
+              "additional_kwargs": {},
+              "response_metadata": {},
+              "type": "system",
+              "name": null,
+              "id": null
+            },
+            {
+              "content": "Given these features: The MacBook Pro is a high-performance laptop from Apple, popular among professionals and creatives. As of my last knowledge update in October 2023, here are the main features typically associated with the MacBook Pro:\n\n1. **Design**: \n   - Sleek aluminum chassis.\n   - Available in multiple sizes (13-inch, 14-inch, and 16-inch).\n   - Thin and lightweight for portability.\n\n2. **Display**: \n   - Retina display with high resolution and wide color (P3) support.\n   - True Tone technology for adaptive color temperature.\n   - Liquid Retina XDR (in higher-end models) offering extreme brightness and contrast.\n\n3. **Performance**: \n   - Powered by Apple\u2019s M-series chips (e.g., M1 Pro, M1 Max, and M2 chips in newer models).\n   - At least 8-core CPU and up to 10-core GPU configurations.\n   - Unified memory architecture providing fast access to memory resources.\n\n4. **Storage": " \
+   - SSD options ranging from 256GB to 8TB.\n   - Fast read and write speeds.\n\n5. **Battery Life**: \n   - All-day battery life (up to 17-21 hours depending on the model and usage).\n   - Fast charging capabilities via USB-C.\n\n6. **Keyboard and Trackpad**: \n   - Magic Keyboard with a scissor mechanism for improved typing experience.\n   - Large Force Touch trackpad for precise control and multi-touch gestures.\n\n7. **Connectivity**: \n   - Multiple Thunderbolt 4 ports for high-speed data transfer and peripheral connections.\n   - MagSafe 3 charging port.\n   - HDMI port and an SDXC card slot in newer models.\n\n8. **Audio and Video**: \n   - High-fidelity six-speaker sound system with force-canceling woofers.\n   - Studio-quality microphones for clear audio capture.\n   - 1080p FaceTime HD camera.\n\n9. **Operating System**: \n   - macOS, with features optimized for performance and productivity.\n   - Compatibility with a wide range of professional software.\n\n10. **Security and Privacy**: \n    - Touch ID sensor for secure login and transactions.\n    - T2 security chip in older models, replaced by the security features of the M-series chips.\n\n11. **Software Integration**: \n    - Seamless integration with other Apple devices and services, such as iCloud, Handoff, and AirDrop.\n\nThese features may vary slightly by model and configuration, so it's always a good idea to check the specifications for the exact version of the MacBook Pro you're interested in., list the cons of these features.",
+              "additional_kwargs": {},
+              "response_metadata": {},
+              "type": "human",
+              "name": null,
+              "id": null
+            }
+          ]
+        },
+        "openinference.span.kind": "CHAIN"
+      }
+    },
+    {
+      "name": "ChatCompletion",
+      "span_id": "7574f277b33a93d2",
+      "parent_id": null,
+      "start_time": 1765802544021897200,
+      "end_time": 1765802576737792200,
+      "node_type": "llm_call",
+      "status": "OK",
+      "attributes": {
+        "llm.provider": "azure",
+        "llm.system": "openai",
+        "llm.model_name": "gpt-4o-mini-2024-07-18",
+        "token_usage": {
+          "prompt_tokens": 29,
+          "completion_tokens": 541,
+          "total_tokens": 570
+        },
+        "input_messages": [
+          {
+            "role": "system",
+            "content": "You are an expert product reviewer."
+          },
+          {
+            "role": "user",
+            "content": "List the main features of the product MacBook Pro."
+          }
+        ],
+        "output_messages": [
+          {
+            "role": "assistant",
+            "content": "The MacBook Pro is a high-performance laptop from Apple, popular among professionals and creatives. As of my last knowledge update in October 2023, here are the main features typically associated with the MacBook Pro:\n\n1. **Design**: \n   - Sleek aluminum chassis.\n   - Available in multiple sizes (13-inch, 14-inch, and 16-inch).\n   - Thin and lightweight for portability.\n\n2. **Display**: \n   - Retina display with high resolution and wide color (P3) support.\n   - True Tone technology for adaptive color temperature.\n   - Liquid Retina XDR (in higher-end models) offering extreme brightness and contrast.\n\n3. **Performance**: \n   - Powered by Apple\u2019s M-series chips (e.g., M1 Pro, M1 Max, and M2 chips in newer models).\n   - At least 8-core CPU and up to 10-core GPU configurations.\n   - Unified memory architecture providing fast access to memory resources.\n\n4. **Storage**: \n   - SSD options ranging from 256GB to 8TB.\n   - Fast read and write speeds.\n\n5. **Battery Life**: \n   - All-day battery life (up to 17-21 hours depending on the model and usage).\n   - Fast charging capabilities via USB-C.\n\n6. **Keyboard and Trackpad**: \n   - Magic Keyboard with a scissor mechanism for improved typing experience.\n   - Large Force Touch trackpad for precise control and multi-touch gestures.\n\n7. **Connectivity**: \n   - Multiple Thunderbolt 4 ports for high-speed data transfer and peripheral connections.\n   - MagSafe 3 charging port.\n   - HDMI port and an SDXC card slot in newer models.\n\n8. **Audio and Video**: \n   - High-fidelity six-speaker sound system with force-canceling woofers.\n   - Studio-quality microphones for clear audio capture.\n   - 1080p FaceTime HD camera.\n\n9. **Operating System**: \n   - macOS, with features optimized for performance and productivity.\n   - Compatibility with a wide range of professional software.\n\n10. **Security and Privacy**: \n    - Touch ID sensor for secure login and transactions.\n    - T2 security chip in older models, replaced by the security features of the M-series chips.\n\n11. **Software Integration**: \n    - Seamless integration with other Apple devices and services, such as iCloud, Handoff, and AirDrop.\n\nThese features may vary slightly by model and configuration, so it's always a good idea to check the specifications for the exact version of the MacBook Pro you're interested in."
+          }
+        ],
+        "openinference.span.kind": "LLM"
+      }
+    }
+  ],
+  "workflow_summary": {
+    "framework": "langchain",
+    "total_execution_time": "32.72 seconds",
+    "main_llm_calls": 2,
+    "total_tokens_used": 1140,
+    "workflow_steps": [
+      "ChatPromptTemplate: Created system and user messages",
+      "AzureChatOpenAI: Generated MacBook Pro features list",
+      "StrOutputParser: Extracted text from AI response",
+      "RunnableLambda (pros): Prepared pros analysis prompt",
+      "RunnableLambda (cons): Prepared cons analysis prompt"
+    ],
+    "parallel_branches": true,
+    "branch_names": ["pros", "cons"]
+  }
+}

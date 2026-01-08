@@ -1,0 +1,46 @@
+INFO:dev_server:Trace: {
+  "name": "GenerateContent",
+  "context": {
+    "trace_id": "0xd8033b127ab37334a3167920ed9536c3",
+    "span_id": "0x2c9cf1717ffc6254",
+    "trace_state": "[]"
+  },
+  "kind": "SpanKind.INTERNAL",
+  "parent_id": null,
+  "start_time": "2025-12-12T10:13:30.323287Z",
+  "end_time": "2025-12-12T10:13:34.945929Z",
+  "status": {
+    "status_code": "OK"
+  },
+  "attributes": {
+    "output.value": "{\"sdk_http_response\":{\"headers\":{\"content-type\":\"application/json; charset=UTF-8\",\"vary\":\"Origin, X-Origin, Referer\",\"content-encoding\":\"gzip\",\"date\":\"Fri, 12 Dec 2025 10:13:31 GMT\",\"server\":\"scaffolding on HTTPServer2\",\"x-xss-protection\":\"0\",\"x-frame-options\":\"SAMEORIGIN\",\"x-content-type-options\":\"nosniff\",\"server-timing\":\"gfet4t7; dur=4525\",\"alt-svc\":\"h3=\\\":443\\\"; ma=2592000,h3-29=\\\":443\\\"; ma=2592000\",\"transfer-encoding\":\"chunked\"}},\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Hello!\"}],\"role\":\"model\"},\"finish_reason\":\"STOP\",\"index\":0}],\"model_version\":\"gemini-2.5-flash\",\"response_id\":\"y-o7aeK9D6C0juMPy-aGgAw\",\"usage_metadata\":{\"candidates_token_count\":2,\"prompt_token_count\":9,\"prompt_tokens_details\":[{\"modality\":\"TEXT\",\"token_count\":9}],\"thoughts_token_count\":67,\"total_token_count\":78},\"automatic_function_calling_history\":[]}",
+    "output.mime_type": "application/json",
+    "llm.provider": "google",
+    "input.value": "{\"model\": \"gemini-2.5-flash\", \"contents\": [{\"role\": \"user\", \"parts\": [{\"text\": \"Say hello in 5 words or less\"}]}]}",
+    "input.mime_type": "application/json",
+    "llm.model_name": "gemini-2.5-flash",
+    "llm.token_count.total": 78,
+    "llm.token_count.prompt": 9,
+    "llm.token_count.completion_details.reasoning": 67,
+    "llm.token_count.completion": 69,
+    "llm.output_messages.0.message.content": "Hello!",
+    "llm.output_messages.0.message.role": "model",
+    "openinference.span.kind": "LLM"
+  },
+  "events": [],
+  "links": [],
+  "resource": {
+    "attributes": {
+      "telemetry.sdk.language": "python",
+      "telemetry.sdk.name": "opentelemetry",
+      "telemetry.sdk.version": "1.39.0",
+      "service.name": "neatlogs",
+      "service.version": "1.1.7",
+      "neatlogs.session_id": "4a6b0486-82c0-4705-9de3-26652276d58c",
+      "neatlogs.agent_id": "default-agent",
+      "neatlogs.thread_id": "e67e876b-41c9-4aa0-9c18-2f574e5d9357"
+    },
+    "schema_url": ""
+  }
+}
+INFO:     127.0.0.1:59783 - "POST /api/data/v2 HTTP/1.1" 200 OK

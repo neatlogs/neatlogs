@@ -107,7 +107,6 @@ def demo_langchain_agent():
         llm = ChatOpenAI(
             model="gpt-4o-mini",
             temperature=0,
-            openai_api_key="",
             max_completion_tokens=200
         )
         
@@ -308,7 +307,6 @@ demo_langchain_agent()
 #         llm = ChatOpenAI(
 #             model="gpt-4o-mini",
 #             temperature=0,
-#             openai_api_key=""
 #         )
 #         qa_chain = RetrievalQA.from_chain_type(
 #             llm=llm,
@@ -391,7 +389,6 @@ demo_langchain_agent()
 #         llm = ChatOpenAI(
 #             model="gpt-4o-mini",
 #             temperature=0.7,
-#             openai_api_key=""
 #         )
         
 #         # This LLM call is AUTO-TRACED as a child of our custom span!

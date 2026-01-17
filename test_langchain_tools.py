@@ -176,7 +176,7 @@ webhook_tool = Tool(
 
 # LLM
 llm = ChatOpenAI(
-    api_key="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",
+    api_key="",
     model="gpt-4o-mini",
     temperature=0
 )

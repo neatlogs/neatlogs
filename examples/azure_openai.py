@@ -5,8 +5,13 @@ This example demonstrates how to use Neatlogs with OpenAI API calls.
 Traces will be written to a local file (neatlogs.jsonl).
 """
 
-from dotenv import load_dotenv
 import os
+import sys
+
+# Add parent directory to path to import local neatlogs
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+from dotenv import load_dotenv
 import neatlogs
 
 load_dotenv()

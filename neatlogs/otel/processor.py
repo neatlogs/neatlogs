@@ -13,6 +13,7 @@ from datetime import datetime
 from typing import Optional
 
 from opentelemetry.sdk.trace import SpanProcessor, ReadableSpan
+from opentelemetry.trace import SpanKind
 
 from ..core import LLMTracker, LLMCallData
 
@@ -114,21 +115,63 @@ class NeatlogsSpanProcessor(SpanProcessor):
         self.tracker = tracker
 
     def on_start(self, span, parent_context=None):
+        logging.debug(f"[SPAN PROCESSOR] on_start: {span.name if hasattr(span, 'name') else 'unknown'}")
         pass
 
     def on_end(self, span: ReadableSpan) -> None:
         if not span:
             return
+        logging.debug(f"[SPAN PROCESSOR] on_end: {span.name} kind={span.kind if hasattr(span, 'kind') else 'N/A'}")
 
         try:
             attributes = span.attributes or {}
-            span_kind = attributes.get("openinference.span.kind")
+            openinference_span_kind = attributes.get("openinference.span.kind")
+            otel_span_kind = span.kind  # Standard OTel SpanKind (CLIENT, SERVER, etc.)
 
-            # Ignore infra spans
-            if not span_kind:
+            # Accept spans that are either:
+            # 1. OpenInference spans (LLM, AGENT, TOOL, etc.)
+            # 2. Standard OTel spans (HTTP CLIENT/SERVER, etc.)
+            is_openinference_span = openinference_span_kind is not None
+            is_http_span = otel_span_kind in [SpanKind.CLIENT, SpanKind.SERVER]
+            
+            if not (is_openinference_span or is_http_span):
+                logging.debug(f"[SPAN PROCESSOR] Ignoring span: {span.name} (no OpenInference kind, not HTTP)")
                 return
+            
+            span_kind = openinference_span_kind  # For OpenInference spans
 
             serialized = serialize_span(span)
+            
+            # 🔍 RAW SPAN LOGGING - Before any processing
+            logger.info(f"[RAW SPAN] ==================== SPAN START ====================")
+            logger.info(f"[RAW SPAN] Name: {span.name}")
+            logger.info(f"[RAW SPAN] Span Kind (OpenInference): {openinference_span_kind}")
+            logger.info(f"[RAW SPAN] Span Kind (OTel): {otel_span_kind}")
+            logger.info(f"[RAW SPAN] Context: trace_id={serialized.get('context', {}).get('trace_id')}, span_id={serialized.get('context', {}).get('span_id')}")
+            logger.info(f"[RAW SPAN] Parent: {serialized.get('parent_id')}")
+            logger.info(f"[RAW SPAN] Start Time: {span.start_time}")
+            logger.info(f"[RAW SPAN] End Time: {span.end_time}")
+            logger.info(f"[RAW SPAN] Status: {serialized.get('status')}")
+            logger.info(f"[RAW SPAN] Attributes ({len(attributes)} total):")
+            for key, value in sorted(attributes.items()):
+                # Truncate long values for readability
+                val_str = str(value)
+                if len(val_str) > 200:
+                    val_str = val_str[:200] + "...[truncated]"
+                logger.info(f"[RAW SPAN]   - {key}: {val_str}")
+            
+            resource_attrs = serialized.get('resource', {}).get('attributes', {})
+            logger.info(f"[RAW SPAN] Resource Attributes ({len(resource_attrs)} total):")
+            for key, value in sorted(resource_attrs.items()):
+                logger.info(f"[RAW SPAN]   - {key}: {value}")
+            
+            if span.events:
+                logger.info(f"[RAW SPAN] Events ({len(span.events)} total):")
+                for event in span.events:
+                    logger.info(f"[RAW SPAN]   - {event.name}: {event._attributes}")
+            
+            logger.info(f"[RAW SPAN] ==================== SPAN END ====================")
+            # End raw span logging
 
             # Add tags to the resource attributes of the span
             with self.tracker._lock:

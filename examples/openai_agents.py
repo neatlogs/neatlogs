@@ -4,6 +4,12 @@ Neatlogs OpenAI Agents SDK Example (Multi-span)
 This example demonstrates a flow with tool usage to generate multiple spans.
 """
 
+import os
+import sys
+
+# Add parent directory to path to import local neatlogs
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 from neatlogs import init
 
 # Initialize neatlogs

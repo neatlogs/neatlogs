@@ -1,3 +1,9 @@
+import os
+import sys
+
+# Add parent directory to path to import local neatlogs
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 from langgraph.graph import StateGraph, START, END
 import neatlogs
 from langgraph.graph.message import add_messages
@@ -6,7 +12,6 @@ from langchain_openai import AzureChatOpenAI
 from langchain_core.runnables import RunnableConfig
 
 from typing import TypedDict
-import os
 from dotenv import load_dotenv
 
 load_dotenv()

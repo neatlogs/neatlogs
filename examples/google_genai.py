@@ -5,8 +5,13 @@ This example demonstrates how to use Neatlogs with Google Generative AI API call
 Traces will be written to a local file (neatlogs.jsonl).
 """
 
-import neatlogs
 import os
+import sys
+
+# Add parent directory to path to import local neatlogs
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+import neatlogs
 
 # Initialize neatlogs to write traces to a local file.
 neatlogs.init(

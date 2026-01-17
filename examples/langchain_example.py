@@ -1,8 +1,13 @@
+import os
+import sys
+
+# Add parent directory to path to import local neatlogs
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 import neatlogs
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import AzureChatOpenAI
 from langchain_core.output_parsers import StrOutputParser
-import os
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -12,7 +17,7 @@ model = AzureChatOpenAI(api_key=os.getenv("AZURE_OPENAI_API_KEY"),
                         azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
                         azure_deployment=os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME"),)
 
-neatlogs.init(api_key=os.getenv('NEATLOGS_API_KEY'), tags=[
+neatlogs.init(api_key="W8go5KrUxk0ORsw0KfmOwgppjTkVSH6H", tags=[
     "v3", "langchain", "demo"], instrumentations=["langchain"])
 
 

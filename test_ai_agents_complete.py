@@ -107,7 +107,7 @@ def demo_langchain_agent():
         llm = ChatOpenAI(
             model="gpt-4o-mini",
             temperature=0,
-            openai_api_key="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",
+            openai_api_key="",
             max_completion_tokens=200
         )
         
@@ -292,7 +292,7 @@ demo_langchain_agent()
         
 #         # Create embeddings (EMBEDDING spans - auto-traced!)
 #         print("\n📝 Creating embeddings...")
-#         embeddings = OpenAIEmbeddings(openai_api_key="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")
+#         embeddings = OpenAIEmbeddings(openai_api_key="")
         
 #         # Create vector store (EMBEDDING spans for each document!)
 #         vectorstore = Chroma.from_documents(
@@ -308,7 +308,7 @@ demo_langchain_agent()
 #         llm = ChatOpenAI(
 #             model="gpt-4o-mini",
 #             temperature=0,
-#             openai_api_key="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"
+#             openai_api_key=""
 #         )
 #         qa_chain = RetrievalQA.from_chain_type(
 #             llm=llm,
@@ -391,7 +391,7 @@ demo_langchain_agent()
 #         llm = ChatOpenAI(
 #             model="gpt-4o-mini",
 #             temperature=0.7,
-#             openai_api_key="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"
+#             openai_api_key=""
 #         )
         
 #         # This LLM call is AUTO-TRACED as a child of our custom span!

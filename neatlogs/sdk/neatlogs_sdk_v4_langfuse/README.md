@@ -109,11 +109,11 @@ neatlogs_sdk_v4_langfuse/
 ├── pricing.json             # Model pricing (per 1K tokens)
 │
 ├── core/
-│   ├── tracer.py           # Tracer provider
-│   ├── span_processor.py   # Span processing + merging
-│   ├── attribute_merger.py # Smart attribute merger
-│   ├── exporter.py         # Batched async export
-│   └── context.py          # Context managers (trace, observe)
+│   ├── span_processor.py    # Span processing + dedupe/merge
+│   ├── attribute_processor.py # Attribute normalization/mapping
+│   ├── exporter.py          # Batched async export (spans + metrics)
+│   ├── metrics_correlation.py # Correlate instrumentor metrics to spans
+│   └── context.py           # Context managers (trace, observe)
 │
 ├── instrumentation/
 │   ├── manager.py          # Instrumentation orchestration

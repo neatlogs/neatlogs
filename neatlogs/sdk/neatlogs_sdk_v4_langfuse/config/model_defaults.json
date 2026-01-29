@@ -28,6 +28,16 @@
         "frequency_penalty": 0,
         "presence_penalty": 0
       },
+      "o1": {
+        "temperature": 1.0,
+        "top_p": 1.0,
+        "max_completion_tokens": null
+      },
+      "o1-mini": {
+        "temperature": 1.0,
+        "top_p": 1.0,
+        "max_completion_tokens": null
+      },
       "_default": {
         "temperature": 1.0,
         "top_p": 1.0,
@@ -58,6 +68,20 @@
         "max_tokens": 8192,
         "stream": false
       },
+      "claude-3-opus": {
+        "temperature": 1.0,
+        "top_p": null,
+        "top_k": null,
+        "max_tokens": 4096,
+        "stream": false
+      },
+      "claude-3-haiku": {
+        "temperature": 1.0,
+        "top_p": null,
+        "top_k": null,
+        "max_tokens": 4096,
+        "stream": false
+      },
       "_default": {
         "temperature": 1.0,
         "stream": false
@@ -71,6 +95,281 @@
         "p": 0.75,
         "k": 0,
         "max_tokens": null
+      }
+    },
+    "generate": {
+      "_default": {
+        "temperature": 0.9,
+        "p": null,
+        "k": 0,
+        "max_tokens": null
+      }
+    }
+  },
+  "google": {
+    "generateContent": {
+      "gemini-1.5-pro": {
+        "temperature": 1.0,
+        "top_p": 0.94,
+        "top_k": 40,
+        "max_output_tokens": null,
+        "stop_sequences": null
+      },
+      "gemini-1.5-flash": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 40,
+        "max_output_tokens": null
+      },
+      "gemini-1.0-pro": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 40,
+        "max_output_tokens": null
+      },
+      "_default": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 40
+      }
+    }
+  },
+  "vertex_ai": {
+    "generateContent": {
+      "gemini-1.5-pro": {
+        "temperature": 1.0,
+        "top_p": 0.94,
+        "top_k": 40,
+        "max_output_tokens": null
+      },
+      "gemini-1.5-flash": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 40,
+        "max_output_tokens": null
+      },
+      "_default": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 40
+      }
+    }
+  },
+  "bedrock": {
+    "messages": {
+      "anthropic.claude-3-5-sonnet": {
+        "temperature": 1.0,
+        "top_p": 1.0,
+        "top_k": null,
+        "max_tokens": null,
+        "stop_sequences": null
+      },
+      "anthropic.claude-3-opus": {
+        "temperature": 1.0,
+        "top_p": 1.0,
+        "top_k": null,
+        "max_tokens": null
+      },
+      "anthropic.claude-3-haiku": {
+        "temperature": 1.0,
+        "top_p": 1.0,
+        "top_k": null,
+        "max_tokens": null
+      },
+      "meta.llama3": {
+        "temperature": 0.5,
+        "top_p": 0.9,
+        "max_gen_len": null
+      },
+      "mistral.mistral-7b-instruct": {
+        "temperature": 0.5,
+        "top_p": 0.9,
+        "top_k": 50,
+        "max_tokens": null
+      },
+      "amazon.titan-text": {
+        "temperature": 0.7,
+        "topP": 0.9,
+        "maxTokenCount": null
+      },
+      "_default": {
+        "temperature": 1.0,
+        "top_p": 1.0
+      }
+    }
+  },
+  "groq": {
+    "chat.completions": {
+      "llama-3.3-70b-versatile": {
+        "temperature": 1.0,
+        "top_p": 1.0,
+        "max_tokens": 1024,
+        "stream": false
+      },
+      "llama-3.1-70b-versatile": {
+        "temperature": 1.0,
+        "top_p": 1.0,
+        "max_tokens": 1024,
+        "stream": false
+      },
+      "mixtral-8x7b-32768": {
+        "temperature": 1.0,
+        "top_p": 1.0,
+        "max_tokens": 1024,
+        "stream": false
+      },
+      "_default": {
+        "temperature": 1.0,
+        "top_p": 1.0,
+        "max_tokens": 1024,
+        "stream": false
+      }
+    }
+  },
+  "mistral": {
+    "chat": {
+      "mistral-large-latest": {
+        "temperature": 0.7,
+        "top_p": 1.0,
+        "max_tokens": null,
+        "safe_prompt": false
+      },
+      "mistral-medium-latest": {
+        "temperature": 0.7,
+        "top_p": 1.0,
+        "max_tokens": null
+      },
+      "mistral-small-latest": {
+        "temperature": 0.7,
+        "top_p": 1.0,
+        "max_tokens": null
+      },
+      "codestral-latest": {
+        "temperature": 0.0,
+        "top_p": 1.0,
+        "max_tokens": null
+      },
+      "_default": {
+        "temperature": 0.7,
+        "top_p": 1.0
+      }
+    }
+  },
+  "ollama": {
+    "generate": {
+      "_default": {
+        "temperature": 0.8,
+        "top_k": 40,
+        "top_p": 0.9,
+        "num_predict": -1,
+        "repeat_penalty": 1.1,
+        "stream": false
+      }
+    },
+    "chat": {
+      "_default": {
+        "temperature": 0.8,
+        "top_k": 40,
+        "top_p": 0.9,
+        "num_predict": -1,
+        "stream": false
+      }
+    }
+  },
+  "together": {
+    "chat.completions": {
+      "_default": {
+        "temperature": 0.7,
+        "top_p": 0.7,
+        "top_k": 50,
+        "max_tokens": 512,
+        "stream": false
+      }
+    },
+    "completions": {
+      "_default": {
+        "temperature": 0.7,
+        "top_p": 0.7,
+        "top_k": 50,
+        "max_tokens": 128
+      }
+    }
+  },
+  "replicate": {
+    "predictions": {
+      "meta/llama-2": {
+        "temperature": 0.75,
+        "top_p": 0.9,
+        "max_new_tokens": 500
+      },
+      "meta/llama-3": {
+        "temperature": 0.75,
+        "top_p": 0.9,
+        "max_new_tokens": 500
+      },
+      "_default": {
+        "temperature": 0.75,
+        "top_p": 0.9
+      }
+    }
+  },
+  "huggingface": {
+    "text_generation": {
+      "_default": {
+        "temperature": 1.0,
+        "top_p": null,
+        "top_k": null,
+        "max_new_tokens": null,
+        "do_sample": true
+      }
+    },
+    "conversational": {
+      "_default": {
+        "temperature": 1.0,
+        "top_p": null,
+        "top_k": null,
+        "max_length": null
+      }
+    }
+  },
+  "azure_openai": {
+    "chat.completions": {
+      "_default": {
+        "temperature": 1.0,
+        "top_p": 1.0,
+        "frequency_penalty": 0,
+        "presence_penalty": 0,
+        "max_tokens": null,
+        "stream": false
+      }
+    }
+  },
+  "aleph_alpha": {
+    "completion": {
+      "_default": {
+        "temperature": 0.0,
+        "top_p": 0.0,
+        "top_k": 0,
+        "maximum_tokens": 64
+      }
+    }
+  },
+  "watsonx": {
+    "generate": {
+      "_default": {
+        "temperature": 0.7,
+        "top_p": 1.0,
+        "top_k": 50,
+        "max_new_tokens": 200
+      }
+    }
+  },
+  "writer": {
+    "completion": {
+      "_default": {
+        "temperature": 0.7,
+        "top_p": 1.0,
+        "max_tokens": 1024
       }
     }
   }

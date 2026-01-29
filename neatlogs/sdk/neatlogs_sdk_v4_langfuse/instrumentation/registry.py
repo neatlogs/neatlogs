@@ -41,8 +41,9 @@ INSTRUMENTATION_REGISTRY = {
     "libraries": {
         # ===== LLM Providers (OpenAI, Anthropic, etc.) =====
         "openai": {
-            "openllmetry": "opentelemetry.instrumentation.openai",
             "openinference": "openinference.instrumentation.openai",
+            "openllmetry": "opentelemetry.instrumentation.openai",
+            # "neatlogs": "neatlogs.sdk.neatlogs_sdk_v4_langfuse.neatlogs_instrumentation_openai",
             "default_span_kind": "LLM",
         },
         "anthropic": {
@@ -198,7 +199,7 @@ INSTRUMENTATION_REGISTRY = {
         },
         "milvus": {
             "openllmetry": "opentelemetry.instrumentation.milvus",
-            "openinference": "openinference.instrumentation.milvus",
+            "openinference": None,
             "default_span_kind": "RETRIEVER",
         },
         "opensearch": {
@@ -296,8 +297,8 @@ INSTRUMENTATION_REGISTRY = {
             "default_span_kind": "CHAIN",
         },
         "mcp": {
-            "openllmetry": None,
-            "openinference": "openinference.instrumentation.mcp",
+            "openllmetry": "opentelemetry.instrumentation.mcp",  # Span creation
+            "openinference": "openinference.instrumentation.mcp",  # Context propagation
             "default_span_kind": "TOOL",
         },
     }

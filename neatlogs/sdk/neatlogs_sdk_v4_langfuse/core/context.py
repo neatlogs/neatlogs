@@ -137,8 +137,9 @@ def trace(
                 _finalize_prompt_capture(span, is_prompt_template_obj, logger)
         else:
             # Normal mode: Create child span within existing trace
+            # Pass the context explicitly so child spans can read prompt variables
             logger.debug(f"[trace] Creating child span '{name}'")
-            with tracer.start_as_current_span(name) as span:
+            with tracer.start_as_current_span(name, context=ctx) as span:
                 _set_span_attributes(span, kind, template_string, prompt_variables, version, attributes)
                 yield span
                 _finalize_prompt_capture(span, is_prompt_template_obj, logger)
@@ -153,17 +154,16 @@ def _set_span_attributes(span, kind, template_string, prompt_variables, version,
     """Helper to set span attributes."""
     import json
     
+    # Mark as internal wrapper span (filtered in UI)
+    span.set_attribute("neatlogs.internal", True)
+    
     # Set span kind (default to CHAIN for user-created spans)
     span_kind = kind if kind else "CHAIN"
     span.set_attribute("openinference.span.kind", span_kind)
 
-    # Set prompt attributes on current span too (for visibility)
-    if template_string:
-        span.set_attribute("llm.prompt_template", template_string)
-    if prompt_variables:
-        span.set_attribute("llm.prompt_template_variables", json.dumps(prompt_variables, default=str))
-    if version:
-        span.set_attribute("llm.prompt_template.version", version)
+    # DON'T set prompt attributes on wrapper span - they'll be propagated to child LLM spans via context
+    # The span processor reads from context and applies them to actual LLM spans
+    # This avoids duplication and ensures prompt data appears only on the LLM span
 
     # Set additional attributes
     for key, value in attributes.items():

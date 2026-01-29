@@ -73,6 +73,9 @@ def observe(name: Optional[str] = None, version: Optional[str] = None, as_type: 
             try:
                 # Start wrapper span
                 with tracer.start_as_current_span(span_name) as span:
+                    # Mark as internal wrapper span (filtered in UI)
+                    span.set_attribute("neatlogs.internal", True)
+                    
                     # Set span kind for wrapper
                     span_kind_map = {
                         "chain": "CHAIN",
@@ -123,6 +126,9 @@ def observe(name: Optional[str] = None, version: Optional[str] = None, as_type: 
             try:
                 # Start wrapper span
                 with tracer.start_as_current_span(span_name) as span:
+                    # Mark as internal wrapper span (filtered in UI)
+                    span.set_attribute("neatlogs.internal", True)
+                    
                     # Set span kind for wrapper
                     span_kind_map = {
                         "chain": "CHAIN",

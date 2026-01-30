@@ -1,476 +1,461 @@
 """
-Neatlogs Instrumentation Manager
-===============================
-This module manages auto-instrumentation for LLM providers and frameworks
-within the Neatlogs system using OpenInference.
+Instrumentation manager for dual instrumentation (OpenInference + OpenLLMetry).
 """
 
-import importlib.util
-import logging
-from typing import List, Optional
+import importlib
+from typing import List, Set, Optional
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.instrumentation.threading import ThreadingInstrumentor
 
-logger = logging.getLogger(__name__)
+from .registry import INSTRUMENTATION_REGISTRY, get_libraries_by_tag
 
 
-def instrument_all(instrumentations: Optional[List[str]] = None):
+class InstrumentationManager:
     """
-    Instrument all supported and available libraries.
-
-    Args:
-        instrumentations (List[str], optional): List of frameworks to instrument.
-                                                If None, all available supported frameworks are instrumented.
-                                                Supported: "openai", "openai-agents", "langchain", "anthropic",
-                                                "google-genai", "crewai", "groq", "litellm", "llama-index",
-                                                "google-adk", "agno", "bedrock", "dspy", "guardrails", "haystack",
-                                                "instructor", "mcp", "mistralai", "portkey", "pydantic-ai",
-                                                "smolagents", "vertexai", "beeai", "autogen-agentchat".
-
-    This function checks for the presence of OpenInference instrumentation libraries
-    and initializes them if found.
+    Manages dual instrumentation (OpenInference + OpenLLMetry).
+    
+    Features:
+    - Tag-based instrumentation selection (e.g., "llm", "agent")
+    - Explicit library selection (e.g., "openai", "langchain")
+    - Always-on HTTP instrumentation for context propagation
+    - Lazy loading (only instruments what's installed)
+    - Dual convention support (best of both worlds)
     """
+    
+    def __init__(self, provider: TracerProvider, debug: bool = False, excluded_urls: Optional[str] = None):
+        """
+        Initialize the instrumentation manager.
+        
+        Args:
+            provider: OpenTelemetry tracer provider
+            debug: Enable debug logging
+            excluded_urls: Comma-separated URLs to exclude from HTTP tracing
+        """
+        self.provider = provider
+        self.debug = debug
+        self.excluded_urls = excluded_urls
+        self.instrumented: Set[str] = set()
+    
+    def instrument_threading(self) -> None:
+        """
+        Instrument threading for context propagation.
+        
+        This is CRITICAL for maintaining span hierarchy across threads.
+        Must be called before any other instrumentation.
+        """
+        try:
+            ThreadingInstrumentor().instrument()
+            if self.debug:
+                print("✅ Instrumented threading (context propagation)")
+        except Exception as e:
+            if self.debug:
+                print(f"⚠️  Failed to instrument threading: {e}")
+    
+    def instrument_http(self) -> None:
+        """
+        Always instrument HTTP libraries for context propagation.
+        
+        HTTP instrumentation ensures that HTTP calls made within
+        LLM/TOOL/RETRIEVER spans are correctly parented.
+        """
+        http_libs = ["requests", "httpx", "urllib3", "aiohttp"]
+        
+        for lib in http_libs:
+            # Check if library is installed
+            if not self._is_library_installed(lib):
+                if self.debug:
+                    print(f"⏭️  Skipped HTTP: {lib} (not installed)")
+                continue
+            
+            try:
+                # Instrument with OpenLLMetry (has HTTP instrumentation)
+                self._instrument_library(lib, convention="openllmetry")
+                self.instrumented.add(lib)
+                
+                if self.debug:
+                    print(f"✅ Instrumented HTTP: {lib}")
+            except Exception as e:
+                if self.debug:
+                    print(f"⚠️  Failed to instrument {lib}: {e}")
+    
+    def instrument_mcp(self) -> None:
+        """
+        Instrument MCP for cross-process context propagation.
+        
+        This enables distributed tracing where:
+        - MCP client (your agent) runs in process A
+        - MCP server (tool provider) runs in process B (often stdio subprocess)
+        - Traces are connected via W3C TraceContext in MCP protocol metadata
+        
+        Uses DUAL instrumentation:
+        1. openinference-instrumentation-mcp: Context injection/extraction
+        2. opentelemetry-instrumentation-mcp: Span creation for MCP operations
+        """
+        # Check if MCP is installed
+        if not self._is_library_installed("mcp"):
+            if self.debug:
+                print("⏭️  Skipped MCP: not installed")
+            return
+        
+        instrumented_any = False
+        
+        # 1. Context propagation layer (OpenInference)
+        try:
+            from openinference.instrumentation.mcp import MCPInstrumentor
+            MCPInstrumentor().instrument(tracer_provider=self.provider)
+            instrumented_any = True
+            if self.debug:
+                print("✅ MCP (OpenInference - context propagation)")
+        except Exception as e:
+            if self.debug:
+                print(f"⚠️  MCP (OpenInference): {e}")
+        
+        # 2. Span creation layer (OpenLLMetry)
+        try:
+            from opentelemetry.instrumentation.mcp import McpInstrumentor
+            McpInstrumentor().instrument(tracer_provider=self.provider)
+            instrumented_any = True
+            if self.debug:
+                print("✅ MCP (OpenLLMetry - span creation)")
+        except Exception as e:
+            if self.debug:
+                print(f"⚠️  MCP (OpenLLMetry): {e}")
+        
+        if instrumented_any:
+            self.instrumented.add("mcp")
+    
+    def instrument(self, tags: Optional[List[str]] = None, libraries: Optional[List[str]] = None) -> None:
+        """
+        Instrument libraries based on tags and explicit library names.
+        
+        Args:
+            tags: Semantic tags (e.g., ["llm", "agent", "retrieval"])
+            libraries: Explicit library names (e.g., ["openai", "langchain"])
+        """
+        tags = tags or []
+        libraries = libraries or []
+        
+        # Resolve tags to library names
+        tag_libraries = set()
+        for tag in tags:
+            tag_libraries.update(get_libraries_by_tag(tag))
+        
+        # Combine with explicit libraries
+        all_libraries = tag_libraries.union(set(libraries))
+        
+        # Instrument each library with DUAL convention
+        for lib in all_libraries:
+            if lib in self.instrumented:
+                continue  # Skip already instrumented
+            
+            self._instrument_dual(lib)
+    
+    def _instrument_dual(self, library: str) -> None:
+        """
+        Instrument with BOTH OpenLLMetry and OpenInference (if available),
+        or use custom neatlogs instrumentation if provided.
 
-    # Helper to check if we should instrument a specific framework
-    def should_instrument(name):
-        if instrumentations is not None:
-            return name in instrumentations
-        return True
+        Priority:
+        1. Neatlogs (custom instrumentation) - if available, use ONLY this
+        2. Dual (OpenLLMetry + OpenInference) - fallback to dual instrumentation
 
-    # OpenAI Agents
-    # The OpenAI Agents SDK is imported as 'agents'
-    # Check for OpenAI Agents first, as it uses OpenAI SDK internally
-    if should_instrument("openai-agents"):
-        has_agents = importlib.util.find_spec("agents") is not None
+        This gives us:
+        - Neatlogs: Custom unified instrumentation (replaces both)
+        - OpenLLMetry: Streaming info, operational metrics
+        - OpenInference: Cost tracking, span kinds, analytics attributes
 
-        if has_agents:
-            if importlib.util.find_spec("openinference.instrumentation.openai_agents"):
-                try:
-                    from openinference.instrumentation.openai_agents import (
-                        OpenAIAgentsInstrumentor,
-                    )
+        Args:
+            library: Library name (e.g., "openai", "langchain")
+        """
+        # Check if library is installed
+        if not self._is_library_installed(library):
+            if self.debug:
+                print(f"⏭️  Skipped: {library} (not installed)")
+            return
 
-                    OpenAIAgentsInstrumentor().instrument()
-                    logger.info(
-                        "Neatlogs: OpenAI Agents instrumentation enabled.")
-                except Exception as e:
-                    logger.warning(
-                        f"Neatlogs: Failed to instrument OpenAI Agents: {e}")
-            else:
-                logger.warning(
-                    "Neatlogs: Detected 'agents' but 'openinference-instrumentation-openai-agents' is not installed. "
-                    "Install with: uv add neatlogs[openai-agents]"
+        # Get instrumentation info from registry
+        info = INSTRUMENTATION_REGISTRY["libraries"].get(library)
+        if not info:
+            if self.debug:
+                print(f"⚠️  Unknown library: {library}")
+            return
+
+        instrumented_any = False
+
+        # Check for custom neatlogs instrumentation first (takes priority)
+        if info.get("neatlogs"):
+            try:
+                self._instrument_library(library, convention="neatlogs")
+                instrumented_any = True
+                if self.debug:
+                    print(f"✅ {library} (Neatlogs - custom unified)")
+
+                # Mark as instrumented and return early (don't use dual)
+                if instrumented_any:
+                    self.instrumented.add(library)
+                return
+            except Exception as e:
+                if self.debug:
+                    print(f"⚠️  {library} (Neatlogs): {e}")
+                # Fall through to dual instrumentation on error
+
+        # Fallback to dual instrumentation (OpenLLMetry + OpenInference)
+
+        # Instrument with OpenLLMetry (if available)
+        if info.get("openllmetry"):
+            try:
+                self._instrument_library(library, convention="openllmetry")
+                instrumented_any = True
+                if self.debug:
+                    print(f"✅ {library} (OpenLLMetry)")
+            except Exception as e:
+                if self.debug:
+                    print(f"⚠️  {library} (OpenLLMetry): {e}")
+
+        # Instrument with OpenInference (if available)
+        if info.get("openinference"):
+            try:
+                self._instrument_library(library, convention="openinference")
+                instrumented_any = True
+                if self.debug:
+                    print(f"✅ {library} (OpenInference)")
+            except Exception as e:
+                if self.debug:
+                    print(f"⚠️  {library} (OpenInference): {e}")
+
+        if instrumented_any:
+            self.instrumented.add(library)
+    
+    def _instrument_library(self, library: str, convention: str) -> None:
+        """
+        Dynamically import and instrument a library.
+
+        Args:
+            library: Library name (e.g., "openai")
+            convention: "openllmetry", "openinference", or "neatlogs"
+        """
+        info = INSTRUMENTATION_REGISTRY["libraries"][library]
+        package_name = info.get(convention)
+
+        if not package_name:
+            return
+
+        try:
+            # Import the instrumentation package
+            module = importlib.import_module(package_name)
+
+            # Framework instrumentations (e.g. OpenLLMetry LangChain) often set
+            # SUPPRESS_LANGUAGE_MODEL_INSTRUMENTATION_KEY=True to avoid downstream provider spans.
+            # Neatlogs handles dedupe at export-time, so we patch provider instrumentations to
+            # ignore that suppression. This lets us keep provider spans/events (e.g. streaming
+            # chunk events) even when a framework instrumentation is enabled.
+            if convention == "openllmetry" and library == "openai":
+                self._patch_openllmetry_openai_ignore_language_model_suppression()
+
+            # Get the instrumentor class name
+            # Most follow pattern: {Library}Instrumentor
+            # But there are many exceptions...
+            instrumentor_class_name = self._get_instrumentor_class_name(library, convention)
+
+            instrumentor_class = getattr(module, instrumentor_class_name)
+
+            # For HTTP libraries, add excluded_urls to prevent export calls from being traced
+            is_http_lib = library in ["requests", "httpx", "urllib3", "aiohttp"]
+            if is_http_lib and self.excluded_urls:
+                instrumentor_class().instrument(
+                    tracer_provider=self.provider,
+                    excluded_urls=self.excluded_urls
                 )
-
-    # OpenAI - instrument regardless of whether Agents is present (they can coexist)
-    if should_instrument("openai"):
-        if importlib.util.find_spec("openai"):
-            if importlib.util.find_spec("openinference.instrumentation.openai"):
-                try:
-                    from openinference.instrumentation.openai import OpenAIInstrumentor
-
-                    OpenAIInstrumentor().instrument()
-                    logger.info("Neatlogs: OpenAI instrumentation enabled.")
-                except Exception as e:
-                    logger.warning(
-                        f"Neatlogs: Failed to instrument OpenAI: {e}")
             else:
-                logger.warning(
-                    "Neatlogs: Detected 'openai' but 'openinference-instrumentation-openai' is not installed. "
-                    "Install with: uv add neatlogs[openai]"
-                )
+                instrumentor_class().instrument(tracer_provider=self.provider)
 
-    # LangChain
-    if should_instrument("langchain"):
-        if importlib.util.find_spec("langchain"):
-            if importlib.util.find_spec("openinference.instrumentation.langchain"):
-                try:
-                    from openinference.instrumentation.langchain import (
-                        LangChainInstrumentor,
-                    )
+        except Exception as e:
+            raise Exception(f"Failed to instrument {library} with {convention}: {e}")
 
-                    LangChainInstrumentor().instrument()
-                    
-                    logger.info("Neatlogs: LangChain instrumentation enabled.")
-                except Exception as e:
-                    logger.warning(
-                        f"Neatlogs: Failed to instrument LangChain: {e}")
-            else:
-                logger.warning(
-                    "Neatlogs: Detected 'langchain' but 'openinference-instrumentation-langchain' is not installed. "
-                    "Install with: uv add neatlogs[langchain]"
-                )
+    def _patch_openllmetry_openai_ignore_language_model_suppression(self) -> None:
+        """
+        Monkeypatch OpenLLMetry OpenAI wrappers to ignore SUPPRESS_LANGUAGE_MODEL_INSTRUMENTATION_KEY.
 
-    # Anthropic
-    if should_instrument("anthropic"):
-        if importlib.util.find_spec("anthropic"):
-            if importlib.util.find_spec("openinference.instrumentation.anthropic"):
-                try:
-                    from openinference.instrumentation.anthropic import (
-                        AnthropicInstrumentor,
-                    )
+        Why:
+        - OpenLLMetry framework instrumentations (e.g. LangChain) set this flag to True and it
+          prevents OpenLLMetry provider spans like `openai.chat` from being emitted.
+        - We dedupe provider spans in Neatlogs (span_processor.py), but we still want:
+          - provider span attributes (gen_ai.*)
+          - streaming chunk events (llm.content.completion.chunk)
 
-                    AnthropicInstrumentor().instrument()
-                    logger.info("Neatlogs: Anthropic instrumentation enabled.")
-                except Exception as e:
-                    logger.warning(
-                        f"Neatlogs: Failed to instrument Anthropic: {e}")
-            else:
-                logger.warning(
-                    "Neatlogs: Detected 'anthropic' but 'openinference-instrumentation-anthropic' is not installed. "
-                    "Install with: uv add neatlogs[anthropic]"
-                )
+        This patch is local to the running process (no fork/patch of OpenLLMetry required).
+        """
+        try:
+            from functools import wraps
 
-    # Google GenAI
-    if should_instrument("google-genai"):
-        if importlib.util.find_spec("google.genai"):
-            if importlib.util.find_spec("openinference.instrumentation.google_genai"):
-                try:
-                    from openinference.instrumentation.google_genai import (
-                        GoogleGenAIInstrumentor,
-                    )
+            from opentelemetry import context as context_api
+            from opentelemetry.instrumentation.utils import _SUPPRESS_INSTRUMENTATION_KEY
+            from opentelemetry.semconv_ai import SUPPRESS_LANGUAGE_MODEL_INSTRUMENTATION_KEY
 
-                    GoogleGenAIInstrumentor().instrument()
-                    logger.info(
-                        "Neatlogs: Google GenAI instrumentation enabled.")
-                except Exception as e:
-                    logger.warning(
-                        f"Neatlogs: Failed to instrument Google GenAI: {e}")
-            else:
-                logger.warning(
-                    "Neatlogs: Detected 'google.genai' but 'openinference-instrumentation-google-genai' is not installed. "
-                    "Install with: uv add neatlogs[google-genai]"
-                )
+            # Import wrapper modules from the installed OpenLLMetry OpenAI package.
+            from opentelemetry.instrumentation.openai.shared import (
+                chat_wrappers,
+                completion_wrappers,
+                embeddings_wrappers,
+                image_gen_wrappers,
+            )
 
-    # CrewAI
-    if should_instrument("crewai"):
-        if importlib.util.find_spec("crewai"):
-            if importlib.util.find_spec("openinference.instrumentation.crewai"):
-                try:
-                    from openinference.instrumentation.crewai import CrewAIInstrumentor
+            if getattr(chat_wrappers, "_NEATLOGS_PATCHED_IGNORE_LM_SUPPRESS", False):
+                return
 
-                    CrewAIInstrumentor().instrument()
-                    logger.info("Neatlogs: CrewAI instrumentation enabled.")
-                except Exception as e:
-                    logger.warning(
-                        f"Neatlogs: Failed to instrument CrewAI: {e}")
-            else:
-                logger.warning(
-                    "Neatlogs: Detected 'crewai' but 'openinference-instrumentation-crewai' is not installed. "
-                    "Install with: uv add neatlogs[crewai]"
-                )
+            def _wrap_factory(factory_fn):
+                """
+                OpenLLMetry's wrappers are factories:
+                  wrapper = chat_wrapper(tracer, ...)
+                The suppression check happens inside the returned `wrapper`, so we must
+                wrap the returned wrapper (not just the factory itself).
+                """
 
-    # Groq
-    if should_instrument("groq"):
-        if importlib.util.find_spec("groq"):
-            if importlib.util.find_spec("openinference.instrumentation.groq"):
-                try:
-                    from openinference.instrumentation.groq import GroqInstrumentor
+                @wraps(factory_fn)
+                def _patched_factory(*f_args, **f_kwargs):
+                    inner = factory_fn(*f_args, **f_kwargs)
 
-                    GroqInstrumentor().instrument()
-                    logger.info("Neatlogs: Groq instrumentation enabled.")
-                except Exception as e:
-                    logger.warning(f"Neatlogs: Failed to instrument Groq: {e}")
-            else:
-                logger.warning(
-                    "Neatlogs: Detected 'groq' but 'openinference-instrumentation-groq' is not installed. "
-                    "Install with: uv add neatlogs[groq]"
-                )
+                    @wraps(inner)
+                    def _patched_wrapper(wrapped, instance, args, kwargs):
+                        # Still respect global instrumentation suppression to avoid recursion.
+                        if context_api.get_value(_SUPPRESS_INSTRUMENTATION_KEY):
+                            return inner(wrapped, instance, args, kwargs)
 
-    # LiteLLM
-    if should_instrument("litellm"):
-        if importlib.util.find_spec("litellm"):
-            if importlib.util.find_spec("openinference.instrumentation.litellm"):
-                try:
-                    from openinference.instrumentation.litellm import (
-                        LiteLLMInstrumentor,
-                    )
+                        token = None
+                        try:
+                            token = context_api.attach(
+                                context_api.set_value(
+                                    SUPPRESS_LANGUAGE_MODEL_INSTRUMENTATION_KEY, False
+                                )
+                            )
+                        except Exception:
+                            token = None
 
-                    LiteLLMInstrumentor().instrument()
-                    logger.info("Neatlogs: LiteLLM instrumentation enabled.")
-                except Exception as e:
-                    logger.warning(
-                        f"Neatlogs: Failed to instrument LiteLLM: {e}")
-            else:
-                logger.warning(
-                    "Neatlogs: Detected 'litellm' but 'openinference-instrumentation-litellm' is not installed. "
-                    "Install with: uv add neatlogs[litellm]"
-                )
+                        try:
+                            return inner(wrapped, instance, args, kwargs)
+                        finally:
+                            if token is not None:
+                                try:
+                                    context_api.detach(token)
+                                except Exception:
+                                    pass
 
-    # LlamaIndex
-    if should_instrument("llama-index"):
-        if importlib.util.find_spec("llama-index"):
-            if importlib.util.find_spec("openinference.instrumentation.llama-index"):
-                try:
-                    from openinference.instrumentation.llama_index import LlamaIndexInstrumentor
+                    return _patched_wrapper
 
-                    LlamaIndexInstrumentor().instrument()
-                    logger.info(
-                        "Neatlogs: LlamaIndex instrumentation enabled.")
-                except Exception as e:
-                    logger.warning(
-                        f"Neatlogs: Failed to instrument LlamaIndex: {e}")
-            else:
-                logger.warning(
-                    "Neatlogs: Detected 'llama-index' but 'openinference-instrumentation-llama-index' is not installed. "
-                    "Install with: uv add neatlogs[llama-index]"
-                )
+                return _patched_factory
 
-    # Google ADK
-    if should_instrument("google-adk"):
-        if importlib.util.find_spec("google-adk"):
-            if importlib.util.find_spec("openinference.instrumentation.google-adk"):
-                try:
-                    from openinference.instrumentation.google_adk import GoogleADKInstrumentor
+            # Chat
+            if hasattr(chat_wrappers, "chat_wrapper"):
+                chat_wrappers.chat_wrapper = _wrap_factory(chat_wrappers.chat_wrapper)
+            if hasattr(chat_wrappers, "achat_wrapper"):
+                chat_wrappers.achat_wrapper = _wrap_factory(chat_wrappers.achat_wrapper)
 
-                    GoogleADKInstrumentor().instrument()
-                    logger.info(
-                        "Neatlogs: Google ADK instrumentation enabled.")
-                except Exception as e:
-                    logger.warning(
-                        f"Neatlogs: Failed to instrument Google ADK: {e}")
-            else:
-                logger.warning(
-                    "Neatlogs: Detected 'google-adk' but 'openinference-instrumentation-google-adk' is not installed. "
-                    "Install with: uv add neatlogs[google-adk]"
-                )
+            # Completions
+            if hasattr(completion_wrappers, "completion_wrapper"):
+                completion_wrappers.completion_wrapper = _wrap_factory(completion_wrappers.completion_wrapper)
+            if hasattr(completion_wrappers, "acompletion_wrapper"):
+                completion_wrappers.acompletion_wrapper = _wrap_factory(completion_wrappers.acompletion_wrapper)
 
-    # Agno
-    if should_instrument("agno"):
-        if importlib.util.find_spec("agno"):
-            if importlib.util.find_spec("openinference.instrumentation.agno"):
-                try:
-                    from openinference.instrumentation.agno import AgnoInstrumentor
+            # Embeddings
+            if hasattr(embeddings_wrappers, "embeddings_wrapper"):
+                embeddings_wrappers.embeddings_wrapper = _wrap_factory(embeddings_wrappers.embeddings_wrapper)
+            if hasattr(embeddings_wrappers, "aembeddings_wrapper"):
+                embeddings_wrappers.aembeddings_wrapper = _wrap_factory(embeddings_wrappers.aembeddings_wrapper)
 
-                    AgnoInstrumentor().instrument()
-                    logger.info("Neatlogs: Agno instrumentation enabled.")
-                except Exception as e:
-                    logger.warning(
-                        f"Neatlogs: Failed to instrument Agno: {e}")
-            else:
-                logger.warning(
-                    "Neatlogs: Detected 'agno' but 'openinference-instrumentation-agno' is not installed. "
-                    "Install with: uv add neatlogs[agno]"
-                )
+            # Image generation
+            # (OpenLLMetry's OpenAI image instrumentation is metric-only and naming differs)
+            if hasattr(image_gen_wrappers, "image_gen_metrics_wrapper"):
+                image_gen_wrappers.image_gen_metrics_wrapper = _wrap_factory(image_gen_wrappers.image_gen_metrics_wrapper)
+            if hasattr(image_gen_wrappers, "aimage_gen_metrics_wrapper"):
+                image_gen_wrappers.aimage_gen_metrics_wrapper = _wrap_factory(image_gen_wrappers.aimage_gen_metrics_wrapper)
 
-    # AWS Bedrock
-    if should_instrument("bedrock"):
-        if importlib.util.find_spec("boto3"):
-            if importlib.util.find_spec("openinference.instrumentation.bedrock"):
-                try:
-                    from openinference.instrumentation.bedrock import BedrockInstrumentor
+            chat_wrappers._NEATLOGS_PATCHED_IGNORE_LM_SUPPRESS = True
+            if self.debug:
+                print("Patched OpenLLMetry OpenAI: ignore SUPPRESS_LANGUAGE_MODEL_INSTRUMENTATION_KEY")
+        except Exception as e:
+            # Best-effort: if patching fails, instrumentation should still function.
+            if self.debug:
+                print(f"⚠️  Failed to patch OpenLLMetry OpenAI suppression: {e}")
+    
+    def _get_instrumentor_class_name(self, library: str, convention: str) -> str:
+        """
+        Get the correct instrumentor class name for a library.
 
-                    BedrockInstrumentor().instrument()
-                    logger.info(
-                        "Neatlogs: AWS Bedrock instrumentation enabled.")
-                except Exception as e:
-                    logger.warning(
-                        f"Neatlogs: Failed to instrument AWS Bedrock: {e}")
-            else:
-                logger.warning(
-                    "Neatlogs: Detected 'boto3' but 'openinference-instrumentation-bedrock' is not installed. "
-                    "Install with: uv add neatlogs[bedrock]"
-                )
+        Different libraries use different naming conventions.
 
-    # DSPy
-    if should_instrument("dspy"):
-        if importlib.util.find_spec("dspy"):
-            if importlib.util.find_spec("openinference.instrumentation.dspy"):
-                try:
-                    from openinference.instrumentation.dspy import DSPyInstrumentor
+        Args:
+            library: Library name (e.g., "openai")
+            convention: "openllmetry", "openinference", or "neatlogs"
 
-                    DSPyInstrumentor().instrument()
-                    logger.info("Neatlogs: DSPy instrumentation enabled.")
-                except Exception as e:
-                    logger.warning(
-                        f"Neatlogs: Failed to instrument DSPy: {e}")
-            else:
-                logger.warning(
-                    "Neatlogs: Detected 'dspy' but 'openinference-instrumentation-dspy' is not installed. "
-                    "Install with: uv add neatlogs[dspy]"
-                )
+        Returns:
+            Instrumentor class name
+        """
+        # Neatlogs convention (custom instrumentations)
+        if convention == "neatlogs":
+            neatlogs_cases = {
+                "openai": "OpenAIInstrumentor",
+                # Add more custom instrumentations here as they're implemented
+            }
+            if library in neatlogs_cases:
+                return neatlogs_cases[library]
 
-    # Guardrails
-    if should_instrument("guardrails"):
-        if importlib.util.find_spec("guardrails") or importlib.util.find_spec("guardrails_ai"):
-            if importlib.util.find_spec("openinference.instrumentation.guardrails"):
-                try:
-                    from openinference.instrumentation.guardrails import GuardrailsInstrumentor
+        # Special cases that don't follow standard naming
+        special_cases = {
+            "openai": "OpenAIInstrumentor",
+            "langchain": "LangChainInstrumentor" if convention == "openinference" else "LangchainInstrumentor",
+            "urllib3": "URLLib3Instrumentor",
+            "httpx": "HTTPXClientInstrumentor",
+            "aiohttp": "AioHttpClientInstrumentor",
+            "llamaindex": "LlamaIndexInstrumentor" if convention == "openinference" else "LlamaindexInstrumentor",
+            "google_generativeai": "GoogleGenerativeAIInstrumentor",
+            "google_genai": "GoogleGenAIInstrumentor",
+            "google_adk": "GoogleADKInstrumentor",
+            "huggingface_hub": "HuggingfaceHubInstrumentor",
+            "alephalpha": "AlephAlphaInstrumentor",
+            "mistralai": "MistralAIInstrumentor",
+            "vertexai": "VertexAIInstrumentor",
+            "litellm": "LiteLLMInstrumentor",
+            "crewai": "CrewAIInstrumentor",
+            "dspy": "DSPyInstrumentor",
+            "chromadb": "ChromaInstrumentor",
+            "beeai": "BeeAIInstrumentor",
+            "openai_agents": "OpenAIAgentsInstrumentor",
+            "pydantic_ai": "PydanticAIInstrumentor",
+            "mcp": "MCPInstrumentor" if convention == "openinference" else "McpInstrumentor",  # OpenInference=MCP, OpenLLMetry=Mcp
+        }
 
-                    GuardrailsInstrumentor().instrument()
-                    logger.info(
-                        "Neatlogs: Guardrails instrumentation enabled.")
-                except Exception as e:
-                    logger.warning(
-                        f"Neatlogs: Failed to instrument Guardrails: {e}")
-            else:
-                logger.warning(
-                    "Neatlogs: Detected 'guardrails' but 'openinference-instrumentation-guardrails' is not installed. "
-                    "Install with: uv add neatlogs[guardrails]"
-                )
+        if library in special_cases:
+            return special_cases[library]
 
-    # Haystack
-    if should_instrument("haystack"):
-        if importlib.util.find_spec("haystack"):
-            if importlib.util.find_spec("openinference.instrumentation.haystack"):
-                try:
-                    from openinference.instrumentation.haystack import HaystackInstrumentor
-
-                    HaystackInstrumentor().instrument()
-                    logger.info("Neatlogs: Haystack instrumentation enabled.")
-                except Exception as e:
-                    logger.warning(
-                        f"Neatlogs: Failed to instrument Haystack: {e}")
-            else:
-                logger.warning(
-                    "Neatlogs: Detected 'haystack' but 'openinference-instrumentation-haystack' is not installed. "
-                    "Install with: uv add neatlogs[haystack]"
-                )
-
-    # Instructor
-    if should_instrument("instructor"):
-        if importlib.util.find_spec("instructor"):
-            if importlib.util.find_spec("openinference.instrumentation.instructor"):
-                try:
-                    from openinference.instrumentation.instructor import InstructorInstrumentor
-
-                    InstructorInstrumentor().instrument()
-                    logger.info(
-                        "Neatlogs: Instructor instrumentation enabled.")
-                except Exception as e:
-                    logger.warning(
-                        f"Neatlogs: Failed to instrument Instructor: {e}")
-            else:
-                logger.warning(
-                    "Neatlogs: Detected 'instructor' but 'openinference-instrumentation-instructor' is not installed. "
-                    "Install with: uv add neatlogs[instructor]"
-                )
-
-    # MCP
-    if should_instrument("mcp"):
-        if importlib.util.find_spec("mcp"):
-            if importlib.util.find_spec("openinference.instrumentation.mcp"):
-                try:
-                    from openinference.instrumentation.mcp import MCPInstrumentor
-
-                    MCPInstrumentor().instrument()
-                    logger.info("Neatlogs: MCP instrumentation enabled.")
-                except Exception as e:
-                    logger.warning(
-                        f"Neatlogs: Failed to instrument MCP: {e}")
-            else:
-                logger.warning(
-                    "Neatlogs: Detected 'mcp' but 'openinference-instrumentation-mcp' is not installed. "
-                    "Install with: uv add neatlogs[mcp]"
-                )
-
-    # MistralAI
-    if should_instrument("mistralai"):
-        if importlib.util.find_spec("mistralai"):
-            if importlib.util.find_spec("openinference.instrumentation.mistralai"):
-                try:
-                    from openinference.instrumentation.mistralai import MistralAIInstrumentor
-
-                    MistralAIInstrumentor().instrument()
-                    logger.info("Neatlogs: MistralAI instrumentation enabled.")
-                except Exception as e:
-                    logger.warning(
-                        f"Neatlogs: Failed to instrument MistralAI: {e}")
-            else:
-                logger.warning(
-                    "Neatlogs: Detected 'mistralai' but 'openinference-instrumentation-mistralai' is not installed. "
-                    "Install with: uv add neatlogs[mistralai]"
-                )
-
-    # Portkey
-    if should_instrument("portkey"):
-        if importlib.util.find_spec("portkey"):
-            if importlib.util.find_spec("openinference.instrumentation.portkey"):
-                try:
-                    from openinference.instrumentation.portkey import PortkeyInstrumentor
-
-                    PortkeyInstrumentor().instrument()
-                    logger.info("Neatlogs: Portkey instrumentation enabled.")
-                except Exception as e:
-                    logger.warning(
-                        f"Neatlogs: Failed to instrument Portkey: {e}")
-            else:
-                logger.warning(
-                    "Neatlogs: Detected 'portkey' but 'openinference-instrumentation-portkey' is not installed. "
-                    "Install with: uv add neatlogs[portkey]"
-                )
-
-    # PydanticAI
-    if should_instrument("pydantic-ai"):
-        if importlib.util.find_spec("pydantic_ai"):
-            if importlib.util.find_spec("openinference.instrumentation.pydantic_ai"):
-                try:
-                    from openinference.instrumentation.pydantic_ai import PydanticAIInstrumentor
-
-                    PydanticAIInstrumentor().instrument()
-                    logger.info(
-                        "Neatlogs: PydanticAI instrumentation enabled.")
-                except Exception as e:
-                    logger.warning(
-                        f"Neatlogs: Failed to instrument PydanticAI: {e}")
-            else:
-                logger.warning(
-                    "Neatlogs: Detected 'pydantic_ai' but 'openinference-instrumentation-pydantic-ai' is not installed. "
-                    "Install with: uv add neatlogs[pydantic-ai]"
-                )
-
-    # smolagents
-    if should_instrument("smolagents"):
-        if importlib.util.find_spec("smolagents"):
-            if importlib.util.find_spec("openinference.instrumentation.smolagents"):
-                try:
-                    from openinference.instrumentation.smolagents import SmolagentsInstrumentor
-
-                    SmolagentsInstrumentor().instrument()
-                    logger.info(
-                        "Neatlogs: smolagents instrumentation enabled.")
-                except Exception as e:
-                    logger.warning(
-                        f"Neatlogs: Failed to instrument smolagents: {e}")
-            else:
-                logger.warning(
-                    "Neatlogs: Detected 'smolagents' but 'openinference-instrumentation-smolagents' is not installed. "
-                    "Install with: uv add neatlogs[smolagents]"
-                )
-
-    # VertexAI
-    if should_instrument("vertexai"):
-        if importlib.util.find_spec("vertexai") or importlib.util.find_spec("google.cloud.aiplatform"):
-            if importlib.util.find_spec("openinference.instrumentation.vertexai"):
-                try:
-                    from openinference.instrumentation.vertexai import VertexAIInstrumentor
-
-                    VertexAIInstrumentor().instrument()
-                    logger.info("Neatlogs: VertexAI instrumentation enabled.")
-                except Exception as e:
-                    logger.warning(
-                        f"Neatlogs: Failed to instrument VertexAI: {e}")
-            else:
-                logger.warning(
-                    "Neatlogs: Detected 'vertexai' but 'openinference-instrumentation-vertexai' is not installed. "
-                    "Install with: uv add neatlogs[vertexai]"
-                )
-
-    # Autogen AgentChat
-    if should_instrument("autogen-agentchat"):
-        if importlib.util.find_spec("autogen") or importlib.util.find_spec("autogen_agentchat"):
-            if importlib.util.find_spec("openinference.instrumentation.autogen_agentchat"):
-                try:
-                    from openinference.instrumentation.autogen_agentchat import AutogenAgentchatInstrumentor
-
-                    AutogenAgentchatInstrumentor().instrument()
-                    logger.info(
-                        "Neatlogs: Autogen AgentChat instrumentation enabled.")
-                except Exception as e:
-                    logger.warning(
-                        f"Neatlogs: Failed to instrument Autogen AgentChat: {e}")
-            else:
-                logger.warning(
-                    "Neatlogs: Detected 'autogen' but 'openinference-instrumentation-autogen-agentchat' is not installed. "
-                    "Install with: uv add neatlogs[autogen-agentchat]"
-                )
-
-    logger.info("Neatlogs: Auto-instrumentation setup complete.")
+        # Default: capitalize first letter
+        return f"{library.capitalize()}Instrumentor"
+    
+    def _is_library_installed(self, library: str) -> bool:
+        """
+        Check if a library is installed.
+        
+        Args:
+            library: Library name
+            
+        Returns:
+            True if library is installed
+        """
+        try:
+            # Convert library name to import name (handle special cases).
+            #
+            # NOTE: Some registry keys are "logical" names (e.g. google_genai) whose
+            # import path is different (google.genai). If we don't map these, we will
+            # incorrectly skip instrumentation with "not installed".
+            special_imports = {
+                # New Google GenAI SDK (pip: google-genai)
+                "google_genai": "google.genai",
+                # Older Google Generative AI SDK (pip: google-generativeai)
+                "google_generativeai": "google.generativeai",
+                # Milvus python client (pip: pymilvus)
+                "milvus": "pymilvus",
+            }
+            import_name = special_imports.get(library) or library.replace("-", "_")
+            importlib.import_module(import_name)
+            return True
+        except ImportError:
+            return False

@@ -43,7 +43,7 @@ INSTRUMENTATION_REGISTRY = {
         "openai": {
             "openinference": "openinference.instrumentation.openai",
             "openllmetry": "opentelemetry.instrumentation.openai",
-            # "neatlogs": "neatlogs.sdk.neatlogs_sdk_v4_langfuse.neatlogs_instrumentation_openai",
+            # "neatlogs": "neatlogs.neatlogs_instrumentation_openai",
             "default_span_kind": "LLM",
         },
         "anthropic": {

@@ -5,6 +5,7 @@ This module is a drop-in replacement for init.py while we experiment with
 deduping spans emitted by dual instrumentation (OpenInference + OpenLLMetry).
 """
 
+import atexit
 import os
 import time
 import uuid
@@ -12,6 +13,7 @@ from typing import Optional, List
 
 from opentelemetry import trace, metrics
 from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.sampling import TraceIdRatioBased
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.resources import Resource, SERVICE_NAME
 
@@ -19,6 +21,9 @@ from .core.exporter import NeatlogsExporter
 from .core.span_processor import NeatlogsSpanProcessor
 from .core.metrics_correlation import SpanMetricMeterProviderProxy
 from .instrumentation.manager import InstrumentationManager
+from .core.logger import get_logger
+
+logger = get_logger()
 
 
 _initialized = False
@@ -91,7 +96,7 @@ def init(
 
     if _initialized:
         if debug:
-            print("Neatlogs already initialized")
+            logger.warning("Neatlogs already initialized, skipping re-initialization")
         return
 
     api_key = api_key or os.getenv("NEATLOGS_API_KEY")
@@ -118,7 +123,7 @@ def init(
         random_suffix = uuid.uuid4().hex[:8]
         final_session_id = f"session_{timestamp}_{random_suffix}"
         if debug:
-            print(f"Auto-generated session_id: {final_session_id}")
+            logger.debug(f"Auto-generated session_id: {final_session_id}")
 
     # Store session_id and user_id in global state for trace() access
     global _session_config
@@ -143,12 +148,19 @@ def init(
     if existing_provider and hasattr(existing_provider, "add_span_processor"):
         provider = existing_provider
         if debug:
-            print("Using existing tracer provider")
+            logger.debug("Using existing tracer provider")
     else:
-        provider = TracerProvider(resource=resource)
+        # Create sampler for trace sampling (only if sample_rate < 1.0)
+        sampler = None
+        if sample_rate < 1.0:
+            sampler = TraceIdRatioBased(sample_rate)
+            if debug:
+                logger.debug(f"Using TraceIdRatioBased sampler with rate {sample_rate}")
+
+        provider = TracerProvider(resource=resource, sampler=sampler)
         trace.set_tracer_provider(provider)
         if debug:
-            print("Created new tracer provider")
+            logger.debug("Created new tracer provider")
 
     _tracer_provider = provider
 
@@ -168,7 +180,7 @@ def init(
     provider.add_span_processor(_span_processor)
 
     if debug:
-        print("Neatlogs tracer provider initialized")
+        logger.debug("Neatlogs tracer provider initialized")
 
     # Metrics provider
     global _meter_provider
@@ -180,7 +192,7 @@ def init(
     metrics.set_meter_provider(SpanMetricMeterProviderProxy(_meter_provider, exporter))
 
     if debug:
-        print("Neatlogs meter provider initialized")
+        logger.debug("Neatlogs meter provider initialized")
 
     manager = InstrumentationManager(
         provider=provider,
@@ -195,19 +207,23 @@ def init(
     if instrument_tags or instrumentations:
         manager.instrument(tags=instrument_tags, libraries=instrumentations)
         if debug:
-            print(f"Instrumented libraries: {manager.instrumented}")
+            logger.debug(f"Instrumented libraries: {manager.instrumented}")
+
+    # Register automatic shutdown handler to prevent data loss
+    # This ensures flush/shutdown is called even if user forgets
+    atexit.register(shutdown)
 
     _initialized = True
 
     if debug:
-        print("Neatlogs SDK initialized successfully")
-        print(f"Endpoint: {endpoint}")
-        print(f"Workflow: {workflow_name or '(none)'}")
-        print(f"Session: {final_session_id or '(none)'}")
-        print(f"User: {user_id or '(none)'}")
-        print(f"Instrumentations: {manager.instrumented or '(none)'}")
-        print(f"Tags: {instrument_tags or []}")
-        print(f"Sample Rate: {sample_rate}")
+        logger.info("Neatlogs SDK initialized successfully")
+        logger.info(f"Endpoint: {endpoint}")
+        logger.info(f"Workflow: {workflow_name or '(none)'}")
+        logger.info(f"Session: {final_session_id or '(none)'}")
+        logger.info(f"User: {user_id or '(none)'}")
+        logger.info(f"Instrumentations: {manager.instrumented or '(none)'}")
+        logger.info(f"Tags: {instrument_tags or []}")
+        logger.info(f"Sample Rate: {sample_rate}")
 
 
 def flush(timeout_millis: int = 30000) -> bool:
@@ -217,18 +233,22 @@ def flush(timeout_millis: int = 30000) -> bool:
 
     if _tracer_provider:
         try:
+            logger.debug("Flushing tracer provider...")
             ok = _tracer_provider.force_flush(timeout_millis=timeout_millis)
             success = bool(ok) and success
+            logger.debug("Tracer provider flushed successfully")
         except Exception as e:
-            print(f"Error flushing spans: {e}")
+            logger.error(f"Error flushing spans: {e}", exc_info=True)
             success = False
 
     if _meter_provider:
         try:
+            logger.debug("Flushing meter provider...")
             ok = _meter_provider.force_flush(timeout_millis=timeout_millis)
             success = bool(ok) and success
+            logger.debug("Meter provider flushed successfully")
         except Exception as e:
-            print(f"Error flushing metrics: {e}")
+            logger.error(f"Error flushing metrics: {e}", exc_info=True)
             success = False
 
     return success
@@ -242,28 +262,39 @@ def get_session_config():
 def shutdown(timeout_millis: int = 30000) -> bool:
     """Shutdown the SDK and flush pending spans/metrics."""
     global _tracer_provider, _meter_provider, _span_processor, _initialized
+
+    # Unregister atexit handler to prevent double shutdown
+    try:
+        atexit.unregister(shutdown)
+    except Exception:
+        pass  # Ignore if not registered
+
     success = True
 
     if _span_processor:
         try:
             _span_processor._log_performance_stats()
         except Exception as e:
-            print(f"Error logging performance stats: {e}")
+            logger.warning(f"Error logging performance stats: {e}")
 
     if _tracer_provider:
         try:
+            logger.debug("Shutting down tracer provider...")
             ok = _tracer_provider.shutdown()
             success = (ok is None or bool(ok)) and success
+            logger.debug("Tracer provider shut down successfully")
         except Exception as e:
-            print(f"Error shutting down tracer provider: {e}")
+            logger.error(f"Error shutting down tracer provider: {e}", exc_info=True)
             success = False
 
     if _meter_provider:
         try:
+            logger.debug("Shutting down meter provider...")
             ok = _meter_provider.shutdown()
             success = (ok is None or bool(ok)) and success
+            logger.debug("Meter provider shut down successfully")
         except Exception as e:
-            print(f"Error shutting down meter provider: {e}")
+            logger.error(f"Error shutting down meter provider: {e}", exc_info=True)
             success = False
 
     _initialized = False
@@ -273,4 +304,5 @@ def shutdown(timeout_millis: int = 30000) -> bool:
     _session_config["session_id"] = None
     _session_config["user_id"] = None
 
+    logger.info("Neatlogs SDK shutdown complete")
     return success

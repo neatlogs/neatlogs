@@ -511,6 +511,10 @@ class UnifiedAttributeProcessor:
             if not should_ignore:
                 unified[f"neatlogs.raw.{key}"] = value
 
+        span_kind = (attrs.get("neatlogs.span.kind") or attrs.get("openinference.span.kind") or "").lower()
+        if span_kind not in ("embedding", "retriever"):
+            unified.pop("neatlogs.vectordb.embedding_model", None)
+
         return unified
 
     def _map_recursive(

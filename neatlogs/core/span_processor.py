@@ -13,9 +13,9 @@ Implementation note:
 """
 
 import json
-import logging
 import os
 import random
+import threading
 import time
 from typing import Optional, Dict, Any, List
 
@@ -24,8 +24,9 @@ from opentelemetry.context import Context
 
 from .attribute_processor import UnifiedAttributeProcessor
 from .exporter import NeatlogsExporter
+from .logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger()
 
 
 class NeatlogsSpanProcessor(SpanProcessor):
@@ -49,7 +50,7 @@ class NeatlogsSpanProcessor(SpanProcessor):
         self._raw_log_file_path = None
         self._raw_log_file_handle = None
         if self._log_raw_spans_enabled:
-            self._raw_log_file_path = os.path.join(os.getcwd(), os.getenv("NEATLOGS_LOG_RAW_SPANS_FILE", "spans_raw.log"))
+            self._raw_log_file_path = os.path.join(os.getcwd(), os.getenv("NEATLOGS_LOG_RAW_SPANS_FILE", "spans_raw_optimized.log"))
             try:
                 self._raw_log_file_handle = open(self._raw_log_file_path, "a", encoding="utf-8")
             except Exception:
@@ -59,6 +60,16 @@ class NeatlogsSpanProcessor(SpanProcessor):
         # - merge attributes across spans
         # - re-parent children when suppressing wrapper spans
         self._pending: List[Dict[str, Any]] = []
+        self._pending_lock = threading.Lock()
+        self._pending_event = threading.Event()
+        self._stop_background = threading.Event()
+        self._dedupe_interval = float(os.getenv("NEATLOGS_DEDUPE_INTERVAL_S", "1.0"))
+        self._dedupe_latency_ns = int(os.getenv("NEATLOGS_DEDUPE_LATENCY_MS", "2000")) * 1_000_000
+        self._max_pending_spans = int(os.getenv("NEATLOGS_MAX_PENDING_SPANS", "5000"))
+        self._pending_high_watermark = 0
+        self._pending_dropped = 0
+        self._background_thread = threading.Thread(target=self._background_flush_loop, daemon=True)
+        self._background_thread.start()
 
         self.perf_stats = {
             "on_start_time": 0.0,
@@ -66,8 +77,6 @@ class NeatlogsSpanProcessor(SpanProcessor):
             "spans_processed": 0,
             "spans_exported": 0,
         }
-
-        logger.setLevel(logging.DEBUG if self.debug else logging.INFO)
 
     def _init_processor(self) -> None:
         base_path = os.path.dirname(os.path.dirname(__file__))
@@ -249,7 +258,23 @@ class NeatlogsSpanProcessor(SpanProcessor):
                 ),
             }
 
-            self._pending.append(span_data)
+            with self._pending_lock:
+                # Enforce bounded queue to prevent memory exhaustion
+                if len(self._pending) >= self._max_pending_spans:
+                    # Drop oldest span to make room (FIFO eviction)
+                    dropped_span = self._pending.pop(0)
+                    self._pending_dropped += 1
+                    logger.warning(
+                        f"Pending buffer full ({self._max_pending_spans} spans), "
+                        f"dropping oldest span: {dropped_span.get('name')} "
+                        f"(total dropped: {self._pending_dropped})"
+                    )
+
+                self._pending.append(span_data)
+                curr = len(self._pending)
+                if curr > self._pending_high_watermark:
+                    self._pending_high_watermark = curr
+            self._pending_event.set()
         finally:
             self.perf_stats["on_end_time"] += time.perf_counter() - start_time
 
@@ -273,6 +298,52 @@ class NeatlogsSpanProcessor(SpanProcessor):
         # Stable ordering helps debugging and makes spans.log nicer.
         out.sort(key=lambda s: (s["trace_id"], s.get("start_time") or 0, s["span_id"]))
         return out
+
+    def _background_flush_loop(self) -> None:
+        while not self._stop_background.is_set():
+            self._pending_event.wait(timeout=self._dedupe_interval)
+            self._pending_event.clear()
+            self._flush_ready_spans()
+
+    def _flush_ready_spans(self, force: bool = False) -> None:
+        with self._pending_lock:
+            pending = list(self._pending)
+            self._pending.clear()
+
+        if not pending:
+            return
+
+        now_ns = time.time_ns()
+        cutoff_ns = now_ns - self._dedupe_latency_ns
+
+        ready: List[Dict[str, Any]] = []
+        remaining: List[Dict[str, Any]] = []
+
+        for s in pending:
+            end_ts = s.get("end_time")
+            if force or (isinstance(end_ts, int) and end_ts <= cutoff_ns):
+                ready.append(s)
+            else:
+                remaining.append(s)
+
+        if not force:
+            if len(remaining) > self._max_pending_spans:
+                remaining.sort(key=lambda s: int(s.get("end_time") or 0))
+                overflow = len(remaining) - self._max_pending_spans
+                ready.extend(remaining[:overflow])
+                remaining = remaining[overflow:]
+            with self._pending_lock:
+                self._pending.extend(remaining)
+        else:
+            ready.extend(remaining)
+
+        if not ready:
+            return
+
+        rewritten = self._dedupe_and_rewrite(ready)
+        for s in rewritten:
+            self.exporter.export(s)
+            self.perf_stats["spans_exported"] += 1
 
     def _dedupe_trace(self, spans: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         spans_by_id = {s["span_id"]: s for s in spans}
@@ -681,13 +752,7 @@ class NeatlogsSpanProcessor(SpanProcessor):
 
     def force_flush(self, timeout_millis: int = 30000) -> bool:
         try:
-            pending = self._pending
-            self._pending = []
-
-            rewritten = self._dedupe_and_rewrite(pending)
-            for s in rewritten:
-                self.exporter.export(s)
-                self.perf_stats["spans_exported"] += 1
+            self._flush_ready_spans(force=True)
 
             self.exporter.flush(timeout=timeout_millis / 1000.0)
             return True
@@ -696,6 +761,10 @@ class NeatlogsSpanProcessor(SpanProcessor):
 
     def shutdown(self) -> None:
         try:
+            self._stop_background.set()
+            self._pending_event.set()
+            if self._background_thread.is_alive():
+                self._background_thread.join(timeout=1.0)
             self.force_flush()
         finally:
             self._log_performance_stats()
@@ -707,15 +776,20 @@ class NeatlogsSpanProcessor(SpanProcessor):
                     pass
 
     def _log_performance_stats(self) -> None:
+        # Don't print overhead stats unless explicitly debugging. This is noisy in production.
+        if not self.debug:
+            return
         stats = self.perf_stats
         if stats["spans_processed"] == 0:
             return
         total_time = stats["on_start_time"] + stats["on_end_time"]
         avg_ms = (total_time / stats["spans_processed"]) * 1000
         try:
-            print(
-                f"\nNeatlogs overhead: {total_time * 1000:.2f}ms total, {avg_ms:.3f}ms/span "
-                f"({stats['spans_processed']} spans)"
+            logger.info(
+                f"Neatlogs overhead: {total_time * 1000:.2f}ms total, {avg_ms:.3f}ms/span "
+                f"({stats['spans_processed']} spans, "
+                f"pending high watermark: {self._pending_high_watermark}, "
+                f"total dropped: {self._pending_dropped})"
             )
         except (ValueError, OSError):
             pass

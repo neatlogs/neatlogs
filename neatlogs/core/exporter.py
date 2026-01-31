@@ -320,7 +320,8 @@ class NeatlogsExporter:
                 response = requests.post(
                     self.endpoint,
                     headers={
-                        "Authorization": f"Bearer {self.api_key}",
+                        # "Authorization": f"Bearer {self.api_key}",
+                        "x-api-key": self.api_key,
                         "Content-Type": "application/json",
                     },
                     json=payload,

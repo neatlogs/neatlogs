@@ -246,6 +246,13 @@
             ],
             "target": "neatlogs.llm.temperature"
           },
+          "intermediate_steps": {
+            "description": "Derived ReAct-style steps extracted by the SDK (JSON array string).",
+            "sources": [
+              "llm.intermediate_steps"
+            ],
+            "target": "neatlogs.llm.intermediate_steps"
+          },
           "top_p": {
             "sources": [
               "gen_ai.request.top_p"

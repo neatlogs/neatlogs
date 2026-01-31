@@ -689,9 +689,10 @@ class NeatlogsSpanProcessor(SpanProcessor):
         ca = canonical.get("attributes", {})
 
         # Allow wrapper to override a small set of canonical keys where you want OpenLLMetry
-        # to win (e.g., request model for ClickHouse).
+        # to win (e.g., request model for ClickHouse, framework detection).
         override_keys = {
             "neatlogs.llm.model_name",
+            "neatlogs.framework",  # OpenLLMetry knows frameworks, OpenInference doesn't
         }
 
         for k, v in wa.items():

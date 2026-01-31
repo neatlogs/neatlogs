@@ -59,6 +59,9 @@ class UnifiedAttributeProcessor:
             self.logger.warning(f"Failed to enrich invocation parameters: {e}")
 
         unified = self._apply_namespace_mapping(attrs)
+        # Derive compact intermediate steps (ReAct-style) from already-normalized messages.
+        # This avoids parsing vendor-specific raw keys and keeps output stable for the backend.
+        self._add_intermediate_steps(unified)
         return unified
 
     def _normalize_conventions(self, span: ReadableSpan, attrs: Dict[str, Any]) -> Dict[str, Any]:
@@ -345,6 +348,142 @@ class UnifiedAttributeProcessor:
 
         return attrs
 
+    def _add_intermediate_steps(self, unified: Dict[str, Any]) -> None:
+        """
+        Populate `neatlogs.llm.intermediate_steps` when the LLM content includes ReAct-style
+        markers (Thought/Context/Action/Action Input/Observation/Final Answer).
+
+        This is intentionally compact and aggressively truncated to avoid payload bloat.
+        Full tool outputs remain on tool spans.
+        """
+
+        if "neatlogs.llm.intermediate_steps" in unified:
+            return
+        if str(unified.get("neatlogs.span.kind", "")).lower() != "llm":
+            return
+
+        steps = self._extract_react_steps_from_messages(unified)
+        if not steps:
+            return
+
+        # Keep it as a JSON string so ClickHouse can store it directly.
+        unified["neatlogs.llm.intermediate_steps"] = json.dumps(steps, ensure_ascii=True)
+
+    def _extract_react_steps_from_messages(self, unified: Dict[str, Any]) -> List[Dict[str, str]]:
+        def _truncate(val: str, max_len: int) -> str:
+            val = (val or "").strip()
+            if len(val) <= max_len:
+                return val
+            return val[:max_len] + f"...(truncated,len={len(val)})"
+
+        # Prefer output assistant messages. If none contain markers, fall back to assistant
+        # messages in the input (some frameworks echo the scratchpad into the prompt).
+        output_texts = self._collect_role_texts(
+            unified, prefix="neatlogs.llm.output_messages", role="assistant"
+        )
+        steps = self._parse_react_steps(output_texts)
+        if steps:
+            return steps
+
+        input_texts = self._collect_role_texts(
+            unified, prefix="neatlogs.llm.input_messages", role="assistant"
+        )
+        return self._parse_react_steps(input_texts)
+
+    def _collect_role_texts(
+        self, unified: Dict[str, Any], prefix: str, role: str
+    ) -> List[str]:
+        idx_re = re.compile(rf"^{re.escape(prefix)}\.(\d+)\.content$")
+        idxs: set[int] = set()
+        for k in unified.keys():
+            m = idx_re.match(k)
+            if m:
+                try:
+                    idxs.add(int(m.group(1)))
+                except Exception:
+                    pass
+
+        texts: List[str] = []
+        for i in sorted(idxs):
+            r = unified.get(f"{prefix}.{i}.role")
+            if not isinstance(r, str) or r.lower() != role:
+                continue
+            c = unified.get(f"{prefix}.{i}.content")
+            if isinstance(c, str) and "thought:" in c.lower():
+                # Bound per-message scan cost.
+                texts.append(c[:20000])
+        return texts
+
+    def _parse_react_steps(self, texts: List[str]) -> List[Dict[str, str]]:
+        if not texts:
+            return []
+
+        marker_re = re.compile(
+            r"(?im)(?:^|\n)\s*(Thought|Context|Action|Action Input|Observation|Final Answer)\s*:\s*"
+        )
+
+        def _truncate(val: str, max_len: int) -> str:
+            val = (val or "").strip()
+            if len(val) <= max_len:
+                return val
+            return val[:max_len] + f"...(truncated,len={len(val)})"
+
+        all_steps: List[Dict[str, str]] = []
+
+        for text in texts:
+            matches = list(marker_re.finditer(text))
+            if not matches:
+                continue
+
+            cur: Dict[str, str] = {}
+
+            def _commit() -> None:
+                nonlocal cur
+                if not cur:
+                    return
+                # Drop pure instructions / empty blocks.
+                if not any(v for v in cur.values()):
+                    cur = {}
+                    return
+                if all_steps and all_steps[-1] == cur:
+                    cur = {}
+                    return
+                all_steps.append(cur)
+                cur = {}
+
+            for idx, m in enumerate(matches):
+                label = m.group(1).strip().lower()
+                start = m.end()
+                end = matches[idx + 1].start() if idx + 1 < len(matches) else len(text)
+                value = text[start:end].strip()
+
+                # New step boundary on repeated Thought markers.
+                if label == "thought" and cur:
+                    _commit()
+
+                if label == "thought":
+                    cur["thought"] = _truncate(value, 600)
+                elif label == "context":
+                    # Context can be extremely large in RAG; keep it minimal.
+                    cur["context"] = _truncate(value, 500)
+                elif label == "action":
+                    cur["action"] = _truncate(value, 200)
+                elif label == "action input":
+                    cur["action_input"] = _truncate(value, 1000)
+                elif label == "observation":
+                    # Observations often include tool output; store only a preview.
+                    cur["observation"] = _truncate(value, 500)
+                elif label == "final answer":
+                    cur["final_answer"] = _truncate(value, 1200)
+
+            _commit()
+
+        # Hard cap to avoid bloat on long agent loops.
+        if len(all_steps) > 25:
+            all_steps = all_steps[:25]
+
+        return all_steps
+
     def _looks_like_http(self, attrs: Dict[str, Any]) -> bool:
         # Keep this conservative: only label as HTTP when explicit http keys exist.
         for k in ("http.method", "http.url", "http.status_code", "http.route"):
@@ -514,6 +653,27 @@ class UnifiedAttributeProcessor:
         span_kind = (attrs.get("neatlogs.span.kind") or attrs.get("openinference.span.kind") or "").lower()
         if span_kind not in ("embedding", "retriever"):
             unified.pop("neatlogs.vectordb.embedding_model", None)
+
+        # ========================================================================
+        # FRAMEWORK DETECTION (from gen_ai.system)
+        # ========================================================================
+        # Only orchestration frameworks should be mapped to framework field.
+        # LLM providers (openai, anthropic, etc.) and vector DBs should NOT set framework.
+        KNOWN_FRAMEWORKS = {
+            'langchain',
+            'llamaindex',
+            'crewai',
+            'haystack',
+            'agno',
+            'openai-agents'
+        }
+
+        # Check gen_ai.system (could be in attrs, or already mapped to neatlogs.llm.system)
+        gen_ai_system = attrs.get("gen_ai.system") or unified.get("neatlogs.llm.system") or ""
+        if isinstance(gen_ai_system, str) and gen_ai_system:
+            gen_ai_system_lower = gen_ai_system.lower()
+            if gen_ai_system_lower in KNOWN_FRAMEWORKS:
+                unified["neatlogs.framework"] = gen_ai_system_lower
 
         return unified
 

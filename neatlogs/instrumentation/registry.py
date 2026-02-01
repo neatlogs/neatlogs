@@ -1,15 +1,8 @@
 """
 Registry of available instrumentations.
-
-Maps semantic tags and library names to instrumentation packages from both
-OpenInference and OpenLLMetry ecosystems.
 """
 
-# Registry of all available instrumentations from:
-# - OpenLLMetry: https://github.com/traceloop/openllmetry/tree/main/packages
-# - OpenInference: https://github.com/Arize-ai/openinference/tree/main/python/instrumentation
 INSTRUMENTATION_REGISTRY = {
-    # Tag-based grouping for convenient selection
     "tags": {
         "llm": [
             "openai", "anthropic", "cohere", "bedrock", "groq", "together", "vertexai",
@@ -33,17 +26,10 @@ INSTRUMENTATION_REGISTRY = {
         ],
     },
     
-    # Library-specific instrumentations
-    # For each library, we specify:
-    # - openllmetry: Package name for OpenLLMetry instrumentation
-    # - openinference: Package name for OpenInference instrumentation
-    # - default_span_kind: Hint for span kind inference
     "libraries": {
-        # ===== LLM Providers (OpenAI, Anthropic, etc.) =====
         "openai": {
             "openinference": "openinference.instrumentation.openai",
             "openllmetry": "opentelemetry.instrumentation.openai",
-            # "neatlogs": "neatlogs.neatlogs_instrumentation_openai",
             "default_span_kind": "LLM",
         },
         "anthropic": {
@@ -122,7 +108,6 @@ INSTRUMENTATION_REGISTRY = {
             "default_span_kind": "LLM",
         },
         
-        # ===== AI Frameworks =====
         "langchain": {
             "openllmetry": "opentelemetry.instrumentation.langchain",
             "openinference": "openinference.instrumentation.langchain",
@@ -154,10 +139,9 @@ INSTRUMENTATION_REGISTRY = {
             "default_span_kind": "CHAIN",
         },
         
-        # ===== HTTP Libraries (CRITICAL for context propagation) =====
         "requests": {
             "openllmetry": "opentelemetry.instrumentation.requests",
-            "openinference": None,  # No OpenInference HTTP instrumentation
+            "openinference": None,
             "default_span_kind": "TOOL",
         },
         "httpx": {
@@ -176,7 +160,6 @@ INSTRUMENTATION_REGISTRY = {
             "default_span_kind": "TOOL",
         },
         
-        # ===== Vector Databases & Search =====
         "chromadb": {
             "openllmetry": "opentelemetry.instrumentation.chromadb",
             "openinference": None,
@@ -223,7 +206,6 @@ INSTRUMENTATION_REGISTRY = {
             "default_span_kind": "RETRIEVER",
         },
         
-        # ===== Other Frameworks & Tools =====
         "instructor": {
             "openllmetry": "opentelemetry.instrumentation.instructor",
             "openinference": "openinference.instrumentation.instructor",
@@ -240,7 +222,6 @@ INSTRUMENTATION_REGISTRY = {
             "default_span_kind": "AGENT",
         },
         
-        # ===== New OpenInference Packages =====
         "google_genai": {
             "openllmetry": None,
             "openinference": "openinference.instrumentation.google_genai",
@@ -297,8 +278,8 @@ INSTRUMENTATION_REGISTRY = {
             "default_span_kind": "CHAIN",
         },
         "mcp": {
-            "openllmetry": "opentelemetry.instrumentation.mcp",  # Span creation
-            "openinference": "openinference.instrumentation.mcp",  # Context propagation
+            "openllmetry": "opentelemetry.instrumentation.mcp",
+            "openinference": "openinference.instrumentation.mcp",
             "default_span_kind": "TOOL",
         },
     }

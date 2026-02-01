@@ -1,13 +1,5 @@
 """
 Decorator primitives for Neatlogs custom orchestration spans.
-
-We follow the same core pattern as OpenInference/Phoenix + Traceloop:
-- Decorators create OpenTelemetry spans around user functions
-- Span semantics are expressed via `openinference.span.kind`
-- Inputs/outputs are captured in `input.value` / `output.value` (JSON) when enabled
-
-These decorators are intentionally framework-agnostic: they are meant to be used when
-the user's orchestration framework is custom or not supported by auto-instrumentations.
 """
 
 from __future__ import annotations
@@ -25,11 +17,6 @@ F = TypeVar("F", bound=Callable[..., Any])
 
 
 def _should_capture_content() -> bool:
-    """
-    Controls whether decorator spans capture input/output payloads.
-
-    We intentionally respect Traceloop's environment variable for compatibility.
-    """
     v = os.getenv("NEATLOGS_TRACE_CONTENT")
     if v is None:
         v = os.getenv("TRACELOOP_TRACE_CONTENT")
@@ -46,10 +33,6 @@ def _safe_json_dumps(value: Any) -> str:
 
 
 def _bind_call_args(func: Callable[..., Any], args: Tuple[Any, ...], kwargs: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Bind args/kwargs to parameter names so inputs are stable and readable.
-    Falls back to raw args/kwargs when binding fails.
-    """
     try:
         sig = inspect.signature(func)
         bound = sig.bind_partial(*args, **kwargs)
@@ -69,23 +52,18 @@ def _set_common_span_attrs(
     metadata: Optional[Dict[str, Any]] = None,
     attributes: Optional[Dict[str, Any]] = None,
 ) -> None:
-    # Neatlogs wrapper marker: these spans are "orchestration" not provider spans.
     span.set_attribute("neatlogs.internal", True)
 
-    # Canonical semantic kind.
     span.set_attribute("openinference.span.kind", openinference_kind)
 
-    # Optional common metadata in OpenInference conventions.
     if tags:
         span.set_attribute("tag.tags", tags)
     if metadata:
         span.set_attribute("metadata", _safe_json_dumps(metadata))
 
-    # Optional versioning (align with PromptTemplate/observe usage patterns).
     if version:
         span.set_attribute("neatlogs.version", version)
 
-    # Extra user attributes.
     if attributes:
         for k, v in attributes.items():
             if v is None:
@@ -162,7 +140,7 @@ def _decorate_span(
                         span.set_status(Status(StatusCode.ERROR, str(e)))
                         raise
 
-            return async_wrapper  # type: ignore[return-value]
+            return async_wrapper
 
         @functools.wraps(func)
         def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
@@ -203,6 +181,6 @@ def _decorate_span(
                     span.set_status(Status(StatusCode.ERROR, str(e)))
                     raise
 
-        return sync_wrapper  # type: ignore[return-value]
+        return sync_wrapper
 
     return decorator

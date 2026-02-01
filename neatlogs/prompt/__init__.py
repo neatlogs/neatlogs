@@ -1,5 +1,5 @@
 """
-Prompt capture utilities for Neatlogs SDK v4.
+Prompt capture utilities for Neatlogs SDK.
 """
 
 from .capture import capture_prompt, capture_vars

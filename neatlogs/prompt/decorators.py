@@ -15,7 +15,7 @@ def observe(name: Optional[str] = None, version: Optional[str] = None, as_type: 
     Decorator that auto-captures function arguments as prompt variables.
     
     Variables are propagated via OpenTelemetry baggage to child LLM spans,
-    ensuring they appear on the actual LLM span (openinference.span.kind="LLM")
+    ensuring they appear on the actual LLM span
     for consistent querying in the backend.
     
     Args:
@@ -42,7 +42,6 @@ def observe(name: Optional[str] = None, version: Optional[str] = None, as_type: 
             tracer = otel_trace.get_tracer(__name__)
             span_name = name or func.__name__
             
-            # Capture function arguments
             variables_json = None
             template = None
             try:
@@ -52,14 +51,11 @@ def observe(name: Optional[str] = None, version: Optional[str] = None, as_type: 
                 variables = dict(bound.arguments)
                 variables_json = json.dumps(variables, default=str)
                 
-                # Try to extract template from docstring (optional)
                 if func.__doc__:
-                    # First line of docstring could be the template
                     template = func.__doc__.strip().split('\n')[0]
             except Exception:
                 pass
             
-            # Set prompt metadata in context so child LLM spans can access it
             ctx = get_current()
             if variables_json:
                 ctx = set_value("neatlogs.prompt_variables", variables_json, context=ctx)
@@ -68,15 +64,11 @@ def observe(name: Optional[str] = None, version: Optional[str] = None, as_type: 
             if version:
                 ctx = set_value("neatlogs.prompt_version", version, context=ctx)
             
-            # Attach the modified context
             token = attach(ctx)
             try:
-                # Start wrapper span
                 with tracer.start_as_current_span(span_name) as span:
-                    # Mark as internal wrapper span (filtered in UI)
                     span.set_attribute("neatlogs.internal", True)
                     
-                    # Set span kind for wrapper
                     span_kind_map = {
                         "chain": "CHAIN",
                         "tool": "TOOL",
@@ -84,7 +76,6 @@ def observe(name: Optional[str] = None, version: Optional[str] = None, as_type: 
                     }
                     span.set_attribute("openinference.span.kind", span_kind_map.get(as_type, "CHAIN"))
                     
-                    # Execute function (child LLM spans will inherit these attributes via processor)
                     result = func(*args, **kwargs)
                     
                     return result
@@ -96,7 +87,6 @@ def observe(name: Optional[str] = None, version: Optional[str] = None, as_type: 
             tracer = otel_trace.get_tracer(__name__)
             span_name = name or func.__name__
             
-            # Capture function arguments
             variables_json = None
             template = None
             try:
@@ -106,13 +96,11 @@ def observe(name: Optional[str] = None, version: Optional[str] = None, as_type: 
                 variables = dict(bound.arguments)
                 variables_json = json.dumps(variables, default=str)
                 
-                # Try to extract template from docstring (optional)
                 if func.__doc__:
                     template = func.__doc__.strip().split('\n')[0]
             except Exception:
                 pass
             
-            # Set prompt metadata in context so child LLM spans can access it
             ctx = get_current()
             if variables_json:
                 ctx = set_value("neatlogs.prompt_variables", variables_json, context=ctx)
@@ -121,15 +109,11 @@ def observe(name: Optional[str] = None, version: Optional[str] = None, as_type: 
             if version:
                 ctx = set_value("neatlogs.prompt_version", version, context=ctx)
             
-            # Attach the modified context
             token = attach(ctx)
             try:
-                # Start wrapper span
                 with tracer.start_as_current_span(span_name) as span:
-                    # Mark as internal wrapper span (filtered in UI)
                     span.set_attribute("neatlogs.internal", True)
                     
-                    # Set span kind for wrapper
                     span_kind_map = {
                         "chain": "CHAIN",
                         "tool": "TOOL",
@@ -137,14 +121,12 @@ def observe(name: Optional[str] = None, version: Optional[str] = None, as_type: 
                     }
                     span.set_attribute("openinference.span.kind", span_kind_map.get(as_type, "CHAIN"))
                     
-                    # Execute async function (child LLM spans will inherit these attributes via processor)
                     result = await func(*args, **kwargs)
                     
                     return result
             finally:
                 detach(token)
         
-        # Return appropriate wrapper based on function type
         if inspect.iscoroutinefunction(func):
             return async_wrapper
         else:

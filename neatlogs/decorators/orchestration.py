@@ -1,12 +1,5 @@
 """
-Decorators for custom orchestration (decorators-first).
-
-These are used when the user's orchestration is custom (not LangChain/CrewAI/etc.),
-but they still want consistent traces that match OpenInference semantics.
-
-We intentionally emit OpenTelemetry spans with `openinference.span.kind` so:
-- OpenInference instrumentations remain canonical for provider spans (LLM/EMBEDDING)
-- Neatlogs can dedupe/merge OpenLLMetry spans into the canonical OpenInference spans
+Decorators for custom orchestration.
 """
 
 from __future__ import annotations
@@ -31,8 +24,6 @@ def workflow(
 ) -> Callable[[F], F]:
     """
     Root/top-level orchestration span.
-
-    OpenInference does not distinguish "workflow" vs "chain" kinds; both are CHAIN.
     """
     return _decorate_span(
         openinference_kind="CHAIN",
@@ -89,7 +80,6 @@ def agent(
     capture_output: Optional[bool] = None,
 ) -> Callable[[F], F]:
     extra = dict(attributes or {})
-    # OpenInference conventional agent name attribute.
     if agent_name:
         extra["agent.name"] = agent_name
     elif role:
@@ -126,7 +116,6 @@ def tool(
     capture_output: Optional[bool] = None,
 ) -> Callable[[F], F]:
     extra = dict(attributes or {})
-    # OpenInference tool attributes.
     if tool_name:
         extra["tool.name"] = tool_name
     if description:
@@ -137,7 +126,7 @@ def tool(
     return _decorate_span(
         openinference_kind="TOOL",
         name=name,
-        description=None,  # tool.description is already set above
+        description=None,
         version=version,
         tags=tags,
         metadata=metadata,
@@ -166,7 +155,6 @@ def retriever(
     """
 
     def _set_retrieval_attrs(span: Any, result: Any, bound_inputs: Dict[str, Any]) -> None:
-        # Best-effort query extraction for consistent querying downstream.
         query = None
         for k in ("query", "question", "text"):
             v = bound_inputs.get(k)
@@ -174,7 +162,6 @@ def retriever(
                 query = v
                 break
         if query is None:
-            # Fallback: first positional string argument.
             for v in bound_inputs.values():
                 if isinstance(v, str) and v:
                     query = v
@@ -182,7 +169,6 @@ def retriever(
         if query:
             span.set_attribute("retrieval.query", query)
 
-        # Best-effort documents extraction.
         docs: Any = None
         if isinstance(result, (list, tuple)):
             docs = list(result)
@@ -195,15 +181,12 @@ def retriever(
         if not docs:
             return
 
-        # Prefer OpenInference's indexed retrieval document convention so our existing
-        # attribute-mapping.json can upcycle into neatlogs.retriever.documents.{i}.
         for i, doc in enumerate(docs[:20]):
             if isinstance(doc, str):
                 span.set_attribute(f"retrieval.documents.{i}.document.content", doc)
                 continue
 
             if isinstance(doc, dict):
-                # Support common key variants.
                 doc_id = doc.get("id") or doc.get("_id") or doc.get("doc_id")
                 content = doc.get("content") or doc.get("document") or doc.get("text")
                 score = doc.get("score") or doc.get("_score") or doc.get("distance")

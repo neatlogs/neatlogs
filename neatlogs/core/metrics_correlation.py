@@ -1,20 +1,5 @@
 """
-Span-attached metric capture (no OpenLLMetry changes required).
-
-Problem:
-  OpenLLMetry records OTel metrics during an operation, but those metric datapoints
-  do not include trace_id/span_id, so you cannot attach them to the right span row
-  in ClickHouse deterministically.
-
-Constraint:
-  We must not patch/fork OpenLLMetry.
-
-Solution:
-  Wrap the global MeterProvider so that whenever any counter/histogram is recorded
-  while a span context is active, we ALSO emit a *raw metric point* to NeatlogsExporter
-  with trace_id/span_id (for downstream span-join), while still recording the metric
-  normally on the underlying instrument (with the original attributes, preserving
-  low-cardinality time-series semantics if you later decide to export metrics).
+Span-attached metric capture.
 """
 
 from __future__ import annotations
@@ -60,12 +45,11 @@ class _MetricEmitter:
             "unit": unit or "",
             "value": value,
             "attributes": dict(attributes or {}),
-            "timestamp": int(time.time() * 1_000_000_000),  # unix ns
+            "timestamp": int(time.time() * 1_000_000_000),
         }
         try:
             self._exporter.export_metrics([point])
         except Exception:
-            # Never break application logic due to metrics emission.
             return
 
 
@@ -78,7 +62,6 @@ class _CounterProxy:
         self._desc = description
 
     def add(self, amount: Any, attributes: Optional[dict[str, Any]] = None, context: Any = None) -> None:
-        # Emit raw point correlated to the active span (for span-join).
         try:
             self._emitter.emit(
                 metric_name=self._name,
@@ -90,7 +73,6 @@ class _CounterProxy:
             )
         except Exception:
             pass
-        # Preserve standard OTel metric recording (no trace/span injected).
         return self._inner.add(amount, attributes=attributes, context=context)
 
 

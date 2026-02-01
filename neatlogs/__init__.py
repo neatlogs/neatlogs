@@ -1,13 +1,5 @@
 """
-Neatlogs SDK v4 - Langfuse Architecture
-
-A production-ready observability SDK with:
-- Dual instrumentation (OpenInference + OpenLLMetry)
-- Smart attribute merging
-- Traceloop-style context propagation
-- Explicit prompt capture
-- OpenInference span kinds (9 granular types)
-- Universal PromptTemplate (eliminates variable duplication)
+Neatlogs SDK
 """
 
 from .init import init, flush, shutdown

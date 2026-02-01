@@ -10,7 +10,6 @@ import sys
 from typing import Optional
 
 
-# Create logger instance
 _logger: Optional[logging.Logger] = None
 
 
@@ -26,31 +25,37 @@ def get_logger() -> logging.Logger:
     if _logger is not None:
         return _logger
 
-    # Create logger
     _logger = logging.getLogger("neatlogs")
 
-    # Get log level from environment or default to INFO
     log_level_name = os.getenv("NEATLOGS_LOG_LEVEL", "INFO").upper()
     log_level = getattr(logging, log_level_name, logging.INFO)
     _logger.setLevel(log_level)
 
-    # Only add handler if none exists (prevent duplicate handlers)
     if not _logger.handlers:
-        # Create console handler
-        handler = logging.StreamHandler(sys.stdout)
-        handler.setLevel(log_level)
-
-        # Create formatter
         formatter = logging.Formatter(
             fmt="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
             datefmt="%Y-%m-%d %H:%M:%S"
         )
-        handler.setFormatter(formatter)
 
-        # Add handler to logger
-        _logger.addHandler(handler)
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler.setLevel(log_level)
+        console_handler.setFormatter(formatter)
+        _logger.addHandler(console_handler)
 
-    # Prevent propagation to root logger
+        log_file = os.getenv("NEATLOGS_LOG_FILE")
+        if log_file:
+            try:
+                log_dir = os.path.dirname(log_file)
+                if log_dir and not os.path.exists(log_dir):
+                    os.makedirs(log_dir, exist_ok=True)
+                
+                file_handler = logging.FileHandler(log_file)
+                file_handler.setLevel(log_level)
+                file_handler.setFormatter(formatter)
+                _logger.addHandler(file_handler)
+            except Exception as e:
+                _logger.warning(f"Failed to setup file logging to {log_file}: {e}")
+
     _logger.propagate = False
 
     return _logger

@@ -1,5 +1,5 @@
 """
-Instrumentation management for Neatlogs SDK v4.
+Instrumentation management for Neatlogs SDK.
 """
 
 from .manager import InstrumentationManager

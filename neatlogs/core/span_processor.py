@@ -1,15 +1,5 @@
 """
-Neatlogs span processor (new) with export-time span dedupe.
-
-Goal for this experiment:
-- Keep OpenInference spans as canonical when both OpenInference + OpenLLMetry emit spans for the same call.
-- Merge desired OpenLLMetry attributes into the OpenInference span.
-- Suppress exporting the OpenLLMetry "wrapper" span so the user sees 3 spans (wrapper, canonical, HTTP),
-  instead of 4 (wrapper + OpenLLMetry wrapper + OpenInference canonical + HTTP).
-
-Implementation note:
-- To keep this safe while we iterate, we buffer ended spans and perform dedupe at force_flush()/shutdown().
-  This matches your current usage pattern (you call neatlogs.flush() at the end of examples).
+Neatlogs span processor.
 """
 
 import json
@@ -42,8 +32,6 @@ class NeatlogsSpanProcessor(SpanProcessor):
 
         self._init_processor()
 
-        # Raw-span logging (debug helper). This captures the pre-processed OTel span JSON
-        # (OpenInference/OpenLLMetry) into a separate file so stdout stays clean.
         self._log_raw_spans_enabled = self.debug or (
             os.getenv("NEATLOGS_LOG_RAW_SPANS", "").lower() in ["true", "1", "yes"]
         )
@@ -56,9 +44,6 @@ class NeatlogsSpanProcessor(SpanProcessor):
             except Exception:
                 self._raw_log_file_handle = None
 
-        # Buffer span payloads until flush/shutdown so we can:
-        # - merge attributes across spans
-        # - re-parent children when suppressing wrapper spans
         self._pending: List[Dict[str, Any]] = []
         self._pending_lock = threading.Lock()
         self._pending_event = threading.Event()
@@ -89,7 +74,7 @@ class NeatlogsSpanProcessor(SpanProcessor):
             logger.error(f"Failed to load attribute-mapping.json: {e}")
             mapping_config = {}
 
-        pricing_path = os.path.join(base_path, "pricing.json")
+        pricing_path = os.path.join(base_path, "config", "pricing.json")
         try:
             with open(pricing_path, "r") as f:
                 pricing_config = json.load(f)
@@ -104,10 +89,6 @@ class NeatlogsSpanProcessor(SpanProcessor):
         )
 
     def on_start(self, span: Span, parent_context: Optional[Context] = None) -> None:
-        """
-        Keep existing prompt propagation behavior (reads neatlogs.prompt_* from OTel context
-        and stamps them onto LLM spans).
-        """
         start_time = time.perf_counter()
         try:
             span_kind = span.attributes.get("openinference.span.kind") if span.attributes else None
@@ -129,14 +110,11 @@ class NeatlogsSpanProcessor(SpanProcessor):
             template = get_value("neatlogs.prompt_template", context=ctx)
             version_val = get_value("neatlogs.prompt_version", context=ctx)
 
-            # PromptTemplate.compile() captures variables via PromptContext (contextvars),
-            # not OTel context. Fall back to PromptContext so variables land on the LLM span.
             if not variables_json:
                 captured_vars = PromptContext.get_variables()
                 if captured_vars:
                     variables_json = json.dumps(captured_vars, default=str)
 
-            # Same idea for template: prefer explicit OTel context, fall back to PromptContext.
             if not template:
                 captured_template = PromptContext.get_template()
                 if captured_template:
@@ -165,24 +143,19 @@ class NeatlogsSpanProcessor(SpanProcessor):
             if self.debug:
                 logger.debug(f"[SpanProcessor.on_end] Span ending: {span.name}")
 
-            # Debug-only raw dump redirected to spans_raw.log.
             if self._raw_log_file_handle:
                 try:
                     self._raw_log_file_handle.write(span.to_json() + "\n")
                     self._raw_log_file_handle.flush()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(f"Failed to write span to raw log file: {e}")
 
             if self.sample_rate < 1.0 and random.random() > self.sample_rate:
                 return
 
             unified_attrs = self.unified_processor.process(span)
 
-            # Cleanup: prompt template metadata should live on the canonical LLM/EMBEDDING spans,
-            # not on wrapper/workflow/HTTP spans.
             nl_kind = unified_attrs.get("neatlogs.span.kind")
-            # Exception: some frameworks emit a dedicated PromptTemplate span carrying
-            # prompt template info; keep it there so users can debug prompt compilation.
             if nl_kind not in ("llm", "embedding") and span.name != "PromptTemplate":
                 for k in (
                     "neatlogs.llm.prompt_template",
@@ -194,10 +167,6 @@ class NeatlogsSpanProcessor(SpanProcessor):
                 ):
                     unified_attrs.pop(k, None)
             else:
-                # Reduce token duplication in exported spans:
-                # - keep normalized `neatlogs.llm.token_count.*`
-                # - keep OpenLLMetry `neatlogs.raw.gen_ai.usage.*` (useful for debugging/verification)
-                # - drop redundant OpenInference raw token keys
                 for k in (
                     "neatlogs.raw.llm.token_count.prompt",
                     "neatlogs.raw.llm.token_count.completion",
@@ -205,20 +174,15 @@ class NeatlogsSpanProcessor(SpanProcessor):
                 ):
                     unified_attrs.pop(k, None)
 
-                # If you want a single source of truth in exported spans, keep the normalized
-                # token counts and drop the duplicate OpenLLMetry input/output usage fields.
                 for k in (
                     "neatlogs.raw.gen_ai.usage.input_tokens",
                     "neatlogs.raw.gen_ai.usage.output_tokens",
                 ):
                     unified_attrs.pop(k, None)
 
-            # Neatlogs internal marker for our PromptTemplate helper. This makes it easy to
-            # filter these spans in UI/queries without affecting the semantic kind mapping.
             if span.name == "PromptTemplate":
                 unified_attrs.setdefault("neatlogs.internal", True)
-                # User-requested classification: make PromptTemplate spans explicitly internal.
-                # This avoids them showing up as UNKNOWN.
+                unified_attrs["neatlogs.span.kind"] = "Neatlogs.INTERNAL"
                 unified_attrs["neatlogs.span.kind"] = "Neatlogs.INTERNAL"
 
             span_data = {
@@ -226,8 +190,6 @@ class NeatlogsSpanProcessor(SpanProcessor):
                 "span_id": f"{span.context.span_id:016x}",
                 "parent_span_id": (f"{span.parent.span_id:016x}" if span.parent else None),
                 "name": span.name,
-                # Export `kind` as the user-facing span kind. Keep it normalized to avoid
-                # a mix of casing/dot-separated values downstream.
                 "kind": (unified_attrs.get("neatlogs.span.kind", "UNKNOWN") or "UNKNOWN"),
                 "start_time": span.start_time,
                 "end_time": span.end_time,
@@ -237,9 +199,6 @@ class NeatlogsSpanProcessor(SpanProcessor):
                     "code": span.status.status_code.name,
                     "description": span.status.description,
                 },
-                # Streaming can produce events from multiple instrumentations.
-                # Neatlogs preference: keep OpenLLMetry streaming chunk events and drop
-                # OpenInference's "First Token Stream Event" when both exist.
                 "events": (
                     [
                         {
@@ -259,9 +218,7 @@ class NeatlogsSpanProcessor(SpanProcessor):
             }
 
             with self._pending_lock:
-                # Enforce bounded queue to prevent memory exhaustion
                 if len(self._pending) >= self._max_pending_spans:
-                    # Drop oldest span to make room (FIFO eviction)
                     dropped_span = self._pending.pop(0)
                     self._pending_dropped += 1
                     logger.warning(
@@ -278,15 +235,7 @@ class NeatlogsSpanProcessor(SpanProcessor):
         finally:
             self.perf_stats["on_end_time"] += time.perf_counter() - start_time
 
-    # --- Dedupe/merge/suppress on flush ---
-
     def _dedupe_and_rewrite(self, spans: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """
-        Returns a new list of span payloads with:
-        - OpenLLMetry provider wrapper spans suppressed when a canonical OpenInference span exists
-        - OpenLLMetry attrs merged into the canonical span
-        - Children re-parented so the exported tree stays connected
-        """
         by_trace: Dict[str, List[Dict[str, Any]]] = {}
         for s in spans:
             by_trace.setdefault(s["trace_id"], []).append(s)
@@ -295,7 +244,6 @@ class NeatlogsSpanProcessor(SpanProcessor):
         for trace_id, trace_spans in by_trace.items():
             out.extend(self._dedupe_trace(trace_spans))
 
-        # Stable ordering helps debugging and makes spans.log nicer.
         out.sort(key=lambda s: (s["trace_id"], s.get("start_time") or 0, s["span_id"]))
         return out
 
@@ -353,7 +301,6 @@ class NeatlogsSpanProcessor(SpanProcessor):
 
         suppressed_wrapper_ids: set[str] = set()
 
-        # Greedy: for each wrapper, find the best canonical match and merge/suppress.
         for w in wrappers:
             c = self._best_match_wrapper_to_canonical(w, canonicals)
             if not c:
@@ -368,19 +315,9 @@ class NeatlogsSpanProcessor(SpanProcessor):
                 if s.get("parent_span_id") == w["span_id"]:
                     s["parent_span_id"] = replacement_parent
 
-        # Emit everything except suppressed wrappers.
         emitted = [s for s in spans if s["span_id"] not in suppressed_wrapper_ids]
-
-        # Suppress TraceLoop-style entity spans (`*.task`, `*.tool`, `*.workflow`) when a
-        # corresponding semantic span exists (same base name). This happens across many
-        # framework instrumentations and otherwise results in \"duplicate\" spans.
         emitted = self._suppress_traceloop_entity_spans(emitted)
-
-        # Suppress \"framework\" LLM spans when a provider LLM span exists for the same call.
-        # Example: LangChain emits `ChatOpenAI` while OpenInference OpenAI emits `ChatCompletion`.
         emitted = self._suppress_overlapping_llm_spans(emitted)
-
-        # Reduce noisy framework span names (e.g., CrewAI uses full task description as span name).
         emitted = self._normalize_framework_span_names(emitted)
 
         return emitted
@@ -388,11 +325,6 @@ class NeatlogsSpanProcessor(SpanProcessor):
     def _normalize_framework_span_names(self, spans: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
         Reduce very long span names produced by some framework instrumentations.
-
-        CrewAI/OpenLLMetry commonly names task spans as:
-          "<full task description>.task"
-        which makes exported traces hard to read. We keep the description as an attribute and
-        replace the span name with a stable identifier.
         """
         for s in spans:
             name = s.get("name") or ""
@@ -401,7 +333,6 @@ class NeatlogsSpanProcessor(SpanProcessor):
                 continue
 
             attrs = s.get("attributes") or {}
-            # Only apply this normalization to CrewAI spans (detect via exported raw crewai keys).
             if not any(k.startswith("neatlogs.raw.crewai.") for k in attrs.keys()):
                 continue
 
@@ -423,7 +354,6 @@ class NeatlogsSpanProcessor(SpanProcessor):
         if not entity_spans:
             return spans
 
-        # Index potential canonical spans by name for quick lookup.
         by_name: Dict[str, List[Dict[str, Any]]] = {}
         for s in spans:
             by_name.setdefault(s.get("name") or "", []).append(s)
@@ -444,7 +374,6 @@ class NeatlogsSpanProcessor(SpanProcessor):
             self._merge_traceloop_entity_attrs_into_base(entity=e, base=c)
             suppressed.add(e["span_id"])
 
-            # Re-parent any children of the entity span to the semantic base span.
             for s in spans:
                 if s.get("parent_span_id") == e["span_id"]:
                     s["parent_span_id"] = c["span_id"]
@@ -470,10 +399,8 @@ class NeatlogsSpanProcessor(SpanProcessor):
         best_score = 0
         for b in bases:
             score = self._score_time_overlap(entity, b)
-            # Prefer same-parent matches when available.
             if entity.get("parent_span_id") and entity.get("parent_span_id") == b.get("parent_span_id"):
                 score += 1
-            # Prefer spans that start at nearly the same time.
             if self._start_delta_ns(entity, b) is not None and self._start_delta_ns(entity, b) <= 5_000_000:
                 score += 1
             if score > best_score:
@@ -490,7 +417,6 @@ class NeatlogsSpanProcessor(SpanProcessor):
         earliest_end = min(a_e, b_e)
         if earliest_end < latest_start:
             return 0
-        # Strong overlap: share at least half of the shorter span's duration.
         overlap = earliest_end - latest_start
         dur_a = a_e - a_s
         dur_b = b_e - b_s
@@ -508,9 +434,6 @@ class NeatlogsSpanProcessor(SpanProcessor):
     def _merge_traceloop_entity_attrs_into_base(self, entity: Dict[str, Any], base: Dict[str, Any]) -> None:
         ea = entity.get("attributes", {})
         ba = base.get("attributes", {})
-
-        # These entity spans carry valuable debug context (entity input/output/path and metadata).
-        # Merge them into the semantic span without overwriting existing values.
         for k, v in ea.items():
             if k == "neatlogs.span.kind":
                 continue
@@ -520,7 +443,6 @@ class NeatlogsSpanProcessor(SpanProcessor):
         base["attributes"] = ba
 
     def _suppress_overlapping_llm_spans(self, spans: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        # Build child index to detect provider spans (they usually have an HTTP child).
         children: Dict[str, List[Dict[str, Any]]] = {}
         for s in spans:
             pid = s.get("parent_span_id")
@@ -567,11 +489,9 @@ class NeatlogsSpanProcessor(SpanProcessor):
             if not best or best_score < 4:
                 continue
 
-            # Merge framework-only attributes into provider span, then suppress the framework span.
             self._merge_framework_llm_into_provider(framework=fw, provider=best)
             suppressed.add(fw["span_id"])
 
-            # Re-parent children of the suppressed span (rare) to the provider span.
             for s in spans:
                 if s.get("parent_span_id") == fw["span_id"]:
                     s["parent_span_id"] = best["span_id"]
@@ -582,7 +502,6 @@ class NeatlogsSpanProcessor(SpanProcessor):
         fa = framework.get("attributes", {})
         pa = provider.get("attributes", {})
 
-        # Prefer provider keys; only fill missing values from framework.
         for k, v in fa.items():
             if k == "neatlogs.span.kind":
                 continue
@@ -593,10 +512,6 @@ class NeatlogsSpanProcessor(SpanProcessor):
 
     def _is_openllmetry_provider_wrapper(self, span_data: Dict[str, Any]) -> bool:
         attrs = span_data.get("attributes", {})
-        # OpenLLMetry provider spans typically look like `<provider>.<op>` (e.g. `openai.chat`,
-        # `anthropic.chat`) and do NOT carry OpenInference's `openinference.span.kind` marker.
-        # After attribute mapping, gen_ai.* may be consumed into `neatlogs.llm.*`, so avoid
-        # relying on `neatlogs.raw.gen_ai.*` presence here.
         name = (span_data.get("name") or "").lower()
         if (
             "." in name
@@ -604,24 +519,17 @@ class NeatlogsSpanProcessor(SpanProcessor):
             and attrs.get("neatlogs.llm.request_type") is not None
         ):
             return True
-        # Some instrumentors also emit traceloop.* for entity spans.
         if "neatlogs.raw.traceloop.span.kind" in attrs or "neatlogs.raw.traceloop.entity.name" in attrs:
             return True
         return False
 
     def _is_openinference_canonical(self, span_data: Dict[str, Any]) -> bool:
         attrs = span_data.get("attributes", {})
-        # After we added "consumed key" tracking in attribute_processor, source keys used to
-        # populate normalized fields (including `openinference.span.kind`) are no longer emitted
-        # under `neatlogs.raw.*`. So prefer normalized kind, and use provider presence as a
-        # sanity check that this is the OpenInference canonical span.
         raw_kind = attrs.get("neatlogs.raw.openinference.span.kind")
         if raw_kind in ("LLM", "EMBEDDING"):
             return True
 
         kind = attrs.get("neatlogs.span.kind")
-        # Embedding canonical spans (OpenInference) often don't carry llm.provider/system,
-        # but we still want to suppress OpenLLMetry's `openai.embeddings` wrapper span.
         if kind == "embedding":
             return True
 
@@ -644,7 +552,6 @@ class NeatlogsSpanProcessor(SpanProcessor):
                 best_score = score
                 best = c
 
-        # Threshold: we require at least provider match + strong structural/time signal.
         return best if best_score >= 6 else None
 
     def _score_pair(self, w: Dict[str, Any], c: Dict[str, Any]) -> int:
@@ -653,27 +560,22 @@ class NeatlogsSpanProcessor(SpanProcessor):
 
         score = 0
 
-        # Same trace_id is already guaranteed by grouping.
-        # Strong signal: direct parent/child in either direction.
         if c.get("parent_span_id") == w.get("span_id"):
             score += 6
         if w.get("parent_span_id") == c.get("span_id"):
             score += 6
 
-        # Provider match (best-effort).
         w_provider = (wa.get("neatlogs.llm.system") or wa.get("neatlogs.llm.provider") or "").lower()
         c_provider = (ca.get("neatlogs.llm.system") or ca.get("neatlogs.llm.provider") or "").lower()
         if w_provider and c_provider and w_provider == c_provider:
             score += 2
 
-        # Model match (request model vs response model).
         w_req_model = wa.get("neatlogs.raw.gen_ai.request.model") or wa.get("neatlogs.llm.model_name")
         c_resp_model = ca.get("neatlogs.raw.llm.model_name") or ca.get("neatlogs.llm.model_name")
         if w_req_model and c_resp_model:
             if str(c_resp_model).startswith(str(w_req_model)):
                 score += 1
 
-        # Time overlap heuristic.
         w_s, w_e = w.get("start_time"), w.get("end_time")
         c_s, c_e = c.get("start_time"), c.get("end_time")
         if all(isinstance(x, int) for x in (w_s, w_e, c_s, c_e)):
@@ -688,11 +590,9 @@ class NeatlogsSpanProcessor(SpanProcessor):
         wa = wrapper.get("attributes", {})
         ca = canonical.get("attributes", {})
 
-        # Allow wrapper to override a small set of canonical keys where you want OpenLLMetry
-        # to win (e.g., request model for ClickHouse, framework detection).
         override_keys = {
             "neatlogs.llm.model_name",
-            "neatlogs.framework",  # OpenLLMetry knows frameworks, OpenInference doesn't
+            "neatlogs.framework",
         }
 
         for k, v in wa.items():
@@ -702,7 +602,6 @@ class NeatlogsSpanProcessor(SpanProcessor):
             if k not in ca:
                 ca[k] = v
 
-        # If OpenLLMetry provided cache token usage, surface it on normalized keys as well.
         def _get(key: str):
             if key in ca and ca[key] is not None:
                 return ca[key]
@@ -712,12 +611,10 @@ class NeatlogsSpanProcessor(SpanProcessor):
             if key not in ca and value is not None:
                 ca[key] = value
 
-        # Token counts (fallback to OpenLLMetry when OpenInference doesn't provide a field).
         _set_if_missing("neatlogs.llm.token_count.prompt", _get("neatlogs.raw.gen_ai.usage.input_tokens"))
         _set_if_missing("neatlogs.llm.token_count.completion", _get("neatlogs.raw.gen_ai.usage.output_tokens"))
         _set_if_missing("neatlogs.llm.token_count.total", _get("neatlogs.raw.llm.usage.total_tokens"))
 
-        # Cache usage.
         _set_if_missing(
             "neatlogs.llm.token_count.cache_read",
             _get("neatlogs.raw.gen_ai.usage.cache_read_input_tokens"),
@@ -727,13 +624,10 @@ class NeatlogsSpanProcessor(SpanProcessor):
             _get("neatlogs.raw.gen_ai.usage.cache_creation_input_tokens"),
         )
 
-        # More duplication cleanup: OpenLLMetry total tokens is redundant with normalized total.
         ca.pop("neatlogs.raw.llm.usage.total_tokens", None)
 
         canonical["attributes"] = ca
 
-        # Merge wrapper events (especially streaming chunk events) into the canonical span
-        # before suppressing the wrapper. Otherwise users lose stream chunk visibility in export.
         we = wrapper.get("events") or []
         if we:
             ce = canonical.get("events") or []
@@ -743,13 +637,9 @@ class NeatlogsSpanProcessor(SpanProcessor):
                 if key not in existing:
                     ce.append(e)
                     existing.add(key)
-            # If OpenLLMetry chunk events exist, drop OpenInference's first-token event
-            # to avoid duplicate "first token" semantics in the exported span.
             if any(e.get("name") == "llm.content.completion.chunk" for e in ce):
                 ce = [e for e in ce if e.get("name") != "First Token Stream Event"]
             canonical["events"] = ce
-
-    # --- Flush/shutdown ---
 
     def force_flush(self, timeout_millis: int = 30000) -> bool:
         try:
@@ -773,11 +663,10 @@ class NeatlogsSpanProcessor(SpanProcessor):
             if self._raw_log_file_handle:
                 try:
                     self._raw_log_file_handle.close()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(f"Failed to close raw log file handle: {e}")
 
     def _log_performance_stats(self) -> None:
-        # Don't print overhead stats unless explicitly debugging. This is noisy in production.
         if not self.debug:
             return
         stats = self.perf_stats

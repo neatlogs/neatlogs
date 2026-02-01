@@ -9,13 +9,6 @@ from opentelemetry import metrics
 
 
 class UnifiedAttributeProcessor:
-    """
-    Same as core/attribute_processor.py, but with one important fix:
-    - Do NOT label every SpanKind.CLIENT span as HTTP. Only do this for actual HTTP spans.
-
-    This avoids misclassifying provider wrapper spans (e.g., OpenLLMetry's openai.chat)
-    and DB client spans as HTTP just because their OTel SpanKind is CLIENT.
-    """
 
     def __init__(
         self,
@@ -28,7 +21,6 @@ class UnifiedAttributeProcessor:
         self.debug = debug
         self.logger = logging.getLogger(__name__)
 
-        # Initialize OTel metrics for SDK-computed metrics
         self.meter = metrics.get_meter("neatlogs.sdk")
 
         self.time_per_token_histogram = self.meter.create_histogram(
@@ -51,7 +43,6 @@ class UnifiedAttributeProcessor:
 
         attrs = self._apply_cost_fallback(attrs)
 
-        # Apply model defaults to invocation parameters before mapping
         try:
             from ..config import enrich_invocation_parameters
             enrich_invocation_parameters(attrs, enable_enrichment=True)
@@ -59,36 +50,18 @@ class UnifiedAttributeProcessor:
             self.logger.warning(f"Failed to enrich invocation parameters: {e}")
 
         unified = self._apply_namespace_mapping(attrs)
-        # Derive compact intermediate steps (ReAct-style) from already-normalized messages.
-        # This avoids parsing vendor-specific raw keys and keeps output stable for the backend.
         self._add_intermediate_steps(unified)
         return unified
 
     def _normalize_conventions(self, span: ReadableSpan, attrs: Dict[str, Any]) -> Dict[str, Any]:
-        # Only label CLIENT spans as HTTP when they actually look like HTTP.
         if span.kind == SpanKind.CLIENT and self._looks_like_http(attrs):
             attrs["openinference.span.kind"] = "HTTP"
 
-        # CrewAI emits a crew-level span (commonly named `crewai.workflow`) that contains
-        # `crewai.crew.*` metadata but doesn't set a semantic kind. Classify it as a CHAIN
-        # so it doesn't show up as UNKNOWN in export.
         if "openinference.span.kind" not in attrs and any(
             k.startswith("crewai.crew.") for k in attrs.keys()
         ):
             attrs["openinference.span.kind"] = "CHAIN"
-
-        # Normalize tool calls into a stable, provider-agnostic shape.
-        #
-        # - OpenInference (Anthropic/OpenAI, etc) often emits:
-        #   llm.output_messages.0.message.tool_calls.0.tool_call.function.name/arguments
-        # - OpenLLMetry emits:
-        #   gen_ai.completion.0.tool_calls.0.id/name/arguments
-        #
-        # We store tool calls under:
-        #   llm.tool_calls.{i}.name / llm.tool_calls.{i}.arguments / llm.tool_calls.{i}.id
-        # and remove the original tool-call keys to avoid duplicate semantics in neatlogs.raw.*.
         tool_calls: Dict[int, Dict[str, Any]] = {}
-        # Note: these are raw strings; don't double-escape `\d` or `.`.
         oi_tool_re = re.compile(
             r"^llm\.output_messages\.(\d+)\.message\.tool_calls\.(\d+)\.tool_call\.function\.(name|arguments)$"
         )
@@ -124,8 +97,6 @@ class UnifiedAttributeProcessor:
         for k in keys_to_remove:
             attrs.pop(k, None)
 
-        # Normalize tool definitions (the tools you pass to the model) so we can store them under
-        # `neatlogs.llm.tools.*` without duplicating multiple vendor formats.
         tool_defs: Dict[int, Dict[str, Any]] = {}
         oi_schema_re = re.compile(r"^llm\.tools\.(\d+)\.tool\.json_schema$")
         ol_fn_re = re.compile(r"^llm\.request\.functions\.(\d+)\.(name|description|input_schema)$")
@@ -153,7 +124,6 @@ class UnifiedAttributeProcessor:
                     td = tool_defs.setdefault(idx, {})
                     td.setdefault("name", schema.get("name"))
                     td.setdefault("description", schema.get("description"))
-                    # Anthropic uses input_schema; OpenAI uses parameters.
                     td.setdefault("input_schema", schema.get("input_schema") or schema.get("parameters"))
                 keys_to_remove.append(k)
 
@@ -175,14 +145,9 @@ class UnifiedAttributeProcessor:
         for k in keys_to_remove:
             attrs.pop(k, None)
 
-        # span kind fallback
         if "openinference.span.kind" not in attrs and "traceloop.span.kind" in attrs:
             attrs["openinference.span.kind"] = attrs["traceloop.span.kind"]
 
-        # OpenInference does not instrument many vector DB layers (chroma/milvus/qdrant/etc),
-        # but these spans are still semantically "retriever" operations for Neatlogs.
-        # If no canonical kind is present, classify common vector DB spans as RETRIEVER
-        # based on db.system.
         if "openinference.span.kind" not in attrs:
             db_system = attrs.get("db.system")
             if isinstance(db_system, str) and db_system.lower() in {
@@ -198,7 +163,6 @@ class UnifiedAttributeProcessor:
             }:
                 attrs["openinference.span.kind"] = "RETRIEVER"
 
-        # Extract MCP-specific attributes from traceloop.entity.input/output
         if "traceloop.entity.input" in attrs:
             try:
                 entity_input = (
@@ -218,8 +182,6 @@ class UnifiedAttributeProcessor:
             except (json.JSONDecodeError, TypeError, KeyError):
                 pass
 
-        # IMPORTANT: traceloop.entity.output exists for many Traceloop entity spans (LangChain, Haystack, etc).
-        # Only treat it as MCP response when we have a strong MCP signal, otherwise we pollute non-MCP spans.
         has_mcp_signal = False
         if isinstance(attrs.get("mcp.method.name"), str) and attrs.get("mcp.method.name"):
             has_mcp_signal = True
@@ -231,7 +193,6 @@ class UnifiedAttributeProcessor:
         if has_mcp_signal and "traceloop.entity.output" in attrs and "mcp.response.value" not in attrs:
             attrs["mcp.response.value"] = attrs["traceloop.entity.output"]
 
-        # Extract protocol info from initialize response
         if attrs.get("mcp.method.name") == "initialize" and "traceloop.entity.output" in attrs:
             try:
                 output = (
@@ -250,7 +211,6 @@ class UnifiedAttributeProcessor:
             except (json.JSONDecodeError, TypeError, KeyError):
                 pass
 
-        # Extract tools list from tools/list response
         if attrs.get("mcp.method.name") == "tools/list" and "traceloop.entity.output" in attrs:
             try:
                 output = (
@@ -266,7 +226,6 @@ class UnifiedAttributeProcessor:
             except (json.JSONDecodeError, TypeError, KeyError):
                 pass
 
-        # Computed field extraction
         span_kind = attrs.get("openinference.span.kind", "").upper()
         db_system = attrs.get("db.system", "").lower()
 
@@ -338,8 +297,6 @@ class UnifiedAttributeProcessor:
                 "db.milvus.search.result_count",
             ]:
                 if key in attrs:
-                    # Keep operation context to avoid collisions (e.g. insert.data_count vs search.data_count).
-                    # Strip only the `db.milvus.` prefix.
                     doc_attrs[key.replace("db.milvus.", "")] = attrs[key]
             if "db.milvus.search.filter" in attrs:
                 doc_attrs["search.filter"] = attrs["db.milvus.search.filter"]
@@ -366,7 +323,6 @@ class UnifiedAttributeProcessor:
         if not steps:
             return
 
-        # Keep it as a JSON string so ClickHouse can store it directly.
         unified["neatlogs.llm.intermediate_steps"] = json.dumps(steps, ensure_ascii=True)
 
     def _extract_react_steps_from_messages(self, unified: Dict[str, Any]) -> List[Dict[str, str]]:
@@ -376,8 +332,6 @@ class UnifiedAttributeProcessor:
                 return val
             return val[:max_len] + f"...(truncated,len={len(val)})"
 
-        # Prefer output assistant messages. If none contain markers, fall back to assistant
-        # messages in the input (some frameworks echo the scratchpad into the prompt).
         output_texts = self._collect_role_texts(
             unified, prefix="neatlogs.llm.output_messages", role="assistant"
         )
@@ -410,7 +364,6 @@ class UnifiedAttributeProcessor:
                 continue
             c = unified.get(f"{prefix}.{i}.content")
             if isinstance(c, str) and "thought:" in c.lower():
-                # Bound per-message scan cost.
                 texts.append(c[:20000])
         return texts
 
@@ -441,7 +394,6 @@ class UnifiedAttributeProcessor:
                 nonlocal cur
                 if not cur:
                     return
-                # Drop pure instructions / empty blocks.
                 if not any(v for v in cur.values()):
                     cur = {}
                     return
@@ -457,35 +409,27 @@ class UnifiedAttributeProcessor:
                 end = matches[idx + 1].start() if idx + 1 < len(matches) else len(text)
                 value = text[start:end].strip()
 
-                # New step boundary on repeated Thought markers.
                 if label == "thought" and cur:
                     _commit()
 
                 if label == "thought":
                     cur["thought"] = _truncate(value, 600)
                 elif label == "context":
-                    # Context can be extremely large in RAG; keep it minimal.
                     cur["context"] = _truncate(value, 500)
                 elif label == "action":
                     cur["action"] = _truncate(value, 200)
                 elif label == "action input":
                     cur["action_input"] = _truncate(value, 1000)
                 elif label == "observation":
-                    # Observations often include tool output; store only a preview.
                     cur["observation"] = _truncate(value, 500)
                 elif label == "final answer":
                     cur["final_answer"] = _truncate(value, 1200)
 
             _commit()
 
-        # Hard cap to avoid bloat on long agent loops.
-        if len(all_steps) > 25:
-            all_steps = all_steps[:25]
-
         return all_steps
 
     def _looks_like_http(self, attrs: Dict[str, Any]) -> bool:
-        # Keep this conservative: only label as HTTP when explicit http keys exist.
         for k in ("http.method", "http.url", "http.status_code", "http.route"):
             if k in attrs:
                 return True
@@ -497,7 +441,6 @@ class UnifiedAttributeProcessor:
         duration_ns = span.end_time - span.start_time
         computed["neatlogs.metrics.duration_ms"] = duration_ns / 1_000_000
 
-        # Streaming time-per-token computed from chunk events (OpenLLMetry emits chunk events).
         chunk_timestamps = []
         if span.events:
             for event in span.events:
@@ -614,15 +557,9 @@ class UnifiedAttributeProcessor:
         return attrs
 
     def _apply_namespace_mapping(self, attrs: Dict[str, Any]) -> Dict[str, Any]:
-        # Always preserve any SDK-authored `neatlogs.*` keys (e.g. neatlogs.internal,
-        # neatlogs.metrics.duration_ms). These are already in the target namespace and
-        # should never be dropped.
         unified: Dict[str, Any] = {k: v for k, v in attrs.items() if k.startswith("neatlogs.")}
         mappings = self.mapping.get("mappings", {})
 
-        # Track which source keys were used to populate normalized `neatlogs.*` keys.
-        # We then avoid also emitting those same source keys under `neatlogs.raw.*`
-        # to prevent duplicate semantics in exported spans.
         consumed: set[str] = set()
         self._map_recursive(mappings, attrs, unified, consumed)
 
@@ -654,11 +591,6 @@ class UnifiedAttributeProcessor:
         if span_kind not in ("embedding", "retriever"):
             unified.pop("neatlogs.vectordb.embedding_model", None)
 
-        # ========================================================================
-        # FRAMEWORK DETECTION (from gen_ai.system)
-        # ========================================================================
-        # Only orchestration frameworks should be mapped to framework field.
-        # LLM providers (openai, anthropic, etc.) and vector DBs should NOT set framework.
         KNOWN_FRAMEWORKS = {
             'langchain',
             'llamaindex',
@@ -668,7 +600,6 @@ class UnifiedAttributeProcessor:
             'openai-agents'
         }
 
-        # Check gen_ai.system (could be in attrs, or already mapped to neatlogs.llm.system)
         gen_ai_system = attrs.get("gen_ai.system") or unified.get("neatlogs.llm.system") or ""
         if isinstance(gen_ai_system, str) and gen_ai_system:
             gen_ai_system_lower = gen_ai_system.lower()
@@ -688,14 +619,9 @@ class UnifiedAttributeProcessor:
             if not isinstance(config, dict):
                 continue
 
-            # Allow grouping nodes to contain:
-            # - "mappings": nested mapping tier
-            # - additional mapping nodes as direct children (e.g. "messages": {"mappings": {...}, "finish_reason": {...}})
             if isinstance(config, dict) and "mappings" in config and isinstance(config["mappings"], dict):
                 self._map_recursive(config["mappings"], source, target, consumed)
 
-            # Some tiers mix nested maps and leaf mappings in the same object; recurse into
-            # any dict child that looks like a mapping node.
             if isinstance(config, dict):
                 for child_key, child_cfg in config.items():
                     if child_key in (
@@ -717,9 +643,6 @@ class UnifiedAttributeProcessor:
                         self._map_recursive({child_key: child_cfg}, source, target, consumed)
                         continue
 
-                    # Grouping nodes like `db.vectordb` may not use a `mappings` wrapper and
-                    # also won't have a `target` themselves, but do contain leaf mappings as
-                    # grandchildren. Detect and recurse into those children.
                     if any(
                         isinstance(grand_cfg, dict) and any(k in grand_cfg for k in ("target", "sources", "mappings", "indexed"))
                         for grand_cfg in child_cfg.values()
@@ -731,10 +654,6 @@ class UnifiedAttributeProcessor:
             if not target_key:
                 continue
 
-            # Some mappings use a dynamic target like `neatlogs.{span_kind}.input`.
-            # Expand it using the already-mapped `neatlogs.span.kind`, falling back to
-            # OpenInference/TraceLoop kind when needed. If we still can't resolve, skip
-            # rather than emitting literal `{span_kind}` keys.
             if isinstance(target_key, str) and "{span_kind}" in target_key:
                 resolved_kind = target.get("neatlogs.span.kind")
                 if not resolved_kind:
@@ -775,8 +694,6 @@ class UnifiedAttributeProcessor:
             found_any = False
 
             if isinstance(sources_config, list):
-                # Special case: mappings that provide both role + content targets.
-                # Example: neatlogs.llm.input_messages.{i}.role + neatlogs.llm.input_messages.{i}.content
                 if target_content_template:
                     role_val = None
                     content_val = None
@@ -787,7 +704,6 @@ class UnifiedAttributeProcessor:
                             continue
                         val = source[src_key]
 
-                        # Heuristic split: most semconv keys end with ".role"/".content" or ".message.role"/".message.content".
                         if role_val is None and (src_key.endswith(".role") or src_key.endswith(".message.role")):
                             role_val = val
                             consumed.add(src_key)

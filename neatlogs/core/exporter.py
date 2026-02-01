@@ -50,28 +50,23 @@ class NeatlogsExporter:
         self.flush_interval = flush_interval
         self.max_retries = max_retries
         
-        # Span queue for batching
         self._queue: Queue = Queue()
         self._batch: List[Dict[str, Any]] = []
         self._lock = threading.Lock()
 
-        # Metrics queue for batching
         self._metrics_queue: Queue = Queue()
         self._metrics_batch: List[Dict[str, Any]] = []
         self._metrics_lock = threading.Lock()
         
-        # Check if span logging is enabled via env var
         self._log_spans_enabled = os.getenv("NEATLOGS_LOG_SPANS", "").lower() in ["true", "1", "yes"]
         self._log_file_path = None
         self._log_file_handle = None
         
-        # Metrics logging
         self._log_metrics_enabled = os.getenv("NEATLOGS_LOG_METRICS", "").lower() in ["true", "1", "yes"]
         self._metrics_log_file_path = None
         self._metrics_log_file_handle = None
         
         if self._log_spans_enabled:
-            # Log to spans.log in current working directory
             self._log_file_path = os.path.join(os.getcwd(), os.getenv("NEATLOGS_LOG_SPANS_FILE", "spans_optimized.log"))
             try:
                 self._log_file_handle = open(self._log_file_path, 'a', encoding='utf-8')
@@ -81,7 +76,6 @@ class NeatlogsExporter:
                 self._log_spans_enabled = False
         
         if self._log_metrics_enabled:
-            # Log to metrics.log in current working directory
             self._metrics_log_file_path = os.path.join(os.getcwd(), os.getenv("NEATLOGS_LOG_METRICS_FILE", "metrics_optimized.log"))
             try:
                 self._metrics_log_file_handle = open(self._metrics_log_file_path, 'a', encoding='utf-8')
@@ -90,7 +84,6 @@ class NeatlogsExporter:
                 logger.warning(f"Failed to open metrics log file: {e}")
                 self._log_metrics_enabled = False
         
-        # Background flush thread
         self._stop_event = threading.Event()
         self._flush_thread = threading.Thread(target=self._flush_worker, daemon=True)
         self._flush_thread.start()
@@ -102,24 +95,19 @@ class NeatlogsExporter:
         Args:
             span_data: Span data dictionary
         """
-        # Ignore late exports after shutdown (can happen via atexit / provider shutdown ordering).
         if self._stop_event.is_set():
             return
 
-        # Log span to file if enabled
         if self._log_spans_enabled and self._log_file_handle and not self._log_file_handle.closed:
             try:
-                # Write full span JSON to file (one JSON object per line)
                 json_line = json.dumps(span_data) + '\n'
                 self._log_file_handle.write(json_line)
-                self._log_file_handle.flush()  # Ensure it's written immediately
+                self._log_file_handle.flush()
             except Exception as e:
-                # Don't let logging errors break the export
                 logger.debug(f"Failed to log span to file: {e}")
         
         self._queue.put(span_data)
 
-        # Check if we need to flush immediately
         with self._lock:
             with self._metrics_lock:
                 if len(self._batch) >= self.batch_size:
@@ -132,11 +120,9 @@ class NeatlogsExporter:
         Args:
             metrics_list: List of metric data point dictionaries
         """
-        # Ignore late exports after shutdown (can happen via atexit / provider shutdown ordering).
         if self._stop_event.is_set():
             return
 
-        # Log metrics to file if enabled
         if (
             self._log_metrics_enabled
             and self._metrics_log_file_handle
@@ -150,11 +136,9 @@ class NeatlogsExporter:
             except Exception as e:
                 logger.debug(f"Failed to log metrics to file: {e}")
 
-        # Add to metrics queue
         for metric_data in metrics_list:
             self._metrics_queue.put(metric_data)
 
-        # Check if we need to flush immediately
         with self._lock:
             with self._metrics_lock:
                 if len(self._metrics_batch) >= self.batch_size:
@@ -169,7 +153,6 @@ class NeatlogsExporter:
         Args:
             timeout: Maximum time to wait for flush (seconds)
         """
-        # Collect all queued spans
         spans_collected = 0
         while not self._queue.empty():
             try:
@@ -180,7 +163,6 @@ class NeatlogsExporter:
             except Empty:
                 break
 
-        # Collect all queued metrics
         metrics_collected = 0
         while not self._metrics_queue.empty():
             try:
@@ -191,20 +173,16 @@ class NeatlogsExporter:
             except Empty:
                 break
 
-        # Flush both batches together
         with self._lock:
             with self._metrics_lock:
                 if self._batch or self._metrics_batch:
                     self._flush_combined_batch()
 
-        # Mark all collected items as done
         for _ in range(spans_collected):
             self._queue.task_done()
         for _ in range(metrics_collected):
             self._metrics_queue.task_done()
 
-        # Wait for all queued tasks to complete (blocks until all task_done() called)
-        # This ensures all HTTP requests have finished before returning
         try:
             logger.debug("Waiting for span queue to drain...")
             self._queue.join()
@@ -218,7 +196,6 @@ class NeatlogsExporter:
         """
         Shutdown the exporter and flush all pending spans.
         """
-        # Make shutdown idempotent; some apps call shutdown twice (explicit + atexit).
         if getattr(self, "_shutdown_called", False):
             return
         self._shutdown_called = True
@@ -227,7 +204,6 @@ class NeatlogsExporter:
         self.flush()
         self._flush_thread.join(timeout=10.0)
         
-        # Close log file if open
         if self._log_file_handle:
             try:
                 self._log_file_handle.close()
@@ -237,7 +213,6 @@ class NeatlogsExporter:
             finally:
                 self._log_file_handle = None
 
-        # Close metrics log file if open
         if self._metrics_log_file_handle:
             try:
                 self._metrics_log_file_handle.close()
@@ -254,7 +229,6 @@ class NeatlogsExporter:
         while not self._stop_event.is_set():
             time.sleep(self.flush_interval)
 
-            # Collect spans from queue
             spans_collected = 0
             spans_to_mark_done = 0
             while not self._queue.empty() and spans_collected < self.batch_size:
@@ -267,7 +241,6 @@ class NeatlogsExporter:
                 except Empty:
                     break
 
-            # Collect metrics from queue
             metrics_collected = 0
             metrics_to_mark_done = 0
             while not self._metrics_queue.empty() and metrics_collected < self.batch_size:
@@ -280,13 +253,11 @@ class NeatlogsExporter:
                 except Empty:
                     break
 
-            # Flush if we have spans or metrics
             with self._lock:
                 with self._metrics_lock:
                     if self._batch or self._metrics_batch:
                         self._flush_combined_batch()
 
-            # Mark items as done AFTER successful flush
             for _ in range(spans_to_mark_done):
                 self._queue.task_done()
             for _ in range(metrics_to_mark_done):
@@ -307,20 +278,17 @@ class NeatlogsExporter:
         self._batch.clear()
         self._metrics_batch.clear()
 
-        # Build payload with spans and/or metrics
         payload = {}
         if spans_to_send:
             payload["spans"] = spans_to_send
         if metrics_to_send:
             payload["metrics"] = metrics_to_send
 
-        # Send combined batch with retry logic
         for attempt in range(self.max_retries):
             try:
                 response = requests.post(
                     self.endpoint,
                     headers={
-                        # "Authorization": f"Bearer {self.api_key}",
                         "x-api-key": self.api_key,
                         "Content-Type": "application/json",
                     },

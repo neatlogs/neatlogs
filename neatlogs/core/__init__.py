@@ -1,5 +1,5 @@
 """
-Core modules for Neatlogs SDK v4.
+Core modules for Neatlogs SDK.
 """
 
 from .context import trace, track_prompt

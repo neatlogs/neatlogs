@@ -35,13 +35,18 @@ dependencies = [
     "openinference-semantic-conventions>=0.1.13",
     "opentelemetry-api>=1.33.1",
     "opentelemetry-exporter-otlp-proto-http>=1.33.1",
+    # Used directly by the SDK (e.g. SUPPRESS_LANGUAGE_MODEL_INSTRUMENTATION_KEY)
+    "opentelemetry-semantic-conventions-ai>=0.4.13",
     "opentelemetry-sdk>=1.33.1",
     "requests>=2.31.0",
     "agnost (>=0.1.8,<0.2.0)",
     # HTTP instrumentation (optional, will try to import if available)
+    "opentelemetry-instrumentation>=0.50b0",
     "opentelemetry-instrumentation-requests>=0.50b0",
     "opentelemetry-instrumentation-httpx>=0.50b0",
+    "opentelemetry-instrumentation-urllib3>=0.50b0",
     "opentelemetry-instrumentation-aiohttp-client>=0.50b0",
+    "opentelemetry-instrumentation-threading>=0.50b0",
 ]
 
 [project.optional-dependencies]
@@ -162,4 +167,20 @@ dev = [
     "pytest-mock>=3.10.0",
     "python-dotenv>=1.0.0",
     "respx>=0.20.0",
+    "black>=24.0.0",
+    "isort>=5.13.0",
 ]
+
+[tool.black]
+line-length = 100
+target-version = ["py310"]
+exclude = """
+(
+  /\\.venv/
+)
+"""
+
+[tool.isort]
+profile = "black"
+line_length = 100
+skip = [".venv"]

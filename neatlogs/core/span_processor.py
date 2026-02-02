@@ -231,6 +231,33 @@ class NeatlogsSpanProcessor(SpanProcessor):
                 curr = len(self._pending)
                 if curr > self._pending_high_watermark:
                     self._pending_high_watermark = curr
+                
+                if not span.parent:
+                    trace_id = span_data["trace_id"]
+                    marker_span_id = f"completion_{trace_id[:16]}"
+                    
+                    completion_marker = {
+                        "trace_id": trace_id,
+                        "span_id": marker_span_id,
+                        "parent_span_id": None,
+                        "name": "neatlogs.trace.complete",
+                        "kind": "INTERNAL",
+                        "start_time": span.end_time,
+                        "end_time": span.end_time,
+                        "duration_ns": 0,
+                        "attributes": {
+                            "neatlogs.trace.complete": True,
+                            "neatlogs.internal": True,
+                            "neatlogs.span.kind": "Neatlogs.INTERNAL"
+                        },
+                        "status": {"code": "OK", "description": ""},
+                        "events": []
+                    }
+                    self._pending.append(completion_marker)
+                    
+                    if self.debug:
+                        logger.debug(f"Added completion marker for trace {trace_id}")
+            
             self._pending_event.set()
         finally:
             self.perf_stats["on_end_time"] += time.perf_counter() - start_time

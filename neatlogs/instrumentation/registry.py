@@ -27,6 +27,12 @@ INSTRUMENTATION_REGISTRY = {
     },
     
     "libraries": {
+        "azure_ai_inference": {
+            "openllmetry": None,
+            "openinference": None,
+            "neatlogs": "instrumentations.neatlogs_instrumentation_azure_ai_inference",
+            "default_span_kind": "LLM",
+        },
         "openai": {
             "openinference": "openinference.instrumentation.openai",
             "openllmetry": "opentelemetry.instrumentation.openai",
@@ -103,7 +109,7 @@ INSTRUMENTATION_REGISTRY = {
             "default_span_kind": "LLM",
         },
         "litellm": {
-            "openllmetry": "opentelemetry.instrumentation.litellm",
+            "openllmetry": None,
             "openinference": "openinference.instrumentation.litellm",
             "default_span_kind": "LLM",
         },

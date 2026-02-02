@@ -4,6 +4,8 @@ Instrumentation manager.
 
 import importlib
 import logging
+import sys
+from pathlib import Path
 from typing import List, Set, Optional
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.instrumentation.threading import ThreadingInstrumentor
@@ -175,7 +177,16 @@ class InstrumentationManager:
             return
 
         try:
-            module = importlib.import_module(package_name)
+            try:
+                module = importlib.import_module(package_name)
+            except ModuleNotFoundError:
+                if convention == "neatlogs" and package_name.startswith("instrumentations."):
+                    repo_root = Path(__file__).resolve().parents[3]
+                    if str(repo_root) not in sys.path:
+                        sys.path.insert(0, str(repo_root))
+                    module = importlib.import_module(package_name)
+                else:
+                    raise
             if convention == "openllmetry" and library == "openai":
                 self._patch_openllmetry_openai_ignore_language_model_suppression()
             instrumentor_class_name = self._get_instrumentor_class_name(library, convention)
@@ -191,8 +202,65 @@ class InstrumentationManager:
             else:
                 instrumentor_class().instrument(tracer_provider=self.provider)
 
+            if convention == "openinference" and library == "litellm":
+                self._patch_openinference_litellm_ignore_instrumentation_suppression()
+
         except Exception as e:
             raise Exception(f"Failed to instrument {library} with {convention}: {e}")
+
+    def _patch_openinference_litellm_ignore_instrumentation_suppression(self) -> None:
+        try:
+            import litellm
+            from functools import wraps
+            from opentelemetry import context as context_api
+            from opentelemetry.context import _SUPPRESS_INSTRUMENTATION_KEY
+
+            if getattr(litellm, "_NEATLOGS_PATCHED_IGNORE_OTEL_SUPPRESS", False):
+                return
+
+            def _wrap(fn):
+                @wraps(fn)
+                def _wrapped(*args, **kwargs):
+                    token = None
+                    try:
+                        token = context_api.attach(
+                            context_api.set_value(_SUPPRESS_INSTRUMENTATION_KEY, False)
+                        )
+                    except Exception:
+                        token = None
+                    try:
+                        return fn(*args, **kwargs)
+                    finally:
+                        if token is not None:
+                            try:
+                                context_api.detach(token)
+                            except Exception:
+                                pass
+
+                return _wrapped
+
+            for name in (
+                "completion",
+                "acompletion",
+                "responses",
+                "aresponses",
+                "completion_with_retries",
+                "embedding",
+                "aembedding",
+                "image_generation",
+                "aimage_generation",
+            ):
+                if hasattr(litellm, name):
+                    fn = getattr(litellm, name)
+                    if callable(fn):
+                        setattr(litellm, name, _wrap(fn))
+
+            litellm._NEATLOGS_PATCHED_IGNORE_OTEL_SUPPRESS = True
+            if self.debug:
+                logger.debug("Patched OpenInference LiteLLM: ignore _SUPPRESS_INSTRUMENTATION_KEY")
+        except Exception as e:
+            if self.debug:
+                logger.warning(f"⚠️  Failed to patch OpenInference LiteLLM suppression: {e}")
 
     def _patch_openllmetry_openai_ignore_language_model_suppression(self) -> None:
         try:
@@ -300,6 +368,7 @@ class InstrumentationManager:
             "vertexai": "VertexAIInstrumentor",
             "litellm": "LiteLLMInstrumentor",
             "crewai": "CrewAIInstrumentor",
+            "azure_ai_inference": "AzureAIInferenceInstrumentor",
             "dspy": "DSPyInstrumentor",
             "chromadb": "ChromaInstrumentor",
             "beeai": "BeeAIInstrumentor",
@@ -328,6 +397,8 @@ class InstrumentationManager:
                 "google_genai": "google.genai",
                 # Older Google Generative AI SDK (pip: google-generativeai)
                 "google_generativeai": "google.generativeai",
+                # Azure AI Inference SDK (pip: azure-ai-inference)
+                "azure_ai_inference": "azure.ai.inference",
                 # Milvus python client (pip: pymilvus)
                 "milvus": "pymilvus",
             }

@@ -61,6 +61,8 @@ class UnifiedAttributeProcessor:
             k.startswith("crewai.crew.") for k in attrs.keys()
         ):
             attrs["openinference.span.kind"] = "CHAIN"
+
+        self._add_crewai_token_usage_fallback(attrs)
         tool_calls: Dict[int, Dict[str, Any]] = {}
         oi_tool_re = re.compile(
             r"^llm\.output_messages\.(\d+)\.message\.tool_calls\.(\d+)\.tool_call\.function\.(name|arguments)$"
@@ -304,6 +306,40 @@ class UnifiedAttributeProcessor:
                 attrs["document_attributes"] = json.dumps(doc_attrs)
 
         return attrs
+
+    def _add_crewai_token_usage_fallback(self, attrs: Dict[str, Any]) -> None:
+        """
+        Parse CrewAI aggregate token usage strings like:
+          "total_tokens=67305 prompt_tokens=46983 cached_prompt_tokens=0 completion_tokens=20322 successful_requests=27"
+        and map them to OpenInference-style token keys:
+          - llm.token_count.prompt / completion / total
+          - llm.token_count.prompt_details.cache_read (best-effort)
+        Only applies when token_count fields are not already present.
+        """
+        usage = attrs.get("crewai.crew.token_usage")
+        if not isinstance(usage, str) or not usage:
+            return
+
+        if any(k in attrs for k in ("llm.token_count.prompt", "llm.token_count.completion", "llm.token_count.total")):
+            return
+
+        parsed: Dict[str, int] = {}
+        for key, val in re.findall(r"([a-zA-Z_]+)=(\d+)", usage):
+            try:
+                parsed[key] = int(val)
+            except Exception:
+                continue
+
+        if "prompt_tokens" in parsed:
+            attrs["llm.token_count.prompt"] = parsed["prompt_tokens"]
+        if "completion_tokens" in parsed:
+            attrs["llm.token_count.completion"] = parsed["completion_tokens"]
+        if "total_tokens" in parsed:
+            attrs["llm.token_count.total"] = parsed["total_tokens"]
+
+        # CrewAI reports cached_prompt_tokens; treat as cache-read input tokens.
+        if "cached_prompt_tokens" in parsed:
+            attrs["llm.token_count.prompt_details.cache_read"] = parsed["cached_prompt_tokens"]
 
     def _add_intermediate_steps(self, unified: Dict[str, Any]) -> None:
         """

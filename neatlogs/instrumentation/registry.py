@@ -30,7 +30,9 @@ INSTRUMENTATION_REGISTRY = {
         "azure_ai_inference": {
             "openllmetry": None,
             "openinference": None,
-            "neatlogs": "instrumentations.neatlogs_instrumentation_azure_ai_inference",
+            # Local/dev: in the separate `NeatLogs/instrumentations` repo this lives under `packages/`.
+            # Installable module name:
+            "neatlogs": "neatlogs_instrumentation_azure_ai_inference",
             "default_span_kind": "LLM",
         },
         "openai": {

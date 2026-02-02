@@ -4,8 +4,6 @@ Instrumentation manager.
 
 import importlib
 import logging
-import sys
-from pathlib import Path
 from typing import List, Set, Optional
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.instrumentation.threading import ThreadingInstrumentor
@@ -177,16 +175,7 @@ class InstrumentationManager:
             return
 
         try:
-            try:
-                module = importlib.import_module(package_name)
-            except ModuleNotFoundError:
-                if convention == "neatlogs" and package_name.startswith("instrumentations."):
-                    repo_root = Path(__file__).resolve().parents[3]
-                    if str(repo_root) not in sys.path:
-                        sys.path.insert(0, str(repo_root))
-                    module = importlib.import_module(package_name)
-                else:
-                    raise
+            module = importlib.import_module(package_name)
             if convention == "openllmetry" and library == "openai":
                 self._patch_openllmetry_openai_ignore_language_model_suppression()
             instrumentor_class_name = self._get_instrumentor_class_name(library, convention)

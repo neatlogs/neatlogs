@@ -4,10 +4,11 @@ Neatlogs span exporter with batching and async export.
 
 import json
 import os
-import time
 import threading
-from typing import List, Dict, Any
-from queue import Queue, Empty
+import time
+from queue import Empty, Queue
+from typing import Any, Dict, List
+
 import requests
 
 from .logger import get_logger
@@ -18,14 +19,14 @@ logger = get_logger()
 class NeatlogsExporter:
     """
     Exports spans to Neatlogs backend with batching for performance.
-    
+
     Features:
     - Batch export to reduce HTTP overhead
     - Async export in background thread
     - Automatic retry on failure
     - Configurable flush interval
     """
-    
+
     def __init__(
         self,
         api_key: str,
@@ -33,10 +34,11 @@ class NeatlogsExporter:
         batch_size: int = 100,
         flush_interval: float = 5.0,
         max_retries: int = 3,
+        disable_export: bool = False,
     ):
         """
         Initialize the exporter.
-        
+
         Args:
             api_key: Neatlogs API key
             endpoint: Neatlogs backend endpoint
@@ -49,7 +51,11 @@ class NeatlogsExporter:
         self.batch_size = batch_size
         self.flush_interval = flush_interval
         self.max_retries = max_retries
-        
+        # Default false; can be enabled via param or env for unit tests/local debugging.
+        self.disable_export = bool(disable_export) or (
+            os.getenv("NEATLOGS_DISABLE_EXPORT", "").lower() in ["true", "1", "yes"]
+        )
+
         self._queue: Queue = Queue()
         self._batch: List[Dict[str, Any]] = []
         self._lock = threading.Lock()
@@ -57,41 +63,55 @@ class NeatlogsExporter:
         self._metrics_queue: Queue = Queue()
         self._metrics_batch: List[Dict[str, Any]] = []
         self._metrics_lock = threading.Lock()
-        
-        self._log_spans_enabled = os.getenv("NEATLOGS_LOG_SPANS", "").lower() in ["true", "1", "yes"]
+
+        self._log_spans_enabled = os.getenv("NEATLOGS_LOG_SPANS", "").lower() in [
+            "true",
+            "1",
+            "yes",
+        ]
         self._log_file_path = None
         self._log_file_handle = None
-        
-        self._log_metrics_enabled = os.getenv("NEATLOGS_LOG_METRICS", "").lower() in ["true", "1", "yes"]
+
+        self._log_metrics_enabled = os.getenv("NEATLOGS_LOG_METRICS", "").lower() in [
+            "true",
+            "1",
+            "yes",
+        ]
         self._metrics_log_file_path = None
         self._metrics_log_file_handle = None
-        
+
         if self._log_spans_enabled:
-            self._log_file_path = os.path.join(os.getcwd(), os.getenv("NEATLOGS_LOG_SPANS_FILE", "spans_optimized.log"))
+            self._log_file_path = os.path.join(
+                os.getcwd(), os.getenv("NEATLOGS_LOG_SPANS_FILE", "spans_optimized.log")
+            )
             try:
-                self._log_file_handle = open(self._log_file_path, 'a', encoding='utf-8')
+                self._log_file_handle = open(self._log_file_path, "a", encoding="utf-8")
                 logger.info(f"Span logging enabled: {self._log_file_path}")
             except Exception as e:
                 logger.warning(f"Failed to open span log file: {e}")
                 self._log_spans_enabled = False
-        
+
         if self._log_metrics_enabled:
-            self._metrics_log_file_path = os.path.join(os.getcwd(), os.getenv("NEATLOGS_LOG_METRICS_FILE", "metrics_optimized.log"))
+            self._metrics_log_file_path = os.path.join(
+                os.getcwd(), os.getenv("NEATLOGS_LOG_METRICS_FILE", "metrics_optimized.log")
+            )
             try:
-                self._metrics_log_file_handle = open(self._metrics_log_file_path, 'a', encoding='utf-8')
+                self._metrics_log_file_handle = open(
+                    self._metrics_log_file_path, "a", encoding="utf-8"
+                )
                 logger.info(f"Metrics logging enabled: {self._metrics_log_file_path}")
             except Exception as e:
                 logger.warning(f"Failed to open metrics log file: {e}")
                 self._log_metrics_enabled = False
-        
+
         self._stop_event = threading.Event()
         self._flush_thread = threading.Thread(target=self._flush_worker, daemon=True)
         self._flush_thread.start()
-    
+
     def export(self, span_data: Dict[str, Any]) -> None:
         """
         Add a span to the export queue.
-        
+
         Args:
             span_data: Span data dictionary
         """
@@ -100,19 +120,19 @@ class NeatlogsExporter:
 
         if self._log_spans_enabled and self._log_file_handle and not self._log_file_handle.closed:
             try:
-                json_line = json.dumps(span_data) + '\n'
+                json_line = json.dumps(span_data) + "\n"
                 self._log_file_handle.write(json_line)
                 self._log_file_handle.flush()
             except Exception as e:
                 logger.debug(f"Failed to log span to file: {e}")
-        
+
         self._queue.put(span_data)
 
         with self._lock:
             with self._metrics_lock:
                 if len(self._batch) >= self.batch_size:
                     self._flush_combined_batch()
-    
+
     def export_metrics(self, metrics_list: List[Dict[str, Any]]) -> None:
         """
         Add metrics to the export queue.
@@ -130,7 +150,7 @@ class NeatlogsExporter:
         ):
             try:
                 for metric_data in metrics_list:
-                    json_line = json.dumps(metric_data) + '\n'
+                    json_line = json.dumps(metric_data) + "\n"
                     self._metrics_log_file_handle.write(json_line)
                 self._metrics_log_file_handle.flush()
             except Exception as e:
@@ -143,7 +163,7 @@ class NeatlogsExporter:
             with self._metrics_lock:
                 if len(self._metrics_batch) >= self.batch_size:
                     self._flush_combined_batch()
-    
+
     def flush(self, timeout: float = 10.0) -> None:
         """
         Force flush all pending spans and metrics.
@@ -191,7 +211,7 @@ class NeatlogsExporter:
             logger.debug("All queues drained successfully")
         except Exception as e:
             logger.warning(f"Error waiting for queues to drain: {e}")
-    
+
     def shutdown(self) -> None:
         """
         Shutdown the exporter and flush all pending spans.
@@ -203,7 +223,7 @@ class NeatlogsExporter:
         self._stop_event.set()
         self.flush()
         self._flush_thread.join(timeout=10.0)
-        
+
         if self._log_file_handle:
             try:
                 self._log_file_handle.close()
@@ -221,7 +241,7 @@ class NeatlogsExporter:
                 pass
             finally:
                 self._metrics_log_file_handle = None
-    
+
     def _flush_worker(self) -> None:
         """
         Background worker that periodically flushes spans and metrics batches.
@@ -262,7 +282,7 @@ class NeatlogsExporter:
                 self._queue.task_done()
             for _ in range(metrics_to_mark_done):
                 self._metrics_queue.task_done()
-    
+
     def _flush_combined_batch(self) -> None:
         """
         Flush both spans and metrics in a single request to Neatlogs backend.
@@ -277,6 +297,12 @@ class NeatlogsExporter:
 
         self._batch.clear()
         self._metrics_batch.clear()
+
+        if self.disable_export:
+            logger.debug(
+                f"Export disabled: skipping send of {len(spans_to_send)} spans and {len(metrics_to_send)} metrics"
+            )
+            return
 
         payload = {}
         if spans_to_send:
@@ -297,26 +323,34 @@ class NeatlogsExporter:
                 )
 
                 if response.status_code == 200:
-                    logger.debug(f"Successfully exported {len(spans_to_send)} spans and {len(metrics_to_send)} metrics")
+                    logger.debug(
+                        f"Successfully exported {len(spans_to_send)} spans and {len(metrics_to_send)} metrics"
+                    )
                     break
                 elif response.status_code == 401:
                     logger.error("Authentication failed (invalid API key)")
                     break
                 elif response.status_code >= 500:
                     if attempt < self.max_retries - 1:
-                        logger.warning(f"Server error {response.status_code}, retrying (attempt {attempt + 1}/{self.max_retries})...")
-                        time.sleep(2 ** attempt)
+                        logger.warning(
+                            f"Server error {response.status_code}, retrying (attempt {attempt + 1}/{self.max_retries})..."
+                        )
+                        time.sleep(2**attempt)
                         continue
                     else:
-                        logger.error(f"Server error {response.status_code} after {self.max_retries} attempts, giving up")
+                        logger.error(
+                            f"Server error {response.status_code} after {self.max_retries} attempts, giving up"
+                        )
                 else:
                     logger.error(f"Export failed with status {response.status_code}")
                     break
 
             except requests.exceptions.RequestException as e:
                 if attempt < self.max_retries - 1:
-                    logger.warning(f"Request exception, retrying (attempt {attempt + 1}/{self.max_retries}): {e}")
-                    time.sleep(2 ** attempt)
+                    logger.warning(
+                        f"Request exception, retrying (attempt {attempt + 1}/{self.max_retries}): {e}"
+                    )
+                    time.sleep(2**attempt)
                     continue
                 else:
                     logger.error(f"Export failed after {self.max_retries} attempts: {e}")

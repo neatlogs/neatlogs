@@ -1,11 +1,11 @@
 import json
 import logging
 import re
-from typing import Dict, Any, List, Optional
+from typing import Any, Dict, List, Optional
 
+from opentelemetry import metrics
 from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.trace import SpanKind
-from opentelemetry import metrics
 
 
 class UnifiedAttributeProcessor:
@@ -45,6 +45,7 @@ class UnifiedAttributeProcessor:
 
         try:
             from ..config import enrich_invocation_parameters
+
             enrich_invocation_parameters(attrs, enable_enrichment=True)
         except Exception as e:
             self.logger.warning(f"Failed to enrich invocation parameters: {e}")
@@ -67,7 +68,9 @@ class UnifiedAttributeProcessor:
         oi_tool_re = re.compile(
             r"^llm\.output_messages\.(\d+)\.message\.tool_calls\.(\d+)\.tool_call\.function\.(name|arguments)$"
         )
-        ol_tool_re = re.compile(r"^gen_ai\.completion\.(\d+)\.tool_calls\.(\d+)\.(id|name|arguments)$")
+        ol_tool_re = re.compile(
+            r"^gen_ai\.completion\.(\d+)\.tool_calls\.(\d+)\.(id|name|arguments)$"
+        )
 
         keys_to_remove: List[str] = []
         for k, v in list(attrs.items()):
@@ -126,7 +129,9 @@ class UnifiedAttributeProcessor:
                     td = tool_defs.setdefault(idx, {})
                     td.setdefault("name", schema.get("name"))
                     td.setdefault("description", schema.get("description"))
-                    td.setdefault("input_schema", schema.get("input_schema") or schema.get("parameters"))
+                    td.setdefault(
+                        "input_schema", schema.get("input_schema") or schema.get("parameters")
+                    )
                 keys_to_remove.append(k)
 
         for idx in sorted(tool_defs.keys()):
@@ -179,7 +184,9 @@ class UnifiedAttributeProcessor:
                         attrs["mcp.request.argument"] = json.dumps(entity_input["params"])
                     if "tool_name" in entity_input:
                         attrs["mcp.tool.name"] = entity_input["tool_name"]
-                        if "arguments" in entity_input and isinstance(entity_input["arguments"], dict):
+                        if "arguments" in entity_input and isinstance(
+                            entity_input["arguments"], dict
+                        ):
                             attrs["mcp.tool.arguments"] = json.dumps(entity_input["arguments"])
             except (json.JSONDecodeError, TypeError, KeyError):
                 pass
@@ -192,7 +199,11 @@ class UnifiedAttributeProcessor:
         if "mcp.request.argument" in attrs or "mcp.tool.arguments" in attrs:
             has_mcp_signal = True
 
-        if has_mcp_signal and "traceloop.entity.output" in attrs and "mcp.response.value" not in attrs:
+        if (
+            has_mcp_signal
+            and "traceloop.entity.output" in attrs
+            and "mcp.response.value" not in attrs
+        ):
             attrs["mcp.response.value"] = attrs["traceloop.entity.output"]
 
         if attrs.get("mcp.method.name") == "initialize" and "traceloop.entity.output" in attrs:
@@ -320,7 +331,14 @@ class UnifiedAttributeProcessor:
         if not isinstance(usage, str) or not usage:
             return
 
-        if any(k in attrs for k in ("llm.token_count.prompt", "llm.token_count.completion", "llm.token_count.total")):
+        if any(
+            k in attrs
+            for k in (
+                "llm.token_count.prompt",
+                "llm.token_count.completion",
+                "llm.token_count.total",
+            )
+        ):
             return
 
         parsed: Dict[str, int] = {}
@@ -380,9 +398,7 @@ class UnifiedAttributeProcessor:
         )
         return self._parse_react_steps(input_texts)
 
-    def _collect_role_texts(
-        self, unified: Dict[str, Any], prefix: str, role: str
-    ) -> List[str]:
+    def _collect_role_texts(self, unified: Dict[str, Any], prefix: str, role: str) -> List[str]:
         idx_re = re.compile(rf"^{re.escape(prefix)}\.(\d+)\.content$")
         idxs: set[int] = set()
         for k in unified.keys():
@@ -471,7 +487,9 @@ class UnifiedAttributeProcessor:
                 return True
         return any(key.startswith("http.") for key in attrs.keys())
 
-    def _extract_operational_metrics(self, span: ReadableSpan, attrs: Dict[str, Any]) -> Dict[str, Any]:
+    def _extract_operational_metrics(
+        self, span: ReadableSpan, attrs: Dict[str, Any]
+    ) -> Dict[str, Any]:
         computed = {}
 
         duration_ns = span.end_time - span.start_time
@@ -484,7 +502,10 @@ class UnifiedAttributeProcessor:
                     chunk_timestamps.append(event.timestamp / 1_000_000)
 
         if len(chunk_timestamps) > 1:
-            diffs = [chunk_timestamps[i] - chunk_timestamps[i - 1] for i in range(1, len(chunk_timestamps))]
+            diffs = [
+                chunk_timestamps[i] - chunk_timestamps[i - 1]
+                for i in range(1, len(chunk_timestamps))
+            ]
             mean_gap_ms = sum(diffs) / len(diffs)
             rounded_value = round(mean_gap_ms, 3)
             computed["gen_ai.server.time_per_output_token"] = rounded_value
@@ -509,7 +530,11 @@ class UnifiedAttributeProcessor:
             if event.name == "db.query.result":
                 e_attrs = event.attributes
                 doc: Dict[str, Any] = {
-                    "timestamp": event.timestamp.isoformat() if hasattr(event.timestamp, "isoformat") else str(event.timestamp)
+                    "timestamp": (
+                        event.timestamp.isoformat()
+                        if hasattr(event.timestamp, "isoformat")
+                        else str(event.timestamp)
+                    )
                 }
                 if "db.query.result.id" in e_attrs:
                     doc["id"] = e_attrs["db.query.result.id"]
@@ -520,7 +545,9 @@ class UnifiedAttributeProcessor:
                 if "db.query.result.metadata" in e_attrs:
                     metadata = e_attrs["db.query.result.metadata"]
                     try:
-                        doc["metadata"] = json.loads(metadata) if isinstance(metadata, str) else metadata
+                        doc["metadata"] = (
+                            json.loads(metadata) if isinstance(metadata, str) else metadata
+                        )
                     except Exception:
                         doc["metadata"] = str(metadata)
 
@@ -533,7 +560,11 @@ class UnifiedAttributeProcessor:
             elif event.name == "db.search.result":
                 e_attrs = event.attributes
                 doc = {
-                    "timestamp": event.timestamp.isoformat() if hasattr(event.timestamp, "isoformat") else str(event.timestamp)
+                    "timestamp": (
+                        event.timestamp.isoformat()
+                        if hasattr(event.timestamp, "isoformat")
+                        else str(event.timestamp)
+                    )
                 }
                 if "db.search.query.id" in e_attrs:
                     doc["query_id"] = e_attrs["db.search.query.id"]
@@ -623,17 +654,19 @@ class UnifiedAttributeProcessor:
             if not should_ignore:
                 unified[f"neatlogs.raw.{key}"] = value
 
-        span_kind = (attrs.get("neatlogs.span.kind") or attrs.get("openinference.span.kind") or "").lower()
+        span_kind = (
+            attrs.get("neatlogs.span.kind") or attrs.get("openinference.span.kind") or ""
+        ).lower()
         if span_kind not in ("embedding", "retriever"):
             unified.pop("neatlogs.vectordb.embedding_model", None)
 
         KNOWN_FRAMEWORKS = {
-            'langchain',
-            'llamaindex',
-            'crewai',
-            'haystack',
-            'agno',
-            'openai-agents'
+            "langchain",
+            "llamaindex",
+            "crewai",
+            "haystack",
+            "agno",
+            "openai-agents",
         }
 
         gen_ai_system = attrs.get("gen_ai.system") or unified.get("neatlogs.llm.system") or ""
@@ -655,7 +688,11 @@ class UnifiedAttributeProcessor:
             if not isinstance(config, dict):
                 continue
 
-            if isinstance(config, dict) and "mappings" in config and isinstance(config["mappings"], dict):
+            if (
+                isinstance(config, dict)
+                and "mappings" in config
+                and isinstance(config["mappings"], dict)
+            ):
                 self._map_recursive(config["mappings"], source, target, consumed)
 
             if isinstance(config, dict):
@@ -679,11 +716,11 @@ class UnifiedAttributeProcessor:
                         self._map_recursive({child_key: child_cfg}, source, target, consumed)
                         continue
 
-                    if any(
-                        isinstance(grand_cfg, dict) and any(k in grand_cfg for k in ("target", "sources", "mappings", "indexed"))
-                        for grand_cfg in child_cfg.values()
-                    ):
-                        nested_tier = {k: v for k, v in child_cfg.items() if isinstance(v, dict)}
+                    # Some tiers are purely organizational (e.g. metrics.llm.time_per_output_token)
+                    # and don't contain leaf mapping keys until 2+ levels down. Always descend into
+                    # nested dicts here to reach those leaf mappings.
+                    nested_tier = {k: v for k, v in child_cfg.items() if isinstance(v, dict)}
+                    if nested_tier:
                         self._map_recursive(nested_tier, source, target, consumed)
 
             target_key = config.get("target")
@@ -693,7 +730,9 @@ class UnifiedAttributeProcessor:
             if isinstance(target_key, str) and "{span_kind}" in target_key:
                 resolved_kind = target.get("neatlogs.span.kind")
                 if not resolved_kind:
-                    resolved_kind = source.get("openinference.span.kind") or source.get("traceloop.span.kind")
+                    resolved_kind = source.get("openinference.span.kind") or source.get(
+                        "traceloop.span.kind"
+                    )
                     if isinstance(resolved_kind, str):
                         resolved_kind = resolved_kind.strip()
                 if not resolved_kind:
@@ -740,7 +779,9 @@ class UnifiedAttributeProcessor:
                             continue
                         val = source[src_key]
 
-                        if role_val is None and (src_key.endswith(".role") or src_key.endswith(".message.role")):
+                        if role_val is None and (
+                            src_key.endswith(".role") or src_key.endswith(".message.role")
+                        ):
                             role_val = val
                             consumed.add(src_key)
                         elif content_val is None and (

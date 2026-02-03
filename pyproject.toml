@@ -2,11 +2,43 @@
 requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
+[tool.poetry]
+name = "neatlogs"
+version = "1.1.7"
+description = "A Python package for extracting and managing LLM logs to build a collaborative workspace"
+readme = "README.MD"
+license = "MIT"
+authors = ["Neatlogs <hello@neatlogs.com>"]
+homepage = "https://github.com/NeatLogs/neatlogs"
+repository = "https://github.com/NeatLogs/neatlogs.git"
+documentation = "https://docs.neatlogs.com/"
+
+[tool.poetry.dependencies]
+python = ">=3.10,<3.14"
+openinference-instrumentation = ">=0.1.27"
+openinference-semantic-conventions = ">=0.1.13"
+opentelemetry-api = ">=1.33.1"
+opentelemetry-exporter-otlp-proto-http = ">=1.33.1"
+opentelemetry-semantic-conventions-ai = ">=0.4.13"
+opentelemetry-sdk = ">=1.33.1"
+requests = ">=2.31.0"
+agnost = ">=0.1.8,<0.2.0"
+opentelemetry-instrumentation = ">=0.50b0"
+opentelemetry-instrumentation-requests = ">=0.50b0"
+opentelemetry-instrumentation-httpx = ">=0.50b0"
+opentelemetry-instrumentation-urllib3 = ">=0.50b0"
+opentelemetry-instrumentation-aiohttp-client = ">=0.50b0"
+opentelemetry-instrumentation-threading = ">=0.50b0"
+
+[tool.poetry.group.dev.dependencies]
+black = ">=24.0.0"
+isort = ">=5.13.0"
+
 [project]
 name = "neatlogs"
 version = "1.1.7"
 description = "A Python package for extracting and managing LLM logs to build a collaborative workspace"
-readme = "README.md"
+readme = "README.MD"
 license = {text = "MIT"}
 authors = [
     {name = "Neatlogs", email = "hello@neatlogs.com"}
@@ -39,7 +71,7 @@ dependencies = [
     "opentelemetry-semantic-conventions-ai>=0.4.13",
     "opentelemetry-sdk>=1.33.1",
     "requests>=2.31.0",
-    "agnost (>=0.1.8,<0.2.0)",
+    "agnost>=0.1.8,<0.2.0",
     # HTTP instrumentation (optional, will try to import if available)
     "opentelemetry-instrumentation>=0.50b0",
     "opentelemetry-instrumentation-requests>=0.50b0",

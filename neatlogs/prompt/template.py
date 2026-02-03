@@ -1,10 +1,12 @@
-import re
 import json
-from typing import Dict, Any, Union, List, Optional
+import re
 from contextvars import ContextVar
+from typing import Any, Dict, List, Optional, Union
 
 _prompt_template: ContextVar[Optional[str]] = ContextVar("prompt.template", default=None)
-_prompt_variables: ContextVar[Optional[Dict[str, Any]]] = ContextVar("prompt.variables", default=None)
+_prompt_variables: ContextVar[Optional[Dict[str, Any]]] = ContextVar(
+    "prompt.variables", default=None
+)
 
 
 class PromptContext:
@@ -61,21 +63,20 @@ class PromptTemplate:
             List of unique variable names
         """
         if isinstance(self.template, str):
-            return list(set(re.findall(r'\{\{(\w+)\}\}', self.template)))
+            return list(set(re.findall(r"\{\{(\w+)\}\}", self.template)))
 
         # Extract from message list
         vars_found = []
         for msg in self.template:
             if isinstance(msg, dict) and "content" in msg:
-                vars_found.extend(re.findall(r'\{\{(\w+)\}\}', msg["content"]))
+                vars_found.extend(re.findall(r"\{\{(\w+)\}\}", msg["content"]))
         return list(set(vars_found))
 
     def compile(self, **variables) -> Union[str, List[Dict[str, str]]]:
         missing = set(self._variables) - set(variables.keys())
         if missing:
             raise ValueError(
-                f"Missing required variables: {missing}. "
-                f"Template requires: {self._variables}"
+                f"Missing required variables: {missing}. " f"Template requires: {self._variables}"
             )
 
         PromptContext.set(str(self.template), variables)
@@ -84,10 +85,7 @@ class PromptTemplate:
             return self._render_string(self.template, variables)
 
         return [
-            {
-                "role": msg["role"],
-                "content": self._render_string(msg["content"], variables)
-            }
+            {"role": msg["role"], "content": self._render_string(msg["content"], variables)}
             for msg in self.template
         ]
 
@@ -100,7 +98,11 @@ class PromptTemplate:
     def __str__(self) -> str:
         """String representation showing template structure"""
         if isinstance(self.template, str):
-            return f"PromptTemplate('{self.template[:50]}...')" if len(str(self.template)) > 50 else f"PromptTemplate('{self.template}')"
+            return (
+                f"PromptTemplate('{self.template[:50]}...')"
+                if len(str(self.template)) > 50
+                else f"PromptTemplate('{self.template}')"
+            )
         return f"PromptTemplate({len(self.template)} messages, variables={self.variables})"
 
     def __repr__(self) -> str:

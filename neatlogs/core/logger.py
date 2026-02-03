@@ -9,7 +9,6 @@ import os
 import sys
 from typing import Optional
 
-
 _logger: Optional[logging.Logger] = None
 
 
@@ -33,8 +32,7 @@ def get_logger() -> logging.Logger:
 
     if not _logger.handlers:
         formatter = logging.Formatter(
-            fmt="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-            datefmt="%Y-%m-%d %H:%M:%S"
+            fmt="%(asctime)s - %(name)s - %(levelname)s - %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
         )
 
         console_handler = logging.StreamHandler(sys.stdout)
@@ -48,7 +46,7 @@ def get_logger() -> logging.Logger:
                 log_dir = os.path.dirname(log_file)
                 if log_dir and not os.path.exists(log_dir):
                     os.makedirs(log_dir, exist_ok=True)
-                
+
                 file_handler = logging.FileHandler(log_file)
                 file_handler.setLevel(log_level)
                 file_handler.setFormatter(formatter)

@@ -6,19 +6,19 @@ import atexit
 import os
 import time
 import uuid
-from typing import Optional, List
+from typing import List, Optional
 
-from opentelemetry import trace, metrics
+from opentelemetry import metrics, trace
+from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.resources import SERVICE_NAME, Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.sampling import TraceIdRatioBased
-from opentelemetry.sdk.metrics import MeterProvider
-from opentelemetry.sdk.resources import Resource, SERVICE_NAME
 
 from .core.exporter import NeatlogsExporter
-from .core.span_processor import NeatlogsSpanProcessor
-from .core.metrics_correlation import SpanMetricMeterProviderProxy
-from .instrumentation.manager import InstrumentationManager
 from .core.logger import get_logger
+from .core.metrics_correlation import SpanMetricMeterProviderProxy
+from .core.span_processor import NeatlogsSpanProcessor
+from .instrumentation.manager import InstrumentationManager
 
 logger = get_logger()
 
@@ -55,6 +55,7 @@ def _patch_semconv_ai_for_openllmetry(debug: bool) -> None:
 
     if debug and changed:
         from .core.logger import get_logger
+
         logger = get_logger()
         logger.debug(
             "Patched opentelemetry.semconv_ai.SpanAttributes GEN_AI_* aliases for OpenLLMetry compatibility"
@@ -74,6 +75,7 @@ def init(
     batch_size: int = 100,
     flush_interval: float = 5.0,
     debug: bool = False,
+    disable_export: bool = False,
 ) -> None:
     """
     Initialize Neatlogs SDK.
@@ -93,6 +95,7 @@ def init(
 
     if debug:
         import logging
+
         logging.basicConfig(
             level=logging.DEBUG,
             format="%(name)s - %(levelname)s - %(message)s",
@@ -150,6 +153,7 @@ def init(
         endpoint=endpoint,
         batch_size=batch_size,
         flush_interval=flush_interval,
+        disable_export=disable_export,
     )
 
     global _span_processor

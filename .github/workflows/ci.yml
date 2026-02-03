@@ -27,10 +27,10 @@ jobs:
           python -m pip install black isort pytest pytest-asyncio pytest-mock respx httpx numpy
 
       - name: Format (black)
-        run: black --check neatlogs tests/unit
+        run: black --check neatlogs tests
 
       - name: Imports (isort)
-        run: isort --check-only neatlogs tests/unit
+        run: isort --check-only neatlogs tests
 
       - name: Unit tests
         run: pytest -q tests/unit

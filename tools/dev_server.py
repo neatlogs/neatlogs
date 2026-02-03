@@ -1,7 +1,7 @@
-import logging
 import json
-from fastapi import FastAPI
-from fastapi import Request
+import logging
+
+from fastapi import FastAPI, Request
 
 app = FastAPI()
 

@@ -4,8 +4,10 @@ Pytest Configuration and Fixtures
 Shared fixtures for Neatlogs tests.
 """
 
-import pytest
+import os
 from unittest.mock import Mock, patch
+
+import pytest
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
@@ -67,29 +69,45 @@ def tracer_provider(in_memory_span_exporter):
 
 
 @pytest.fixture(autouse=True)
-def reset_neatlogs_tracker():
-    """Reset the global neatlogs tracker and OpenTelemetry state between tests."""
-    import neatlogs
+def _disable_export_for_unit_tests(monkeypatch):
+    """
+    Ensure tests never attempt to call a real Neatlogs backend.
+
+    Tests should assert on spans in-memory, not on HTTP side effects.
+    """
+    monkeypatch.setenv("NEATLOGS_DISABLE_EXPORT", "true")
+
+
+@pytest.fixture(autouse=True)
+def reset_neatlogs_and_otel_state():
+    """
+    Reset Neatlogs + OpenTelemetry globals between tests (Langfuse-style).
+
+    Many OTel SDK globals are "set-once"; tests need a clean slate to set a new
+    TracerProvider and capture spans deterministically.
+    """
     from opentelemetry import trace
 
-    # Store the original tracker
-    original_tracker = neatlogs._global_tracker
+    import neatlogs
 
-    # Reset to None before each test
-    neatlogs._global_tracker = None
-
-    # Reset OpenTelemetry trace provider
+    # Hard reset OTel "set once" provider state to allow tests to set their own provider.
     trace._TRACER_PROVIDER = None
     trace._TRACER_PROVIDER_SET_ONCE = trace.Once()
+
+    # Reset Neatlogs SDK state if a previous test initialized it.
+    try:
+        neatlogs.shutdown()
+    except Exception:
+        pass
 
     yield
 
     # Cleanup after test
-    if neatlogs._global_tracker:
-        neatlogs._global_tracker.shutdown()
+    try:
+        neatlogs.shutdown()
+    except Exception:
+        pass
 
-    # Reset again after test
-    neatlogs._global_tracker = original_tracker
     trace._TRACER_PROVIDER = None
     trace._TRACER_PROVIDER_SET_ONCE = trace.Once()
 
@@ -103,3 +121,8 @@ def mock_neatlogs_server():
         mock_response.json.return_value = {"status": "success"}
         mock_post.return_value = mock_response
         yield mock_post
+
+
+def _noop():
+    # Keep file ending stable for tooling.
+    return None

@@ -54,14 +54,18 @@ class _MetricEmitter:
 
 
 class _CounterProxy:
-    def __init__(self, inner: Any, emitter: _MetricEmitter, *, name: str, unit: str, description: str):
+    def __init__(
+        self, inner: Any, emitter: _MetricEmitter, *, name: str, unit: str, description: str
+    ):
         self._inner = inner
         self._emitter = emitter
         self._name = name
         self._unit = unit
         self._desc = description
 
-    def add(self, amount: Any, attributes: Optional[dict[str, Any]] = None, context: Any = None) -> None:
+    def add(
+        self, amount: Any, attributes: Optional[dict[str, Any]] = None, context: Any = None
+    ) -> None:
         try:
             self._emitter.emit(
                 metric_name=self._name,
@@ -77,14 +81,18 @@ class _CounterProxy:
 
 
 class _UpDownCounterProxy:
-    def __init__(self, inner: Any, emitter: _MetricEmitter, *, name: str, unit: str, description: str):
+    def __init__(
+        self, inner: Any, emitter: _MetricEmitter, *, name: str, unit: str, description: str
+    ):
         self._inner = inner
         self._emitter = emitter
         self._name = name
         self._unit = unit
         self._desc = description
 
-    def add(self, amount: Any, attributes: Optional[dict[str, Any]] = None, context: Any = None) -> None:
+    def add(
+        self, amount: Any, attributes: Optional[dict[str, Any]] = None, context: Any = None
+    ) -> None:
         try:
             self._emitter.emit(
                 metric_name=self._name,
@@ -100,14 +108,18 @@ class _UpDownCounterProxy:
 
 
 class _HistogramProxy:
-    def __init__(self, inner: Any, emitter: _MetricEmitter, *, name: str, unit: str, description: str):
+    def __init__(
+        self, inner: Any, emitter: _MetricEmitter, *, name: str, unit: str, description: str
+    ):
         self._inner = inner
         self._emitter = emitter
         self._name = name
         self._unit = unit
         self._desc = description
 
-    def record(self, amount: Any, attributes: Optional[dict[str, Any]] = None, context: Any = None) -> None:
+    def record(
+        self, amount: Any, attributes: Optional[dict[str, Any]] = None, context: Any = None
+    ) -> None:
         try:
             self._emitter.emit(
                 metric_name=self._name,
@@ -127,16 +139,28 @@ class SpanMetricMeterProxy:
         self._inner = inner_meter
         self._emitter = emitter
 
-    def create_counter(self, name: str, unit: str = "", description: str = "", **kwargs: Any) -> Any:
+    def create_counter(
+        self, name: str, unit: str = "", description: str = "", **kwargs: Any
+    ) -> Any:
         inner = self._inner.create_counter(name=name, unit=unit, description=description, **kwargs)
         return _CounterProxy(inner, self._emitter, name=name, unit=unit, description=description)
 
-    def create_up_down_counter(self, name: str, unit: str = "", description: str = "", **kwargs: Any) -> Any:
-        inner = self._inner.create_up_down_counter(name=name, unit=unit, description=description, **kwargs)
-        return _UpDownCounterProxy(inner, self._emitter, name=name, unit=unit, description=description)
+    def create_up_down_counter(
+        self, name: str, unit: str = "", description: str = "", **kwargs: Any
+    ) -> Any:
+        inner = self._inner.create_up_down_counter(
+            name=name, unit=unit, description=description, **kwargs
+        )
+        return _UpDownCounterProxy(
+            inner, self._emitter, name=name, unit=unit, description=description
+        )
 
-    def create_histogram(self, name: str, unit: str = "", description: str = "", **kwargs: Any) -> Any:
-        inner = self._inner.create_histogram(name=name, unit=unit, description=description, **kwargs)
+    def create_histogram(
+        self, name: str, unit: str = "", description: str = "", **kwargs: Any
+    ) -> Any:
+        inner = self._inner.create_histogram(
+            name=name, unit=unit, description=description, **kwargs
+        )
         return _HistogramProxy(inner, self._emitter, name=name, unit=unit, description=description)
 
     def __getattr__(self, name: str) -> Any:
@@ -154,4 +178,3 @@ class SpanMetricMeterProviderProxy:
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._inner, name)
-

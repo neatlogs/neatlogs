@@ -4,9 +4,10 @@ Instrumentation manager.
 
 import importlib
 import logging
-from typing import List, Set, Optional
-from opentelemetry.sdk.trace import TracerProvider
+from typing import List, Optional, Set
+
 from opentelemetry.instrumentation.threading import ThreadingInstrumentor
+from opentelemetry.sdk.trace import TracerProvider
 
 from .registry import INSTRUMENTATION_REGISTRY, get_libraries_by_tag
 
@@ -14,11 +15,13 @@ logger = logging.getLogger(__name__)
 
 
 class InstrumentationManager:
-    
-    def __init__(self, provider: TracerProvider, debug: bool = False, excluded_urls: Optional[str] = None):
+
+    def __init__(
+        self, provider: TracerProvider, debug: bool = False, excluded_urls: Optional[str] = None
+    ):
         """
         Initialize the instrumentation manager.
-        
+
         Args:
             provider: OpenTelemetry tracer provider
             debug: Enable debug logging
@@ -28,7 +31,7 @@ class InstrumentationManager:
         self.debug = debug
         self.excluded_urls = excluded_urls
         self.instrumented: Set[str] = set()
-    
+
     def instrument_threading(self) -> None:
         """
         Instrument threading for context propagation.
@@ -40,29 +43,29 @@ class InstrumentationManager:
         except Exception as e:
             if self.debug:
                 logger.warning(f"⚠️  Failed to instrument threading: {e}")
-    
+
     def instrument_http(self) -> None:
         """
         Always instrument HTTP libraries for context propagation.
         """
         http_libs = ["requests", "httpx", "urllib3", "aiohttp"]
-        
+
         for lib in http_libs:
             if not self._is_library_installed(lib):
                 if self.debug:
                     logger.info(f"⏭️  Skipped HTTP: {lib} (not installed)")
                 continue
-            
+
             try:
                 self._instrument_library(lib, convention="openllmetry")
                 self.instrumented.add(lib)
-                
+
                 if self.debug:
                     logger.info(f"✅ Instrumented HTTP: {lib}")
             except Exception as e:
                 if self.debug:
                     logger.warning(f"⚠️  Failed to instrument {lib}: {e}")
-    
+
     def instrument_mcp(self) -> None:
         """
         Instrument MCP for cross-process context propagation.
@@ -71,11 +74,12 @@ class InstrumentationManager:
             if self.debug:
                 logger.info("⏭️  Skipped MCP: not installed")
             return
-        
+
         instrumented_any = False
-        
+
         try:
             from openinference.instrumentation.mcp import MCPInstrumentor
+
             MCPInstrumentor().instrument(tracer_provider=self.provider)
             instrumented_any = True
             if self.debug:
@@ -83,9 +87,10 @@ class InstrumentationManager:
         except Exception as e:
             if self.debug:
                 logger.warning(f"⚠️  MCP (OpenInference): {e}")
-        
+
         try:
             from opentelemetry.instrumentation.mcp import McpInstrumentor
+
             McpInstrumentor().instrument(tracer_provider=self.provider)
             instrumented_any = True
             if self.debug:
@@ -93,11 +98,13 @@ class InstrumentationManager:
         except Exception as e:
             if self.debug:
                 logger.warning(f"⚠️  MCP (OpenLLMetry): {e}")
-        
+
         if instrumented_any:
             self.instrumented.add("mcp")
-    
-    def instrument(self, tags: Optional[List[str]] = None, libraries: Optional[List[str]] = None) -> None:
+
+    def instrument(
+        self, tags: Optional[List[str]] = None, libraries: Optional[List[str]] = None
+    ) -> None:
         """
         Instrument libraries based on tags and explicit library names.
         """
@@ -110,9 +117,9 @@ class InstrumentationManager:
         for lib in all_libraries:
             if lib in self.instrumented:
                 continue
-            
+
             self._instrument_dual(lib)
-    
+
     def _instrument_dual(self, library: str) -> None:
         if not self._is_library_installed(library):
             if self.debug:
@@ -163,7 +170,7 @@ class InstrumentationManager:
 
         if instrumented_any:
             self.instrumented.add(library)
-    
+
     def _instrument_library(self, library: str, convention: str) -> None:
         """
         Dynamically import and instrument a library.
@@ -185,8 +192,7 @@ class InstrumentationManager:
             is_http_lib = library in ["requests", "httpx", "urllib3", "aiohttp"]
             if is_http_lib and self.excluded_urls:
                 instrumentor_class().instrument(
-                    tracer_provider=self.provider,
-                    excluded_urls=self.excluded_urls
+                    tracer_provider=self.provider, excluded_urls=self.excluded_urls
                 )
             else:
                 instrumentor_class().instrument(tracer_provider=self.provider)
@@ -199,8 +205,9 @@ class InstrumentationManager:
 
     def _patch_openinference_litellm_ignore_instrumentation_suppression(self) -> None:
         try:
-            import litellm
             from functools import wraps
+
+            import litellm
             from opentelemetry import context as context_api
             from opentelemetry.context import _SUPPRESS_INSTRUMENTATION_KEY
 
@@ -256,15 +263,14 @@ class InstrumentationManager:
             from functools import wraps
 
             from opentelemetry import context as context_api
-            from opentelemetry.instrumentation.utils import _SUPPRESS_INSTRUMENTATION_KEY
-            from opentelemetry.semconv_ai import SUPPRESS_LANGUAGE_MODEL_INSTRUMENTATION_KEY
-
             from opentelemetry.instrumentation.openai.shared import (
                 chat_wrappers,
                 completion_wrappers,
                 embeddings_wrappers,
                 image_gen_wrappers,
             )
+            from opentelemetry.instrumentation.utils import _SUPPRESS_INSTRUMENTATION_KEY
+            from opentelemetry.semconv_ai import SUPPRESS_LANGUAGE_MODEL_INSTRUMENTATION_KEY
 
             if getattr(chat_wrappers, "_NEATLOGS_PATCHED_IGNORE_LM_SUPPRESS", False):
                 return
@@ -311,28 +317,42 @@ class InstrumentationManager:
 
             # Completions
             if hasattr(completion_wrappers, "completion_wrapper"):
-                completion_wrappers.completion_wrapper = _wrap_factory(completion_wrappers.completion_wrapper)
+                completion_wrappers.completion_wrapper = _wrap_factory(
+                    completion_wrappers.completion_wrapper
+                )
             if hasattr(completion_wrappers, "acompletion_wrapper"):
-                completion_wrappers.acompletion_wrapper = _wrap_factory(completion_wrappers.acompletion_wrapper)
+                completion_wrappers.acompletion_wrapper = _wrap_factory(
+                    completion_wrappers.acompletion_wrapper
+                )
 
             # Embeddings
             if hasattr(embeddings_wrappers, "embeddings_wrapper"):
-                embeddings_wrappers.embeddings_wrapper = _wrap_factory(embeddings_wrappers.embeddings_wrapper)
+                embeddings_wrappers.embeddings_wrapper = _wrap_factory(
+                    embeddings_wrappers.embeddings_wrapper
+                )
             if hasattr(embeddings_wrappers, "aembeddings_wrapper"):
-                embeddings_wrappers.aembeddings_wrapper = _wrap_factory(embeddings_wrappers.aembeddings_wrapper)
+                embeddings_wrappers.aembeddings_wrapper = _wrap_factory(
+                    embeddings_wrappers.aembeddings_wrapper
+                )
 
             if hasattr(image_gen_wrappers, "image_gen_metrics_wrapper"):
-                image_gen_wrappers.image_gen_metrics_wrapper = _wrap_factory(image_gen_wrappers.image_gen_metrics_wrapper)
+                image_gen_wrappers.image_gen_metrics_wrapper = _wrap_factory(
+                    image_gen_wrappers.image_gen_metrics_wrapper
+                )
             if hasattr(image_gen_wrappers, "aimage_gen_metrics_wrapper"):
-                image_gen_wrappers.aimage_gen_metrics_wrapper = _wrap_factory(image_gen_wrappers.aimage_gen_metrics_wrapper)
+                image_gen_wrappers.aimage_gen_metrics_wrapper = _wrap_factory(
+                    image_gen_wrappers.aimage_gen_metrics_wrapper
+                )
 
             chat_wrappers._NEATLOGS_PATCHED_IGNORE_LM_SUPPRESS = True
             if self.debug:
-                logger.debug("Patched OpenLLMetry OpenAI: ignore SUPPRESS_LANGUAGE_MODEL_INSTRUMENTATION_KEY")
+                logger.debug(
+                    "Patched OpenLLMetry OpenAI: ignore SUPPRESS_LANGUAGE_MODEL_INSTRUMENTATION_KEY"
+                )
         except Exception as e:
             if self.debug:
                 logger.warning(f"⚠️  Failed to patch OpenLLMetry OpenAI suppression: {e}")
-    
+
     def _get_instrumentor_class_name(self, library: str, convention: str) -> str:
         if convention == "neatlogs":
             neatlogs_cases = {
@@ -343,11 +363,19 @@ class InstrumentationManager:
 
         special_cases = {
             "openai": "OpenAIInstrumentor",
-            "langchain": "LangChainInstrumentor" if convention == "openinference" else "LangchainInstrumentor",
+            "langchain": (
+                "LangChainInstrumentor"
+                if convention == "openinference"
+                else "LangchainInstrumentor"
+            ),
             "urllib3": "URLLib3Instrumentor",
             "httpx": "HTTPXClientInstrumentor",
             "aiohttp": "AioHttpClientInstrumentor",
-            "llamaindex": "LlamaIndexInstrumentor" if convention == "openinference" else "LlamaindexInstrumentor",
+            "llamaindex": (
+                "LlamaIndexInstrumentor"
+                if convention == "openinference"
+                else "LlamaindexInstrumentor"
+            ),
             "google_generativeai": "GoogleGenerativeAIInstrumentor",
             "google_genai": "GoogleGenAIInstrumentor",
             "google_adk": "GoogleADKInstrumentor",
@@ -370,14 +398,14 @@ class InstrumentationManager:
             return special_cases[library]
 
         return f"{library.capitalize()}Instrumentor"
-    
+
     def _is_library_installed(self, library: str) -> bool:
         """
         Check if a library is installed.
-        
+
         Args:
             library: Library name
-            
+
         Returns:
             True if library is installed
         """

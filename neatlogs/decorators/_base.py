@@ -32,7 +32,9 @@ def _safe_json_dumps(value: Any) -> str:
         return json.dumps(str(value))
 
 
-def _bind_call_args(func: Callable[..., Any], args: Tuple[Any, ...], kwargs: Dict[str, Any]) -> Dict[str, Any]:
+def _bind_call_args(
+    func: Callable[..., Any], args: Tuple[Any, ...], kwargs: Dict[str, Any]
+) -> Dict[str, Any]:
     try:
         sig = inspect.signature(func)
         bound = sig.bind_partial(*args, **kwargs)
@@ -103,7 +105,9 @@ def _decorate_span(
 
             @functools.wraps(func)
             async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
-                with tracer.start_as_current_span(span_name, kind=otel_trace.SpanKind.INTERNAL) as span:
+                with tracer.start_as_current_span(
+                    span_name, kind=otel_trace.SpanKind.INTERNAL
+                ) as span:
                     _set_common_span_attrs(
                         span,
                         openinference_kind=openinference_kind,

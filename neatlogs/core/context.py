@@ -3,7 +3,8 @@ Context managers for manual span creation.
 """
 
 from contextlib import contextmanager
-from typing import Optional, Dict, Any, Union
+from typing import Any, Dict, Optional, Union
+
 from opentelemetry import trace as otel_trace
 
 
@@ -14,7 +15,7 @@ def trace(
     prompt_template: Optional[Union[str, "PromptTemplate"]] = None,
     prompt_variables: Optional[Dict[str, Any]] = None,
     version: Optional[str] = None,
-    **attributes
+    **attributes,
 ):
     """
     Generic span context manager with optional prompt tracking.
@@ -75,9 +76,11 @@ def trace(
     """
     import json
     import logging
-    from opentelemetry.context import attach, detach, set_value, get_current
-    from ..prompt.template import PromptTemplate, PromptContext
+
+    from opentelemetry.context import attach, detach, get_current, set_value
+
     from ..init import get_session_config
+    from ..prompt.template import PromptContext, PromptTemplate
 
     logger = logging.getLogger(__name__)
     tracer = otel_trace.get_tracer(__name__)
@@ -97,7 +100,9 @@ def trace(
         if isinstance(prompt_template, PromptTemplate):
             is_prompt_template_obj = True
             template_string = str(prompt_template.template)
-            logger.debug(f"[trace] Using PromptTemplate object with variables: {prompt_template.variables}")
+            logger.debug(
+                f"[trace] Using PromptTemplate object with variables: {prompt_template.variables}"
+            )
         else:
             template_string = prompt_template
 
@@ -119,14 +124,18 @@ def trace(
         if should_create_root_trace:
             logger.debug(f"[trace] Creating NEW root trace '{name}' (session_id={session_id})")
             with tracer.start_as_current_span(name, context=None) as span:
-                
-                _set_span_attributes(span, kind, template_string, prompt_variables, version, attributes)
+
+                _set_span_attributes(
+                    span, kind, template_string, prompt_variables, version, attributes
+                )
                 yield span
                 _finalize_prompt_capture(span, is_prompt_template_obj, logger)
         else:
             logger.debug(f"[trace] Creating child span '{name}'")
             with tracer.start_as_current_span(name, context=ctx) as span:
-                _set_span_attributes(span, kind, template_string, prompt_variables, version, attributes)
+                _set_span_attributes(
+                    span, kind, template_string, prompt_variables, version, attributes
+                )
                 yield span
                 _finalize_prompt_capture(span, is_prompt_template_obj, logger)
     finally:
@@ -137,7 +146,7 @@ def trace(
 
 def _set_span_attributes(span, kind, template_string, prompt_variables, version, attributes):
     """Helper to set span attributes."""
-    
+
     span.set_attribute("neatlogs.internal", True)
     span_kind = kind if kind else "CHAIN"
     span.set_attribute("openinference.span.kind", span_kind)
@@ -149,15 +158,18 @@ def _set_span_attributes(span, kind, template_string, prompt_variables, version,
 def _finalize_prompt_capture(span, is_prompt_template_obj, logger):
     """Helper to finalize prompt variable capture after yield."""
     import json
+
     from ..prompt.template import PromptContext
+
     if is_prompt_template_obj:
         captured_vars = PromptContext.get_variables()
         if captured_vars:
             span.set_attribute(
-                "llm.prompt_template_variables",
-                json.dumps(captured_vars, default=str)
+                "llm.prompt_template_variables", json.dumps(captured_vars, default=str)
             )
-            logger.debug(f"[trace] Auto-captured variables from PromptContext: {list(captured_vars.keys())}")
+            logger.debug(
+                f"[trace] Auto-captured variables from PromptContext: {list(captured_vars.keys())}"
+            )
 
 
 @contextmanager
@@ -168,15 +180,15 @@ def track_prompt(
 ):
     """
     Context manager for prompt tracking.
-    
+
     Automatically captures prompt template and variables for the current span.
     Use this when you want to wrap a block of code that makes LLM calls.
-    
+
     Args:
         template: Prompt template string
         variables: Dictionary of template variables
         version: Optional version identifier
-    
+
     Example:
         ```python
         with neatlogs.track_prompt(
@@ -187,5 +199,6 @@ def track_prompt(
         ```
     """
     from ..prompt.capture import capture_prompt
+
     capture_prompt(template, variables, version)
     yield

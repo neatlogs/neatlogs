@@ -5,27 +5,56 @@ Registry of available instrumentations.
 INSTRUMENTATION_REGISTRY = {
     "tags": {
         "llm": [
-            "openai", "anthropic", "cohere", "bedrock", "groq", "together", "vertexai",
-            "google_generativeai", "mistralai", "ollama", "watsonx", "alephalpha",
-            "replicate", "sagemaker", "huggingface_hub", "litellm", "google_genai", "portkey"
+            "openai",
+            "anthropic",
+            "cohere",
+            "bedrock",
+            "groq",
+            "together",
+            "vertexai",
+            "google_generativeai",
+            "mistralai",
+            "ollama",
+            "watsonx",
+            "alephalpha",
+            "replicate",
+            "sagemaker",
+            "huggingface_hub",
+            "litellm",
+            "google_genai",
+            "portkey",
         ],
         "embedding": ["openai", "cohere", "huggingface", "vertexai", "mistralai", "ollama"],
         "retrieval": [
-            "chromadb", "pinecone", "weaviate", "qdrant", "milvus", "opensearch",
-            "elasticsearch", "redis", "marqo"
+            "chromadb",
+            "pinecone",
+            "weaviate",
+            "qdrant",
+            "milvus",
+            "opensearch",
+            "elasticsearch",
+            "redis",
+            "marqo",
         ],
         "agent": [
-            "langchain", "llamaindex", "crewai", "autogen", "haystack", "dspy",
-            "agno", "beeai", "openai_agents", "pydantic_ai", "smolagents", "strands",
-            "pipecat"
+            "langchain",
+            "llamaindex",
+            "crewai",
+            "autogen",
+            "haystack",
+            "dspy",
+            "agno",
+            "beeai",
+            "openai_agents",
+            "pydantic_ai",
+            "smolagents",
+            "strands",
+            "pipecat",
         ],
         "tool": ["langchain", "llamaindex", "haystack", "mcp"],
         "http": ["requests", "httpx", "urllib3", "aiohttp"],
-        "framework": [
-            "instructor", "guardrails", "letta", "promptflow", "google_adk"
-        ],
+        "framework": ["instructor", "guardrails", "letta", "promptflow", "google_adk"],
     },
-    
     "libraries": {
         "azure_ai_inference": {
             "openllmetry": None,
@@ -115,7 +144,6 @@ INSTRUMENTATION_REGISTRY = {
             "openinference": "openinference.instrumentation.litellm",
             "default_span_kind": "LLM",
         },
-        
         "langchain": {
             "openllmetry": "opentelemetry.instrumentation.langchain",
             "openinference": "openinference.instrumentation.langchain",
@@ -146,7 +174,6 @@ INSTRUMENTATION_REGISTRY = {
             "openinference": "openinference.instrumentation.dspy",
             "default_span_kind": "CHAIN",
         },
-        
         "requests": {
             "openllmetry": "opentelemetry.instrumentation.requests",
             "openinference": None,
@@ -167,7 +194,6 @@ INSTRUMENTATION_REGISTRY = {
             "openinference": None,
             "default_span_kind": "TOOL",
         },
-        
         "chromadb": {
             "openllmetry": "opentelemetry.instrumentation.chromadb",
             "openinference": None,
@@ -213,7 +239,6 @@ INSTRUMENTATION_REGISTRY = {
             "openinference": None,
             "default_span_kind": "RETRIEVER",
         },
-        
         "instructor": {
             "openllmetry": "opentelemetry.instrumentation.instructor",
             "openinference": "openinference.instrumentation.instructor",
@@ -229,7 +254,6 @@ INSTRUMENTATION_REGISTRY = {
             "openinference": None,
             "default_span_kind": "AGENT",
         },
-        
         "google_genai": {
             "openllmetry": None,
             "openinference": "openinference.instrumentation.google_genai",
@@ -290,17 +314,17 @@ INSTRUMENTATION_REGISTRY = {
             "openinference": "openinference.instrumentation.mcp",
             "default_span_kind": "TOOL",
         },
-    }
+    },
 }
 
 
 def get_libraries_by_tag(tag: str) -> list:
     """
     Get list of library names for a given semantic tag.
-    
+
     Args:
         tag: Semantic tag (e.g., "llm", "agent", "http")
-        
+
     Returns:
         List of library names matching the tag
     """
@@ -310,10 +334,10 @@ def get_libraries_by_tag(tag: str) -> list:
 def get_library_info(library: str) -> dict:
     """
     Get instrumentation info for a specific library.
-    
+
     Args:
         library: Library name (e.g., "openai", "langchain")
-        
+
     Returns:
         Dictionary with instrumentation package names and metadata
     """

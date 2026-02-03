@@ -27,7 +27,7 @@ def infer_span_kind_from_name(span_name: str) -> str:
         for keyword in ["openai", "anthropic", "cohere", "bedrock", "chat", "completion", "llm"]
     ):
         return "LLM"
-    
+
     elif "embed" in name_lower:
         return "EMBEDDING"
 
@@ -45,26 +45,21 @@ def infer_span_kind_from_name(span_name: str) -> str:
         ]
     ):
         return "RETRIEVER"
-    
+
     elif "rerank" in name_lower:
         return "RERANKER"
-    
+
     elif "agent" in name_lower:
         return "AGENT"
-    
-    elif any(
-        keyword in name_lower
-        for keyword in ["tool", "function"]
-    ):
+
+    elif any(keyword in name_lower for keyword in ["tool", "function"]):
         return "TOOL"
-    
-    elif any(
-        keyword in name_lower for keyword in ["guardrail", "validate", "moderate", "safety"]
-    ):
+
+    elif any(keyword in name_lower for keyword in ["guardrail", "validate", "moderate", "safety"]):
         return "GUARDRAIL"
-    
+
     elif any(keyword in name_lower for keyword in ["evaluat", "score", "metric"]):
         return "EVALUATOR"
-    
+
     else:
         return "CHAIN"

@@ -7,10 +7,10 @@ import os
 import random
 import threading
 import time
-from typing import Optional, Dict, Any, List
+from typing import Any, Dict, List, Optional
 
-from opentelemetry.sdk.trace import ReadableSpan, SpanProcessor, Span
 from opentelemetry.context import Context
+from opentelemetry.sdk.trace import ReadableSpan, Span, SpanProcessor
 
 from .attribute_processor import UnifiedAttributeProcessor
 from .exporter import NeatlogsExporter
@@ -38,7 +38,9 @@ class NeatlogsSpanProcessor(SpanProcessor):
         self._raw_log_file_path = None
         self._raw_log_file_handle = None
         if self._log_raw_spans_enabled:
-            self._raw_log_file_path = os.path.join(os.getcwd(), os.getenv("NEATLOGS_LOG_RAW_SPANS_FILE", "spans_raw_optimized.log"))
+            self._raw_log_file_path = os.path.join(
+                os.getcwd(), os.getenv("NEATLOGS_LOG_RAW_SPANS_FILE", "spans_raw_optimized.log")
+            )
             try:
                 self._raw_log_file_handle = open(self._raw_log_file_path, "a", encoding="utf-8")
             except Exception:
@@ -102,7 +104,8 @@ class NeatlogsSpanProcessor(SpanProcessor):
             if not is_llm_span:
                 return
 
-            from opentelemetry.context import get_value, get_current
+            from opentelemetry.context import get_current, get_value
+
             from ..prompt.template import PromptContext
 
             ctx = get_current()
@@ -231,11 +234,11 @@ class NeatlogsSpanProcessor(SpanProcessor):
                 curr = len(self._pending)
                 if curr > self._pending_high_watermark:
                     self._pending_high_watermark = curr
-                
+
                 if not span.parent:
                     trace_id = span_data["trace_id"]
                     marker_span_id = f"completion_{trace_id[:16]}"
-                    
+
                     completion_marker = {
                         "trace_id": trace_id,
                         "span_id": marker_span_id,
@@ -248,16 +251,16 @@ class NeatlogsSpanProcessor(SpanProcessor):
                         "attributes": {
                             "neatlogs.trace.complete": True,
                             "neatlogs.internal": True,
-                            "neatlogs.span.kind": "Neatlogs.INTERNAL"
+                            "neatlogs.span.kind": "Neatlogs.INTERNAL",
                         },
                         "status": {"code": "OK", "description": ""},
-                        "events": []
+                        "events": [],
                     }
                     self._pending.append(completion_marker)
-                    
+
                     if self.debug:
                         logger.debug(f"Added completion marker for trace {trace_id}")
-            
+
             self._pending_event.set()
         finally:
             self.perf_stats["on_end_time"] += time.perf_counter() - start_time
@@ -408,7 +411,7 @@ class NeatlogsSpanProcessor(SpanProcessor):
         return [s for s in spans if s["span_id"] not in suppressed]
 
     def _is_traceloop_entity_span(self, span_data: Dict[str, Any]) -> bool:
-        name = (span_data.get("name") or "")
+        name = span_data.get("name") or ""
         return name.endswith(".task") or name.endswith(".tool") or name.endswith(".workflow")
 
     def _traceloop_base_name(self, entity_name: str) -> Optional[str]:
@@ -426,9 +429,14 @@ class NeatlogsSpanProcessor(SpanProcessor):
         best_score = 0
         for b in bases:
             score = self._score_time_overlap(entity, b)
-            if entity.get("parent_span_id") and entity.get("parent_span_id") == b.get("parent_span_id"):
+            if entity.get("parent_span_id") and entity.get("parent_span_id") == b.get(
+                "parent_span_id"
+            ):
                 score += 1
-            if self._start_delta_ns(entity, b) is not None and self._start_delta_ns(entity, b) <= 5_000_000:
+            if (
+                self._start_delta_ns(entity, b) is not None
+                and self._start_delta_ns(entity, b) <= 5_000_000
+            ):
                 score += 1
             if score > best_score:
                 best_score = score
@@ -458,7 +466,9 @@ class NeatlogsSpanProcessor(SpanProcessor):
             return None
         return abs(a_s - b_s)
 
-    def _merge_traceloop_entity_attrs_into_base(self, entity: Dict[str, Any], base: Dict[str, Any]) -> None:
+    def _merge_traceloop_entity_attrs_into_base(
+        self, entity: Dict[str, Any], base: Dict[str, Any]
+    ) -> None:
         ea = entity.get("attributes", {})
         ba = base.get("attributes", {})
         for k, v in ea.items():
@@ -483,7 +493,9 @@ class NeatlogsSpanProcessor(SpanProcessor):
                     return True
             return False
 
-        llm_spans = [s for s in spans if (s.get("attributes") or {}).get("neatlogs.span.kind") == "llm"]
+        llm_spans = [
+            s for s in spans if (s.get("attributes") or {}).get("neatlogs.span.kind") == "llm"
+        ]
         if len(llm_spans) < 2:
             return spans
 
@@ -498,14 +510,20 @@ class NeatlogsSpanProcessor(SpanProcessor):
             best = None
             best_score = 0
             fwa = fw.get("attributes") or {}
-            fw_provider = (fwa.get("neatlogs.llm.provider") or fwa.get("neatlogs.llm.system") or "").lower()
+            fw_provider = (
+                fwa.get("neatlogs.llm.provider") or fwa.get("neatlogs.llm.system") or ""
+            ).lower()
 
             for pv in provider_like:
                 score = self._score_time_overlap(fw, pv)
-                if fw.get("parent_span_id") and fw.get("parent_span_id") == pv.get("parent_span_id"):
+                if fw.get("parent_span_id") and fw.get("parent_span_id") == pv.get(
+                    "parent_span_id"
+                ):
                     score += 2
                 pva = pv.get("attributes") or {}
-                pv_provider = (pva.get("neatlogs.llm.provider") or pva.get("neatlogs.llm.system") or "").lower()
+                pv_provider = (
+                    pva.get("neatlogs.llm.provider") or pva.get("neatlogs.llm.system") or ""
+                ).lower()
                 if fw_provider and pv_provider and fw_provider == pv_provider:
                     score += 1
 
@@ -525,7 +543,9 @@ class NeatlogsSpanProcessor(SpanProcessor):
 
         return [s for s in spans if s["span_id"] not in suppressed]
 
-    def _merge_framework_llm_into_provider(self, framework: Dict[str, Any], provider: Dict[str, Any]) -> None:
+    def _merge_framework_llm_into_provider(
+        self, framework: Dict[str, Any], provider: Dict[str, Any]
+    ) -> None:
         fa = framework.get("attributes", {})
         pa = provider.get("attributes", {})
 
@@ -546,7 +566,10 @@ class NeatlogsSpanProcessor(SpanProcessor):
             and attrs.get("neatlogs.llm.request_type") is not None
         ):
             return True
-        if "neatlogs.raw.traceloop.span.kind" in attrs or "neatlogs.raw.traceloop.entity.name" in attrs:
+        if (
+            "neatlogs.raw.traceloop.span.kind" in attrs
+            or "neatlogs.raw.traceloop.entity.name" in attrs
+        ):
             return True
         return False
 
@@ -592,12 +615,18 @@ class NeatlogsSpanProcessor(SpanProcessor):
         if w.get("parent_span_id") == c.get("span_id"):
             score += 6
 
-        w_provider = (wa.get("neatlogs.llm.system") or wa.get("neatlogs.llm.provider") or "").lower()
-        c_provider = (ca.get("neatlogs.llm.system") or ca.get("neatlogs.llm.provider") or "").lower()
+        w_provider = (
+            wa.get("neatlogs.llm.system") or wa.get("neatlogs.llm.provider") or ""
+        ).lower()
+        c_provider = (
+            ca.get("neatlogs.llm.system") or ca.get("neatlogs.llm.provider") or ""
+        ).lower()
         if w_provider and c_provider and w_provider == c_provider:
             score += 2
 
-        w_req_model = wa.get("neatlogs.raw.gen_ai.request.model") or wa.get("neatlogs.llm.model_name")
+        w_req_model = wa.get("neatlogs.raw.gen_ai.request.model") or wa.get(
+            "neatlogs.llm.model_name"
+        )
         c_resp_model = ca.get("neatlogs.raw.llm.model_name") or ca.get("neatlogs.llm.model_name")
         if w_req_model and c_resp_model:
             if str(c_resp_model).startswith(str(w_req_model)):
@@ -613,7 +642,9 @@ class NeatlogsSpanProcessor(SpanProcessor):
 
         return score
 
-    def _merge_wrapper_attrs_into_canonical(self, wrapper: Dict[str, Any], canonical: Dict[str, Any]) -> None:
+    def _merge_wrapper_attrs_into_canonical(
+        self, wrapper: Dict[str, Any], canonical: Dict[str, Any]
+    ) -> None:
         wa = wrapper.get("attributes", {})
         ca = canonical.get("attributes", {})
 
@@ -638,9 +669,15 @@ class NeatlogsSpanProcessor(SpanProcessor):
             if key not in ca and value is not None:
                 ca[key] = value
 
-        _set_if_missing("neatlogs.llm.token_count.prompt", _get("neatlogs.raw.gen_ai.usage.input_tokens"))
-        _set_if_missing("neatlogs.llm.token_count.completion", _get("neatlogs.raw.gen_ai.usage.output_tokens"))
-        _set_if_missing("neatlogs.llm.token_count.total", _get("neatlogs.raw.llm.usage.total_tokens"))
+        _set_if_missing(
+            "neatlogs.llm.token_count.prompt", _get("neatlogs.raw.gen_ai.usage.input_tokens")
+        )
+        _set_if_missing(
+            "neatlogs.llm.token_count.completion", _get("neatlogs.raw.gen_ai.usage.output_tokens")
+        )
+        _set_if_missing(
+            "neatlogs.llm.token_count.total", _get("neatlogs.raw.llm.usage.total_tokens")
+        )
 
         _set_if_missing(
             "neatlogs.llm.token_count.cache_read",

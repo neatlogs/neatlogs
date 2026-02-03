@@ -23,9 +23,7 @@ class AttributeMapper:
             config_path: Path to attribute-mapping.json. If None, uses default location.
         """
         if config_path is None:
-            config_path = str(
-                Path(__file__).parent / "attribute-mapping.json"
-            )
+            config_path = str(Path(__file__).parent / "attribute-mapping.json")
 
         with open(config_path, "r") as f:
             self.config = json.load(f)
@@ -71,15 +69,17 @@ class AttributeMapper:
         if span_kind_value and span_kind_value in values_map:
             return values_map[span_kind_value]
 
-        is_llm_span = any([
-            "llm.model_name" in attributes,
-            "gen_ai.request.model" in attributes,
-            "llm.token_count.prompt" in attributes,
-            "llm.token_count.completion" in attributes,
-            "gen_ai.usage.prompt_tokens" in attributes,
-            "gen_ai.usage.completion_tokens" in attributes,
-        ])
-        
+        is_llm_span = any(
+            [
+                "llm.model_name" in attributes,
+                "gen_ai.request.model" in attributes,
+                "llm.token_count.prompt" in attributes,
+                "llm.token_count.completion" in attributes,
+                "gen_ai.usage.prompt_tokens" in attributes,
+                "gen_ai.usage.completion_tokens" in attributes,
+            ]
+        )
+
         if is_llm_span:
             return "llm"
 
@@ -166,9 +166,7 @@ class AttributeMapper:
                 if "sources" in value:
                     if value.get("indexed", False):
                         target = value.get("target", "")
-                        indexed_mapped = self.map_indexed_attributes(
-                            value, attributes, target
-                        )
+                        indexed_mapped = self.map_indexed_attributes(value, attributes, target)
                         mapped.update(indexed_mapped)
 
                         if "target_content" in value:
@@ -228,9 +226,7 @@ class AttributeMapper:
                 if result is not None:
                     mapped[target] = result
             else:
-                nested_mapped = self.map_nested_config(
-                    section_config, attributes, span_kind
-                )
+                nested_mapped = self.map_nested_config(section_config, attributes, span_kind)
                 mapped.update(nested_mapped)
 
         for attr_name, attr_value in attributes.items():
@@ -246,7 +242,7 @@ class AttributeMapper:
                     self._collect_mapped_sources(section_config["mappings"], mapped_sources)
                 else:
                     self._collect_mapped_sources(section_config, mapped_sources)
-        
+
         for attr_name, attr_value in attributes.items():
             if (
                 attr_name not in mapped_sources
@@ -255,16 +251,14 @@ class AttributeMapper:
             ):
                 mapped[attr_name] = attr_value
 
-        mapped = {
-            k: v for k, v in mapped.items() if not self.should_ignore(k)
-        }
+        mapped = {k: v for k, v in mapped.items() if not self.should_ignore(k)}
 
         return mapped
-    
+
     def _collect_mapped_sources(self, config: Dict[str, Any], collected: set) -> None:
         """
         Recursively collect all source attribute names from nested config.
-        
+
         Args:
             config: Configuration dict
             collected: Set to add source attribute names to
@@ -293,6 +287,7 @@ class AttributeMapper:
         Returns:
             Target attribute name or None if no mapping exists
         """
+
         def search_config(config: Dict[str, Any], target_span_kind: Optional[str]) -> Optional[str]:
             for key, value in config.items():
                 if isinstance(value, dict):
@@ -322,9 +317,7 @@ def get_mapper() -> AttributeMapper:
     return _mapper_instance
 
 
-def map_attributes(
-    attributes: Dict[str, Any], span_kind: Optional[str] = None
-) -> Dict[str, Any]:
+def map_attributes(attributes: Dict[str, Any], span_kind: Optional[str] = None) -> Dict[str, Any]:
     """
     Convenience function to map attributes using the global mapper.
 

@@ -188,6 +188,23 @@ class NeatlogsSpanProcessor(SpanProcessor):
                 unified_attrs["neatlogs.span.kind"] = "Neatlogs.INTERNAL"
                 unified_attrs["neatlogs.span.kind"] = "Neatlogs.INTERNAL"
 
+            # Include resource attributes for tags, session_id, user_id, etc.
+            resource_attrs = {}
+            if span.resource and span.resource.attributes:
+                # Properly serialize OTel resource attributes (handles AttributeValue types)
+                for key, value in span.resource.attributes.items():
+                    # Convert AttributeValue to native Python types
+                    if isinstance(value, (str, int, float, bool)):
+                        resource_attrs[key] = value
+                    elif isinstance(value, (list, tuple)):
+                        resource_attrs[key] = list(value)
+                    else:
+                        resource_attrs[key] = str(value)
+                
+                # Debug logging for tags
+                if self.debug and "neatlogs.tags" in resource_attrs:
+                    logger.debug(f"[Tags] Span {span.name}: resource.neatlogs.tags = {resource_attrs['neatlogs.tags']}")
+            
             span_data = {
                 "trace_id": f"{span.context.trace_id:032x}",
                 "span_id": f"{span.context.span_id:016x}",
@@ -198,6 +215,7 @@ class NeatlogsSpanProcessor(SpanProcessor):
                 "end_time": span.end_time,
                 "duration_ns": span.end_time - span.start_time if span.end_time else None,
                 "attributes": unified_attrs,
+                "resource": {"attributes": resource_attrs},  # Add resource attributes
                 "status": {
                     "code": span.status.status_code.name,
                     "description": span.status.description,

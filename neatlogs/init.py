@@ -69,7 +69,7 @@ def init(
     session_id: Optional[str] = None,
     auto_session: bool = False,
     user_id: Optional[str] = None,
-    instrument_tags: Optional[List[str]] = None,
+    tags: Optional[List[str]] = None,
     instrumentations: Optional[List[str]] = None,
     sample_rate: float = 1.0,
     batch_size: int = 100,
@@ -79,6 +79,21 @@ def init(
 ) -> None:
     """
     Initialize Neatlogs SDK.
+    
+    Args:
+        api_key: Neatlogs API key (or set NEATLOGS_API_KEY env var)
+        endpoint: Neatlogs backend endpoint
+        workflow_name: Logical grouping for traces
+        session_id: Custom session ID (for multi-turn conversations)
+        auto_session: Auto-generate session_id (useful for chatbots)
+        user_id: User identifier (propagates to all spans)
+        tags: Global tags for all traces (list of strings only, e.g., ['production', 'api-v2'])
+        instrumentations: Specific libraries to instrument
+        sample_rate: Trace sampling rate (0.0-1.0)
+        batch_size: Max spans per batch
+        flush_interval: Seconds between batch flushes
+        debug: Enable debug logging
+        disable_export: Disable data export (for testing)
     """
     global _initialized
 
@@ -125,6 +140,15 @@ def init(
         resource_attrs["session.id"] = final_session_id
     if user_id:
         resource_attrs["user.id"] = user_id
+    if tags:
+        # Tags must be a list of strings
+        if not isinstance(tags, list):
+            raise ValueError(f"tags must be a list of strings, got {type(tags)}")
+        # Validate all elements are strings
+        if not all(isinstance(tag, str) for tag in tags):
+            raise ValueError("All tags must be strings")
+        # Store as comma-separated string for OTel resource attributes
+        resource_attrs["neatlogs.tags"] = ",".join(tags)
     resource = Resource.create(resource_attrs)
 
     global _tracer_provider
@@ -185,8 +209,8 @@ def init(
     manager.instrument_threading()
     manager.instrument_http()
 
-    if instrument_tags or instrumentations:
-        manager.instrument(tags=instrument_tags, libraries=instrumentations)
+    if instrumentations:
+        manager.instrument(libraries=instrumentations)
         if debug:
             logger.debug(f"Instrumented libraries: {manager.instrumented}")
 
@@ -200,8 +224,8 @@ def init(
         logger.info(f"Workflow: {workflow_name or '(none)'}")
         logger.info(f"Session: {final_session_id or '(none)'}")
         logger.info(f"User: {user_id or '(none)'}")
+        logger.info(f"Tags: {tags or []}")
         logger.info(f"Instrumentations: {manager.instrumented or '(none)'}")
-        logger.info(f"Tags: {instrument_tags or []}")
         logger.info(f"Sample Rate: {sample_rate}")
 
 

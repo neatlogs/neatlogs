@@ -5,6 +5,7 @@ Registry of available instrumentations.
 INSTRUMENTATION_REGISTRY = {
     "tags": {
         "llm": [
+            "azure_ai_inference",
             "openai",
             "anthropic",
             "cohere",

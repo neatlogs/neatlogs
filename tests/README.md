@@ -4,40 +4,34 @@ This directory contains tests for the Neatlogs library.
 
 ## Running Tests
 
-### Install test dependencies
+### Install test dependencies (Poetry)
 
 ```bash
-uv sync --group dev
+poetry install --with dev
 ```
 
-### Run all tests
+### Run unit tests (default)
 
 ```bash
-uv run pytest
+poetry run pytest
 ```
 
-### Run specific test file
+### Run unit tests explicitly
 
 ```bash
-uv run pytest tests/test_openai_instrumentation.py
+poetry run pytest -q tests/unit
 ```
 
-### Run with coverage
+### Run a specific unit test file
 
 ```bash
-uv run pytest --cov=neatlogs --cov-report=html
-```
-
-### Run specific test
-
-```bash
-uv run pytest tests/test_openai_instrumentation.py::TestOpenAIInstrumentation::test_openai_chat_completion_creates_span
+poetry run pytest tests/unit/test_unified_attribute_processor_pipeline.py
 ```
 
 ## Test Structure
 
 - `conftest.py` - Shared pytest fixtures and configuration
-- `test_openai_instrumentation.py` - Tests for OpenAI SDK instrumentation
+- `tests/unit/` - Unit tests (run by default)
 
 ## Writing Tests
 

@@ -10,6 +10,7 @@ from opentelemetry.instrumentation.threading import ThreadingInstrumentor
 from opentelemetry.sdk.trace import TracerProvider
 
 from .registry import INSTRUMENTATION_REGISTRY, get_libraries_by_tag
+from .http_context_propagation import patch_http_context_propagation
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +66,17 @@ class InstrumentationManager:
             except Exception as e:
                 if self.debug:
                     logger.warning(f"⚠️  Failed to instrument {lib}: {e}")
+
+        # Server-side frameworks are not always available as OTel dependencies in user envs.
+        # Patch context propagation for common libraries/frameworks so cross-service calls
+        # can still share a trace_id even without full HTTP auto-instrumentation packages.
+        try:
+            patch_http_context_propagation()
+            if self.debug:
+                logger.info("✅ Patched HTTP context propagation (best-effort)")
+        except Exception as e:
+            if self.debug:
+                logger.warning(f"⚠️  Failed to patch HTTP context propagation: {e}")
 
     def instrument_mcp(self) -> None:
         """
@@ -185,6 +197,10 @@ class InstrumentationManager:
             module = importlib.import_module(package_name)
             if convention == "openllmetry" and library == "openai":
                 self._patch_openllmetry_openai_ignore_language_model_suppression()
+            if convention == "openllmetry" and library == "langchain":
+                self._patch_openllmetry_langchain_callback_handler_errors()
+            if convention == "openllmetry" and library == "cohere":
+                self._patch_openllmetry_cohere_safe_token_sums()
             instrumentor_class_name = self._get_instrumentor_class_name(library, convention)
 
             instrumentor_class = getattr(module, instrumentor_class_name)
@@ -202,6 +218,184 @@ class InstrumentationManager:
 
         except Exception as e:
             raise Exception(f"Failed to instrument {library} with {convention}: {e}")
+
+    def _patch_openllmetry_cohere_safe_token_sums(self) -> None:
+        """
+        Patch OpenLLMetry Cohere instrumentation to handle token counts that are present
+        but set to null/None (observed in some responses, e.g. rerank).
+
+        Without this, OpenLLMetry can log:
+          TypeError: unsupported operand type(s) for +: 'NoneType' and 'NoneType'
+        and usage attributes won't be set for that span.
+        """
+        try:
+            import opentelemetry.instrumentation.cohere as cohere_inst
+            import opentelemetry.instrumentation.cohere.span_utils as span_utils
+            from opentelemetry.semconv._incubating.attributes import (
+                gen_ai_attributes as GenAIAttributes,
+            )
+            from opentelemetry.semconv_ai import SpanAttributes
+
+            if getattr(cohere_inst, "_NEATLOGS_PATCHED_SAFE_TOKEN_SUMS", False):
+                return
+
+            def _safe_int(value: object, default: int = 0) -> int:
+                if value is None:
+                    return default
+                try:
+                    return int(value)  # type: ignore[arg-type]
+                except Exception:
+                    return default
+
+            def _patched_set_span_response_attributes(span, response):
+                if not span.is_recording():
+                    return
+
+                response_dict = span_utils.to_dict(response)
+
+                # Cohere API v1
+                if response_dict.get("response_id"):
+                    span_utils._set_span_attribute(
+                        span,
+                        GenAIAttributes.GEN_AI_RESPONSE_ID,
+                        response_dict.get("response_id"),
+                    )
+                # Cohere API v2
+                elif response_dict.get("id"):
+                    span_utils._set_span_attribute(
+                        span,
+                        GenAIAttributes.GEN_AI_RESPONSE_ID,
+                        response_dict.get("id"),
+                    )
+
+                # Cohere v4
+                token_count = response_dict.get("token_count")
+                if token_count:
+                    token_count_dict = span_utils.to_dict(token_count)
+                    input_tokens = _safe_int(token_count_dict.get("prompt_tokens"))
+                    output_tokens = _safe_int(token_count_dict.get("response_tokens"))
+                    span_utils._set_span_attribute(
+                        span,
+                        SpanAttributes.LLM_USAGE_TOTAL_TOKENS,
+                        input_tokens + output_tokens,
+                    )
+                    span_utils._set_span_attribute(
+                        span,
+                        SpanAttributes.LLM_USAGE_COMPLETION_TOKENS,
+                        output_tokens,
+                    )
+                    span_utils._set_span_attribute(
+                        span,
+                        SpanAttributes.LLM_USAGE_PROMPT_TOKENS,
+                        input_tokens,
+                    )
+
+                # Cohere v5
+                if response_dict.get("meta"):
+                    meta_dict = span_utils.to_dict(response_dict.get("meta", {}))
+                    billed_units_dict = span_utils.to_dict(meta_dict.get("billed_units", {}))
+                    input_tokens = _safe_int(billed_units_dict.get("input_tokens"))
+                    output_tokens = _safe_int(billed_units_dict.get("output_tokens"))
+
+                    span_utils._set_span_attribute(
+                        span,
+                        SpanAttributes.LLM_USAGE_TOTAL_TOKENS,
+                        input_tokens + output_tokens,
+                    )
+                    span_utils._set_span_attribute(
+                        span,
+                        SpanAttributes.LLM_USAGE_COMPLETION_TOKENS,
+                        output_tokens,
+                    )
+                    span_utils._set_span_attribute(
+                        span,
+                        SpanAttributes.LLM_USAGE_PROMPT_TOKENS,
+                        input_tokens,
+                    )
+
+                # Cohere API v2
+                if response_dict.get("usage"):
+                    usage_dict = span_utils.to_dict(response_dict.get("usage", {}))
+                    billed_units_dict = span_utils.to_dict(usage_dict.get("billed_units", {}))
+                    input_tokens = _safe_int(billed_units_dict.get("input_tokens"))
+                    output_tokens = _safe_int(billed_units_dict.get("output_tokens"))
+                    span_utils._set_span_attribute(
+                        span,
+                        SpanAttributes.LLM_USAGE_TOTAL_TOKENS,
+                        input_tokens + output_tokens,
+                    )
+                    span_utils._set_span_attribute(
+                        span,
+                        SpanAttributes.LLM_USAGE_COMPLETION_TOKENS,
+                        output_tokens,
+                    )
+                    span_utils._set_span_attribute(
+                        span,
+                        SpanAttributes.LLM_USAGE_PROMPT_TOKENS,
+                        input_tokens,
+                    )
+
+            wrapped = span_utils.dont_throw(_patched_set_span_response_attributes)
+            span_utils.set_span_response_attributes = wrapped
+            # The instrumentation module imports this into its namespace at import-time.
+            cohere_inst.set_span_response_attributes = wrapped
+
+            cohere_inst._NEATLOGS_PATCHED_SAFE_TOKEN_SUMS = True
+            if self.debug:
+                logger.debug("Patched OpenLLMetry Cohere: safe token sums")
+        except Exception as e:
+            if self.debug:
+                logger.warning(f"⚠️  Failed to patch OpenLLMetry Cohere token sums: {e}")
+
+    def _patch_openllmetry_langchain_callback_handler_errors(self) -> None:
+        """
+        Patch OpenLLMetry LangChain callback handler to:
+        - Avoid KeyError when error callbacks fire after the span was already removed
+        - Use correct `Span.set_status(...)` call shape (prevents OTel warnings)
+        """
+        try:
+            import opentelemetry.instrumentation.langchain.callback_handler as cb
+            from opentelemetry.trace.status import Status, StatusCode
+
+            if getattr(cb, "_NEATLOGS_PATCHED_HANDLE_ERROR_GUARDS", False):
+                return
+
+            original_handle_error = cb.TraceloopCallbackHandler._handle_error
+
+            def _patched_handle_error(
+                self,
+                error,
+                run_id,
+                parent_run_id=None,
+                **kwargs,
+            ):
+                # If this run_id was never started or already ended, skip emitting error to avoid KeyError noise.
+                holder = getattr(self, "spans", {}).get(run_id)
+                if holder is None:
+                    return
+
+                span = holder.span
+                try:
+                    span.set_status(Status(StatusCode.ERROR, str(error)))
+                except Exception:
+                    # Never let tracing errors break user code paths
+                    return original_handle_error(self, error, run_id, parent_run_id, **kwargs)
+                try:
+                    span.record_exception(error)
+                except Exception:
+                    pass
+                try:
+                    self._end_span(span, run_id)
+                except Exception:
+                    pass
+
+            cb.TraceloopCallbackHandler._handle_error = _patched_handle_error
+            cb._NEATLOGS_PATCHED_HANDLE_ERROR_GUARDS = True
+        except Exception as e:
+            if self.debug:
+                logger.warning(
+                    f"⚠️  Failed to patch OpenLLMetry LangChain callback handler: {e}"
+                )
 
     def _patch_openinference_litellm_ignore_instrumentation_suppression(self) -> None:
         try:
@@ -357,6 +551,13 @@ class InstrumentationManager:
         if convention == "neatlogs":
             neatlogs_cases = {
                 "openai": "OpenAIInstrumentor",
+                "anthropic": "AnthropicInstrumentor",
+                "langchain": "LangChainInstrumentor",
+                "langgraph": "LangGraphInstrumentor",
+                "crewai": "CrewAIInstrumentor",
+                "bedrock": "BedrockInstrumentor",
+                "groq": "GroqInstrumentor",
+                "google_genai": "GoogleGenAIInstrumentor",
             }
             if library in neatlogs_cases:
                 return neatlogs_cases[library]
@@ -418,6 +619,8 @@ class InstrumentationManager:
                 "azure_ai_inference": "azure.ai.inference",
                 # Milvus python client (pip: pymilvus)
                 "milvus": "pymilvus",
+                # Qdrant python client (pip: qdrant-client)
+                "qdrant": "qdrant_client",
             }
             import_name = special_imports.get(library) or library.replace("-", "_")
             importlib.import_module(import_name)

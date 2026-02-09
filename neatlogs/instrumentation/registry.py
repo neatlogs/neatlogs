@@ -39,6 +39,7 @@ INSTRUMENTATION_REGISTRY = {
         ],
         "agent": [
             "langchain",
+            "langgraph",
             "llamaindex",
             "crewai",
             "autogen",
@@ -66,11 +67,13 @@ INSTRUMENTATION_REGISTRY = {
             "default_span_kind": "LLM",
         },
         "openai": {
+            # "neatlogs": "neatlogs_instrumentation_openai",
             "openinference": "openinference.instrumentation.openai",
             "openllmetry": "opentelemetry.instrumentation.openai",
             "default_span_kind": "LLM",
         },
         "anthropic": {
+            # "neatlogs": "neatlogs_instrumentation_anthropic",
             "openllmetry": "opentelemetry.instrumentation.anthropic",
             "openinference": "openinference.instrumentation.anthropic",
             "default_span_kind": "LLM",
@@ -81,11 +84,13 @@ INSTRUMENTATION_REGISTRY = {
             "default_span_kind": "LLM",
         },
         "bedrock": {
+            # "neatlogs": "neatlogs_instrumentation_bedrock",
             "openllmetry": "opentelemetry.instrumentation.bedrock",
             "openinference": "openinference.instrumentation.bedrock",
             "default_span_kind": "LLM",
         },
         "groq": {
+            # "neatlogs": "neatlogs_instrumentation_groq",
             "openllmetry": "opentelemetry.instrumentation.groq",
             "openinference": "openinference.instrumentation.groq",
             "default_span_kind": "LLM",
@@ -146,9 +151,16 @@ INSTRUMENTATION_REGISTRY = {
             "default_span_kind": "LLM",
         },
         "langchain": {
+            # "neatlogs": "neatlogs_instrumentation_langchain",
             "openllmetry": "opentelemetry.instrumentation.langchain",
             "openinference": "openinference.instrumentation.langchain",
             "default_span_kind": "CHAIN",
+        },
+        "langgraph": {
+            # "neatlogs": "neatlogs_instrumentation_langgraph",
+            "openllmetry": None,
+            "openinference": None,
+            "default_span_kind": "WORKFLOW",
         },
         "llamaindex": {
             "openllmetry": "opentelemetry.instrumentation.llamaindex",
@@ -156,6 +168,7 @@ INSTRUMENTATION_REGISTRY = {
             "default_span_kind": "CHAIN",
         },
         "crewai": {
+            "neatlogs": "neatlogs_instrumentation_crewai",
             "openllmetry": "opentelemetry.instrumentation.crewai",
             "openinference": "openinference.instrumentation.crewai",
             "default_span_kind": "AGENT",
@@ -212,7 +225,7 @@ INSTRUMENTATION_REGISTRY = {
         },
         "qdrant": {
             "openllmetry": "opentelemetry.instrumentation.qdrant",
-            "openinference": "openinference.instrumentation.qdrant",
+            "openinference": None,
             "default_span_kind": "RETRIEVER",
         },
         "milvus": {
@@ -256,6 +269,7 @@ INSTRUMENTATION_REGISTRY = {
             "default_span_kind": "AGENT",
         },
         "google_genai": {
+            # "neatlogs": "neatlogs_instrumentation_google_genai",
             "openllmetry": None,
             "openinference": "openinference.instrumentation.google_genai",
             "default_span_kind": "LLM",

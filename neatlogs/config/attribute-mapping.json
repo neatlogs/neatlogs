@@ -15,7 +15,7 @@
         "LLM": "llm",
         "TOOL": "tool",
         "AGENT": "agent",
-        "CHAIN": "workflow",
+        "CHAIN": "chain",
         "WORKFLOW": "workflow",
         "TASK": "task",
         "RETRIEVER": "retriever",

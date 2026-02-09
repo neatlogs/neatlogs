@@ -158,6 +158,35 @@ class NeatlogsSpanProcessor(SpanProcessor):
 
             unified_attrs = self.unified_processor.process(span)
 
+            # CRITICAL: Filter out large tokenized arrays for EMBEDDING/VECTOR_STORE spans
+            # These arrays can be 8+ MB and should NOT be sent to Kafka
+            nl_kind = unified_attrs.get("neatlogs.span.kind")
+            if nl_kind in ("embedding", "vector_store"):
+                keys_to_remove = []
+                for key in unified_attrs.keys():
+                    # Remove massive tokenized input/output arrays
+                    if (
+                        "input_messages" in key or
+                        "output_messages" in key or
+                        "gen_ai.prompt" in key or
+                        "gen_ai.completion" in key or
+                        ".content" in key or
+                        key == "neatlogs.embedding.input" or
+                        key == "neatlogs.embedding.output" or
+                        key == "neatlogs.raw.embedding.input" or
+                        key == "neatlogs.raw.embedding.output"
+                    ):
+                        keys_to_remove.append(key)
+                
+                for key in keys_to_remove:
+                    unified_attrs.pop(key, None)
+                
+                if self.debug and keys_to_remove:
+                    logger.debug(
+                        f"[EMBEDDING Filter] Removed {len(keys_to_remove)} large attribute keys "
+                        f"from {nl_kind} span to prevent 8+ MB payloads"
+                    )
+
             nl_kind = unified_attrs.get("neatlogs.span.kind")
             if nl_kind not in ("llm", "embedding") and span.name != "PromptTemplate":
                 for k in (
@@ -545,7 +574,24 @@ class NeatlogsSpanProcessor(SpanProcessor):
         llm_spans = [
             s for s in spans if (s.get("attributes") or {}).get("neatlogs.span.kind") == "llm"
         ]
-        if len(llm_spans) < 2:
+        
+        # Also handle LLM wrappers around EMBEDDING/RERANKER spans (e.g., openai.embeddings → CreateEmbeddings)
+        suppressed_embedding_wrappers: set[str] = set()
+        for llm_span in llm_spans:
+            llm_children = children.get(llm_span["span_id"], [])
+            for child in llm_children:
+                child_kind = (child.get("attributes") or {}).get("neatlogs.span.kind", "").lower()
+                if child_kind in ("embedding", "reranker"):
+                    # This LLM span is a wrapper around an embedding/reranker - suppress it
+                    suppressed_embedding_wrappers.add(llm_span["span_id"])
+                    if self.debug:
+                        logger.debug(
+                            f"[Dedup] Suppressing LLM wrapper {llm_span['span_id']} "
+                            f"(has {child_kind} child {child['span_id']})"
+                        )
+                    break
+        
+        if len(llm_spans) < 2 and not suppressed_embedding_wrappers:
             return spans
 
         provider_like = [s for s in llm_spans if has_http_child(s["span_id"])]
@@ -590,7 +636,9 @@ class NeatlogsSpanProcessor(SpanProcessor):
                 if s.get("parent_span_id") == fw["span_id"]:
                     s["parent_span_id"] = best["span_id"]
 
-        return [s for s in spans if s["span_id"] not in suppressed]
+        # Combine both suppression sets
+        all_suppressed = suppressed | suppressed_embedding_wrappers
+        return [s for s in spans if s["span_id"] not in all_suppressed]
 
     def _merge_framework_llm_into_provider(
         self, framework: Dict[str, Any], provider: Dict[str, Any]

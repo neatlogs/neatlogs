@@ -55,6 +55,16 @@ class UnifiedAttributeProcessor:
 
         unified = self._apply_namespace_mapping(attrs)
         self._add_intermediate_steps(unified)
+        
+        # 🔥 CRITICAL: Filter out massive embedding vectors before export
+        # Embedding vectors can be 4MB+ (1000 embeddings × 4096 dimensions), causing:
+        # - Kafka message size limits (1MB default)
+        # - ClickHouse memory exhaustion (6GB+ RAM usage)
+        # - Network/storage costs
+        span_kind = (unified.get("neatlogs.span.kind") or "").lower()
+        if span_kind in ("embedding", "vector_store"):
+            unified = self._filter_embedding_vectors(unified)
+        
         return unified
 
     def _normalize_conventions(self, span: ReadableSpan, attrs: Dict[str, Any]) -> Dict[str, Any]:
@@ -691,6 +701,14 @@ class UnifiedAttributeProcessor:
                     inferred_kind = infer_span_kind_from_name(span_name)
                     unified["neatlogs.span.kind"] = inferred_kind.lower()
         
+        # Detect RERANKER operations from llm.request.type or gen_ai.operation.name
+        llm_request_type = attrs.get("llm.request.type", "").lower()
+        gen_ai_operation = attrs.get("gen_ai.operation.name", "").lower()
+        span_name_lower = attrs.get("_span_name", "").lower()
+        
+        if llm_request_type == "rerank" or gen_ai_operation == "rerank" or "rerank" in span_name_lower:
+            unified["neatlogs.span.kind"] = "reranker"
+        
         span_kind = (
             attrs.get("neatlogs.span.kind") or attrs.get("openinference.span.kind") or ""
         ).lower()
@@ -877,3 +895,29 @@ class UnifiedAttributeProcessor:
 
             if not found_any:
                 break
+    
+    def _filter_embedding_vectors(self, attrs: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Filter out massive embedding vectors that cause memory/network issues.
+        
+        Removes:
+        - embedding.embeddings.*.embedding.vector (4KB-4MB per embedding)
+        - Any array with >1000 elements (likely a vector)
+        """
+        filtered = {}
+        for key, value in attrs.items():
+            # Skip embedding vector keys
+            if ".embedding.vector" in key or ".embeddings." in key:
+                if self.debug:
+                    self.logger.debug(f"[FILTER] Dropped embedding vector key: {key}")
+                continue
+            
+            # Skip large arrays (likely embedding vectors)
+            if isinstance(value, (list, tuple)) and len(value) > 1000:
+                if self.debug:
+                    self.logger.debug(f"[FILTER] Dropped large array ({len(value)} elements): {key}")
+                continue
+            
+            filtered[key] = value
+        
+        return filtered

@@ -53,7 +53,9 @@
         },
         "request_type": {
           "sources": [
-            "llm.request.type"
+            "llm.request.type",
+            "neatlogs.llm.operation.name",
+            "neatlogs.llm.operation.type"
           ],
           "target": "neatlogs.llm.request_type"
         },
@@ -96,6 +98,7 @@
             },
             "cached": {
               "sources": [
+                "neatlogs.llm.token_count.cached_read",
                 "llm.token_count.prompt_details.cache_read",
                 "llm.token_count.prompt.cache_read",
                 "gen_ai.usage.cache_read_input_tokens"
@@ -104,6 +107,7 @@
             },
             "cache_write": {
               "sources": [
+                "neatlogs.llm.token_count.cached_write",
                 "llm.token_count.prompt_details.cache_write",
                 "gen_ai.usage.cache_creation_input_tokens"
               ],
@@ -117,6 +121,7 @@
             },
             "completion_audio": {
               "sources": [
+                "neatlogs.llm.token_count.audio",
                 "llm.token_count.completion_details.audio"
               ],
               "target": "neatlogs.llm.token_count.completion_audio"
@@ -329,6 +334,7 @@
           "prompt_template": {
             "template": {
               "sources": [
+                "neatlogs.prompt.template",
                 "llm.prompt_template.template",
                 "llm.prompt_template",
                 "traceloop.prompt.template"
@@ -337,6 +343,7 @@
             },
             "variables": {
               "sources": [
+                "neatlogs.prompt.template_variables",
                 "llm.prompt_template.variables",
                 "llm.prompt_template_variables",
                 "traceloop.prompt.template_variables"
@@ -345,6 +352,7 @@
             },
             "version": {
               "sources": [
+                "neatlogs.prompt.version",
                 "llm.prompt_template.version",
                 "traceloop.prompt.version"
               ],
@@ -744,6 +752,67 @@
           "target": "neatlogs.workflow.name"
         }
       },
+      "entity": {
+        "description": "LangChain entity metadata (from OpenLLMetry/Traceloop)",
+        "name": {
+          "sources": [
+            "traceloop.entity.name"
+          ],
+          "target": "neatlogs.entity.name"
+        },
+        "path": {
+          "sources": [
+            "traceloop.entity.path"
+          ],
+          "target": "neatlogs.entity.path"
+        }
+      },
+      "langgraph": {
+        "description": "LangGraph execution metadata (from OpenLLMetry/Traceloop association properties)",
+        "step": {
+          "sources": [
+            "traceloop.association.properties.langgraph_step"
+          ],
+          "target": "neatlogs.langgraph.step"
+        },
+        "node": {
+          "sources": [
+            "traceloop.association.properties.langgraph_node"
+          ],
+          "target": "neatlogs.langgraph.node"
+        },
+        "triggers": {
+          "sources": [
+            "traceloop.association.properties.langgraph_triggers"
+          ],
+          "target": "neatlogs.langgraph.triggers"
+        },
+        "path": {
+          "sources": [
+            "traceloop.association.properties.langgraph_path"
+          ],
+          "target": "neatlogs.langgraph.path"
+        },
+        "checkpoint_ns": {
+          "sources": [
+            "traceloop.association.properties.langgraph_checkpoint_ns",
+            "traceloop.association.properties.checkpoint_ns"
+          ],
+          "target": "neatlogs.langgraph.checkpoint_ns"
+        },
+        "task_id": {
+          "sources": [
+            "traceloop.association.properties.langgraph_task_id"
+          ],
+          "target": "neatlogs.langgraph.task_id"
+        },
+        "thread_id": {
+          "sources": [
+            "traceloop.association.properties.thread_id"
+          ],
+          "target": "neatlogs.langgraph.thread_id"
+        }
+      },
       "mcp": {
         "description": "Model Context Protocol (MCP) attributes",
         "method": {
@@ -904,18 +973,21 @@
         "llm": {
           "time_to_first_token": {
             "sources": [
+              "neatlogs.llm.metrics.time_to_first_token",
               "gen_ai.server.time_to_first_token"
             ],
             "target": "neatlogs.llm.metrics.time_to_first_token"
           },
           "streaming_time_to_generate": {
             "sources": [
+              "neatlogs.llm.metrics.streaming_time_to_generate",
               "llm.chat_completions.streaming_time_to_generate"
             ],
             "target": "neatlogs.llm.metrics.streaming_time_to_generate"
           },
           "time_per_output_token": {
             "sources": [
+              "neatlogs.llm.metrics.time_per_output_token",
               "gen_ai.server.time_per_output_token"
             ],
             "target": "neatlogs.llm.metrics.time_per_output_token"

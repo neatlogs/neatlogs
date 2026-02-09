@@ -17,12 +17,19 @@ logger = logging.getLogger(__name__)
 F = TypeVar("F", bound=Callable[..., Any])
 
 
-def mcp_tool(name: str | None = None) -> Callable[[F], F]:
+def mcp_tool(
+    name: str | None = None,
+    *,
+    description: str | None = None,
+    tool_json_schema: dict | None = None,
+) -> Callable[[F], F]:
     """
     Decorator to instrument MCP tool functions with tracing.
 
     Args:
         name: Optional custom span name. If not provided, uses function name.
+        description: Optional tool description.
+        tool_json_schema: Optional JSON schema for the tool.
 
     Example:
         ```python
@@ -34,7 +41,7 @@ def mcp_tool(name: str | None = None) -> Callable[[F], F]:
         mcp = FastMCP("my-server")
 
         @mcp.tool()
-        @mcp_tool(name="add_numbers")
+        @mcp_tool(name="add_numbers", description="Add two numbers")
         def add(a: int, b: int) -> str:
             return f"Result: {a + b}"
         ```
@@ -56,6 +63,11 @@ def mcp_tool(name: str | None = None) -> Callable[[F], F]:
                     span.set_attribute("mcp.tool.name", tool_name)
                     span.set_attribute("openinference.span.kind", "MCP_TOOL")
                     span.set_attribute("tool.name", tool_name)
+                    
+                    if description:
+                        span.set_attribute("tool.description", description)
+                    if tool_json_schema is not None:
+                        span.set_attribute("tool.json_schema", json.dumps(tool_json_schema))
 
                     try:
                         if args and hasattr(args[0], "model_dump"):
@@ -109,6 +121,11 @@ def mcp_tool(name: str | None = None) -> Callable[[F], F]:
                     span.set_attribute("mcp.tool.name", tool_name)
                     span.set_attribute("openinference.span.kind", "MCP_TOOL")
                     span.set_attribute("tool.name", tool_name)
+                    
+                    if description:
+                        span.set_attribute("tool.description", description)
+                    if tool_json_schema is not None:
+                        span.set_attribute("tool.json_schema", json.dumps(tool_json_schema))
 
                     try:
                         if args and hasattr(args[0], "model_dump"):

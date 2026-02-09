@@ -108,6 +108,7 @@ def tool(
     tool_name: Optional[str] = None,
     description: Optional[str] = None,
     parameters: Optional[Dict[str, Any]] = None,
+    tool_json_schema: Optional[Dict[str, Any]] = None,
     version: Optional[str] = None,
     tags: Optional[list[str]] = None,
     metadata: Optional[Dict[str, Any]] = None,
@@ -122,6 +123,8 @@ def tool(
         extra["tool.description"] = description
     if parameters is not None:
         extra["tool.parameters"] = _safe_json_dumps(parameters)
+    if tool_json_schema is not None:
+        extra["tool.json_schema"] = _safe_json_dumps(tool_json_schema)
 
     return _decorate_span(
         openinference_kind="TOOL",
@@ -218,4 +221,39 @@ def retriever(
         capture_input=capture_input,
         capture_output=capture_output,
         postprocess_result=_set_retrieval_attrs,
+    )
+
+
+def embedding(
+    name: Optional[str] = None,
+    *,
+    model: Optional[str] = None,
+    dimension: Optional[int] = None,
+    description: Optional[str] = None,
+    version: Optional[str] = None,
+    tags: Optional[list[str]] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    attributes: Optional[Dict[str, Any]] = None,
+    capture_input: Optional[bool] = None,
+    capture_output: Optional[bool] = None,
+) -> Callable[[F], F]:
+    """
+    Embedding generation boundary.
+    """
+    extra = dict(attributes or {})
+    if model:
+        extra["embedding.model_name"] = model
+    if dimension:
+        extra["embedding.vector.dimensions"] = dimension
+    
+    return _decorate_span(
+        openinference_kind="EMBEDDING",
+        name=name,
+        description=description,
+        version=version,
+        tags=tags,
+        metadata=metadata,
+        attributes=extra,
+        capture_input=capture_input,
+        capture_output=capture_output,
     )

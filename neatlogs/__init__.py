@@ -3,7 +3,7 @@ Neatlogs SDK
 """
 
 from .core.context import trace, track_prompt
-from .decorators import agent, chain, mcp_tool, retriever, tool, workflow
+from .decorators import agent, chain, embedding, mcp_tool, retriever, tool, workflow
 from .init import flush, init, shutdown
 from .prompt.capture import capture_prompt, capture_vars
 from .prompt.decorators import observe
@@ -25,6 +25,7 @@ __all__ = [
     "agent",
     "tool",
     "retriever",
+    "embedding",
 ]
 
 __version__ = "4.0.0"

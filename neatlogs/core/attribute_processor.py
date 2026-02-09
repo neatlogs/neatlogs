@@ -24,7 +24,7 @@ class UnifiedAttributeProcessor:
         self.meter = metrics.get_meter("neatlogs.sdk")
 
         self.time_per_token_histogram = self.meter.create_histogram(
-            name="gen_ai.server.time_per_output_token",
+            name="neatlogs.llm.metrics.time_per_output_token",
             unit="ms",
             description="Inter-token latency for streaming LLM responses (SDK-computed)",
         )
@@ -32,6 +32,9 @@ class UnifiedAttributeProcessor:
     def process(self, span: ReadableSpan) -> Dict[str, Any]:
         res_attrs = dict(span.resource.attributes) if span.resource else {}
         attrs = {**res_attrs, **dict(span.attributes)}
+        
+        # Add span name for downstream processing
+        attrs["_span_name"] = span.name
 
         attrs = self._normalize_conventions(span, attrs)
 
@@ -165,10 +168,22 @@ class UnifiedAttributeProcessor:
                 "milvus",
                 "marqo",
                 "weaviate",
+                "lancedb",
+                "astra",
                 "pgvector",
                 "elasticsearch",
             }:
-                attrs["openinference.span.kind"] = "RETRIEVER"
+                # Use span name to distinguish RETRIEVER vs VECTOR_STORE
+                span_name = attrs.get("_span_name", "").lower()
+                retrieval_ops = [
+                    "query", "search", "get", "fetch", "find",
+                    "retrieve", "scroll", "peek", "discover", "recommend",
+                    "aggregate", "hybrid_search"
+                ]
+                if any(op in span_name for op in retrieval_ops):
+                    attrs["openinference.span.kind"] = "RETRIEVER"
+                else:
+                    attrs["openinference.span.kind"] = "VECTOR_STORE"
 
         if "traceloop.entity.input" in attrs:
             try:
@@ -498,7 +513,11 @@ class UnifiedAttributeProcessor:
         chunk_timestamps = []
         if span.events:
             for event in span.events:
-                if event.name == "llm.content.completion.chunk":
+                if event.name in {
+                    "llm.content.completion.chunk",
+                    "gen_ai.content.completion.chunk",
+                    "neatlogs.gen_ai.content.completion.chunk",
+                }:
                     chunk_timestamps.append(event.timestamp / 1_000_000)
 
         if len(chunk_timestamps) > 1:
@@ -508,13 +527,18 @@ class UnifiedAttributeProcessor:
             ]
             mean_gap_ms = sum(diffs) / len(diffs)
             rounded_value = round(mean_gap_ms, 3)
-            computed["gen_ai.server.time_per_output_token"] = rounded_value
+            computed["neatlogs.llm.metrics.time_per_output_token"] = rounded_value
 
             metric_attributes = {
                 "trace_id": f"{span.context.trace_id:032x}",
                 "span_id": f"{span.context.span_id:016x}",
             }
-            model = attrs.get("gen_ai.request.model") or attrs.get("llm.model_name")
+            model = (
+                attrs.get("neatlogs.llm.model_name")
+                or attrs.get("neatlogs.gen_ai.request.model")
+                or attrs.get("gen_ai.request.model")
+                or attrs.get("llm.model_name")
+            )
             if model:
                 metric_attributes["llm_model"] = model
 
@@ -654,10 +678,23 @@ class UnifiedAttributeProcessor:
             if not should_ignore:
                 unified[f"neatlogs.raw.{key}"] = value
 
+        # Ensure neatlogs.span.kind is always set (for simplified view)
+        if "neatlogs.span.kind" not in unified:
+            oi_kind = attrs.get("openinference.span.kind")
+            if oi_kind:
+                unified["neatlogs.span.kind"] = str(oi_kind).lower()
+            else:
+                # Fallback: infer from span name
+                from ..span_kinds.mapping import infer_span_kind_from_name
+                span_name = attrs.get("_span_name", "")  # Will be set by span processor
+                if span_name:
+                    inferred_kind = infer_span_kind_from_name(span_name)
+                    unified["neatlogs.span.kind"] = inferred_kind.lower()
+        
         span_kind = (
             attrs.get("neatlogs.span.kind") or attrs.get("openinference.span.kind") or ""
         ).lower()
-        if span_kind not in ("embedding", "retriever"):
+        if span_kind not in ("embedding", "retriever", "vector_store"):
             unified.pop("neatlogs.vectordb.embedding_model", None)
 
         KNOWN_FRAMEWORKS = {
@@ -674,6 +711,19 @@ class UnifiedAttributeProcessor:
             gen_ai_system_lower = gen_ai_system.lower()
             if gen_ai_system_lower in KNOWN_FRAMEWORKS:
                 unified["neatlogs.framework"] = gen_ai_system_lower
+        
+        # Detect framework from OpenLLMetry/Traceloop attributes
+        if not unified.get("neatlogs.framework"):
+            # Check for LangGraph-specific attributes
+            if (attrs.get("traceloop.association.properties.langgraph_node") or 
+                attrs.get("traceloop.association.properties.langgraph_step") or
+                attrs.get("traceloop.association.properties.langgraph_checkpoint_ns")):
+                unified["neatlogs.framework"] = "langgraph"
+            # Check for generic traceloop attributes (LangChain via OpenLLMetry)
+            elif (attrs.get("traceloop.workflow.name") or 
+                  attrs.get("traceloop.entity.name") or
+                  attrs.get("traceloop.span.kind")):
+                unified["neatlogs.framework"] = "langchain"
 
         return unified
 

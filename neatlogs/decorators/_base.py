@@ -57,6 +57,9 @@ def _set_common_span_attrs(
     span.set_attribute("neatlogs.internal", True)
 
     span.set_attribute("openinference.span.kind", openinference_kind)
+    
+    # Set neatlogs.span.kind for simplified view
+    span.set_attribute("neatlogs.span.kind", openinference_kind.lower())
 
     if tags:
         span.set_attribute("tag.tags", tags)

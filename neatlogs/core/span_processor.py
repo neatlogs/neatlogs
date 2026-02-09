@@ -205,10 +205,26 @@ class NeatlogsSpanProcessor(SpanProcessor):
                 if self.debug and "neatlogs.tags" in resource_attrs:
                     logger.debug(f"[Tags] Span {span.name}: resource.neatlogs.tags = {resource_attrs['neatlogs.tags']}")
             
+            trace_id = f"{span.context.trace_id:032x}"
+            span_id = f"{span.context.span_id:016x}"
+            parent_span_id = f"{span.parent.span_id:016x}" if span.parent else None
+
+            # Guard against corrupted/self-referential parenting (seen in some LangChain/LangGraph
+            # instrumentation edge cases where the SDK ends up exporting a span whose parent span id
+            # equals its own span id). This creates cycles and breaks trace trees downstream.
+            if parent_span_id == span_id:
+                if self.debug:
+                    logger.warning(
+                        "[SpanProcessor] Detected self-parenting span. "
+                        f"trace_id={trace_id} span_id={span_id} name={span.name}. "
+                        "Setting parent_span_id=None."
+                    )
+                parent_span_id = None
+
             span_data = {
-                "trace_id": f"{span.context.trace_id:032x}",
-                "span_id": f"{span.context.span_id:016x}",
-                "parent_span_id": (f"{span.parent.span_id:016x}" if span.parent else None),
+                "trace_id": trace_id,
+                "span_id": span_id,
+                "parent_span_id": parent_span_id,
                 "name": span.name,
                 "kind": (unified_attrs.get("neatlogs.span.kind", "UNKNOWN") or "UNKNOWN"),
                 "start_time": span.start_time,
@@ -229,7 +245,15 @@ class NeatlogsSpanProcessor(SpanProcessor):
                         }
                         for event in span.events
                         if not (
-                            any(e.name == "llm.content.completion.chunk" for e in span.events)
+                            any(
+                                e.name
+                                in {
+                                    "llm.content.completion.chunk",
+                                    "gen_ai.content.completion.chunk",
+                                    "neatlogs.gen_ai.content.completion.chunk",
+                                }
+                                for e in span.events
+                            )
                             and event.name == "First Token Stream Event"
                         )
                     ]
@@ -406,7 +430,16 @@ class NeatlogsSpanProcessor(SpanProcessor):
         for s in spans:
             by_name.setdefault(s.get("name") or "", []).append(s)
 
-        suppressed: set[str] = set()
+        # IMPORTANT:
+        # We used to *suppress* Traceloop entity spans (e.g. `.task`, `.tool`, `.workflow`) and merge
+        # their attributes into the matching "base" span. This breaks parenting in practice because
+        # traces are often exported in multiple chunks by end_time; the entity span (often long-lived)
+        # arrives in a later chunk, but its children (shorter spans) have already been exported with
+        # `parent_span_id` pointing at the entity span_id. Once suppressed, ClickHouse/UX sees those
+        # children as "orphans" (missing parent in the trace).
+        #
+        # To preserve the trace tree, we keep the entity spans and ONLY merge their attributes into
+        # the base span when we can match them.
         for e in entity_spans:
             base_name = self._traceloop_base_name(e.get("name") or "")
             if not base_name:
@@ -420,13 +453,11 @@ class NeatlogsSpanProcessor(SpanProcessor):
                 continue
 
             self._merge_traceloop_entity_attrs_into_base(entity=e, base=c)
-            suppressed.add(e["span_id"])
+            # NOTE: Do NOT re-parent children here either. Re-parenting is only safe when you have
+            # the full trace buffered; otherwise it can create self-parenting (e.g. LangGraph.workflow
+            # matched to LangGraph base span) or partial rewrites across chunks.
 
-            for s in spans:
-                if s.get("parent_span_id") == e["span_id"]:
-                    s["parent_span_id"] = c["span_id"]
-
-        return [s for s in spans if s["span_id"] not in suppressed]
+        return spans
 
     def _is_traceloop_entity_span(self, span_data: Dict[str, Any]) -> bool:
         name = span_data.get("name") or ""
@@ -567,26 +598,83 @@ class NeatlogsSpanProcessor(SpanProcessor):
         fa = framework.get("attributes", {})
         pa = provider.get("attributes", {})
 
+        prefer_oi_llm_names = os.getenv("NEATLOGS_PREFER_OPENINFERENCE_LLM_NAMES", "").lower() in (
+            "true",
+            "1",
+            "yes",
+        )
+
+        def _as_num(v: Any) -> float:
+            try:
+                if v is None:
+                    return 0.0
+                if isinstance(v, bool):
+                    return float(int(v))
+                return float(v)
+            except Exception:
+                return 0.0
+
+        def _prefer_if_missing_or_zero(key: str) -> None:
+            fv = fa.get(key)
+            if fv is None:
+                return
+            pv = pa.get(key)
+            if pv is None or _as_num(pv) <= 0:
+                pa[key] = fv
+
+        # Prefer OpenInference token counts when the provider wrapper doesn't have them populated.
+        for k in (
+            "neatlogs.llm.token_count.prompt",
+            "neatlogs.llm.token_count.completion",
+            "neatlogs.llm.token_count.total",
+            "neatlogs.llm.token_count.reasoning",
+            "neatlogs.llm.token_count.cache_read",
+            "neatlogs.llm.token_count.cached_read",
+            "neatlogs.llm.token_count.cache_write",
+            "neatlogs.llm.token_count.cached_write",
+            "neatlogs.llm.token_count.audio",
+            "neatlogs.llm.token_count.completion_audio",
+        ):
+            _prefer_if_missing_or_zero(k)
+
         for k, v in fa.items():
             if k == "neatlogs.span.kind":
                 continue
             if k not in pa:
                 pa[k] = v
 
+        if prefer_oi_llm_names:
+            fw_name = str(framework.get("name") or "").strip()
+            pv_name = str(provider.get("name") or "").strip()
+
+            fw_name_l = fw_name.lower()
+            pv_name_l = pv_name.lower()
+
+            # Common provider-side / generic names we prefer to replace with the OpenInference name.
+            generic_provider_names = {"messages"}
+
+            if fw_name and pv_name and fw_name_l != pv_name_l:
+                if fw_name.startswith("Chat") and pv_name_l in generic_provider_names:
+                    pa.setdefault("neatlogs.dedupe.original_span_name", pv_name)
+                    pa.setdefault("neatlogs.dedupe.merged_from_span_id", framework.get("span_id"))
+                    provider["name"] = fw_name
+
         provider["attributes"] = pa
 
     def _is_openllmetry_provider_wrapper(self, span_data: Dict[str, Any]) -> bool:
         attrs = span_data.get("attributes", {})
         name = (span_data.get("name") or "").lower()
+        # Traceloop entity spans (e.g. LangGraph `.workflow` / Runnable `.task`) must NOT be treated
+        # as OpenLLMetry provider wrappers. If we suppress them during partial/interval flushes,
+        # their children may have already been exported with `parent_span_id` pointing to the entity
+        # span, which produces "orphan" spans downstream (ClickHouse/UI). These are handled by
+        # `_suppress_traceloop_entity_spans` instead (which preserves the tree).
+        if self._is_traceloop_entity_span(span_data):
+            return False
         if (
             "." in name
             and attrs.get("neatlogs.raw.openinference.span.kind") not in ("LLM", "EMBEDDING")
             and attrs.get("neatlogs.llm.request_type") is not None
-        ):
-            return True
-        if (
-            "neatlogs.raw.traceloop.span.kind" in attrs
-            or "neatlogs.raw.traceloop.entity.name" in attrs
         ):
             return True
         return False
@@ -719,7 +807,15 @@ class NeatlogsSpanProcessor(SpanProcessor):
                 if key not in existing:
                     ce.append(e)
                     existing.add(key)
-            if any(e.get("name") == "llm.content.completion.chunk" for e in ce):
+            if any(
+                e.get("name")
+                in {
+                    "llm.content.completion.chunk",
+                    "gen_ai.content.completion.chunk",
+                    "neatlogs.gen_ai.content.completion.chunk",
+                }
+                for e in ce
+            ):
                 ce = [e for e in ce if e.get("name") != "First Token Stream Event"]
             canonical["events"] = ce
 

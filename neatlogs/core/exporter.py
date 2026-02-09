@@ -33,6 +33,7 @@ class NeatlogsExporter:
         endpoint: str = "http://localhost:3000/api/data/v4/batch",
         batch_size: int = 100,
         flush_interval: float = 5.0,
+        request_timeout: float = 30.0,  # Increase default to 30 seconds for large payloads
         max_retries: int = 3,
         disable_export: bool = False,
     ):
@@ -44,6 +45,7 @@ class NeatlogsExporter:
             endpoint: Neatlogs backend endpoint
             batch_size: Maximum number of spans per batch
             flush_interval: Seconds between automatic flushes
+            request_timeout: HTTP request timeout in seconds (default: 30s for large payloads)
             max_retries: Maximum retry attempts on failure
         """
         self.api_key = api_key
@@ -51,6 +53,7 @@ class NeatlogsExporter:
         self.batch_size = batch_size
         self.flush_interval = flush_interval
         self.max_retries = max_retries
+        self.request_timeout = request_timeout
         # Default false; can be enabled via param or env for unit tests/local debugging.
         self.disable_export = bool(disable_export) or (
             os.getenv("NEATLOGS_DISABLE_EXPORT", "").lower() in ["true", "1", "yes"]
@@ -319,7 +322,7 @@ class NeatlogsExporter:
                         "Content-Type": "application/json",
                     },
                     json=payload,
-                    timeout=5.0,
+                    timeout=self.request_timeout,
                 )
 
                 if response.status_code == 200:

@@ -9,9 +9,13 @@ import uuid
 from typing import List, Optional
 
 from opentelemetry import metrics, trace
+from opentelemetry.sdk.environment_variables import (
+    OTEL_ATTRIBUTE_COUNT_LIMIT,
+    OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT,
+)
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.resources import SERVICE_NAME, Resource
-from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace import SpanLimits, TracerProvider
 from opentelemetry.sdk.trace.sampling import TraceIdRatioBased
 
 from .core.exporter import NeatlogsExporter
@@ -31,6 +35,23 @@ _session_config = {
     "session_id": None,
     "user_id": None,
 }
+
+_DEFAULT_MAX_SPAN_ATTRIBUTES = 10_000
+
+
+def _span_limits_for_capture_everything() -> SpanLimits:
+    """
+    OpenTelemetry defaults to 128 span attributes, which can silently drop semantic
+    attributes when instrumenting LLM apps (retrieval docs, tool IO, etc).
+
+    If the user explicitly sets OTel limits via env vars, respect that. Otherwise
+    default to a larger max-span-attributes value (matching OpenInference's approach).
+    """
+    span_limit = os.getenv(OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT, "")
+    general_limit = os.getenv(OTEL_ATTRIBUTE_COUNT_LIMIT, "")
+    if span_limit.strip() or general_limit.strip():
+        return SpanLimits()
+    return SpanLimits(max_span_attributes=_DEFAULT_MAX_SPAN_ATTRIBUTES)
 
 
 def _patch_semconv_ai_for_openllmetry(debug: bool) -> None:
@@ -165,7 +186,11 @@ def init(
             if debug:
                 logger.debug(f"Using TraceIdRatioBased sampler with rate {sample_rate}")
 
-        provider = TracerProvider(resource=resource, sampler=sampler)
+        provider = TracerProvider(
+            resource=resource,
+            sampler=sampler,
+            span_limits=_span_limits_for_capture_everything(),
+        )
         trace.set_tracer_provider(provider)
         if debug:
             logger.debug("Created new tracer provider")

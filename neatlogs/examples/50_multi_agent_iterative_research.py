@@ -157,7 +157,11 @@ Call the web_search tool now with the query."""
                 if hasattr(last_message, 'tool_calls') and last_message.tool_calls:
                     return state
                 
-                current_query = state["search_queries"][state["current_query_idx"]]
+                idx = state["current_query_idx"]
+                if idx >= len(state["search_queries"]):
+                    return state
+                
+                current_query = state["search_queries"][idx]
                 
                 analysis_prompt = PromptTemplate(
                     """Based on the search results, provide analysis in JSON format:

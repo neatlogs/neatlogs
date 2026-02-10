@@ -54,7 +54,7 @@ except Exception:
     from langchain_classic.text_splitter import RecursiveCharacterTextSplitter
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
-from neatlogs import flush, init, shutdown, trace
+from neatlogs import flush, init, shutdown, trace, PromptTemplate
 
 def _env_default(k: str, v: str) -> None:
     os.environ.setdefault(k, v)
@@ -69,9 +69,9 @@ _env_default("NEATLOGS_LOG_RAW_SPANS", "true")
 # _env_default("NEATLOGS_LOG_SPANS_FILE", "spans_49_langgraph_gemini_qdrant_cohere_reranker.jsonl")
 # _env_default("NEATLOGS_LOG_RAW_SPANS_FILE", "spans_raw_49_langgraph_gemini_qdrant_cohere_reranker.jsonl")
 # _env_default("NEATLOGS_LOG_METRICS_FILE", "metrics_49_langgraph_gemini_qdrant_cohere_reranker.jsonl")
-_env_default("NEATLOGS_LOG_SPANS_FILE", "spans_49_langgraph_gemini_qdrant_cohere_reranker_v2.jsonl")
-_env_default("NEATLOGS_LOG_RAW_SPANS_FILE", "spans_raw_49_langgraph_gemini_qdrant_cohere_reranker_v2.jsonl")
-_env_default("NEATLOGS_LOG_METRICS_FILE", "metrics_49_langgraph_gemini_qdrant_cohere_reranker_v2.jsonl")
+_env_default("NEATLOGS_LOG_SPANS_FILE", "spans_49_langgraph_gemini_qdrant_cohere_reranker_v3.jsonl")
+_env_default("NEATLOGS_LOG_RAW_SPANS_FILE", "spans_raw_49_langgraph_gemini_qdrant_cohere_reranker_v3.log")
+_env_default("NEATLOGS_LOG_METRICS_FILE", "metrics_49_langgraph_gemini_qdrant_cohere_reranker_v3.jsonl")
 
 def _require_env(key: str) -> str:
     val = os.getenv(key)
@@ -262,19 +262,26 @@ def agent(state, tools):
         max_output_tokens=256,
     )
 
-    prompt = (
+    # Define PromptTemplate inside function
+    rag_agent_prompt = PromptTemplate(
         "You are a RAG agent.\n"
-        f"Call the tool `{tool_name}` exactly once to fetch context for the user question.\n"
+        "Call the tool `{{tool_name}}` exactly once to fetch context for the user question.\n"
         "Do not answer the question yet. Only call the tool.\n\n"
-        f"Question: {question}"
+        "Question: {{question}}"
     )
+    
+    # Format prompt using PromptTemplate
+    # PromptContext is automatically set by compile(), SDK will capture it
+    prompt = rag_agent_prompt.compile(tool_name=tool_name, question=question)
 
     # Use streaming to get the response
-    stream = gemini_client.models.generate_content_stream(
-        model=settings.gemini_model,
-        contents=[genai_types.Content(role="user", parts=[genai_types.Part(text=prompt)])],
-        config=cfg,
-    )
+    # Wrap in trace for orchestration context (LLM span auto-instrumented inside)
+    with trace("rag_agent_call", kind="CHAIN"):
+        stream = gemini_client.models.generate_content_stream(
+            model=settings.gemini_model,
+            contents=[genai_types.Content(role="user", parts=[genai_types.Part(text=prompt)])],
+            config=cfg,
+        )
 
     # Collect the streaming response
     resp = None
@@ -321,20 +328,28 @@ def rewrite(state):
     messages = state["messages"]
     question = messages[0].content
 
-    prompt = f""" \n 
-                    Look at the input and try to reason about the underlying semantic intent / meaning. \n 
-                    Here is the initial question:
-                    \n ------- \n
-                    {question} 
-                    \n ------- \n
-                    Formulate an improved question: """
+    # Define PromptTemplate inside function
+    query_rewrite_prompt = PromptTemplate(
+        "Look at the input and try to reason about the underlying semantic intent / meaning.\n"
+        "Here is the initial question:\n"
+        "------- \n"
+        "{{question}}\n"
+        "------- \n"
+        "Formulate an improved question:"
+    )
+    
+    # Format prompt using PromptTemplate
+    # PromptContext is automatically set by compile(), SDK will capture it
+    prompt = query_rewrite_prompt.compile(question=question)
 
     # Use streaming to get the response
-    stream = gemini_client.models.generate_content_stream(
-        model=settings.gemini_model,
-        contents=[{"role": "user", "parts": [{"text": prompt}]}],
-        config={"temperature": 0},
-    )
+    # Wrap in trace for orchestration context (LLM span auto-instrumented inside)
+    with trace("query_rewrite", kind="CHAIN"):
+        stream = gemini_client.models.generate_content_stream(
+            model=settings.gemini_model,
+            contents=[{"role": "user", "parts": [{"text": prompt}]}],
+            config={"temperature": 0},
+        )
     
     # Collect the streaming response
     text_parts = []
@@ -439,32 +454,39 @@ def generate(state):
 
     docs = last_message.content
 
-    # Build RAG prompt manually
-    prompt = f"""You are an assistant for question-answering tasks. Use the following pieces of retrieved context to answer the question. If you don't know the answer, just say that you don't know. Use three sentences maximum and keep the answer concise.
-
-Question: {question}
-
-Context: {docs}
-
-Answer:"""
+    # Define PromptTemplate inside function
+    rag_generation_prompt = PromptTemplate(
+        "You are an assistant for question-answering tasks. "
+        "Use the following pieces of retrieved context to answer the question. "
+        "If you don't know the answer, just say that you don't know. "
+        "Use three sentences maximum and keep the answer concise.\n\n"
+        "Question: {{question}}\n\n"
+        "Context: {{docs}}\n\n"
+        "Answer:"
+    )
+    
+    # Format prompt using PromptTemplate
+    prompt = rag_generation_prompt.compile(question=question, docs=docs)
 
     # Use streaming to get the response
-    stream = gemini_client.models.generate_content_stream(
-        model=settings.gemini_model,
-        contents=[genai_types.Content(role="user", parts=[genai_types.Part(text=prompt)])],
-        config=genai_types.GenerateContentConfig(temperature=0, max_output_tokens=512),
-    )
+    # Wrap in trace for orchestration context (LLM span auto-instrumented inside)
+    with trace("rag_generation", kind="CHAIN"):
+        stream = gemini_client.models.generate_content_stream(
+            model=settings.gemini_model,
+            contents=[genai_types.Content(role="user", parts=[genai_types.Part(text=prompt)])],
+            config=genai_types.GenerateContentConfig(temperature=0, max_output_tokens=512),
+        )
 
-    # Collect the streaming response
-    text_parts = []
-    for chunk in stream:
-        if chunk.text:
-            text_parts.append(chunk.text)
-            print(chunk.text, end="", flush=True)
-    
-    print()  # New line after streaming
-    
-    return {"messages": ["".join(text_parts)]}
+        # Collect the streaming response
+        text_parts = []
+        for chunk in stream:
+            if chunk.text:
+                text_parts.append(chunk.text)
+                print(chunk.text, end="", flush=True)
+        
+        print()  # New line after streaming
+        
+        return {"messages": ["".join(text_parts)]}
 
 # graph function
 def get_graph(retriever_tool, reranker):

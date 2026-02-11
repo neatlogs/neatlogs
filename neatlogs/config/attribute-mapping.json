@@ -20,9 +20,12 @@
         "TASK": "task",
         "RETRIEVER": "retriever",
         "EMBEDDING": "embedding",
+        "VECTOR_STORE": "vector_store",
         "RERANKER": "reranker",
         "GUARDRAIL": "guardrail",
-        "EVALUATOR": "evaluator"
+        "EVALUATOR": "evaluator",
+        "MCP_TOOL": "mcp_tool",
+        "HTTP": "http"
       },
       "priority": "openinference"
     },

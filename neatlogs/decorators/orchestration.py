@@ -26,7 +26,7 @@ def workflow(
     Root/top-level orchestration span.
     """
     return _decorate_span(
-        openinference_kind="CHAIN",
+        openinference_kind="WORKFLOW",
         name=name,
         description=description,
         version=version,

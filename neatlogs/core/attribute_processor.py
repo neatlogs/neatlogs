@@ -7,6 +7,8 @@ from opentelemetry import metrics
 from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.trace import SpanKind
 
+from .logger import get_logger
+
 
 class UnifiedAttributeProcessor:
 
@@ -19,7 +21,13 @@ class UnifiedAttributeProcessor:
         self.mapping = mapping_config
         self.pricing = pricing_config or {}
         self.debug = debug
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger()
+        
+        # Enable debug logging if debug mode is on
+        if self.debug:
+            self.logger.setLevel(logging.DEBUG)
+            for handler in self.logger.handlers:
+                handler.setLevel(logging.DEBUG)
 
         self.meter = metrics.get_meter("neatlogs.sdk")
 
@@ -170,6 +178,8 @@ class UnifiedAttributeProcessor:
 
         if "openinference.span.kind" not in attrs:
             db_system = attrs.get("db.system")
+            db_operation = attrs.get("db.operation", "").lower()
+          
             if isinstance(db_system, str) and db_system.lower() in {
                 "chroma",
                 "chromadb",
@@ -183,14 +193,32 @@ class UnifiedAttributeProcessor:
                 "pgvector",
                 "elasticsearch",
             }:
-                # Use span name to distinguish RETRIEVER vs VECTOR_STORE
+                # Use db.operation (if available) or span name to distinguish RETRIEVER vs VECTOR_STORE
                 span_name = attrs.get("_span_name", "").lower()
+                
+                # Read operations (retrieval)
                 retrieval_ops = [
                     "query", "search", "get", "fetch", "find",
                     "retrieve", "scroll", "peek", "discover", "recommend",
-                    "aggregate", "hybrid_search"
+                    "aggregate", "hybrid_search", "select"
                 ]
-                if any(op in span_name for op in retrieval_ops):
+                
+                # Write operations
+                write_ops = [
+                    "upsert", "insert", "add", "update", "delete", "create",
+                    "drop", "put", "set", "upload", "index"
+                ]
+                
+                # Check db.operation first (most reliable)
+                is_retrieval = False
+                if db_operation:
+                    is_retrieval = any(op in db_operation for op in retrieval_ops)
+                    is_write = any(op in db_operation for op in write_ops)
+                else:
+                    # Fallback to span name
+                    is_retrieval = any(op in span_name for op in retrieval_ops)
+                
+                if is_retrieval:
                     attrs["openinference.span.kind"] = "RETRIEVER"
                 else:
                     attrs["openinference.span.kind"] = "VECTOR_STORE"

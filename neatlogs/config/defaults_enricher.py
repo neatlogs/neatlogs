@@ -9,6 +9,14 @@ from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
+# Import for provider detection
+try:
+    from ..core.instrumentation_scope_parser import get_effective_provider_for_defaults
+except ImportError:
+    # Fallback if import fails
+    def get_effective_provider_for_defaults(attrs: Dict[str, Any]) -> str:
+        return attrs.get("llm.system", "").lower()
+
 
 class DefaultsEnricher:
     """
@@ -94,7 +102,9 @@ def enrich_invocation_parameters(
     if span_kind not in ("LLM", "EMBEDDING"):
         return
 
-    provider = merged_attrs.get("llm.system", "").lower()
+    # Use the new provider detection that considers platform/framework
+    provider = get_effective_provider_for_defaults(merged_attrs)
+    
     # For EMBEDDING spans, use embedding.model_name; for LLM spans, use llm.model_name
     if span_kind == "EMBEDDING":
         model = merged_attrs.get("embedding.model_name", "")

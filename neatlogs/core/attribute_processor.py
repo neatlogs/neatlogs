@@ -8,6 +8,7 @@ from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.trace import SpanKind
 
 from .logger import get_logger
+from .instrumentation_scope_parser import enrich_with_scope_detection
 
 
 class UnifiedAttributeProcessor:
@@ -43,6 +44,11 @@ class UnifiedAttributeProcessor:
         
         # Add span name for downstream processing
         attrs["_span_name"] = span.name
+        
+        # Extract framework/platform/provider from instrumentation scope
+        scope_name = span.instrumentation_scope.name if span.instrumentation_scope else None
+        # TODO: In future, track parent spans to get parent_scope_name for better framework detection
+        enrich_with_scope_detection(attrs, scope_name, parent_scope_name=None)
 
         attrs = self._normalize_conventions(span, attrs)
 
@@ -85,9 +91,14 @@ class UnifiedAttributeProcessor:
             attrs["openinference.span.kind"] = "CHAIN"
 
         self._add_crewai_token_usage_fallback(attrs)
+        
+        # Extract tool calls from output messages
         tool_calls: Dict[int, Dict[str, Any]] = {}
         oi_tool_re = re.compile(
             r"^llm\.output_messages\.(\d+)\.message\.tool_calls\.(\d+)\.tool_call\.function\.(name|arguments)$"
+        )
+        oi_tool_id_re = re.compile(
+            r"^llm\.output_messages\.(\d+)\.message\.tool_calls\.(\d+)\.tool_call\.id$"
         )
         ol_tool_re = re.compile(
             r"^gen_ai\.completion\.(\d+)\.tool_calls\.(\d+)\.(id|name|arguments)$"
@@ -95,6 +106,7 @@ class UnifiedAttributeProcessor:
 
         keys_to_remove: List[str] = []
         for k, v in list(attrs.items()):
+            # OpenInference tool call function (name, arguments)
             m = oi_tool_re.match(k)
             if m:
                 _msg_idx, call_idx, field = m.groups()
@@ -102,7 +114,17 @@ class UnifiedAttributeProcessor:
                 tool_calls.setdefault(idx, {})[field] = v
                 keys_to_remove.append(k)
                 continue
+            
+            # OpenInference tool call id (separate pattern)
+            m = oi_tool_id_re.match(k)
+            if m:
+                _msg_idx, call_idx = m.groups()
+                idx = int(call_idx)
+                tool_calls.setdefault(idx, {})["id"] = v
+                keys_to_remove.append(k)
+                continue
 
+            # OpenLLMetry tool calls
             m = ol_tool_re.match(k)
             if m:
                 _comp_idx, call_idx, field = m.groups()
@@ -122,6 +144,48 @@ class UnifiedAttributeProcessor:
 
         for k in keys_to_remove:
             attrs.pop(k, None)
+        
+        # Extract tool_call_id and name from input messages (tool response messages)
+        input_msg_tool_re = re.compile(
+            r"^llm\.input_messages\.(\d+)\.message\.(tool_call_id|name)$"
+        )
+        for k, v in list(attrs.items()):
+            m = input_msg_tool_re.match(k)
+            if m:
+                msg_idx, field = m.groups()
+                # Map to new structured format
+                attrs[f"llm.input_messages.{msg_idx}.{field}"] = v
+        
+        # Extract invalid_tool_calls from output (LangChain AIMessage often includes this)
+        # Look for patterns like: llm.output or gen_ai.completion containing invalid_tool_calls
+        llm_output = attrs.get("llm.output") or attrs.get("output.value")
+        if llm_output and isinstance(llm_output, str):
+            try:
+                output_data = json.loads(llm_output)
+                # Navigate through nested structure to find invalid_tool_calls
+                if isinstance(output_data, dict):
+                    # LangChain format: generations[0][0].message.invalid_tool_calls
+                    generations = output_data.get("generations", [])
+                    if generations and len(generations) > 0 and len(generations[0]) > 0:
+                        message = generations[0][0].get("message", {})
+                        invalid_calls = message.get("invalid_tool_calls", [])
+                        if invalid_calls:
+                            attrs["llm.invalid_tool_calls"] = json.dumps(invalid_calls)
+            except (json.JSONDecodeError, TypeError, AttributeError):
+                pass
+        
+        # Extract tool_call_id from tool.output (for TOOL kind spans)
+        # This provides structured field that Kafka consumer currently extracts from JSON
+        tool_output = attrs.get("tool.output") or attrs.get("output.value")
+        if tool_output and isinstance(tool_output, str):
+            try:
+                output_data = json.loads(tool_output)
+                if isinstance(output_data, dict):
+                    tool_call_id = output_data.get("tool_call_id") or output_data.get("toolCallId")
+                    if tool_call_id:
+                        attrs["tool_call_id"] = tool_call_id
+            except (json.JSONDecodeError, TypeError):
+                pass
 
         tool_defs: Dict[int, Dict[str, Any]] = {}
         oi_schema_re = re.compile(r"^llm\.tools\.(\d+)\.tool\.json_schema$")
@@ -743,31 +807,17 @@ class UnifiedAttributeProcessor:
         if span_kind not in ("embedding", "retriever", "vector_store"):
             unified.pop("neatlogs.vectordb.embedding_model", None)
 
-        KNOWN_FRAMEWORKS = {
-            "langchain",
-            "llamaindex",
-            "crewai",
-            "haystack",
-            "agno",
-            "openai-agents",
-        }
-
-        gen_ai_system = attrs.get("gen_ai.system") or unified.get("neatlogs.llm.system") or ""
-        if isinstance(gen_ai_system, str) and gen_ai_system:
-            gen_ai_system_lower = gen_ai_system.lower()
-            if gen_ai_system_lower in KNOWN_FRAMEWORKS:
-                unified["neatlogs.framework"] = gen_ai_system_lower
-        
-        # Detect framework from OpenLLMetry/Traceloop attributes
+        # Framework detection fallback from OpenLLMetry/Traceloop attributes
+        # Primary detection is from instrumentation_scope.name (done earlier in pipeline)
         if not unified.get("neatlogs.framework"):
             # Check for LangGraph-specific attributes
             if (attrs.get("traceloop.association.properties.langgraph_node") or 
-                attrs.get("traceloop.association.properties.langgraph_step") or
+                attrs.get("traceloop.association.properties.langgraph_step") or 
                 attrs.get("traceloop.association.properties.langgraph_checkpoint_ns")):
                 unified["neatlogs.framework"] = "langgraph"
             # Check for generic traceloop attributes (LangChain via OpenLLMetry)
             elif (attrs.get("traceloop.workflow.name") or 
-                  attrs.get("traceloop.entity.name") or
+                  attrs.get("traceloop.entity.name") or 
                   attrs.get("traceloop.span.kind")):
                 unified["neatlogs.framework"] = "langchain"
 

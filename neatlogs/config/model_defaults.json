@@ -1,17 +1,59 @@
 {
   "openai": {
     "chat.completions": {
-      "gpt-4": {
+      "gpt-5.2": {
         "temperature": 1.0,
         "top_p": 1.0,
         "frequency_penalty": 0,
         "presence_penalty": 0,
         "max_tokens": null,
         "stream": false,
-        "n": 1,
-        "stop": null,
-        "logprobs": null,
-        "seed": null
+        "n": 1
+      },
+      "gpt-5.1": {
+        "temperature": 1.0,
+        "top_p": 1.0,
+        "frequency_penalty": 0,
+        "presence_penalty": 0,
+        "max_tokens": null,
+        "stream": false,
+        "n": 1
+      },
+      "gpt-5": {
+        "temperature": 1.0,
+        "top_p": 1.0,
+        "frequency_penalty": 0,
+        "presence_penalty": 0,
+        "max_tokens": null,
+        "stream": false,
+        "n": 1
+      },
+      "gpt-5-mini": {
+        "temperature": 1.0,
+        "top_p": 1.0,
+        "frequency_penalty": 0,
+        "presence_penalty": 0
+      },
+      "gpt-5-nano": {
+        "temperature": 1.0,
+        "top_p": 1.0,
+        "frequency_penalty": 0,
+        "presence_penalty": 0
+      },
+      "gpt-4.1": {
+        "temperature": 1.0,
+        "top_p": 1.0,
+        "frequency_penalty": 0,
+        "presence_penalty": 0,
+        "max_tokens": null,
+        "stream": false,
+        "n": 1
+      },
+      "gpt-4.1-mini": {
+        "temperature": 1.0,
+        "top_p": 1.0,
+        "frequency_penalty": 0,
+        "presence_penalty": 0
       },
       "gpt-4o": {
         "temperature": 1.0,
@@ -28,14 +70,19 @@
         "frequency_penalty": 0,
         "presence_penalty": 0
       },
+      "o4-mini": {
+        "max_completion_tokens": null
+      },
+      "o3": {
+        "max_completion_tokens": null
+      },
+      "o3-mini": {
+        "max_completion_tokens": null
+      },
       "o1": {
-        "temperature": 1.0,
-        "top_p": 1.0,
         "max_completion_tokens": null
       },
       "o1-mini": {
-        "temperature": 1.0,
-        "top_p": 1.0,
         "max_completion_tokens": null
       },
       "_default": {
@@ -53,6 +100,55 @@
   },
   "anthropic": {
     "messages": {
+      "claude-opus-4-6": {
+        "temperature": 1.0,
+        "top_p": null,
+        "top_k": null,
+        "max_tokens": 8192,
+        "stream": false
+      },
+      "claude-opus-4-5": {
+        "temperature": 1.0,
+        "top_p": null,
+        "top_k": null,
+        "max_tokens": 8192,
+        "stream": false
+      },
+      "claude-opus-4-1": {
+        "temperature": 1.0,
+        "top_p": null,
+        "top_k": null,
+        "max_tokens": 4096,
+        "stream": false
+      },
+      "claude-opus-4": {
+        "temperature": 1.0,
+        "top_p": null,
+        "top_k": null,
+        "max_tokens": 4096,
+        "stream": false
+      },
+      "claude-sonnet-4-5": {
+        "temperature": 1.0,
+        "top_p": null,
+        "top_k": null,
+        "max_tokens": 8192,
+        "stream": false
+      },
+      "claude-sonnet-4": {
+        "temperature": 1.0,
+        "top_p": null,
+        "top_k": null,
+        "max_tokens": 8192,
+        "stream": false
+      },
+      "claude-haiku-4-5": {
+        "temperature": 1.0,
+        "top_p": null,
+        "top_k": null,
+        "max_tokens": 8192,
+        "stream": false
+      },
       "claude-3-5-sonnet": {
         "temperature": 1.0,
         "top_p": null,
@@ -61,11 +157,11 @@
         "stream": false,
         "stop_sequences": null
       },
-      "claude-sonnet-4-5": {
+      "claude-3-5-haiku": {
         "temperature": 1.0,
         "top_p": null,
         "top_k": null,
-        "max_tokens": 8192,
+        "max_tokens": 4096,
         "stream": false
       },
       "claude-3-opus": {
@@ -108,6 +204,36 @@
   },
   "google": {
     "generateContent": {
+      "gemini-2.5-pro": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 40,
+        "max_output_tokens": null
+      },
+      "gemini-2.5-flash": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 40,
+        "max_output_tokens": null
+      },
+      "gemini-2.0-flash": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 40,
+        "max_output_tokens": null
+      },
+      "gemini-2.0-flash-lite": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 40,
+        "max_output_tokens": null
+      },
+      "gemini-2.0-flash-thinking": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 64,
+        "max_output_tokens": null
+      },
       "gemini-1.5-pro": {
         "temperature": 1.0,
         "top_p": 0.94,
@@ -136,6 +262,24 @@
   },
   "vertex_ai": {
     "generateContent": {
+      "gemini-2.5-pro": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 40,
+        "max_output_tokens": null
+      },
+      "gemini-2.5-flash": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 40,
+        "max_output_tokens": null
+      },
+      "gemini-2.0-flash": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 40,
+        "max_output_tokens": null
+      },
       "gemini-1.5-pro": {
         "temperature": 1.0,
         "top_p": 0.94,
@@ -156,13 +300,38 @@
     }
   },
   "bedrock": {
+    "_note": "Claude Sonnet 4.5 and Haiku 4.5 on Bedrock: Use EITHER temperature OR top_p, not both",
     "messages": {
-      "anthropic.claude-3-5-sonnet": {
+      "anthropic.claude-sonnet-4-5": {
+        "temperature": 1.0,
+        "top_p": null,
+        "top_k": null,
+        "max_tokens": null
+      },
+      "anthropic.claude-haiku-4-5": {
+        "temperature": 1.0,
+        "top_p": null,
+        "top_k": null,
+        "max_tokens": null
+      },
+      "anthropic.claude-3-5-sonnet-20241022": {
+        "temperature": 1.0,
+        "top_p": 1.0,
+        "top_k": null,
+        "max_tokens": null
+      },
+      "anthropic.claude-3-5-sonnet-20240620": {
         "temperature": 1.0,
         "top_p": 1.0,
         "top_k": null,
         "max_tokens": null,
         "stop_sequences": null
+      },
+      "anthropic.claude-3-5-haiku-20241022": {
+        "temperature": 1.0,
+        "top_p": 1.0,
+        "top_k": null,
+        "max_tokens": null
       },
       "anthropic.claude-3-opus": {
         "temperature": 1.0,
@@ -226,6 +395,29 @@
       }
     }
   },
+  "deepseek": {
+    "chat.completions": {
+      "deepseek-chat": {
+        "temperature": 1.0,
+        "top_p": 1.0,
+        "max_tokens": 4096,
+        "frequency_penalty": 0,
+        "presence_penalty": 0,
+        "stream": false
+      },
+      "deepseek-reasoner": {
+        "temperature": 1.0,
+        "top_p": 1.0,
+        "max_tokens": 8192,
+        "stream": false
+      },
+      "_default": {
+        "temperature": 1.0,
+        "top_p": 1.0,
+        "stream": false
+      }
+    }
+  },
   "mistral": {
     "chat": {
       "mistral-large-latest": {
@@ -234,18 +426,33 @@
         "max_tokens": null,
         "safe_prompt": false
       },
-      "mistral-medium-latest": {
+      "mistral-small-latest": {
         "temperature": 0.7,
         "top_p": 1.0,
         "max_tokens": null
       },
-      "mistral-small-latest": {
+      "pixtral-large-latest": {
+        "temperature": 0.7,
+        "top_p": 1.0,
+        "max_tokens": null
+      },
+      "pixtral-12b-2409": {
         "temperature": 0.7,
         "top_p": 1.0,
         "max_tokens": null
       },
       "codestral-latest": {
         "temperature": 0.0,
+        "top_p": 1.0,
+        "max_tokens": null
+      },
+      "ministral-8b-latest": {
+        "temperature": 0.7,
+        "top_p": 1.0,
+        "max_tokens": null
+      },
+      "ministral-3b-latest": {
+        "temperature": 0.7,
         "top_p": 1.0,
         "max_tokens": null
       },

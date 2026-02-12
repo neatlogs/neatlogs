@@ -18,10 +18,21 @@ def trace(
     **attributes,
 ):
     """
-    Generic span context manager with optional prompt tracking.
+    Context manager for prompt tracking and session management.
 
-    Creates a span with automatic context propagation.
-    Span kind is automatically inferred if not provided.
+    IMPORTANT: This is NOT required for basic tracing!
+    - Framework code (LangChain, OpenAI, etc.) is auto-instrumented
+    - Custom code should use @span(kind="...") decorator
+    
+    Use trace() ONLY for:
+    1. Prompt template tracking (captures template + variables for versioning)
+    2. Multi-turn session management (groups turns within a session)
+    3. Grouping multiple top-level operations in main()
+
+    **When NOT to use trace():**
+    - Don't wrap a single @span(kind="WORKFLOW") call - it's already traced!
+    - Don't use for custom functions - use @span(kind="...") decorator instead
+    - Don't use just to "create a span" - auto-instrumentation handles that
 
     **Session-Aware Trace Creation:**
     - If `session_id` is set in init() AND no active parent span exists,
@@ -30,49 +41,55 @@ def trace(
 
     Args:
         name: Span name
-        kind: OpenInference span kind (LLM, CHAIN, TOOL, etc.)
-              If None, will be inferred by span processor
-        prompt_template: Optional prompt template - can be:
-            - String template (legacy): "Weather in {city}"
-            - PromptTemplate object (recommended): PromptTemplate("Weather in {{city}}")
-        prompt_variables: Optional dict of prompt variables (for string templates only)
+        kind: OpenInference span kind (rarely needed - auto-inferred)
+        prompt_template: PromptTemplate object for prompt versioning
+        prompt_variables: Dict of prompt variables (legacy string templates only)
         version: Optional version identifier
         **attributes: Additional attributes to set on the span
 
-    Example (legacy string template):
-        ```python
-        with neatlogs.trace(
-            "weather_query",
-            prompt_template="Weather in {city}",
-            prompt_variables={"city": "SF"}
-        ):
-            response = llm.create(...)
-        ```
+    Examples:
+        
+        Use Case 1: Prompt template tracking (inside your function):
+        
+        >>> template = PromptTemplate([{"role": "user", "content": "{{query}}"}])
+        >>> 
+        >>> @span(kind="AGENT")
+        >>> def my_agent(query: str):
+        ...     with trace(name="prompt", prompt_template=template):
+        ...         messages = template.compile(query=query)  # Compile ONCE
+        ...         response = llm.create(messages=messages)   # No duplication!
+        ...     return response
 
-    Example (new PromptTemplate - NO DUPLICATION!):
-        ```python
-        from neatlogs import trace, PromptTemplate
+        Use Case 2: Multi-turn sessions:
+        
+        >>> neatlogs.init(api_key="...", session_id="user-123")
+        >>> 
+        >>> with trace(name="turn_1"):  # New root trace (same session)
+        ...     agent.run("Hello")
+        >>> 
+        >>> with trace(name="turn_2"):  # New root trace (same session)
+        ...     agent.run("Tell me more")
 
-        template = PromptTemplate("Weather in {{city}}")
+        Use Case 3: Grouping multiple operations in main:
+        
+        >>> def main():
+        ...     with trace(name="pipeline"):  # Groups multiple steps
+        ...         step1()  # @span(kind="CHAIN")
+        ...         step2()  # @span(kind="CHAIN")
+        ...         step3()  # @span(kind="AGENT")
 
-        with trace("weather_query", prompt_template=template):
-            # Variables specified ONCE in compile() - no duplication!
-            prompt_text = template.compile(city="SF")
-            response = llm.create(messages=[{"role": "user", "content": prompt_text}])
-        ```
-
-    Example (chat session - automatic root trace per turn):
-        ```python
-        # init() with session_id
-        neatlogs.init(api_key="...", auto_session=True)
-
-        # Each trace() at top level creates a NEW root trace
-        with trace("turn_1"):  # → New trace (same session_id)
-            agent.run(...)
-
-        with trace("turn_2"):  # → New trace (same session_id)
-            agent.run(...)
-        ```
+        What NOT to do:
+        
+        >>> @span(kind="WORKFLOW")
+        >>> def my_workflow():
+        ...     pass
+        >>> 
+        >>> # ❌ WRONG: Redundant wrapper!
+        >>> with trace(name="main"):
+        ...     my_workflow()  # Already traced by @span decorator
+        >>> 
+        >>> # ✅ CORRECT: Just call it
+        >>> my_workflow()
     """
     import json
     import logging
@@ -170,35 +187,3 @@ def _finalize_prompt_capture(span, is_prompt_template_obj, logger):
             logger.debug(
                 f"[trace] Auto-captured variables from PromptContext: {list(captured_vars.keys())}"
             )
-
-
-@contextmanager
-def track_prompt(
-    template: str,
-    variables: Optional[Dict[str, Any]] = None,
-    version: Optional[str] = None,
-):
-    """
-    Context manager for prompt tracking.
-
-    Automatically captures prompt template and variables for the current span.
-    Use this when you want to wrap a block of code that makes LLM calls.
-
-    Args:
-        template: Prompt template string
-        variables: Dictionary of template variables
-        version: Optional version identifier
-
-    Example:
-        ```python
-        with neatlogs.track_prompt(
-            template="Weather in {city}",
-            variables={"city": "SF"}
-        ):
-            response = openai.create(...)  # Auto-captured
-        ```
-    """
-    from ..prompt.capture import capture_prompt
-
-    capture_prompt(template, variables, version)
-    yield

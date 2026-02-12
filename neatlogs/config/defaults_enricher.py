@@ -95,7 +95,11 @@ def enrich_invocation_parameters(
         return
 
     provider = merged_attrs.get("llm.system", "").lower()
-    model = merged_attrs.get("llm.model_name", "")
+    # For EMBEDDING spans, use embedding.model_name; for LLM spans, use llm.model_name
+    if span_kind == "EMBEDDING":
+        model = merged_attrs.get("embedding.model_name", "")
+    else:
+        model = merged_attrs.get("llm.model_name", "")
 
     if not provider or not model:
         return

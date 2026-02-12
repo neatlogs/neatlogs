@@ -168,7 +168,7 @@ INSTRUMENTATION_REGISTRY = {
             "default_span_kind": "CHAIN",
         },
         "crewai": {
-            "neatlogs": "neatlogs_instrumentation_crewai",
+            # "neatlogs": "neatlogs_instrumentation_crewai",
             "openllmetry": "opentelemetry.instrumentation.crewai",
             "openinference": "openinference.instrumentation.crewai",
             "default_span_kind": "AGENT",

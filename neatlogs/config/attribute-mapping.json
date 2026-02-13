@@ -147,6 +147,13 @@
           "target": "neatlogs.llm.tool_calls.{i}",
           "indexed": true
         },
+        "invalid_tool_calls": {
+          "description": "Invalid or malformed tool calls",
+          "sources": [
+            "llm.invalid_tool_calls"
+          ],
+          "target": "neatlogs.llm.invalid_tool_calls"
+        },
         "tools": {
           "description": "Tool definitions passed to the model",
           "sources": {
@@ -220,6 +227,22 @@
               ],
               "target": "neatlogs.llm.input_messages.{i}.role",
               "target_content": "neatlogs.llm.input_messages.{i}.content",
+              "indexed": true
+            },
+            "input_tool_call_id": {
+              "sources": [
+                "llm.input_messages.{i}.tool_call_id",
+                "llm.input_messages.{i}.message.tool_call_id"
+              ],
+              "target": "neatlogs.llm.input_messages.{i}.tool_call_id",
+              "indexed": true
+            },
+            "input_name": {
+              "sources": [
+                "llm.input_messages.{i}.name",
+                "llm.input_messages.{i}.message.name"
+              ],
+              "target": "neatlogs.llm.input_messages.{i}.name",
               "indexed": true
             },
             "output": {
@@ -465,6 +488,13 @@
             "gen_ai.tool.call.id"
           ],
           "target": "neatlogs.tool.id"
+        },
+        "call_id": {
+          "sources": [
+            "tool.call_id",
+            "tool_call_id"
+          ],
+          "target": "neatlogs.tool_call.id"
         }
       },
       "agent": {

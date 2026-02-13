@@ -1,6 +1,8 @@
-# Neatlogs
+# Neatlogs Python SDK
 
 A comprehensive LLM tracking system that automatically captures and logs all LLM API calls with detailed metrics.
+
+Auto-instruments LLM calls, frameworks, and custom code with just 6 exports.
 
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -8,188 +10,363 @@ A comprehensive LLM tracking system that automatically captures and logs all LLM
 
 ## Features
 
-- 🚀 **Automatic LLM Call Tracking**: Seamlessly tracks all LLM API calls without code changes
-- 📊 **Comprehensive Metrics**: Token usage, costs, response times, and more
-- 🔌 **Multi-Provider Support**: OpenAI, Anthropic, Google Gemini, Azure OpenAI, and LiteLLM
-- 🔗 **LangChain Integration**: Seamless tracking for LangChain chains, agents, and tools
-- 🧵 **Session Management**: Track conversations across multiple threads and agents
-- 📝 **Structured Logging**: Detailed logs with OpenTelemetry support
-- 🎯 **Easy Integration**: Simple one-line initialization
-- 🔍 **Real-time Monitoring**: Live tracking and statistics
+- **Auto-Instrumentation**: Automatically tracks OpenAI, Anthropic, LangChain, LlamaIndex, CrewAI, Haystack, and more
+- **Rich Metrics**: Token usage, costs, latency, streaming metrics, and custom attributes
+- **Multi-Provider**: OpenAI, Anthropic, Google Gemini, Azure OpenAI, Cohere, Groq, Together and 20+ more
+- **Simple API**: Just 6 exports - `init()`, `flush()`, `shutdown()`, `@span()`, `trace()`, `PromptTemplate`
+- **Zero Config**: Works out-of-the-box with frameworks (LangChain, CrewAI, LlamaIndex, Haystack)
+- **OpenTelemetry Native**: Built on OpenTelemetry + OpenInference standards
+- **Session-Aware**: Track multi-turn conversations with automatic session grouping
+- **Prompt Versioning**: Track prompt templates, variables, and versions
 
-## Quick Start
-
-### Installation
-
-**Basic installation (no LLM libraries):**
+## Installation
 
 ```bash
 pip install neatlogs
 ```
 
-### Basic Usage
+## Quick Start
+
+### 1. Framework Code (Auto-Instrumented)
+
+Just `init()` and your framework code is automatically tracked:
 
 ```python
-import neatlogs
-
-# Initialize tracking with your API key
-neatlogs.init(
-    api_key="your-api-key-here"
-)
-
-# add tags
-neatlogs.add_tags(["neatlogs"])
-# Now all LLM calls are automatically tracked!
-# Use any supported LLM library normally
-
-# Get session statistics
-stats = neatlogs.get_session_stats()
-print(f"Total calls: {stats['total_calls']}")
-print(f"Total cost: ${stats['total_cost']:.4f}")
-```
-
-## Supported Providers
-
-- **OpenAI** (GPT models)
-- **Anthropic** (Claude models)
-- **Google Gemini** (Gemini models)
-- **Azure OpenAI**
-- **LiteLLM** (unified interface)
-
-## Framework
-
-Neatlogs provides comprehensive support for various AI frameworks and models:
-
-- [LangChain Integration](#langchain-integration)
-- [CrewAI Integration](#crewai-integration)
-- [LangGraph Integration](#langgraph-integration)
-
-### LangChain Integration
-Neatlogs provides comprehensive tracking for all LangChain components and workflows:
-
-- **LLM & Chat Models**: Track all LLM calls, token usage, costs, and response times
-- **Chains**: Monitor chain execution, inputs, outputs, and performance metrics
-- **Agents**: Capture agent actions, tool calls, decision-making processes, and reasoning
-- **Tools**: Record tool usage, inputs, outputs, and execution times
-- **RAG Systems**: Track retrieval-augmented generation workflows including vector searches and document retrieval
-- **Async Workflows**: Full support for asynchronous LangChain pipelines and concurrent operations
-- **Error Handling**: Capture and log errors across all LangChain components
-- **Model Detection**: Automatic identification of underlying LLM models and providers.
-
-#### LangChain Callback Handler
-
-Neatlogs provides a dedicated callback handler for LangChain to enable detailed tracking of your LangChain applications without modifying your existing code.
-
-#### Usage
-
-```python
+from neatlogs import init, flush, shutdown
 from langchain.chains import LLMChain
-from langchain.llms import OpenAI
-import neatlogs
+from openai import OpenAI
 
-# Get the callback handler
-handler = neatlogs.get_langchain_callback_handler(api_key="your-api-key")
-
-# Use it with your LangChain components
-llm = OpenAI()
-chain = LLMChain(llm=llm, callbacks=[handler])
-
-# Your chain calls will now be tracked automatically
-result = chain.run("Hello world")
-```
-
-#### Features
-
-- **LLM Tracking**: Captures all LLM calls with token usage, costs, and response times
-- **Chain Monitoring**: Tracks chain executions, inputs, and outputs
-- **Tool Call Tracking**: Monitors tool usage and performance
-- **Agent Monitoring**: Records agent actions and decision processes
-- **Automatic Detection**: Automatically detects model types and providers
-- **Async Support**: Full support for both synchronous and asynchronous workflows
-
-#### Asynchronous Usage
-
-For asynchronous LangChain workflows:
-
-```python
-from neatlogs.integration.callbacks.langchain.callback import AsyncNeatlogsLangchainCallbackHandler
-
-# Use the async handler for async workflows
-async_handler = AsyncNeatlogsLangchainCallbackHandler(api_key="your-api-key")
-
-# Use with async chains
-result = await async_chain.arun(..., callbacks=[async_handler])
-```
-
-### CrewAI Integration
-CrewAI is a framework for orchestrating role-playing AI agents. Neatlogs provides seamless integration with CrewAI through automatic instrumentation:
-
-- **Agent Tracking**: Monitor all agent activities, tasks, and interactions
-- **Crew Orchestration**: Track crew-level operations and agent coordination
-- **Task Monitoring**: Capture task execution, delegation, and completion
-- **Automatic Setup**: No code changes required - just initialize with `neatlogs.init()`
-
-```python
-import neatlogs
-from crewai import Agent, Task, Crew
-
-# Initialize Neatlogs (that's all you need!)
-neatlogs.init(api_key="your-api-key")
-
-# Your CrewAI code works normally and gets tracked automatically
-agent = Agent(role="Researcher", goal="Research AI trends")
-task = Task(description="Research latest AI developments")
-crew = Crew(agents=[agent], tasks=[task])
-
-result = crew.kickoff()
-```
-
-### LangGraph Integration
-LangGraph is a library for building stateful, multi-actor applications with LLMs, using graphs to define the flow of execution.
-
-Neatlogs provides seamless integration with LangGraph through automatic instrumentation:
-
-- **Graph Execution Tracking**: Monitor graph execution, node transitions, and state changes
-- **Node Monitoring**: Track individual node executions, inputs, outputs, and performance
-- **Edge Tracking**: Capture edge traversals and conditional logic
-- **Automatic Setup**: No code changes required - just initialize with `neatlogs.init()`
-
-```python
-import neatlogs
-from langgraph import StateGraph
-
-# Initialize Neatlogs (that's all you need!)
-neatlogs.init(api_key="your-api-key")
-
-# Your LangGraph code works normally and gets tracked automatically
-graph = StateGraph(...)
-# ... define your graph
-
-result = graph.invoke(...)
-```
-
-### Configuration Options
-
-```python
-neatlogs.init(
+# Initialize (that's all you need!)
+init(
     api_key="your-api-key",
-    tags=["tag1", "tag2"],
+    endpoint="https://api.neatlogs.com/v4/batch",
+    instrumentations=["langchain", "openai"],
+)
+
+# Your code works normally - fully auto-instrumented!
+client = OpenAI()
+response = client.chat.completions.create(
+    model="gpt-4o-mini",
+    messages=[{"role": "user", "content": "What is AI?"}]
+)
+
+flush()
+shutdown()
+```
+
+### 2. Custom Code with `@span()`
+
+Instrument your custom orchestration functions:
+
+```python
+from neatlogs import init, span, trace, PromptTemplate
+
+init(api_key="...", instrumentations=["openai"])
+
+# Define prompt template for versioning
+template = PromptTemplate([
+    {"role": "user", "content": "{{question}}"}
+])
+
+@span(kind="RETRIEVER", name="vector_search")
+def retrieve_docs(query: str):
+    """Your custom retrieval logic."""
+    return vector_db.search(query)
+
+@span(kind="AGENT", role="Assistant", goal="Answer questions")
+def answer_agent(question: str):
+    """Agent with prompt tracking."""
+    # Track prompt template inside the function that uses it
+    with trace(prompt_template=template):
+        messages = template.compile(question=question)
+        response = llm.create(messages=messages)
+        return response.choices[0].message.content
+
+@span(kind="WORKFLOW", name="qa_workflow")
+def qa_workflow(question: str):
+    """Top-level workflow orchestration."""
+    docs = retrieve_docs(question)
+    answer = answer_agent(question)
+    return answer
+
+# Just call your workflow - no extra wrapper needed!
+result = qa_workflow("What is quantum computing?")
+
+flush()
+shutdown()
+```
+
+## API Reference
+
+### Core Functions
+
+#### `init()`
+Initialize the SDK (call once at startup).
+
+```python
+init(
+    api_key="your-api-key",                    # Required: your Neatlogs API key
+    endpoint="https://api.neatlogs.com/v4/batch",  # Optional: custom endpoint
+    instrumentations=["openai", "langchain"],  # Auto-instrument frameworks
+    metadata={"env": "production"}             # Optional: global metadata
 )
 ```
 
-## Session Statistics
+**Supported instrumentations**: `openai`, `anthropic`, `langchain`, `llama-index`, `crewai`, `haystack`, `google-genai`, `mcp`
 
-Get comprehensive insights into your LLM usage:
+#### `flush()`
+Send all pending spans to the server.
 
 ```python
-stats = neatlogs.get_session_stats()
-
-# Available metrics:
-# - total_calls: Number of LLM API calls
-# - total_tokens_input: Total input tokens
-# - total_tokens_output: Total output tokens
-# - total_cost: Total cost in USD
-# - average_response_time: Average response time
-# - provider_breakdown: Usage by provider
-# - model_breakdown: Usage by model
+flush()
 ```
+
+#### `shutdown()`
+Gracefully shutdown the SDK (call at app exit).
+
+```python
+shutdown()
+```
+
+---
+
+### Custom Instrumentation
+
+#### `@span(kind=...)`
+The **only decorator** you need.
+
+```python
+@span(
+    kind="WORKFLOW",           # Required: WORKFLOW, AGENT, CHAIN, TOOL, RETRIEVER, EMBEDDING, MCP_TOOL
+    name="custom_function",    # Optional: span name (defaults to function name)
+    
+    # Optional: add custom attributes
+    role="Assistant",          # For AGENT: agent role
+    goal="Answer questions",   # For AGENT: agent goal
+    model="gpt-4o",            # For LLM/EMBEDDING: model name
+    tool_name="search_api",    # For TOOL/MCP_TOOL: tool name
+)
+def my_function():
+    pass
+```
+
+**Supported span kinds**:
+- `WORKFLOW`: Top-level orchestration workflows
+- `AGENT`: AI agents (agentic behavior)
+- `CHAIN`: Sequential or conditional chains
+- `TOOL`: Tool/function calls
+- `RETRIEVER`: Vector search, document retrieval
+- `EMBEDDING`: Embedding generation
+- `MCP_TOOL`: Model Context Protocol tools
+
+#### `trace()`
+Context manager for:
+1. **Prompt tracking** - Track prompt templates inside LLM calls
+2. **Session management** - Group multi-turn conversations
+3. **Grouping top-level operations** - If you have multiple workflows in `main()`
+
+```python
+# Use case 1: Track prompts
+@span(kind="AGENT")
+def answer_question(q: str):
+    template = PromptTemplate([{"role": "user", "content": "{{q}}"}])
+    with trace(prompt_template=template):
+        messages = template.compile(q=q)
+        response = llm.create(messages=messages)
+        return response
+
+# Use case 2: Group operations in main()
+def main():
+    with trace(name="batch_processor", session_id="batch-123"):
+        workflow_1()
+        workflow_2()
+
+# Use case 3: Multi-turn session tracking
+with trace(session_id="user-456", thread_id="conversation-1"):
+    for message in conversation:
+        agent_workflow(message)
+```
+
+#### `PromptTemplate`
+Tracks prompt templates, variables and versions.
+
+```python
+template = PromptTemplate([
+    {"role": "system", "content": "You are a {{role}}."},
+    {"role": "user", "content": "{{question}}"}
+])
+
+# Compile with variables
+messages = template.compile(role="assistant", question="What is AI?")
+
+# Use with trace() to log prompt
+with trace(prompt_template=template):
+    response = llm.create(messages=messages)
+```
+
+---
+
+## Supported Frameworks
+
+### Auto-Instrumented
+
+- **LangChain** - Chains, agents, tools, retrievers, LLMs
+- **LlamaIndex** - Queries, retrievals, agents, tools
+- **CrewAI** - Agents, tasks, crews, tools
+- **Haystack** - Pipelines, components, retrievers
+- **OpenAI** - Chat, completions, embeddings, streaming
+- **Anthropic** - Claude chat, streaming
+- **Google GenAI** - Gemini models
+- **Cohere** - Chat, embeddings
+- **Model Context Protocol (MCP)** - MCP tools and servers
+
+### Supported LLM Providers
+
+OpenAI • Anthropic • Google Gemini • Azure OpenAI • Cohere • Groq • Together • Anyscale • Perplexity • Mistral • AWS Bedrock • Replicate • HuggingFace • Ollama • LiteLLM • and 20+ more
+
+---
+
+## Common Patterns
+
+### Pattern 1: Pure Framework Code
+```python
+from neatlogs import init, flush, shutdown
+from langchain.chains import LLMChain
+
+init(api_key="...", instrumentations=["langchain", "openai"])
+
+# Your existing code - zero changes!
+chain = LLMChain(...)
+result = chain.run("query")
+
+flush()
+shutdown()
+```
+
+### Pattern 2: Custom Workflow with Prompt Tracking
+```python
+from neatlogs import init, span, trace, PromptTemplate
+
+init(api_key="...", instrumentations=["openai"])
+
+template = PromptTemplate([{"role": "user", "content": "{{q}}"}])
+
+@span(kind="AGENT", role="QA Agent")
+def answer_question(q: str):
+    with trace(prompt_template=template):
+        messages = template.compile(q=q)
+        response = llm.create(messages=messages)
+        return response
+
+@span(kind="WORKFLOW")
+def qa_workflow(q: str):
+    return answer_question(q)
+
+result = qa_workflow("What is AI?")
+flush()
+shutdown()
+```
+
+### Pattern 3: RAG Pipeline
+```python
+from neatlogs import init, span, trace, PromptTemplate
+
+init(api_key="...", instrumentations=["openai"])
+
+@span(kind="RETRIEVER", name="vector_search")
+def retrieve_docs(query: str):
+    return vector_db.search(query, top_k=5)
+
+@span(kind="TOOL", tool_name="rerank")
+def rerank_docs(docs, query: str):
+    return reranker.rerank(docs, query)
+
+@span(kind="AGENT", role="RAG Agent")
+def generate_answer(query: str, docs):
+    template = PromptTemplate([
+        {"role": "user", "content": "Context: {{context}}\nQuestion: {{query}}"}
+    ])
+    with trace(prompt_template=template):
+        context = "\n".join([d.content for d in docs])
+        messages = template.compile(context=context, query=query)
+        return llm.create(messages=messages)
+
+@span(kind="WORKFLOW", name="rag_pipeline")
+def rag_pipeline(query: str):
+    docs = retrieve_docs(query)
+    ranked = rerank_docs(docs, query)
+    answer = generate_answer(query, ranked)
+    return answer
+
+result = rag_pipeline("What is quantum computing?")
+flush()
+shutdown()
+```
+
+### Pattern 4: Multi-Turn Conversation
+```python
+from neatlogs import init, span, trace
+
+# Enable auto_session for automatic session management
+init(api_key="...", instrumentations=["openai"], auto_session=True)
+
+@span(kind="AGENT", role="Chat Assistant")
+def chat(message: str, history: list):
+    messages = history + [{"role": "user", "content": message}]
+    return llm.create(messages=messages)
+
+# Group entire conversation with session tracking
+with trace(session_id="user-123", thread_id="chat-456"):
+    history = []
+    for user_message in conversation:
+        response = chat(user_message, history)
+        history.append({"role": "assistant", "content": response})
+
+flush()
+shutdown()
+```
+
+
+## Configuration
+
+### Environment Variables
+```bash
+NEATLOGS_API_KEY=your-api-key
+NEATLOGS_ENDPOINT=https://api.neatlogs.com/v4/batch
+```
+
+### Initialization Options
+```python
+init(
+    api_key="...",                                  # Required: API key
+    endpoint="https://api.neatlogs.com/v4/batch",  # Optional: endpoint
+    instrumentations=["openai", "langchain"],       #  Optional: project ID
+    workflow_name="my-workflow",                    # Optional: workflow name
+)
+```
+
+---
+
+## Best Practices
+
+1. **Use auto-instrumentation when possible** - Just `init()` and you're done
+2. **`@span()` for custom orchestration** - Wrap your custom workflow, agent, and tool functions
+3. **`trace()` for prompts** - Track prompt templates inside functions that use LLMs
+4. **`trace()` for sessions** - Group multi-turn conversations with `session_id` and `thread_id`
+5. **Always `flush()` and `shutdown()`** - Ensure all spans are sent before exit
+
+---
+
+## Examples
+
+See the `/examples` directory for 60+ comprehensive examples:
+- Framework examples (LangChain, CrewAI, LlamaIndex, Haystack)
+- Provider examples (OpenAI, Anthropic, Google, Cohere)
+- Pattern examples (RAG, agents, tools, streaming, async)
+- Guardrail integration examples
+
+---
+
+## License
+
+MIT License - see LICENSE file for details

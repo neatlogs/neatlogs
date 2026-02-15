@@ -617,6 +617,8 @@ class InstrumentationManager:
                 "google_generativeai": "google.generativeai",
                 # Azure AI Inference SDK (pip: azure-ai-inference)
                 "azure_ai_inference": "azure.ai.inference",
+                # AWS Bedrock uses boto3 (pip: boto3)
+                "bedrock": "boto3",
                 # Milvus python client (pip: pymilvus)
                 "milvus": "pymilvus",
                 # Qdrant python client (pip: qdrant-client)

@@ -61,19 +61,15 @@ INSTRUMENTATION_REGISTRY = {
         "azure_ai_inference": {
             "openllmetry": None,
             "openinference": None,
-            # Local/dev: in the separate `NeatLogs/instrumentations` repo this lives under `packages/`.
-            # Installable module name:
             "neatlogs": "neatlogs_instrumentation_azure_ai_inference",
             "default_span_kind": "LLM",
         },
         "openai": {
-            # "neatlogs": "neatlogs_instrumentation_openai",
             "openinference": "openinference.instrumentation.openai",
             "openllmetry": "opentelemetry.instrumentation.openai",
             "default_span_kind": "LLM",
         },
         "anthropic": {
-            # "neatlogs": "neatlogs_instrumentation_anthropic",
             "openllmetry": "opentelemetry.instrumentation.anthropic",
             "openinference": "openinference.instrumentation.anthropic",
             "default_span_kind": "LLM",
@@ -84,13 +80,11 @@ INSTRUMENTATION_REGISTRY = {
             "default_span_kind": "LLM",
         },
         "bedrock": {
-            # "neatlogs": "neatlogs_instrumentation_bedrock",
             "openllmetry": "opentelemetry.instrumentation.bedrock",
             "openinference": "openinference.instrumentation.bedrock",
             "default_span_kind": "LLM",
         },
         "groq": {
-            # "neatlogs": "neatlogs_instrumentation_groq",
             "openllmetry": "opentelemetry.instrumentation.groq",
             "openinference": "openinference.instrumentation.groq",
             "default_span_kind": "LLM",
@@ -151,13 +145,11 @@ INSTRUMENTATION_REGISTRY = {
             "default_span_kind": "LLM",
         },
         "langchain": {
-            # "neatlogs": "neatlogs_instrumentation_langchain",
             "openllmetry": "opentelemetry.instrumentation.langchain",
             "openinference": "openinference.instrumentation.langchain",
             "default_span_kind": "CHAIN",
         },
         "langgraph": {
-            # "neatlogs": "neatlogs_instrumentation_langgraph",
             "openllmetry": None,
             "openinference": None,
             "default_span_kind": "WORKFLOW",
@@ -168,7 +160,6 @@ INSTRUMENTATION_REGISTRY = {
             "default_span_kind": "CHAIN",
         },
         "crewai": {
-            # "neatlogs": "neatlogs_instrumentation_crewai",
             "openllmetry": "opentelemetry.instrumentation.crewai",
             "openinference": "openinference.instrumentation.crewai",
             "default_span_kind": "AGENT",
@@ -259,7 +250,7 @@ INSTRUMENTATION_REGISTRY = {
             "default_span_kind": "CHAIN",
         },
         "guardrails": {
-            "openllmetry": "opentelemetry.instrumentation.guardrails",
+            "openllmetry": None,
             "openinference": "openinference.instrumentation.guardrails",
             "default_span_kind": "GUARDRAIL",
         },
@@ -269,7 +260,6 @@ INSTRUMENTATION_REGISTRY = {
             "default_span_kind": "AGENT",
         },
         "google_genai": {
-            # "neatlogs": "neatlogs_instrumentation_google_genai",
             "openllmetry": None,
             "openinference": "openinference.instrumentation.google_genai",
             "default_span_kind": "LLM",

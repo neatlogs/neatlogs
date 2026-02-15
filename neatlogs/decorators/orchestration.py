@@ -280,7 +280,7 @@ def span(
         need decoration.
     """
     # Validate kind
-    valid_kinds = {"WORKFLOW", "AGENT", "CHAIN", "TOOL", "RETRIEVER", "EMBEDDING", "MCP_TOOL"}
+    valid_kinds = {"WORKFLOW", "AGENT", "CHAIN", "TOOL", "RETRIEVER", "EMBEDDING", "GUARDRAIL", "MCP_TOOL"}
     kind_upper = kind.upper()
     if kind_upper not in valid_kinds:
         raise ValueError(

@@ -34,7 +34,7 @@ neatlogs.init(
     api_key=os.getenv("NEATLOGS_API_KEY", "test-key"),
     endpoint=os.getenv("NEATLOGS_ENDPOINT", "https://api.neatlogs.com/v4/batch"),
     tags=["gobblecube", "langgraph", "demo"],
-    instrumentations=["langchain"],   # auto-instruments LangChain + LangGraph
+    instrumentations=["langchain", "azure_ai_inference"],   # auto-instruments LangChain + LangGraph + Azure
     debug=False,
 )
 

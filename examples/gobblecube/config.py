@@ -18,17 +18,9 @@ _env_path = os.path.join(os.path.dirname(__file__), ".env")
 load_dotenv(_env_path if os.path.exists(_env_path) else None)
 
 # ---------------------------------------------------------------------------
-# Neatlogs – initialise ONCE before any LLM import/call
+# Neatlogs – imported here for @span decorators in agents
 # ---------------------------------------------------------------------------
 import neatlogs
-
-neatlogs.init(
-    api_key=os.getenv("NEATLOGS_API_KEY", "test-key"),
-    endpoint=os.getenv("NEATLOGS_ENDPOINT", "https://api.neatlogs.com/v4/batch"),
-    tags=["gobblecube", "langgraph", "demo"],
-    instrumentations=["langchain"],   # auto-instruments LangChain + LangGraph
-    debug=False,
-)
 
 # ---------------------------------------------------------------------------
 # Azure OpenAI LLM (used by all agents)

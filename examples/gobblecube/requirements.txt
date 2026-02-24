@@ -7,3 +7,4 @@ pydantic>=2.0
 python-dotenv
 neatlogs
 azure-ai-inference
+neatlogs-instrumentations[azure-ai-inference]

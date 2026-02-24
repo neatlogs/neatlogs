@@ -7,6 +7,10 @@ AI-smart purchase order recommendations.
 Pipeline:
   check_inventory ──(fill_rate ≥ 85%)──► END
                   └─(fill_rate < 85%)──► analyze_demand → generate_alerts → recommend_po → END
+
+Error variants:
+  cascade_failure — generate_alerts raises ExternalAPIError(500),
+                    recommend_purchase_orders raises ValueError
 """
 
 import json
@@ -19,6 +23,7 @@ from typing_extensions import TypedDict
 
 import neatlogs
 from config import llm
+from error_injection import ExternalAPIError
 
 
 # ---------------------------------------------------------------------------
@@ -34,10 +39,11 @@ class InventoryState(TypedDict):
     stockout_alerts: Optional[list]
     po_recommendations: Optional[list]
     forecast: Optional[dict]
+    error_variant: Optional[str]
 
 
 # ---------------------------------------------------------------------------
-# Nodes
+# Nodes (Original — happy path)
 # ---------------------------------------------------------------------------
 
 @neatlogs.span(kind="TOOL", name="inventory_snapshot",
@@ -191,6 +197,48 @@ def recommend_purchase_orders(state: InventoryState) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Error Variant: Cascading Tool Failures
+# ---------------------------------------------------------------------------
+
+@neatlogs.span(kind="TOOL", name="stockout_alert_generator",
+               tool_name="alert_service_api")
+def generate_alerts_api_down(state: InventoryState) -> dict:
+    """
+    Simulates alert service API returning 500 Internal Server Error.
+    The alert service depends on an upstream notification queue (SQS/Kafka)
+    that is experiencing issues.
+    """
+    raise ExternalAPIError(
+        status_code=500,
+        service="alert_service_api",
+        message=(
+            "Internal Server Error: Alert service failed to process request. "
+            "Upstream dependency 'notification-queue' returned: "
+            "KafkaProducerError — broker not available (leader election in progress). "
+            "Circuit breaker OPEN — 15/20 requests failed in last 60 seconds."
+        ),
+    )
+
+
+@neatlogs.span(kind="AGENT", name="po_recommendation_engine",
+               role="Supply Planner", goal="Generate PO recommendations — missing alerts")
+def recommend_purchase_orders_missing_data(state: InventoryState) -> dict:
+    """
+    PO recommendation that fails because required alerts data is missing
+    (cascading from the upstream alert service failure).
+    """
+    alerts = state.get("stockout_alerts")
+    if not alerts:
+        raise ValueError(
+            "Cannot generate purchase order recommendations: "
+            "stockout_alerts data is missing or empty. "
+            "The PO recommendation engine requires severity-ranked alerts "
+            "to prioritise orders. Upstream dependency: alert_service_api."
+        )
+    return recommend_purchase_orders(state)
+
+
+# ---------------------------------------------------------------------------
 # Routing
 # ---------------------------------------------------------------------------
 
@@ -202,28 +250,54 @@ def route_inventory_query(state: InventoryState) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Graph
+# Graph Factory
 # ---------------------------------------------------------------------------
 
-def build_inventory_agent() -> StateGraph:
+def build_inventory_agent(error_variant: str = None) -> StateGraph:
+    """
+    Build the inventory agent graph. Pass error_variant to get
+    error-injecting variants for demo scenarios.
+    """
     graph = StateGraph(InventoryState)
 
-    graph.add_node("check_inventory",  check_inventory)
-    graph.add_node("analyze_demand",   analyze_demand)
-    graph.add_node("generate_alerts",  generate_alerts)
-    graph.add_node("recommend_po",     recommend_purchase_orders)
+    if error_variant == "cascade_failure":
+        # Scenario 10: Cascading tool failures
+        graph.add_node("check_inventory",  check_inventory)
+        graph.add_node("analyze_demand",   analyze_demand)
+        graph.add_node("generate_alerts",  generate_alerts_api_down)
+        graph.add_node("recommend_po",     recommend_purchase_orders_missing_data)
 
-    graph.add_edge(START, "check_inventory")
-    graph.add_conditional_edges(
-        "check_inventory",
-        route_inventory_query,
-        {
-            "needs_action": "analyze_demand",
-            "report_only":  END,
-        },
-    )
-    graph.add_edge("analyze_demand",  "generate_alerts")
-    graph.add_edge("generate_alerts", "recommend_po")
-    graph.add_edge("recommend_po",    END)
+        graph.add_edge(START, "check_inventory")
+        graph.add_conditional_edges(
+            "check_inventory",
+            route_inventory_query,
+            {
+                "needs_action": "analyze_demand",
+                "report_only":  END,
+            },
+        )
+        graph.add_edge("analyze_demand",  "generate_alerts")
+        graph.add_edge("generate_alerts", "recommend_po")
+        graph.add_edge("recommend_po",    END)
+
+    else:
+        # Default: original happy-path graph
+        graph.add_node("check_inventory",  check_inventory)
+        graph.add_node("analyze_demand",   analyze_demand)
+        graph.add_node("generate_alerts",  generate_alerts)
+        graph.add_node("recommend_po",     recommend_purchase_orders)
+
+        graph.add_edge(START, "check_inventory")
+        graph.add_conditional_edges(
+            "check_inventory",
+            route_inventory_query,
+            {
+                "needs_action": "analyze_demand",
+                "report_only":  END,
+            },
+        )
+        graph.add_edge("analyze_demand",  "generate_alerts")
+        graph.add_edge("generate_alerts", "recommend_po")
+        graph.add_edge("recommend_po",    END)
 
     return graph.compile()

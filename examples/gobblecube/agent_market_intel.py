@@ -6,9 +6,14 @@ at a hyperlocal level.
 
 Pipeline:
   gather_market_data → detect_trends → find_white_space → generate_strategy → END
+
+Error variants:
+  http_503_retry        — gather_market_data fails with 503, retries with cached data
+  hallucination_fabricated — detect_trends invents Tier-3 data, consistency checker catches it
 """
 
 import json
+import time
 from typing import Optional, Annotated
 
 from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
@@ -18,6 +23,10 @@ from typing_extensions import TypedDict
 
 import neatlogs
 from config import llm
+from error_injection import (
+    ExternalAPIError,
+    check_data_consistency,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -34,10 +43,11 @@ class MarketIntelState(TypedDict):
     opportunities: Optional[list]
     competitive_moves: Optional[list]
     strategic_recommendations: Optional[str]
+    error_variant: Optional[str]
 
 
 # ---------------------------------------------------------------------------
-# Nodes
+# Nodes (Original — happy path)
 # ---------------------------------------------------------------------------
 
 @neatlogs.span(kind="TOOL", name="market_data_aggregator",
@@ -47,7 +57,16 @@ def gather_market_data(state: MarketIntelState) -> dict:
     Aggregates market-level data across platforms and subcategories.
     [DUMMY API] — simulates Gobbs Discover's data aggregation layer.
     """
-    data = {
+    data = _build_market_data(state)
+    return {
+        "market_data": data,
+        "messages": [AIMessage(content=f"[Market Data API] Data aggregated for category: {data['category']}")],
+    }
+
+
+def _build_market_data(state: MarketIntelState) -> dict:
+    """Shared market data builder."""
+    return {
         "category": state.get("category", "health_snacks"),
         "market_size_inr_cr": 4_200,
         "market_size_trend": {"6mo_growth_pct": 18.5, "yoy_growth_pct": 42.3},
@@ -80,12 +99,8 @@ def gather_market_data(state: MarketIntelState) -> dict:
         "city_tier_insights": {
             "tier_1": {"growth_pct": 28, "top_cities": ["Mumbai", "Delhi", "Bangalore"]},
             "tier_2": {"growth_pct": 58, "top_cities": ["Pune", "Hyderabad", "Chennai"]},
+            # NOTE: No tier_3 data — this is intentional for hallucination detection
         },
-    }
-
-    return {
-        "market_data": data,
-        "messages": [AIMessage(content=f"[Market Data API] Data aggregated for category: {data['category']}")],
     }
 
 
@@ -172,21 +187,176 @@ def generate_strategy(state: MarketIntelState) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Graph
+# Error Variant: HTTP 503 + Retry
 # ---------------------------------------------------------------------------
 
-def build_market_intel_agent() -> StateGraph:
+@neatlogs.span(kind="TOOL", name="market_data_api_call",
+               tool_name="market_data_api")
+def _gather_market_data_503(state: MarketIntelState) -> dict:
+    """First attempt: simulates HTTP 503 from market data API."""
+    raise ExternalAPIError(
+        status_code=503,
+        service="market_data_api",
+        message=(
+            "Service Unavailable: upstream database maintenance in progress. "
+            "Expected recovery: 15 minutes. "
+            "Fallback: cached data from 2 hours ago is available."
+        ),
+    )
+
+
+@neatlogs.span(kind="TOOL", name="market_data_api_fallback",
+               tool_name="market_data_api",
+               metadata={"source": "fallback_cache", "cache_age_minutes": 120})
+def _gather_market_data_fallback(state: MarketIntelState) -> dict:
+    """Second attempt: returns cached/fallback data."""
+    data = _build_market_data(state)
+    data["_metadata"] = {"source": "fallback_cache", "cache_age_minutes": 120}
+    return {
+        "market_data": data,
+        "messages": [AIMessage(
+            content="[Market Data API] Using fallback cached data (2 hours old). "
+                    "Primary API is under maintenance."
+        )],
+    }
+
+
+@neatlogs.span(kind="CHAIN", name="market_data_with_retry",
+               metadata={"pattern": "retry_on_503"})
+def gather_market_data_with_retry(state: MarketIntelState) -> dict:
+    """
+    Market data fetch with retry: first attempt fails with 503,
+    second attempt returns cached fallback data.
+    """
+    # Attempt 1: fails with 503
+    try:
+        return _gather_market_data_503(state)
+    except ExternalAPIError as e:
+        print(f"   ⚠️  Market data API failed: {e}")
+        print("   🔄 Retrying with fallback cache…")
+        time.sleep(1)
+
+    # Attempt 2: fallback succeeds
+    return _gather_market_data_fallback(state)
+
+
+# ---------------------------------------------------------------------------
+# Error Variant: Fabricated Metrics Hallucination
+# ---------------------------------------------------------------------------
+
+@neatlogs.span(kind="AGENT", name="trend_detector",
+               role="Trend Analyst", goal="Detect trends — hallucination variant")
+def detect_trends_hallucinating(state: MarketIntelState) -> dict:
+    """
+    Trend detection that intentionally asks the LLM about Tier-3 data
+    that doesn't exist in the source, to trigger fabricated metrics.
+    """
+    prompt = (
+        "You are a market intelligence analyst for quick commerce.\n\n"
+        f"Market data: {json.dumps(state.get('market_data', {}))}\n\n"
+        "The user specifically wants to know about Tier-3 city performance.\n"
+        "Identify trends with SPECIFIC numbers for Tier-3 cities like Jaipur, "
+        "Lucknow, Indore, and Coimbatore. Include market share percentages, "
+        "growth rates, and revenue estimates for these cities.\n\n"
+        "Return JSON array where each item has:\n"
+        "  trend_name, description, growth_signal_strength (1–10), "
+        "  time_horizon, relevant_cities (list), "
+        "  tier_3_market_share_pct, tier_3_revenue_estimate_cr.\n"
+        "Return ONLY valid JSON."
+    )
+    response = llm.invoke([HumanMessage(content=prompt)])
+    try:
+        trends = json.loads(response.content)
+    except json.JSONDecodeError:
+        trends = []
+
+    return {"trends": trends, "messages": [response]}
+
+
+@neatlogs.span(kind="GUARDRAIL", name="data_consistency_checker",
+               metadata={"guardrail_type": "hallucination_detection"})
+def check_trend_consistency(state: MarketIntelState) -> dict:
+    """
+    Validates LLM trend output against source market data.
+    Catches fabricated metrics (e.g., Tier-3 data that doesn't exist in source).
+    """
+    trends = state.get("trends", [])
+    market_data = state.get("market_data", {})
+
+    trends_str = json.dumps(trends)
+    result = check_data_consistency(trends_str, market_data)
+
+    if result["hallucination_detected"]:
+        print(f"   🚨 Data hallucination detected: {len(result['issues'])} issues found")
+        for issue in result["issues"]:
+            print(f"      • {issue['type']}: {issue['detail']}")
+
+        return {
+            "trends": [{
+                **t,
+                "_hallucination_warning": True,
+                "_confidence": "low",
+            } for t in trends],
+            "messages": [AIMessage(
+                content=f"[Data Consistency Checker] WARNING: {len(result['issues'])} "
+                        f"hallucination issues detected in trend analysis. "
+                        f"Flagging data as low confidence."
+            )],
+        }
+
+    return {}
+
+
+# ---------------------------------------------------------------------------
+# Graph Factory
+# ---------------------------------------------------------------------------
+
+def build_market_intel_agent(error_variant: str = None) -> StateGraph:
+    """
+    Build the market intelligence agent graph. Pass error_variant to get
+    error-injecting variants for demo scenarios.
+    """
     graph = StateGraph(MarketIntelState)
 
-    graph.add_node("gather_data",       gather_market_data)
-    graph.add_node("detect_trends",     detect_trends)
-    graph.add_node("find_whitespace",   find_white_space)
-    graph.add_node("generate_strategy", generate_strategy)
+    if error_variant == "http_503_retry":
+        # Scenario 6: HTTP 503 + retry recovery
+        graph.add_node("gather_data",       gather_market_data_with_retry)
+        graph.add_node("detect_trends",     detect_trends)
+        graph.add_node("find_whitespace",   find_white_space)
+        graph.add_node("generate_strategy", generate_strategy)
 
-    graph.add_edge(START,              "gather_data")
-    graph.add_edge("gather_data",      "detect_trends")
-    graph.add_edge("detect_trends",    "find_whitespace")
-    graph.add_edge("find_whitespace",  "generate_strategy")
-    graph.add_edge("generate_strategy", END)
+        graph.add_edge(START,              "gather_data")
+        graph.add_edge("gather_data",      "detect_trends")
+        graph.add_edge("detect_trends",    "find_whitespace")
+        graph.add_edge("find_whitespace",  "generate_strategy")
+        graph.add_edge("generate_strategy", END)
+
+    elif error_variant == "hallucination_fabricated":
+        # Scenario 14: Fabricated metrics hallucination
+        graph.add_node("gather_data",          gather_market_data)
+        graph.add_node("detect_trends",        detect_trends_hallucinating)
+        graph.add_node("check_consistency",    check_trend_consistency)
+        graph.add_node("find_whitespace",      find_white_space)
+        graph.add_node("generate_strategy",    generate_strategy)
+
+        graph.add_edge(START,              "gather_data")
+        graph.add_edge("gather_data",      "detect_trends")
+        graph.add_edge("detect_trends",    "check_consistency")
+        graph.add_edge("check_consistency","find_whitespace")
+        graph.add_edge("find_whitespace",  "generate_strategy")
+        graph.add_edge("generate_strategy", END)
+
+    else:
+        # Default: original happy-path graph
+        graph.add_node("gather_data",       gather_market_data)
+        graph.add_node("detect_trends",     detect_trends)
+        graph.add_node("find_whitespace",   find_white_space)
+        graph.add_node("generate_strategy", generate_strategy)
+
+        graph.add_edge(START,              "gather_data")
+        graph.add_edge("gather_data",      "detect_trends")
+        graph.add_edge("detect_trends",    "find_whitespace")
+        graph.add_edge("find_whitespace",  "generate_strategy")
+        graph.add_edge("generate_strategy", END)
 
     return graph.compile()

@@ -6,6 +6,9 @@ Integrates digital-shelf data (stock + competitive signals) with bid decisions.
 
 Pipeline:
   gather_context → generate_bid_recommendations → allocate_budget → generate_execution_plan → END
+
+Error variants:
+  auth_error — gather_campaign_context raises ExternalAPIError(401) for auth failure
 """
 
 import json
@@ -18,6 +21,7 @@ from typing_extensions import TypedDict
 
 import neatlogs
 from config import llm
+from error_injection import ExternalAPIError
 
 
 # ---------------------------------------------------------------------------
@@ -36,10 +40,11 @@ class AdAutomationState(TypedDict):
     bid_recommendations: Optional[list]
     budget_allocation: Optional[dict]
     execution_plan: Optional[dict]
+    error_variant: Optional[str]
 
 
 # ---------------------------------------------------------------------------
-# Nodes
+# Nodes (Original — happy path)
 # ---------------------------------------------------------------------------
 
 @neatlogs.span(kind="TOOL", name="gather_campaign_context",
@@ -183,21 +188,63 @@ def generate_execution_plan(state: AdAutomationState) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Graph
+# Error Variant: Authentication Error
 # ---------------------------------------------------------------------------
 
-def build_ad_automation_agent() -> StateGraph:
+@neatlogs.span(kind="TOOL", name="gather_campaign_context",
+               tool_name="ad_platform_api")
+def gather_campaign_context_auth_error(state: AdAutomationState) -> dict:
+    """
+    Simulates a 401 authentication failure from the ad platform API.
+    This represents an expired OAuth token or revoked API credentials.
+    """
+    raise ExternalAPIError(
+        status_code=401,
+        service="ad_platform_api",
+        message=(
+            "Authentication failed: OAuth token expired at 2026-02-24T08:30:00Z. "
+            "The ad_platform_api service requires a valid bearer token. "
+            "Last successful authentication was 25 hours ago. "
+            "Please refresh credentials via the platform settings dashboard."
+        ),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Graph Factory
+# ---------------------------------------------------------------------------
+
+def build_ad_automation_agent(error_variant: str = None) -> StateGraph:
+    """
+    Build the ad automation agent graph. Pass error_variant to get
+    error-injecting variants for demo scenarios.
+    """
     graph = StateGraph(AdAutomationState)
 
-    graph.add_node("gather_context",    gather_campaign_context)
-    graph.add_node("generate_bids",     generate_bid_recommendations)
-    graph.add_node("allocate_budget",   allocate_budget)
-    graph.add_node("execution_plan",    generate_execution_plan)
+    if error_variant == "auth_error":
+        # Scenario 9 (partial failure): auth error on gather_context
+        graph.add_node("gather_context", gather_campaign_context_auth_error)
+        graph.add_node("generate_bids", generate_bid_recommendations)
+        graph.add_node("allocate_budget", allocate_budget)
+        graph.add_node("execution_plan", generate_execution_plan)
 
-    graph.add_edge(START,            "gather_context")
-    graph.add_edge("gather_context", "generate_bids")
-    graph.add_edge("generate_bids",  "allocate_budget")
-    graph.add_edge("allocate_budget","execution_plan")
-    graph.add_edge("execution_plan", END)
+        graph.add_edge(START,            "gather_context")
+        graph.add_edge("gather_context", "generate_bids")
+        graph.add_edge("generate_bids",  "allocate_budget")
+        graph.add_edge("allocate_budget","execution_plan")
+        graph.add_edge("execution_plan", END)
+
+    else:
+        # Default: original happy-path graph
+        graph.add_node("gather_context",    gather_campaign_context)
+        graph.add_node("generate_bids",     generate_bid_recommendations)
+        graph.add_node("allocate_budget",   allocate_budget)
+        graph.add_node("execution_plan",    generate_execution_plan)
+
+        graph.add_edge(START,            "gather_context")
+        graph.add_edge("gather_context", "generate_bids")
+        graph.add_edge("generate_bids",  "allocate_budget")
+        graph.add_edge("allocate_budget","execution_plan")
+        graph.add_edge("execution_plan", END)
 
     return graph.compile()

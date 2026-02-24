@@ -9,9 +9,16 @@ Pipeline:
                            (anomaly?) ───┤
                                          ├─ analyze_root_cause → END
                                          └─ END
+
+Error variants:
+  db_timeout       — execute_query raises DatabaseTimeoutError
+  token_limit      — analyze_root_cause raises TokenLimitError, retries with truncated context
+  retry_storm      — execute_query fails twice then succeeds (exponential backoff)
+  hallucination_sql — generate_sql references invalid tables, sql_validator catches it
 """
 
 import json
+import time
 from typing import Optional, Annotated
 
 from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
@@ -21,6 +28,12 @@ from typing_extensions import TypedDict
 
 import neatlogs
 from config import llm
+from error_injection import (
+    DatabaseTimeoutError,
+    TokenLimitError,
+    validate_sql,
+    with_retry,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -37,10 +50,11 @@ class AnalyticsState(TypedDict):
     root_cause: Optional[str]
     framework_used: Optional[str]
     confidence_score: Optional[float]
+    error_variant: Optional[str]
 
 
 # ---------------------------------------------------------------------------
-# Nodes
+# Nodes (Original — happy path)
 # ---------------------------------------------------------------------------
 
 @neatlogs.span(kind="AGENT", name="intent_recognition", role="Intent Classifier",
@@ -195,6 +209,190 @@ def analyze_root_cause(state: AnalyticsState) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Error Variant: Database Timeout
+# ---------------------------------------------------------------------------
+
+@neatlogs.span(kind="TOOL", name="execute_query", tool_name="antman_analytics_engine")
+def execute_query_timeout(state: AnalyticsState) -> dict:
+    """Simulates a ClickHouse connection timeout after delay."""
+    print("   ⏳ Connecting to Antman analytics engine…")
+    time.sleep(2)
+    raise DatabaseTimeoutError(
+        "Connection timed out after 30000ms: ClickHouse cluster 'antman-prod' "
+        "is not responding. Last successful query was 45 minutes ago. "
+        "Possible cause: cluster maintenance or network partition."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Error Variant: Token Limit Exceeded
+# ---------------------------------------------------------------------------
+
+@neatlogs.span(kind="AGENT", name="root_cause_analysis_attempt",
+               role="Diagnostic Agent", goal="Root cause analysis — attempt")
+def _root_cause_attempt(state: AnalyticsState, context_data: str) -> dict:
+    """Single attempt at root cause analysis with given context."""
+    prompt = (
+        "You are a root-cause analysis engine for an e-commerce analytics platform.\n"
+        "Use structured decision-tree frameworks to diagnose business problems.\n\n"
+        "Framework rules:\n"
+        "  Revenue drop → availability → pricing → visibility → competition → seasonality\n"
+        "  SOV decline  → keyword ranking → ad spend → new competitors → content quality\n\n"
+        f"Query: {state['user_query']}\n"
+        f"Intent: {state.get('intent')}\n"
+        f"Data: {context_data}\n\n"
+        "Return JSON with: framework, root_cause, contributing_factors (list), "
+        "confidence (0–1), recommended_actions (list).\n"
+        "Return ONLY valid JSON."
+    )
+    response = llm.invoke([HumanMessage(content=prompt)])
+    try:
+        parsed = json.loads(response.content)
+    except json.JSONDecodeError:
+        parsed = {"framework": "revenue_diagnostic", "root_cause": "Analysis complete", "confidence": 0.75}
+    return {
+        "root_cause": response.content,
+        "framework_used": parsed.get("framework", "general_diagnostic"),
+        "confidence_score": parsed.get("confidence", 0.7),
+        "messages": [response],
+    }
+
+
+@neatlogs.span(kind="CHAIN", name="root_cause_with_retry",
+               metadata={"pattern": "token_limit_retry"})
+def analyze_root_cause_with_token_retry(state: AnalyticsState) -> dict:
+    """
+    Root cause analysis that simulates token limit exceeded.
+    First attempt: oversized context → TokenLimitError
+    Second attempt: truncated context → success
+    """
+    query_results = state.get("query_results", {})
+    full_context = json.dumps(query_results, indent=2) * 50  # Intentionally oversized
+
+    # Attempt 1: oversized → raises TokenLimitError
+    try:
+        estimated_tokens = len(full_context) // 4
+        if estimated_tokens > 16_000:
+            raise TokenLimitError(
+                f"Request too large: estimated {estimated_tokens} tokens "
+                f"exceeds maximum context length of 16384 tokens. "
+                f"Input contained {len(full_context)} characters."
+            )
+        return _root_cause_attempt(state, full_context)
+    except TokenLimitError as e:
+        print(f"   ⚠️  Token limit exceeded: {e}")
+        print("   ✂️  Truncating context and retrying…")
+
+    # Attempt 2: truncated context → success
+    truncated = json.dumps(query_results, indent=2)[:4000]
+    return _root_cause_attempt(state, truncated)
+
+
+# ---------------------------------------------------------------------------
+# Error Variant: Retry Storm
+# ---------------------------------------------------------------------------
+
+@neatlogs.span(kind="TOOL", name="execute_query_attempt", tool_name="antman_analytics_engine")
+def _execute_query_attempt(state: AnalyticsState, attempt: int) -> dict:
+    """Single query execution attempt."""
+    if attempt == 1:
+        time.sleep(0.5)
+        raise ConnectionResetError(
+            "Connection reset by peer: Antman cluster rejected the connection. "
+            "Too many concurrent queries (limit: 100, current: 103)."
+        )
+    elif attempt == 2:
+        time.sleep(1.0)
+        raise TimeoutError(
+            "Query execution timed out after 15000ms. "
+            "Table 'orders' scan exceeded memory budget (4GB limit)."
+        )
+    else:
+        # Attempt 3: success
+        return execute_query(state)
+
+
+@neatlogs.span(kind="CHAIN", name="execute_query_with_retry",
+               metadata={"pattern": "retry_storm", "max_retries": 3})
+def execute_query_with_retries(state: AnalyticsState) -> dict:
+    """
+    Execute query with retry storm: 3 attempts with exponential backoff.
+    Attempt 1: ConnectionResetError
+    Attempt 2: TimeoutError
+    Attempt 3: Success
+    """
+    for attempt in range(1, 4):
+        try:
+            print(f"   🔄 Query attempt {attempt}/3…")
+            return _execute_query_attempt(state, attempt)
+        except (ConnectionResetError, TimeoutError) as e:
+            wait = 1.0 * (2 ** (attempt - 1))
+            print(f"   ❌ Attempt {attempt} failed: {type(e).__name__}: {e}")
+            if attempt < 3:
+                print(f"   ⏳ Waiting {wait:.0f}s before retry…")
+                time.sleep(wait)
+            else:
+                raise
+
+
+# ---------------------------------------------------------------------------
+# Error Variant: SQL Hallucination
+# ---------------------------------------------------------------------------
+
+@neatlogs.span(kind="CHAIN", name="nlq_to_sql", goal="Generate ClickHouse SQL — hallucination variant")
+def generate_sql_hallucinating(state: AnalyticsState) -> dict:
+    """
+    SQL generation that intentionally asks about non-existent data.
+    The query asks for customer satisfaction / delivery partner data that
+    doesn't exist in the schema.
+    """
+    prompt = (
+        "You are a ClickHouse SQL expert. The user wants customer satisfaction scores "
+        "by delivery partner across all cities.\n\n"
+        "Generate a SQL query that retrieves customer satisfaction ratings grouped by "
+        "delivery partner and city from the customer_satisfaction and delivery_partners tables.\n\n"
+        "Return ONLY the SQL query."
+    )
+    response = llm.invoke([HumanMessage(content=prompt)])
+    return {
+        "generated_sql": response.content.strip(),
+        "messages": [response],
+    }
+
+
+@neatlogs.span(kind="GUARDRAIL", name="sql_validator",
+               metadata={"guardrail_type": "hallucination_detection"})
+def validate_generated_sql(state: AnalyticsState) -> dict:
+    """
+    Validates generated SQL against known schema.
+    Catches hallucinated table/column references.
+    """
+    sql = state.get("generated_sql", "")
+    result = validate_sql(sql)
+
+    if result["hallucination_detected"]:
+        print(f"   🚨 SQL Hallucination detected: invalid tables {result['invalid_tables']}")
+        return {
+            "query_results": {
+                "status": "hallucination_detected",
+                "hallucination_type": "schema_violation",
+                "invalid_tables": result["invalid_tables"],
+                "message": (
+                    f"The requested data (tables: {', '.join(result['invalid_tables'])}) "
+                    f"does not exist in the analytics schema. "
+                    f"Available tables: orders, products, search_rankings, inventory, campaigns, pricing_history."
+                ),
+            },
+            "messages": [AIMessage(
+                content=f"[SQL Validator] Hallucination detected. "
+                        f"Tables {result['invalid_tables']} do not exist in schema."
+            )],
+        }
+
+    return {}
+
+
+# ---------------------------------------------------------------------------
 # Routing
 # ---------------------------------------------------------------------------
 
@@ -211,26 +409,121 @@ def should_analyze_root_cause(state: AnalyticsState) -> str:
     return "report"
 
 
+def should_analyze_root_cause_token_limit(state: AnalyticsState) -> str:
+    """Always route to root cause analysis for token limit demo."""
+    results = state.get("query_results", {})
+    if isinstance(results, dict):
+        if results.get("revenue_change_pct", 0) < -5:
+            return "analyze"
+        if results.get("overall_availability", 100) < 85:
+            return "analyze"
+        if "symptoms_detected" in results:
+            return "analyze"
+    return "analyze"  # Force root cause for token limit demo
+
+
+def route_after_sql_validation(state: AnalyticsState) -> str:
+    """Skip execute_query if SQL hallucination was detected."""
+    results = state.get("query_results", {})
+    if isinstance(results, dict) and results.get("status") == "hallucination_detected":
+        return "report"
+    return "execute"
+
+
 # ---------------------------------------------------------------------------
-# Graph
+# Graph Factory
 # ---------------------------------------------------------------------------
 
-def build_analytics_agent() -> StateGraph:
+def build_analytics_agent(error_variant: str = None) -> StateGraph:
+    """
+    Build the analytics agent graph. Pass error_variant to get
+    error-injecting variants for demo scenarios.
+    """
     graph = StateGraph(AnalyticsState)
 
-    graph.add_node("recognize_intent", recognize_intent)
-    graph.add_node("generate_sql", generate_sql)
-    graph.add_node("execute_query", execute_query)
-    graph.add_node("analyze_root_cause", analyze_root_cause)
+    if error_variant == "db_timeout":
+        # Scenario 5: Database timeout
+        graph.add_node("recognize_intent", recognize_intent)
+        graph.add_node("generate_sql", generate_sql)
+        graph.add_node("execute_query", execute_query_timeout)
 
-    graph.add_edge(START, "recognize_intent")
-    graph.add_edge("recognize_intent", "generate_sql")
-    graph.add_edge("generate_sql", "execute_query")
-    graph.add_conditional_edges(
-        "execute_query",
-        should_analyze_root_cause,
-        {"analyze": "analyze_root_cause", "report": END},
-    )
-    graph.add_edge("analyze_root_cause", END)
+        graph.add_edge(START, "recognize_intent")
+        graph.add_edge("recognize_intent", "generate_sql")
+        graph.add_edge("generate_sql", "execute_query")
+        graph.add_edge("execute_query", END)
+
+    elif error_variant == "token_limit":
+        # Scenario 7: Token limit exceeded with retry
+        graph.add_node("recognize_intent", recognize_intent)
+        graph.add_node("generate_sql", generate_sql)
+        graph.add_node("execute_query", execute_query)
+        graph.add_node("analyze_root_cause", analyze_root_cause_with_token_retry)
+
+        graph.add_edge(START, "recognize_intent")
+        graph.add_edge("recognize_intent", "generate_sql")
+        graph.add_edge("generate_sql", "execute_query")
+        graph.add_conditional_edges(
+            "execute_query",
+            should_analyze_root_cause_token_limit,
+            {"analyze": "analyze_root_cause", "report": END},
+        )
+        graph.add_edge("analyze_root_cause", END)
+
+    elif error_variant == "retry_storm":
+        # Scenario 12: Retry storm with backoff
+        graph.add_node("recognize_intent", recognize_intent)
+        graph.add_node("generate_sql", generate_sql)
+        graph.add_node("execute_query", execute_query_with_retries)
+        graph.add_node("analyze_root_cause", analyze_root_cause)
+
+        graph.add_edge(START, "recognize_intent")
+        graph.add_edge("recognize_intent", "generate_sql")
+        graph.add_edge("generate_sql", "execute_query")
+        graph.add_conditional_edges(
+            "execute_query",
+            should_analyze_root_cause,
+            {"analyze": "analyze_root_cause", "report": END},
+        )
+        graph.add_edge("analyze_root_cause", END)
+
+    elif error_variant == "hallucination_sql":
+        # Scenario 13: SQL hallucination
+        graph.add_node("recognize_intent", recognize_intent)
+        graph.add_node("generate_sql", generate_sql_hallucinating)
+        graph.add_node("validate_sql", validate_generated_sql)
+        graph.add_node("execute_query", execute_query)
+        graph.add_node("analyze_root_cause", analyze_root_cause)
+
+        graph.add_edge(START, "recognize_intent")
+        graph.add_edge("recognize_intent", "generate_sql")
+        graph.add_edge("generate_sql", "validate_sql")
+        graph.add_conditional_edges(
+            "validate_sql",
+            route_after_sql_validation,
+            {"execute": "execute_query", "report": END},
+        )
+        graph.add_conditional_edges(
+            "execute_query",
+            should_analyze_root_cause,
+            {"analyze": "analyze_root_cause", "report": END},
+        )
+        graph.add_edge("analyze_root_cause", END)
+
+    else:
+        # Default: original happy-path graph
+        graph.add_node("recognize_intent", recognize_intent)
+        graph.add_node("generate_sql", generate_sql)
+        graph.add_node("execute_query", execute_query)
+        graph.add_node("analyze_root_cause", analyze_root_cause)
+
+        graph.add_edge(START, "recognize_intent")
+        graph.add_edge("recognize_intent", "generate_sql")
+        graph.add_edge("generate_sql", "execute_query")
+        graph.add_conditional_edges(
+            "execute_query",
+            should_analyze_root_cause,
+            {"analyze": "analyze_root_cause", "report": END},
+        )
+        graph.add_edge("analyze_root_cause", END)
 
     return graph.compile()

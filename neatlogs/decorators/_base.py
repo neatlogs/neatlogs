@@ -25,10 +25,60 @@ def _should_capture_content() -> bool:
     return v.lower() not in ("false", "0", "no")
 
 
+def _serialize_obj(obj: Any) -> Any:
+    """
+    Convert complex objects to JSON-serializable dicts.
+    Handles common Python library objects (Pydantic, dataclasses, ORM models, etc.)
+    """
+    # Handle None, primitives
+    if obj is None or isinstance(obj, (str, int, float, bool)):
+        return obj
+    
+    # Handle lists and tuples
+    if isinstance(obj, (list, tuple)):
+        return [_serialize_obj(item) for item in obj]
+    
+    # Handle dicts
+    if isinstance(obj, dict):
+        return {k: _serialize_obj(v) for k, v in obj.items()}
+    
+    # Try common serialization methods (Pydantic, dataclasses, etc.)
+    for method in ['model_dump', 'dict', 'to_dict', 'to_json', 'as_dict']:
+        if hasattr(obj, method):
+            try:
+                result = getattr(obj, method)()
+                # to_json returns string, need to parse it
+                if method == 'to_json' and isinstance(result, str):
+                    return json.loads(result)
+                return _serialize_obj(result) if isinstance(result, dict) else result
+            except Exception:
+                continue
+    
+    # Try extracting __dict__ (works for many custom classes)
+    if hasattr(obj, '__dict__'):
+        try:
+            # Filter out private attributes and methods
+            obj_dict = {
+                k: _serialize_obj(v) 
+                for k, v in obj.__dict__.items() 
+                if not k.startswith('_') and not callable(v)
+            }
+            if obj_dict:  # Only return if we got some data
+                return obj_dict
+        except Exception:
+            pass
+    
+    # Last resort: convert to string
+    return str(obj)
+
+
 def _safe_json_dumps(value: Any) -> str:
     try:
-        return json.dumps(value, default=str)
+        # Use custom serializer that handles complex objects
+        serialized = _serialize_obj(value)
+        return json.dumps(serialized)
     except Exception:
+        # Final fallback: convert entire value to string
         return json.dumps(str(value))
 
 

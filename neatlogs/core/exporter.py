@@ -3,7 +3,9 @@ Neatlogs span exporter with batching and async export.
 """
 
 import json
+import logging
 import os
+import sys
 import threading
 import time
 from queue import Empty, Queue
@@ -31,6 +33,7 @@ class NeatlogsExporter:
         self,
         api_key: str,
         endpoint: str = "http://localhost:3000/api/data/v4/batch",
+        workflow_name: str = "neatlogs-app",
         batch_size: int = 100,
         flush_interval: float = 5.0,
         request_timeout: float = 30.0,  # Increase default to 30 seconds for large payloads
@@ -43,6 +46,7 @@ class NeatlogsExporter:
         Args:
             api_key: Neatlogs API key
             endpoint: Neatlogs backend endpoint
+            workflow_name: Workflow name included at batch payload top level
             batch_size: Maximum number of spans per batch
             flush_interval: Seconds between automatic flushes
             request_timeout: HTTP request timeout in seconds (default: 30s for large payloads)
@@ -50,6 +54,9 @@ class NeatlogsExporter:
         """
         self.api_key = api_key
         self.endpoint = endpoint.rstrip("/")
+        self.workflow_name = (
+            workflow_name.strip() if isinstance(workflow_name, str) and workflow_name.strip() else "neatlogs-app"
+        )
         self.batch_size = batch_size
         self.flush_interval = flush_interval
         self.max_retries = max_retries
@@ -308,6 +315,7 @@ class NeatlogsExporter:
             return
 
         payload = {}
+        payload["workflow_name"] = self.workflow_name
         if spans_to_send:
             payload["spans"] = spans_to_send
         if metrics_to_send:
@@ -331,7 +339,14 @@ class NeatlogsExporter:
                     )
                     break
                 elif response.status_code == 401:
-                    logger.error("Authentication failed (invalid API key)")
+                    self._emit_export_error(
+                        "Authentication failed (invalid API key)"
+                    )
+                    break
+                elif response.status_code == 429:
+                    self._emit_export_error(
+                        f"Export rate-limited (429): {self._response_snippet(response)}"
+                    )
                     break
                 elif response.status_code >= 500:
                     if attempt < self.max_retries - 1:
@@ -341,11 +356,13 @@ class NeatlogsExporter:
                         time.sleep(2**attempt)
                         continue
                     else:
-                        logger.error(
+                        self._emit_export_error(
                             f"Server error {response.status_code} after {self.max_retries} attempts, giving up"
                         )
                 else:
-                    logger.error(f"Export failed with status {response.status_code}")
+                    self._emit_export_error(
+                        f"Export failed with status {response.status_code}: {self._response_snippet(response)}"
+                    )
                     break
 
             except requests.exceptions.RequestException as e:
@@ -356,4 +373,32 @@ class NeatlogsExporter:
                     time.sleep(2**attempt)
                     continue
                 else:
-                    logger.error(f"Export failed after {self.max_retries} attempts: {e}")
+                    self._emit_export_error(
+                        f"Export failed after {self.max_retries} attempts: {e}"
+                    )
+
+    def _response_snippet(self, response: requests.Response, max_len: int = 240) -> str:
+        """
+        Return a short, safe snippet of an HTTP response body for error logs.
+        """
+        try:
+            body = (response.text or "").strip().replace("\n", " ")
+            if not body:
+                return "(empty response body)"
+            if len(body) > max_len:
+                return body[:max_len] + "..."
+            return body
+        except Exception:
+            return "(unable to read response body)"
+
+    def _emit_export_error(self, message: str) -> None:
+        """
+        Emit exporter errors even when debug=False.
+        Falls back to stderr if logger error level is disabled.
+        """
+        try:
+            logger.error(message)
+            if logger.disabled or not logger.isEnabledFor(logging.ERROR):
+                print(f"[neatlogs] ERROR: {message}", file=sys.stderr, flush=True)
+        except Exception:
+            print(f"[neatlogs] ERROR: {message}", file=sys.stderr, flush=True)

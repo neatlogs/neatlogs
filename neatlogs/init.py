@@ -4,6 +4,8 @@ Neatlogs SDK.
 
 import atexit
 import os
+import re
+import sys
 import time
 import uuid
 from typing import List, Optional
@@ -34,9 +36,24 @@ _span_processor = None
 _session_config = {
     "session_id": None,
     "user_id": None,
+    "workflow_name": None,
 }
 
 _DEFAULT_MAX_SPAN_ATTRIBUTES = 10_000
+
+
+def _resolve_workflow_name(workflow_name: Optional[str]) -> str:
+    """Return non-empty workflow name; derive from script when omitted."""
+    provided = (workflow_name or "").strip()
+    if provided:
+        return provided
+
+    script_name = os.path.splitext(os.path.basename(sys.argv[0] or ""))[0]
+    script_slug = re.sub(r"[^a-zA-Z0-9_-]+", "-", script_name).strip("-").lower()
+    if script_slug and script_slug not in {"python", "python3", "ipython", "-c"}:
+        return script_slug
+
+    return "neatlogs-app"
 
 
 def _span_limits_for_capture_everything() -> SpanLimits:
@@ -138,6 +155,7 @@ def init(
         )
 
     _patch_semconv_ai_for_openllmetry(debug=debug)
+    resolved_workflow_name = _resolve_workflow_name(workflow_name)
 
     final_session_id = None
     if session_id:
@@ -152,10 +170,11 @@ def init(
     global _session_config
     _session_config["session_id"] = final_session_id
     _session_config["user_id"] = user_id
+    _session_config["workflow_name"] = resolved_workflow_name
 
     resource_attrs = {
         SERVICE_NAME: workflow_name or "neatlogs-app",
-        "neatlogs.workflow_name": workflow_name or "",
+        "neatlogs.workflow_name": resolved_workflow_name,
     }
     if final_session_id:
         resource_attrs["session.id"] = final_session_id
@@ -200,6 +219,7 @@ def init(
     exporter = NeatlogsExporter(
         api_key=api_key,
         endpoint=endpoint,
+        workflow_name=resolved_workflow_name,
         batch_size=batch_size,
         flush_interval=flush_interval,
         disable_export=disable_export,
@@ -246,7 +266,7 @@ def init(
     if debug:
         logger.info("Neatlogs SDK initialized successfully")
         logger.info(f"Endpoint: {endpoint}")
-        logger.info(f"Workflow: {workflow_name or '(none)'}")
+        logger.info(f"Workflow: {resolved_workflow_name}")
         logger.info(f"Session: {final_session_id or '(none)'}")
         logger.info(f"User: {user_id or '(none)'}")
         logger.info(f"Tags: {tags or []}")
@@ -330,6 +350,7 @@ def shutdown(timeout_millis: int = 30000) -> bool:
     _span_processor = None
     _session_config["session_id"] = None
     _session_config["user_id"] = None
+    _session_config["workflow_name"] = None
 
     logger.info("Neatlogs SDK shutdown complete")
     return success

@@ -162,6 +162,9 @@ class NeatlogsSpanProcessor(SpanProcessor):
             # These arrays can be 8+ MB and should NOT be sent to Kafka
             nl_kind = unified_attrs.get("neatlogs.span.kind")
             if nl_kind in ("embedding", "vector_store"):
+                # Check if this is a REAL embedding operation (flag set) or user's @span(kind="EMBEDDING")
+                skip_output = unified_attrs.get("neatlogs.raw._skip_output_value") == True
+                
                 keys_to_remove = []
                 for key in unified_attrs.keys():
                     # Remove massive tokenized input/output arrays
@@ -170,7 +173,11 @@ class NeatlogsSpanProcessor(SpanProcessor):
                         "output_messages" in key or
                         "gen_ai.prompt" in key or
                         "gen_ai.completion" in key or
-                        ".content" in key or
+                        ".content" in key
+                    ):
+                        keys_to_remove.append(key)
+                    # Only remove embedding input/output if it's a REAL embedding operation
+                    elif skip_output and (
                         key == "neatlogs.embedding.input" or
                         key == "neatlogs.embedding.output" or
                         key == "neatlogs.raw.embedding.input" or
@@ -184,7 +191,7 @@ class NeatlogsSpanProcessor(SpanProcessor):
                 if self.debug and keys_to_remove:
                     logger.debug(
                         f"[EMBEDDING Filter] Removed {len(keys_to_remove)} large attribute keys "
-                        f"from {nl_kind} span to prevent 8+ MB payloads"
+                        f"from {nl_kind} span (skip_output={skip_output}) to prevent 8+ MB payloads"
                     )
 
             nl_kind = unified_attrs.get("neatlogs.span.kind")

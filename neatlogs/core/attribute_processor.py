@@ -1,6 +1,7 @@
 import json
 import logging
 import re
+import ast
 from typing import Any, Dict, List, Optional
 
 from opentelemetry import metrics
@@ -91,6 +92,7 @@ class UnifiedAttributeProcessor:
             attrs["openinference.span.kind"] = "CHAIN"
 
         self._add_crewai_token_usage_fallback(attrs)
+        self._add_crewai_kickoff_telemetry(attrs)
         
         # Extract tool calls from output messages
         tool_calls: Dict[int, Dict[str, Any]] = {}
@@ -375,7 +377,15 @@ class UnifiedAttributeProcessor:
                 embeddings.sort(key=lambda x: x["index"])
                 attrs["embeddings_data"] = json.dumps(embeddings)
 
-            attrs["_skip_output_value"] = True
+            # Only skip output if it's a REAL embedding operation from OpenLLMetry
+            # (has actual embedding attributes, not just user's @span(kind="EMBEDDING"))
+            has_embedding_attrs = any(
+                k.startswith("embedding.") or k.startswith("gen_ai.embedding")
+                for k in attrs.keys()
+            )
+            
+            if has_embedding_attrs:
+                attrs["_skip_output_value"] = True
 
         if db_system == "chroma":
             doc_attrs = {}
@@ -384,10 +394,13 @@ class UnifiedAttributeProcessor:
                 "db.chroma.add.embeddings_count",
                 "db.chroma.add.metadatas_count",
                 "db.chroma.add.documents_count",
-                "db.chroma.query.n_results",
             ]:
                 if key in attrs:
                     doc_attrs[key.split(".")[-1]] = attrs[key]
+
+            # Chroma's n_results is the requested top-k, not guaranteed returned count.
+            if "db.chroma.query.n_results" in attrs:
+                doc_attrs["requested_top_k"] = attrs["db.chroma.query.n_results"]
 
             if "db.chroma.query.include" in attrs:
                 doc_attrs["include"] = attrs["db.chroma.query.include"]
@@ -434,6 +447,100 @@ class UnifiedAttributeProcessor:
                 attrs["document_attributes"] = json.dumps(doc_attrs)
 
         return attrs
+
+    def _add_crewai_kickoff_telemetry(self, attrs: Dict[str, Any]) -> None:
+        """
+        Ensure CrewAI kickoff spans carry telemetry directly so downstream consumers
+        do not need cross-batch Crew Created → kickoff correlation.
+        """
+        span_name = str(attrs.get("_span_name") or "")
+        if not (span_name.startswith("Crew_") and span_name.endswith(".kickoff")):
+            return
+
+        # Prefer existing values if instrumentation already provides them.
+        if "neatlogs.raw.crewai_version" not in attrs:
+            try:
+                import crewai  # type: ignore
+
+                version = getattr(crewai, "__version__", None)
+                if version:
+                    attrs["neatlogs.raw.crewai_version"] = str(version)
+            except Exception:
+                pass
+
+        if "neatlogs.raw.python_version" not in attrs:
+            try:
+                import platform
+
+                attrs["neatlogs.raw.python_version"] = platform.python_version()
+            except Exception:
+                pass
+
+        if "neatlogs.raw.crew_number_of_tasks" not in attrs:
+            count = self._coerce_collection_count(
+                attrs.get("crew_number_of_tasks")
+                or attrs.get("neatlogs.raw.crew_number_of_tasks")
+                or attrs.get("crew_tasks")
+                or attrs.get("neatlogs.raw.crew_tasks")
+            )
+            if count is not None:
+                attrs["neatlogs.raw.crew_number_of_tasks"] = count
+
+        if "neatlogs.raw.crew_number_of_agents" not in attrs:
+            count = self._coerce_collection_count(
+                attrs.get("crew_number_of_agents")
+                or attrs.get("neatlogs.raw.crew_number_of_agents")
+                or attrs.get("crew_agents")
+                or attrs.get("neatlogs.raw.crew_agents")
+            )
+            if count is not None:
+                attrs["neatlogs.raw.crew_number_of_agents"] = count
+
+    def _coerce_collection_count(self, value: Any) -> Optional[int]:
+        if value is None:
+            return None
+
+        if isinstance(value, bool):
+            return int(value)
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float):
+            try:
+                return int(value)
+            except Exception:
+                return None
+        if isinstance(value, (list, tuple, set, dict)):
+            return len(value)
+
+        if isinstance(value, str):
+            s = value.strip()
+            if not s:
+                return None
+
+            # Direct integer string.
+            if re.fullmatch(r"\d+", s):
+                try:
+                    return int(s)
+                except Exception:
+                    return None
+
+            # Try JSON first.
+            try:
+                parsed = json.loads(s)
+                if isinstance(parsed, (list, tuple, set, dict)):
+                    return len(parsed)
+            except Exception:
+                pass
+
+            # Fallback for Python-repr style lists from some instrumentations.
+            try:
+                parsed = ast.literal_eval(s)
+                if isinstance(parsed, (list, tuple, set, dict)):
+                    return len(parsed)
+            except Exception:
+                pass
+
+        return None
 
     def _add_crewai_token_usage_fallback(self, attrs: Dict[str, Any]) -> None:
         """
@@ -893,6 +1000,17 @@ class UnifiedAttributeProcessor:
             if isinstance(sources, list):
                 for src_key in sources:
                     if src_key in source:
+                        # Skip output.value if _skip_output_value flag is set (for real embedding operations)
+                        if src_key == "output.value":
+                            skip_flag = source.get("_skip_output_value")
+                            
+                            if skip_flag:
+                                if self.debug:
+                                    span_name = source.get("_span_name", "unknown")
+                                    self.logger.debug(f"[AttributeProcessor] Skipping output.value for '{span_name}' due to _skip_output_value flag")
+                                consumed.add(src_key)  # Mark as consumed but don't copy value
+                                break
+                        
                         val = source[src_key]
                         if "values" in config:
                             val = config["values"].get(val, val)

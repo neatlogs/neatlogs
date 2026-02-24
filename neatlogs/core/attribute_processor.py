@@ -59,7 +59,7 @@ class UnifiedAttributeProcessor:
         event_attrs = self._upcycle_events(span)
         attrs.update(event_attrs)
 
-        attrs = self._apply_cost_fallback(attrs)
+        attrs = self._apply_cost_from_pricing(attrs)
 
         try:
             from ..config import enrich_invocation_parameters
@@ -394,6 +394,10 @@ class UnifiedAttributeProcessor:
                 "db.chroma.add.embeddings_count",
                 "db.chroma.add.metadatas_count",
                 "db.chroma.add.documents_count",
+                "db.chroma.upsert.ids_count",
+                "db.chroma.upsert.embeddings_count",
+                "db.chroma.upsert.metadatas_count",
+                "db.chroma.upsert.documents_count",
             ]:
                 if key in attrs:
                     doc_attrs[key.split(".")[-1]] = attrs[key]
@@ -822,10 +826,19 @@ class UnifiedAttributeProcessor:
 
         return upcycled
 
-    def _apply_cost_fallback(self, attrs: Dict[str, Any]) -> Dict[str, Any]:
-        if "llm.cost.total" in attrs:
-            return attrs
+    def _resolve_model_prices(self, pricing_table: Dict[str, Any], model: str) -> Optional[Dict[str, Any]]:
+        if model in pricing_table and isinstance(pricing_table[model], dict):
+            return pricing_table[model]
+        model_lower = model.lower()
+        for model_key, prices in pricing_table.items():
+            if not isinstance(prices, dict):
+                continue
+            key_lower = model_key.lower()
+            if model_lower == key_lower or model_lower.startswith(key_lower) or key_lower in model_lower:
+                return prices
+        return None
 
+    def _apply_cost_from_pricing(self, attrs: Dict[str, Any]) -> Dict[str, Any]:
         model = attrs.get("llm.model_name")
         prompt_tokens = attrs.get("llm.token_count.prompt")
         completion_tokens = attrs.get("llm.token_count.completion")
@@ -833,23 +846,46 @@ class UnifiedAttributeProcessor:
         if not model or not self.pricing:
             return attrs
 
-        chat_pricing = self.pricing.get("chat", {})
-        model_lower = model.lower()
-        prices = None
+        # Enforce pricing.json as source of truth: clear pre-populated costs first.
+        attrs.pop("llm.cost.prompt", None)
+        attrs.pop("llm.cost.completion", None)
+        attrs.pop("llm.cost.total", None)
 
-        if model in chat_pricing:
-            prices = chat_pricing[model]
-        else:
-            for model_key, p in chat_pricing.items():
-                if model_key.lower() in model_lower or model_lower.startswith(model_key.lower()):
-                    prices = p
-                    break
+        prices: Optional[Dict[str, Any]] = None
+        platform = str(attrs.get("neatlogs.platform", "")).lower()
+
+        # Platform-specific pricing (e.g., Azure OpenAI) takes precedence.
+        if platform == "azure_openai":
+            azure_chat_pricing = (
+                self.pricing.get("azure_openai", {}).get("chat", {})
+                if isinstance(self.pricing.get("azure_openai"), dict)
+                else {}
+            )
+            azure_model_prices = self._resolve_model_prices(azure_chat_pricing, model)
+            if azure_model_prices:
+                if "promptPrice" in azure_model_prices and "completionPrice" in azure_model_prices:
+                    prices = azure_model_prices
+                else:
+                    tier = str(
+                        attrs.get("neatlogs.azure.pricing_tier")
+                        or attrs.get("azure.pricing_tier")
+                        or "global_standard"
+                    )
+                    tier_prices = azure_model_prices.get(tier)
+                    if isinstance(tier_prices, dict):
+                        prices = tier_prices
+
+        # Default provider pricing.
+        if not prices:
+            chat_pricing = self.pricing.get("chat", {})
+            if isinstance(chat_pricing, dict):
+                prices = self._resolve_model_prices(chat_pricing, model)
 
         if prices and (prompt_tokens is not None or completion_tokens is not None):
-            p_tokens = prompt_tokens or 0
-            c_tokens = completion_tokens or 0
-            prompt_cost = (p_tokens / 1000) * prices.get("promptPrice", 0)
-            completion_cost = (c_tokens / 1000) * prices.get("completionPrice", 0)
+            p_tokens = float(prompt_tokens or 0)
+            c_tokens = float(completion_tokens or 0)
+            prompt_cost = (p_tokens / 1000) * float(prices.get("promptPrice", 0))
+            completion_cost = (c_tokens / 1000) * float(prices.get("completionPrice", 0))
             attrs["llm.cost.prompt"] = round(prompt_cost, 6)
             attrs["llm.cost.completion"] = round(completion_cost, 6)
             attrs["llm.cost.total"] = round(prompt_cost + completion_cost, 6)

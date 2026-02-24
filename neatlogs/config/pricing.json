@@ -1,7 +1,7 @@
 {
   "_metadata": {
-    "source": "Direct API pricing (OpenAI, Anthropic, Google AI API)",
-    "last_updated": "2026-02-12",
+    "source": "Direct API pricing (OpenAI, Anthropic, Google AI API) + Azure OpenAI overrides",
+    "last_updated": "2026-02-24",
     "warning": "Cloud platform pricing (AWS Bedrock, Azure OpenAI, Vertex AI) can be 2-3x higher and varies by region",
     "note": "Prices are per 1,000 tokens (divide official per-1M-token prices by 1000)"
   },
@@ -345,6 +345,571 @@
     "meta.llama3-70b-instruct-v1:0": {
       "promptPrice": 0.00265,
       "completionPrice": 0.0035
+    }
+  },
+  "azure_openai": {
+    "_metadata": {
+      "source": [
+        "https://azure.microsoft.com/en-us/pricing/details/cognitive-services/openai-service/",
+        "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20%27Azure%20OpenAI%20Service%27%20and%20armRegionName%20eq%20%27eastus%27%20and%20armSkuName%20eq%20%27GPT-4o%27%20and%20type%20eq%20%27Consumption%27",
+        "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20%27Azure%20OpenAI%20Service%27%20and%20armRegionName%20eq%20%27eastus%27%20and%20armSkuName%20eq%20%27GPT-4o-mini%27%20and%20type%20eq%20%27Consumption%27",
+        "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20%27Azure%20OpenAI%20Service%27%20and%20armRegionName%20eq%20%27eastus%27%20and%20armSkuName%20eq%20%27GPT-5%27%20and%20type%20eq%20%27Consumption%27",
+        "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20%27Azure%20OpenAI%20Service%27%20and%20armRegionName%20eq%20%27eastus%27%20and%20armSkuName%20eq%20%27GPT-5-mini%27%20and%20type%20eq%20%27Consumption%27",
+        "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20%27Azure%20OpenAI%20Service%27%20and%20armRegionName%20eq%20%27eastus%27%20and%20armSkuName%20eq%20%27GPT-5-nano%27%20and%20type%20eq%20%27Consumption%27",
+        "manual_static_extension_for_all_openai_models_in_pricing_json"
+      ],
+      "pricing_scope": "eastus meter examples; verify region-specific values before production billing",
+      "token_unit": "1K tokens",
+      "note": "Azure OpenAI pricing map is local and static for now; run pricing sync pipeline later.",
+      "last_updated": "2026-02-24"
+    },
+    "chat": {
+      "gpt-5": {
+        "global_standard": {
+          "promptPrice": 0.001375,
+          "completionPrice": 0.011
+        },
+        "global_batch": {
+          "promptPrice": 0.0006875,
+          "completionPrice": 0.0055
+        },
+        "data_zone_standard": {
+          "promptPrice": 0.0015125,
+          "completionPrice": 0.0121
+        },
+        "data_zone_batch": {
+          "promptPrice": 0.00075625,
+          "completionPrice": 0.00605
+        },
+        "regional_standard": {
+          "promptPrice": 0.00165,
+          "completionPrice": 0.0132
+        },
+        "regional_batch": {
+          "promptPrice": 0.000825,
+          "completionPrice": 0.0066
+        }
+      },
+      "gpt-5-mini": {
+        "global_standard": {
+          "promptPrice": 0.000275,
+          "completionPrice": 0.0022
+        },
+        "global_batch": {
+          "promptPrice": 0.0001375,
+          "completionPrice": 0.0011
+        },
+        "data_zone_standard": {
+          "promptPrice": 0.0003025,
+          "completionPrice": 0.00242
+        },
+        "data_zone_batch": {
+          "promptPrice": 0.00015125,
+          "completionPrice": 0.00121
+        },
+        "regional_standard": {
+          "promptPrice": 0.00033,
+          "completionPrice": 0.00264
+        },
+        "regional_batch": {
+          "promptPrice": 0.000165,
+          "completionPrice": 0.00132
+        }
+      },
+      "gpt-5-nano": {
+        "global_standard": {
+          "promptPrice": 0.000055,
+          "completionPrice": 0.00044
+        },
+        "global_batch": {
+          "promptPrice": 0.0000275,
+          "completionPrice": 0.00022
+        },
+        "data_zone_standard": {
+          "promptPrice": 0.0000605,
+          "completionPrice": 0.000484
+        },
+        "data_zone_batch": {
+          "promptPrice": 0.00003025,
+          "completionPrice": 0.000242
+        },
+        "regional_standard": {
+          "promptPrice": 0.000066,
+          "completionPrice": 0.000528
+        },
+        "regional_batch": {
+          "promptPrice": 0.000033,
+          "completionPrice": 0.000264
+        }
+      },
+      "gpt-4o": {
+        "global_standard": {
+          "promptPrice": 0.00275,
+          "completionPrice": 0.011
+        },
+        "global_batch": {
+          "promptPrice": 0.001375,
+          "completionPrice": 0.0055
+        },
+        "data_zone_standard": {
+          "promptPrice": 0.003025,
+          "completionPrice": 0.0121
+        },
+        "data_zone_batch": {
+          "promptPrice": 0.0015125,
+          "completionPrice": 0.00605
+        },
+        "regional_standard": {
+          "promptPrice": 0.0033,
+          "completionPrice": 0.0132
+        },
+        "regional_batch": {
+          "promptPrice": 0.00165,
+          "completionPrice": 0.0066
+        }
+      },
+      "gpt-4o-mini": {
+        "global_standard": {
+          "promptPrice": 0.000165,
+          "completionPrice": 0.00066
+        },
+        "global_batch": {
+          "promptPrice": 0.0000825,
+          "completionPrice": 0.00033
+        },
+        "data_zone_standard": {
+          "promptPrice": 0.0001815,
+          "completionPrice": 0.000726
+        },
+        "data_zone_batch": {
+          "promptPrice": 0.00009075,
+          "completionPrice": 0.000363
+        },
+        "regional_standard": {
+          "promptPrice": 0.000198,
+          "completionPrice": 0.000792
+        },
+        "regional_batch": {
+          "promptPrice": 0.000099,
+          "completionPrice": 0.000396
+        }
+      },
+      "gpt-5.2": {
+        "global_standard": {
+          "promptPrice": 0.00175,
+          "completionPrice": 0.014
+        },
+        "global_batch": {
+          "promptPrice": 0.000875,
+          "completionPrice": 0.007
+        },
+        "data_zone_standard": {
+          "promptPrice": 0.001925,
+          "completionPrice": 0.0154
+        },
+        "data_zone_batch": {
+          "promptPrice": 0.0009625,
+          "completionPrice": 0.0077
+        },
+        "regional_standard": {
+          "promptPrice": 0.0021,
+          "completionPrice": 0.0168
+        },
+        "regional_batch": {
+          "promptPrice": 0.00105,
+          "completionPrice": 0.0084
+        }
+      },
+      "gpt-5.1": {
+        "global_standard": {
+          "promptPrice": 0.00125,
+          "completionPrice": 0.01
+        },
+        "global_batch": {
+          "promptPrice": 0.000625,
+          "completionPrice": 0.005
+        },
+        "data_zone_standard": {
+          "promptPrice": 0.001375,
+          "completionPrice": 0.011
+        },
+        "data_zone_batch": {
+          "promptPrice": 0.0006875,
+          "completionPrice": 0.0055
+        },
+        "regional_standard": {
+          "promptPrice": 0.0015,
+          "completionPrice": 0.012
+        },
+        "regional_batch": {
+          "promptPrice": 0.00075,
+          "completionPrice": 0.006
+        }
+      },
+      "gpt-4.1": {
+        "global_standard": {
+          "promptPrice": 0.002,
+          "completionPrice": 0.008
+        },
+        "global_batch": {
+          "promptPrice": 0.001,
+          "completionPrice": 0.004
+        },
+        "data_zone_standard": {
+          "promptPrice": 0.0022,
+          "completionPrice": 0.0088
+        },
+        "data_zone_batch": {
+          "promptPrice": 0.0011,
+          "completionPrice": 0.0044
+        },
+        "regional_standard": {
+          "promptPrice": 0.0024,
+          "completionPrice": 0.0096
+        },
+        "regional_batch": {
+          "promptPrice": 0.0012,
+          "completionPrice": 0.0048
+        }
+      },
+      "gpt-4.1-mini": {
+        "global_standard": {
+          "promptPrice": 0.0004,
+          "completionPrice": 0.0016
+        },
+        "global_batch": {
+          "promptPrice": 0.0002,
+          "completionPrice": 0.0008
+        },
+        "data_zone_standard": {
+          "promptPrice": 0.00044,
+          "completionPrice": 0.00176
+        },
+        "data_zone_batch": {
+          "promptPrice": 0.00022,
+          "completionPrice": 0.00088
+        },
+        "regional_standard": {
+          "promptPrice": 0.00048,
+          "completionPrice": 0.00192
+        },
+        "regional_batch": {
+          "promptPrice": 0.00024,
+          "completionPrice": 0.00096
+        }
+      },
+      "gpt-4o-2024-08-06": {
+        "global_standard": {
+          "promptPrice": 0.00375,
+          "completionPrice": 0.015
+        },
+        "global_batch": {
+          "promptPrice": 0.001875,
+          "completionPrice": 0.0075
+        },
+        "data_zone_standard": {
+          "promptPrice": 0.004125,
+          "completionPrice": 0.0165
+        },
+        "data_zone_batch": {
+          "promptPrice": 0.0020625,
+          "completionPrice": 0.00825
+        },
+        "regional_standard": {
+          "promptPrice": 0.0045,
+          "completionPrice": 0.018
+        },
+        "regional_batch": {
+          "promptPrice": 0.00225,
+          "completionPrice": 0.009
+        }
+      },
+      "gpt-4o-2024-05-13": {
+        "global_standard": {
+          "promptPrice": 0.005,
+          "completionPrice": 0.015
+        },
+        "global_batch": {
+          "promptPrice": 0.0025,
+          "completionPrice": 0.0075
+        },
+        "data_zone_standard": {
+          "promptPrice": 0.0055,
+          "completionPrice": 0.0165
+        },
+        "data_zone_batch": {
+          "promptPrice": 0.00275,
+          "completionPrice": 0.00825
+        },
+        "regional_standard": {
+          "promptPrice": 0.006,
+          "completionPrice": 0.018
+        },
+        "regional_batch": {
+          "promptPrice": 0.003,
+          "completionPrice": 0.009
+        }
+      },
+      "gpt-4o-mini-2024-07-18": {
+        "global_standard": {
+          "promptPrice": 0.00015,
+          "completionPrice": 0.0006
+        },
+        "global_batch": {
+          "promptPrice": 0.000075,
+          "completionPrice": 0.0003
+        },
+        "data_zone_standard": {
+          "promptPrice": 0.000165,
+          "completionPrice": 0.00066
+        },
+        "data_zone_batch": {
+          "promptPrice": 0.0000825,
+          "completionPrice": 0.00033
+        },
+        "regional_standard": {
+          "promptPrice": 0.00018,
+          "completionPrice": 0.00072
+        },
+        "regional_batch": {
+          "promptPrice": 0.00009,
+          "completionPrice": 0.00036
+        }
+      },
+      "o4-mini": {
+        "global_standard": {
+          "promptPrice": 0.0011,
+          "completionPrice": 0.0044
+        },
+        "global_batch": {
+          "promptPrice": 0.00055,
+          "completionPrice": 0.0022
+        },
+        "data_zone_standard": {
+          "promptPrice": 0.00121,
+          "completionPrice": 0.00484
+        },
+        "data_zone_batch": {
+          "promptPrice": 0.000605,
+          "completionPrice": 0.00242
+        },
+        "regional_standard": {
+          "promptPrice": 0.00132,
+          "completionPrice": 0.00528
+        },
+        "regional_batch": {
+          "promptPrice": 0.00066,
+          "completionPrice": 0.00264
+        }
+      },
+      "o3": {
+        "global_standard": {
+          "promptPrice": 0.002,
+          "completionPrice": 0.008
+        },
+        "global_batch": {
+          "promptPrice": 0.001,
+          "completionPrice": 0.004
+        },
+        "data_zone_standard": {
+          "promptPrice": 0.0022,
+          "completionPrice": 0.0088
+        },
+        "data_zone_batch": {
+          "promptPrice": 0.0011,
+          "completionPrice": 0.0044
+        },
+        "regional_standard": {
+          "promptPrice": 0.0024,
+          "completionPrice": 0.0096
+        },
+        "regional_batch": {
+          "promptPrice": 0.0012,
+          "completionPrice": 0.0048
+        }
+      },
+      "o3-mini": {
+        "global_standard": {
+          "promptPrice": 0.0011,
+          "completionPrice": 0.0044
+        },
+        "global_batch": {
+          "promptPrice": 0.00055,
+          "completionPrice": 0.0022
+        },
+        "data_zone_standard": {
+          "promptPrice": 0.00121,
+          "completionPrice": 0.00484
+        },
+        "data_zone_batch": {
+          "promptPrice": 0.000605,
+          "completionPrice": 0.00242
+        },
+        "regional_standard": {
+          "promptPrice": 0.00132,
+          "completionPrice": 0.00528
+        },
+        "regional_batch": {
+          "promptPrice": 0.00066,
+          "completionPrice": 0.00264
+        }
+      },
+      "o1": {
+        "global_standard": {
+          "promptPrice": 0.015,
+          "completionPrice": 0.06
+        },
+        "global_batch": {
+          "promptPrice": 0.0075,
+          "completionPrice": 0.03
+        },
+        "data_zone_standard": {
+          "promptPrice": 0.0165,
+          "completionPrice": 0.066
+        },
+        "data_zone_batch": {
+          "promptPrice": 0.00825,
+          "completionPrice": 0.033
+        },
+        "regional_standard": {
+          "promptPrice": 0.018,
+          "completionPrice": 0.072
+        },
+        "regional_batch": {
+          "promptPrice": 0.009,
+          "completionPrice": 0.036
+        }
+      },
+      "o1-mini": {
+        "global_standard": {
+          "promptPrice": 0.0011,
+          "completionPrice": 0.0044
+        },
+        "global_batch": {
+          "promptPrice": 0.00055,
+          "completionPrice": 0.0022
+        },
+        "data_zone_standard": {
+          "promptPrice": 0.00121,
+          "completionPrice": 0.00484
+        },
+        "data_zone_batch": {
+          "promptPrice": 0.000605,
+          "completionPrice": 0.00242
+        },
+        "regional_standard": {
+          "promptPrice": 0.00132,
+          "completionPrice": 0.00528
+        },
+        "regional_batch": {
+          "promptPrice": 0.00066,
+          "completionPrice": 0.00264
+        }
+      },
+      "o1-preview": {
+        "global_standard": {
+          "promptPrice": 0.015,
+          "completionPrice": 0.06
+        },
+        "global_batch": {
+          "promptPrice": 0.0075,
+          "completionPrice": 0.03
+        },
+        "data_zone_standard": {
+          "promptPrice": 0.0165,
+          "completionPrice": 0.066
+        },
+        "data_zone_batch": {
+          "promptPrice": 0.00825,
+          "completionPrice": 0.033
+        },
+        "regional_standard": {
+          "promptPrice": 0.018,
+          "completionPrice": 0.072
+        },
+        "regional_batch": {
+          "promptPrice": 0.009,
+          "completionPrice": 0.036
+        }
+      },
+      "gpt-4-turbo": {
+        "global_standard": {
+          "promptPrice": 0.005,
+          "completionPrice": 0.015
+        },
+        "global_batch": {
+          "promptPrice": 0.0025,
+          "completionPrice": 0.0075
+        },
+        "data_zone_standard": {
+          "promptPrice": 0.0055,
+          "completionPrice": 0.0165
+        },
+        "data_zone_batch": {
+          "promptPrice": 0.00275,
+          "completionPrice": 0.00825
+        },
+        "regional_standard": {
+          "promptPrice": 0.006,
+          "completionPrice": 0.018
+        },
+        "regional_batch": {
+          "promptPrice": 0.003,
+          "completionPrice": 0.009
+        }
+      },
+      "gpt-3.5-turbo": {
+        "global_standard": {
+          "promptPrice": 0.0005,
+          "completionPrice": 0.0015
+        },
+        "global_batch": {
+          "promptPrice": 0.00025,
+          "completionPrice": 0.00075
+        },
+        "data_zone_standard": {
+          "promptPrice": 0.00055,
+          "completionPrice": 0.00165
+        },
+        "data_zone_batch": {
+          "promptPrice": 0.000275,
+          "completionPrice": 0.000825
+        },
+        "regional_standard": {
+          "promptPrice": 0.0006,
+          "completionPrice": 0.0018
+        },
+        "regional_batch": {
+          "promptPrice": 0.0003,
+          "completionPrice": 0.0009
+        }
+      }
+    },
+    "embeddings": {
+      "text-embedding-ada-002": {
+        "global_standard": 0.0001,
+        "global_batch": 0.00005,
+        "data_zone_standard": 0.00011,
+        "data_zone_batch": 0.000055,
+        "regional_standard": 0.00012,
+        "regional_batch": 0.00006
+      },
+      "text-embedding-3-small": {
+        "global_standard": 0.00002,
+        "global_batch": 0.00001,
+        "data_zone_standard": 0.000022,
+        "data_zone_batch": 0.000011,
+        "regional_standard": 0.000024,
+        "regional_batch": 0.000012
+      },
+      "text-embedding-3-large": {
+        "global_standard": 0.00013,
+        "global_batch": 0.000065,
+        "data_zone_standard": 0.000143,
+        "data_zone_batch": 0.0000715,
+        "regional_standard": 0.000156,
+        "regional_batch": 0.000078
+      }
     }
   },
   "embeddings": {

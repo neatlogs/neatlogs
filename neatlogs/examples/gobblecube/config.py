@@ -33,10 +33,11 @@ os.environ.setdefault("NEATLOGS_LOG_RAW_SPANS_FILE", "spans_raw_gobblecube.log")
 os.environ.setdefault("NEATLOGS_LOG_METRICS_FILE", "metrics_gobblecube.log")
 
 neatlogs.init(
-    api_key=os.getenv("NEATLOGS_API_KEY", "test-key"),
+    api_key=os.getenv("NEATLOGS_API_KEY"),
     endpoint="http://localhost:4100/api/data/v4/batch",
     tags=["gobblecube", "langgraph", "demo"],
     instrumentations=["langchain", "azure_ai_inference"],   # auto-instruments LangChain + LangGraph
+    workflow_name="gobblecube_v7",
     debug=True,
 )
 

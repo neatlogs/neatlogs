@@ -14,6 +14,8 @@ def trace(
     kind: Optional[str] = None,
     prompt_template: Optional[Union[str, "PromptTemplate"]] = None,
     prompt_variables: Optional[Dict[str, Any]] = None,
+    user_prompt_template: Optional[Union[str, "UserPromptTemplate"]] = None,
+    user_prompt_variables: Optional[Dict[str, Any]] = None,
     version: Optional[str] = None,
     **attributes,
 ):
@@ -42,8 +44,10 @@ def trace(
     Args:
         name: Span name
         kind: OpenInference span kind (rarely needed - auto-inferred)
-        prompt_template: PromptTemplate object for prompt versioning
-        prompt_variables: Dict of prompt variables (legacy string templates only)
+        prompt_template: PromptTemplate object for system prompt versioning
+        prompt_variables: Dict of system prompt variables (legacy string templates only)
+        user_prompt_template: UserPromptTemplate object for user/human prompt versioning
+        user_prompt_variables: Dict of user prompt variables (legacy string templates only)
         version: Optional version identifier
         **attributes: Additional attributes to set on the span
 
@@ -97,7 +101,7 @@ def trace(
     from opentelemetry.context import attach, detach, get_current, set_value
 
     from ..init import get_session_config
-    from ..prompt.template import PromptContext, PromptTemplate
+    from ..prompt.template import PromptContext, PromptTemplate, UserPromptContext, UserPromptTemplate
 
     logger = logging.getLogger(__name__)
     tracer = otel_trace.get_tracer(__name__)
@@ -123,8 +127,22 @@ def trace(
         else:
             template_string = prompt_template
 
+    user_template_string = None
+    is_user_prompt_template_obj = False
+
+    if user_prompt_template is not None:
+        if isinstance(user_prompt_template, UserPromptTemplate):
+            is_user_prompt_template_obj = True
+            user_template_string = str(user_prompt_template.template)
+            logger.debug(
+                f"[trace] Using UserPromptTemplate object with variables: {user_prompt_template.variables}"
+            )
+        else:
+            user_template_string = user_prompt_template
+
     ctx = get_current()
     variables_json = json.dumps(prompt_variables, default=str) if prompt_variables else None
+    user_variables_json = json.dumps(user_prompt_variables, default=str) if user_prompt_variables else None
 
     if variables_json:
         ctx = set_value("neatlogs.prompt_variables", variables_json, context=ctx)
@@ -132,6 +150,12 @@ def trace(
     if template_string:
         ctx = set_value("neatlogs.prompt_template", template_string, context=ctx)
         logger.debug(f"[trace] Set neatlogs.prompt_template in context: {template_string}")
+    if user_variables_json:
+        ctx = set_value("neatlogs.user_prompt_variables", user_variables_json, context=ctx)
+        logger.debug(f"[trace] Set neatlogs.user_prompt_variables in context: {user_variables_json}")
+    if user_template_string:
+        ctx = set_value("neatlogs.user_prompt_template", user_template_string, context=ctx)
+        logger.debug(f"[trace] Set neatlogs.user_prompt_template in context: {user_template_string}")
     if version:
         ctx = set_value("neatlogs.prompt_version", version, context=ctx)
         logger.debug(f"[trace] Set neatlogs.prompt_version in context: {version}")
@@ -141,12 +165,11 @@ def trace(
         if should_create_root_trace:
             logger.debug(f"[trace] Creating NEW root trace '{name}' (session_id={session_id})")
             with tracer.start_as_current_span(name, context=None) as span:
-
                 _set_span_attributes(
                     span, kind, template_string, prompt_variables, version, attributes
                 )
                 yield span
-                _finalize_prompt_capture(span, is_prompt_template_obj, logger)
+                _finalize_prompt_capture(span, is_prompt_template_obj, is_user_prompt_template_obj, logger)
         else:
             logger.debug(f"[trace] Creating child span '{name}'")
             with tracer.start_as_current_span(name, context=ctx) as span:
@@ -154,10 +177,12 @@ def trace(
                     span, kind, template_string, prompt_variables, version, attributes
                 )
                 yield span
-                _finalize_prompt_capture(span, is_prompt_template_obj, logger)
+                _finalize_prompt_capture(span, is_prompt_template_obj, is_user_prompt_template_obj, logger)
     finally:
         if is_prompt_template_obj:
             PromptContext.clear()
+        if is_user_prompt_template_obj:
+            UserPromptContext.clear()
         detach(ctx_token)
 
 
@@ -172,11 +197,11 @@ def _set_span_attributes(span, kind, template_string, prompt_variables, version,
         span.set_attribute(key, value)
 
 
-def _finalize_prompt_capture(span, is_prompt_template_obj, logger):
+def _finalize_prompt_capture(span, is_prompt_template_obj, is_user_prompt_template_obj, logger):
     """Helper to finalize prompt variable capture after yield."""
     import json
 
-    from ..prompt.template import PromptContext
+    from ..prompt.template import PromptContext, UserPromptContext
 
     if is_prompt_template_obj:
         captured_vars = PromptContext.get_variables()
@@ -186,4 +211,14 @@ def _finalize_prompt_capture(span, is_prompt_template_obj, logger):
             )
             logger.debug(
                 f"[trace] Auto-captured variables from PromptContext: {list(captured_vars.keys())}"
+            )
+
+    if is_user_prompt_template_obj:
+        captured_user_vars = UserPromptContext.get_variables()
+        if captured_user_vars:
+            span.set_attribute(
+                "llm.user_prompt_template_variables", json.dumps(captured_user_vars, default=str)
+            )
+            logger.debug(
+                f"[trace] Auto-captured variables from UserPromptContext: {list(captured_user_vars.keys())}"
             )

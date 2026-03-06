@@ -4,6 +4,7 @@ Instrumentation manager.
 
 import importlib
 import logging
+from functools import wraps
 from typing import List, Optional, Set
 
 from opentelemetry.instrumentation.threading import ThreadingInstrumentor
@@ -201,6 +202,8 @@ class InstrumentationManager:
                 self._patch_openllmetry_langchain_callback_handler_errors()
             if convention == "openllmetry" and library == "cohere":
                 self._patch_openllmetry_cohere_safe_token_sums()
+            if convention == "openllmetry" and library == "llamaindex":
+                self._patch_openllmetry_llamaindex_none_span_guards()
             instrumentor_class_name = self._get_instrumentor_class_name(library, convention)
 
             instrumentor_class = getattr(module, instrumentor_class_name)
@@ -346,6 +349,61 @@ class InstrumentationManager:
         except Exception as e:
             if self.debug:
                 logger.warning(f"⚠️  Failed to patch OpenLLMetry Cohere token sums: {e}")
+
+    def _patch_openllmetry_llamaindex_none_span_guards(self) -> None:
+        """
+        Patch OpenLLMetry LlamaIndex helpers to no-op when `span` is None.
+
+        Some LlamaIndex event paths invoke these helpers without an active span,
+        causing noisy debug errors and preventing helper logic from executing.
+        """
+        try:
+            import opentelemetry.instrumentation.llamaindex as llamaindex_inst
+            import opentelemetry.instrumentation.llamaindex.dispatcher_wrapper as dispatcher
+            import opentelemetry.instrumentation.llamaindex.span_utils as span_utils
+
+            if getattr(llamaindex_inst, "_NEATLOGS_PATCHED_NONE_SPAN_GUARDS", False):
+                return
+
+            def _guard_none_span(fn):
+                @wraps(fn)
+                def _wrapped(*args, **kwargs):
+                    # In OpenLLMetry llamaindex helpers the second positional arg is span.
+                    span = args[1] if len(args) > 1 else kwargs.get("span")
+                    if span is None:
+                        return None
+                    return fn(*args, **kwargs)
+
+                return _wrapped
+
+            fn_names = (
+                "set_llm_chat_request",
+                "set_llm_chat_request_model_attributes",
+                "set_llm_chat_response",
+                "set_llm_chat_response_model_attributes",
+                "set_llm_predict_response",
+                "set_embedding",
+                "set_rerank",
+                "set_rerank_model_attributes",
+                "set_tool",
+            )
+
+            for fn_name in fn_names:
+                if not hasattr(span_utils, fn_name):
+                    continue
+
+                patched = _guard_none_span(getattr(span_utils, fn_name))
+                setattr(span_utils, fn_name, patched)
+                # dispatcher_wrapper imports these helpers directly, so patch both modules.
+                if hasattr(dispatcher, fn_name):
+                    setattr(dispatcher, fn_name, patched)
+
+            llamaindex_inst._NEATLOGS_PATCHED_NONE_SPAN_GUARDS = True
+            if self.debug:
+                logger.debug("Patched OpenLLMetry LlamaIndex: none-span guards")
+        except Exception as e:
+            if self.debug:
+                logger.warning(f"⚠️  Failed to patch OpenLLMetry LlamaIndex none-span guards: {e}")
 
     def _patch_openllmetry_langchain_callback_handler_errors(self) -> None:
         """
@@ -575,7 +633,7 @@ class InstrumentationManager:
             "llamaindex": (
                 "LlamaIndexInstrumentor"
                 if convention == "openinference"
-                else "LlamaindexInstrumentor"
+                else "LlamaIndexInstrumentor"
             ),
             "google_generativeai": "GoogleGenerativeAIInstrumentor",
             "google_genai": "GoogleGenAIInstrumentor",
@@ -615,6 +673,8 @@ class InstrumentationManager:
                 "google_genai": "google.genai",
                 # Older Google Generative AI SDK (pip: google-generativeai)
                 "google_generativeai": "google.generativeai",
+                # LlamaIndex distribution is `llama-index` but import is `llama_index`
+                "llamaindex": "llama_index",
                 # Azure AI Inference SDK (pip: azure-ai-inference)
                 "azure_ai_inference": "azure.ai.inference",
                 # AWS Bedrock uses boto3 (pip: boto3)

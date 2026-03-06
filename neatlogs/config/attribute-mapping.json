@@ -376,6 +376,20 @@
               ],
               "target": "neatlogs.llm.prompt_template_variables"
             },
+            "user_template": {
+              "sources": [
+                "llm.user_prompt_template",
+                "neatlogs.user_prompt.template"
+              ],
+              "target": "neatlogs.llm.user_prompt_template"
+            },
+            "user_variables": {
+              "sources": [
+                "llm.user_prompt_template_variables",
+                "neatlogs.user_prompt.template_variables"
+              ],
+              "target": "neatlogs.llm.user_prompt_template_variables"
+            },
             "version": {
               "sources": [
                 "neatlogs.prompt.version",

@@ -12,6 +12,7 @@ Pipeline:
 """
 
 import json
+import os
 from typing import Optional, Annotated
 
 from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
@@ -118,6 +119,14 @@ def execute_query(state: AnalyticsState) -> dict:
     Step 3: Simulated query execution against GobbleCube's Antman engine.
     Returns realistic dummy results keyed by intent.
     """
+    force_error = True
+    query_text = str(state.get("user_query", "")).lower()
+    if force_error or "[force_tool_error]" in query_text:
+        raise ConnectionResetError(
+            "Connection reset by peer: Antman cluster rejected the connection. "
+            "Too many concurrent queries (limit: 100, current: 103)."
+        )
+
     simulated: dict[str, dict] = {
         "revenue_analysis": {
             "total_revenue": 2_450_000,

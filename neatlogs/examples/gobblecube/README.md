@@ -68,7 +68,7 @@ Required variables:
 | `AZURE_OPENAI_DEPLOYMENT_NAME` | e.g. `gpt-4o` |
 | `NEATLOGS_API_KEY` | Your Neatlogs API key |
 
-### 3. Run all 4 demo scenarios
+### 3. Run all demo scenarios
 
 ```bash
 python main.py
@@ -81,6 +81,7 @@ python main.py --scenario 1   # Revenue Diagnostic
 python main.py --scenario 2   # Ad Campaign Optimisation
 python main.py --scenario 3   # Stockout Emergency
 python main.py --scenario 4   # Market Opportunity Discovery
+python main.py --scenario 9   # Multi-Agent Partial Failure (Ads + Inventory)
 ```
 
 ### 5. Run a custom query
@@ -99,6 +100,7 @@ python main.py --query "What is our share of search on Zepto for protein bars?"
 | 2 | **Ad Campaign Optimisation** | "Our ROAS on Blinkit dropped below 2. What should we change?" | Gobbs Boost |
 | 3 | **Stockout Emergency** | "Which SKUs are at risk of stocking out in 48 hours?" | Gobbs Flow |
 | 4 | **Market Opportunity** | "What are the fastest growing subcategories we should enter?" | Gobbs Discover |
+| 9 | **Multi-Agent Partial Failure** | "Our ROAS is tanking... check ad performance and stock levels together." | Gobbs Boost + Gobbs Flow |
 
 ---
 

@@ -106,7 +106,7 @@ class NeatlogsSpanProcessor(SpanProcessor):
 
             from opentelemetry.context import get_current, get_value
 
-            from ..prompt.template import PromptContext
+            from ..prompt.template import PromptContext, UserPromptContext
 
             ctx = get_current()
             variables_json = get_value("neatlogs.prompt_variables", context=ctx)
@@ -123,11 +123,27 @@ class NeatlogsSpanProcessor(SpanProcessor):
                 if captured_template:
                     template = captured_template
 
+            # Capture user prompt template and variables (separate from system prompt)
+            user_template = get_value("neatlogs.user_prompt_template", context=ctx)
+            user_variables_json = get_value("neatlogs.user_prompt_variables", context=ctx)
+
+            if not user_template:
+                captured_user_template = UserPromptContext.get_template()
+                if captured_user_template:
+                    user_template = captured_user_template
+
+            if not user_variables_json:
+                captured_user_vars = UserPromptContext.get_variables()
+                if captured_user_vars:
+                    user_variables_json = json.dumps(captured_user_vars, default=str)
+
             if self.debug:
                 logger.debug(f"[SpanProcessor.on_start] LLM span '{span.name}' starting")
                 logger.debug(f"  variables_json from context: {variables_json}")
                 logger.debug(f"  template from context: {template}")
                 logger.debug(f"  version from context: {version_val}")
+                logger.debug(f"  user_template from context: {user_template}")
+                logger.debug(f"  user_variables_json from context: {user_variables_json}")
 
             if variables_json:
                 span.set_attribute("llm.prompt_template_variables", variables_json)
@@ -135,6 +151,10 @@ class NeatlogsSpanProcessor(SpanProcessor):
                 span.set_attribute("llm.prompt_template", template)
             if version_val:
                 span.set_attribute("llm.prompt_template.version", version_val)
+            if user_template:
+                span.set_attribute("llm.user_prompt_template", user_template)
+            if user_variables_json:
+                span.set_attribute("llm.user_prompt_template_variables", user_variables_json)
         finally:
             self.perf_stats["on_start_time"] += time.perf_counter() - start_time
 

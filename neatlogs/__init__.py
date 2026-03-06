@@ -27,9 +27,10 @@ Available span kinds:
 """
 
 from .core.context import trace
+from .core.llm_binder import bind_templates
 from .decorators import span
 from .init import flush, init, shutdown
-from .prompt.template import PromptTemplate
+from .prompt.template import PromptTemplate, UserPromptTemplate
 
 __all__ = [
     "init",
@@ -38,6 +39,8 @@ __all__ = [
     "span",
     "trace",
     "PromptTemplate",
+    "UserPromptTemplate",
+    "bind_templates",
 ]
 
 __version__ = "4.0.0"

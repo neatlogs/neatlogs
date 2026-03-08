@@ -22,8 +22,8 @@ os.environ.setdefault("LANGCHAIN_TRACING_V2", "false")
 os.environ.setdefault("NEATLOGS_LOG_SPANS", "true")
 os.environ.setdefault("NEATLOGS_LOG_METRICS", "true")
 os.environ.setdefault("NEATLOGS_LOG_RAW_SPANS", "true")
-os.environ.setdefault("NEATLOGS_LOG_SPANS_FILE", "spans_detection_demo.log")
-os.environ.setdefault("NEATLOGS_LOG_RAW_SPANS_FILE", "spans_raw_detection_demo.log")
+os.environ.setdefault("NEATLOGS_LOG_SPANS_FILE", "spans_detection_demo_new.log")
+os.environ.setdefault("NEATLOGS_LOG_RAW_SPANS_FILE", "spans_raw_detection_demo_new.log")
 os.environ.setdefault("NEATLOGS_LOG_METRICS_FILE", "metrics_detection_demo.log")
 
 
@@ -95,10 +95,18 @@ def init_neatlogs(settings: Settings):
     """Initialize Neatlogs SDK with instrumentation."""
 
     
+    # neatlogs.init(
+    #     api_key="",
+    #     endpoint="http://localhost:4100/api/data/v4/batch",
+    #     workflow_name="sales-qualified-1",
+    #     tags=["detection-demo", "multi-framework"],
+    #     instrumentations=["langchain", "openai", "crewai", "azure_ai_inference"],
+    #     debug=True,
+    # )
     neatlogs.init(
         api_key="",
-        endpoint="http://localhost:4100/api/data/v4/batch",
-        workflow_name="detection-demo-v1",
+        endpoint="http://52.53.40.222:4100/api/data/v4/batch",
+        workflow_name="sales-nsfw-1",
         tags=["detection-demo", "multi-framework"],
         instrumentations=["langchain", "openai", "crewai", "azure_ai_inference"],
         debug=True,

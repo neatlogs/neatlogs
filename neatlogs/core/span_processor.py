@@ -446,9 +446,111 @@ class NeatlogsSpanProcessor(SpanProcessor):
         emitted = [s for s in spans if s["span_id"] not in suppressed_wrapper_ids]
         emitted = self._suppress_traceloop_entity_spans(emitted)
         emitted = self._suppress_overlapping_llm_spans(emitted)
+        emitted = self._suppress_identical_llm_siblings(emitted)
+        emitted = self._zero_duplicate_parent_tokens(emitted)
         emitted = self._normalize_framework_span_names(emitted)
 
         return emitted
+
+    def _suppress_identical_llm_siblings(
+        self, spans: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """
+        Suppress duplicate LLM sibling spans that share the same
+        (parent_span_id, name, prompt_tokens, completion_tokens) and overlap in time.
+        Keeps the span with the most children; re-parents the rest.
+        Handles the cross-batch case where the provider canonical was flushed separately.
+        """
+        llm_spans = [
+            s for s in spans if (s.get("attributes") or {}).get("neatlogs.span.kind") == "llm"
+        ]
+        if len(llm_spans) < 2:
+            return spans
+
+        children: Dict[str, List[Dict[str, Any]]] = {}
+        for s in spans:
+            pid = s.get("parent_span_id")
+            if pid:
+                children.setdefault(pid, []).append(s)
+
+        groups: Dict[tuple, List[Dict[str, Any]]] = {}
+        for s in llm_spans:
+            attrs = s.get("attributes") or {}
+            p = attrs.get("neatlogs.llm.token_count.prompt") or 0
+            c = attrs.get("neatlogs.llm.token_count.completion") or 0
+            if not p and not c:
+                continue
+            key = (s.get("parent_span_id"), s.get("name"), p, c)
+            groups.setdefault(key, []).append(s)
+
+        suppressed: set[str] = set()
+        for key, group in groups.items():
+            if len(group) < 2:
+                continue
+            has_overlap = any(
+                self._score_time_overlap(group[i], group[j]) > 0
+                for i in range(len(group))
+                for j in range(i + 1, len(group))
+            )
+            if not has_overlap:
+                continue
+            keeper = max(group, key=lambda s: len(children.get(s["span_id"], [])))
+            for s in group:
+                if s["span_id"] == keeper["span_id"]:
+                    continue
+                suppressed.add(s["span_id"])
+                for child in spans:
+                    if child.get("parent_span_id") == s["span_id"]:
+                        child["parent_span_id"] = keeper["span_id"]
+                if self.debug:
+                    logger.debug(
+                        f"[Dedup] Identical sibling: suppressing {s['span_id']} "
+                        f"({s.get('name')}) → keeping {keeper['span_id']}"
+                    )
+
+        return [s for s in spans if s["span_id"] not in suppressed]
+
+    def _zero_duplicate_parent_tokens(
+        self, spans: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """
+        Safety net: if an LLM span's direct parent is also LLM and has identical
+        non-zero prompt AND completion tokens, zero out the parent's token and cost fields.
+        The parent span is kept in the tree for structural integrity.
+        """
+        span_by_id = {s["span_id"]: s for s in spans}
+        for s in spans:
+            if (s.get("attributes") or {}).get("neatlogs.span.kind") != "llm":
+                continue
+            pid = s.get("parent_span_id")
+            if not pid:
+                continue
+            parent = span_by_id.get(pid)
+            if not parent:
+                continue
+            if (parent.get("attributes") or {}).get("neatlogs.span.kind") != "llm":
+                continue
+            sa = s.get("attributes") or {}
+            pa = parent.get("attributes") or {}
+            s_prompt = sa.get("neatlogs.llm.token_count.prompt") or 0
+            s_comp = sa.get("neatlogs.llm.token_count.completion") or 0
+            if not s_prompt and not s_comp:
+                continue
+            p_prompt = pa.get("neatlogs.llm.token_count.prompt") or 0
+            p_comp = pa.get("neatlogs.llm.token_count.completion") or 0
+            if s_prompt == p_prompt and s_comp == p_comp:
+                for k in list(pa.keys()):
+                    if k.startswith("neatlogs.llm.token_count") or k.startswith(
+                        "neatlogs.llm.cost"
+                    ):
+                        pa[k] = 0
+                if self.debug:
+                    logger.debug(
+                        f"[Dedup] Zeroed duplicate parent tokens: {parent['span_id']} "
+                        f"({parent.get('name')}) same tokens as child {s['span_id']} "
+                        f"({s.get('name')})"
+                    )
+        return spans
 
     def _normalize_framework_span_names(self, spans: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
@@ -565,6 +667,19 @@ class NeatlogsSpanProcessor(SpanProcessor):
             return 0
         return 3 if overlap >= (shorter // 2) else 1
 
+    def _providers_match_fuzzy(self, a: str, b: str) -> bool:
+        """Return True when two provider strings belong to the same family."""
+        if a == b:
+            return True
+        # Containment (e.g. "azure_openai" contains "openai")
+        if a in b or b in a:
+            return True
+        # Azure/OpenAI family: treat interchangeably
+        _OPENAI_FAMILY = {"openai", "azure", "azure_openai"}
+        if a in _OPENAI_FAMILY and b in _OPENAI_FAMILY:
+            return True
+        return False
+
     def _start_delta_ns(self, a: Dict[str, Any], b: Dict[str, Any]) -> Optional[int]:
         a_s, b_s = a.get("start_time"), b.get("start_time")
         if not (isinstance(a_s, int) and isinstance(b_s, int)):
@@ -594,7 +709,7 @@ class NeatlogsSpanProcessor(SpanProcessor):
         def has_http_child(sid: str) -> bool:
             for c in children.get(sid, []):
                 a = c.get("attributes") or {}
-                if a.get("neatlogs.span.kind") == "HTTP":
+                if a.get("neatlogs.span.kind") == "http":
                     return True
             return False
 
@@ -633,7 +748,10 @@ class NeatlogsSpanProcessor(SpanProcessor):
             best_score = 0
             fwa = fw.get("attributes") or {}
             fw_provider = (
-                fwa.get("neatlogs.llm.provider") or fwa.get("neatlogs.llm.system") or ""
+                fwa.get("neatlogs.llm.provider")
+                or fwa.get("neatlogs.llm.system")
+                or fwa.get("neatlogs.raw.gen_ai.system")
+                or ""
             ).lower()
 
             for pv in provider_like:
@@ -644,9 +762,14 @@ class NeatlogsSpanProcessor(SpanProcessor):
                     score += 2
                 pva = pv.get("attributes") or {}
                 pv_provider = (
-                    pva.get("neatlogs.llm.provider") or pva.get("neatlogs.llm.system") or ""
+                    pva.get("neatlogs.llm.provider")
+                    or pva.get("neatlogs.llm.system")
+                    or pva.get("neatlogs.raw.gen_ai.system")
+                    or ""
                 ).lower()
-                if fw_provider and pv_provider and fw_provider == pv_provider:
+                if fw_provider and pv_provider and self._providers_match_fuzzy(
+                    fw_provider, pv_provider
+                ):
                     score += 1
 
                 if score > best_score:
@@ -659,9 +782,16 @@ class NeatlogsSpanProcessor(SpanProcessor):
             self._merge_framework_llm_into_provider(framework=fw, provider=best)
             suppressed.add(fw["span_id"])
 
+            # Re-parent children of the suppressed framework span.
+            # If a child IS the best (provider) span, promote it to fw's parent instead
+            # to avoid self-parenting.
+            fw_parent = fw.get("parent_span_id")
             for s in spans:
                 if s.get("parent_span_id") == fw["span_id"]:
-                    s["parent_span_id"] = best["span_id"]
+                    if s["span_id"] == best["span_id"]:
+                        s["parent_span_id"] = fw_parent
+                    else:
+                        s["parent_span_id"] = best["span_id"]
 
         # Combine both suppression sets
         all_suppressed = suppressed | suppressed_embedding_wrappers

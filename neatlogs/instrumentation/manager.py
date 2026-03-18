@@ -683,6 +683,8 @@ class InstrumentationManager:
                 "milvus": "pymilvus",
                 # Qdrant python client (pip: qdrant-client)
                 "qdrant": "qdrant_client",
+                # langchain-openai / langchain-community users may only have langchain-core
+                "langchain": "langchain_core",
             }
             import_name = special_imports.get(library) or library.replace("-", "_")
             importlib.import_module(import_name)

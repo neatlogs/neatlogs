@@ -11,6 +11,33 @@ from opentelemetry.trace import SpanKind
 from .logger import get_logger
 from .instrumentation_scope_parser import enrich_with_scope_detection
 
+# Matches Python object repr strings like:
+#   <function BaseTool.<lambda> at 0x110107be0>
+#   <bound method Foo.bar at 0x7f...>
+#   <MyClass object at 0x...>
+_PYTHON_REPR_RE = re.compile(r'^<[A-Za-z_].*?\bat\s+0x[0-9a-fA-F]+>$')
+
+
+def _is_python_repr(s: str) -> bool:
+    return bool(_PYTHON_REPR_RE.match(s.strip()))
+
+
+def _clean_python_reprs(obj: Any) -> Any:
+    """Recursively remove Python object repr strings from a parsed JSON structure."""
+    if isinstance(obj, dict):
+        return {
+            k: _clean_python_reprs(v)
+            for k, v in obj.items()
+            if not (isinstance(v, str) and _is_python_repr(v))
+        }
+    if isinstance(obj, list):
+        return [
+            _clean_python_reprs(item)
+            for item in obj
+            if not (isinstance(item, str) and _is_python_repr(item))
+        ]
+    return obj
+
 
 class UnifiedAttributeProcessor:
 
@@ -36,6 +63,25 @@ class UnifiedAttributeProcessor:
             unit="ms",
             description="Inter-token latency for streaming LLM responses (SDK-computed)",
         )
+
+    def _sanitize_io_value(self, val: Any) -> Any:
+        """Remove Python object reprs from input.value / output.value JSON strings.
+
+        Also drops the top-level "self" key that CrewAI injects when it serializes
+        the entire tool instance as part of the span input.
+        """
+        if not isinstance(val, str):
+            return val
+        try:
+            parsed = json.loads(val)
+            cleaned = _clean_python_reprs(parsed)
+            if isinstance(cleaned, dict):
+                cleaned.pop("self", None)
+            if cleaned != parsed:
+                return json.dumps(cleaned)
+        except Exception:
+            pass
+        return val
 
     def process(self, span: ReadableSpan) -> Dict[str, Any]:
         res_attrs = dict(span.resource.attributes) if span.resource else {}
@@ -1010,6 +1056,8 @@ class UnifiedAttributeProcessor:
                         val = source[src_key]
                         if "values" in config:
                             val = config["values"].get(val, val)
+                        if src_key in ("input.value", "output.value"):
+                            val = self._sanitize_io_value(val)
                         target[target_key] = val
                         consumed.add(src_key)
                         break

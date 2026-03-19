@@ -827,15 +827,95 @@ class UnifiedAttributeProcessor:
         return upcycled
 
     def _resolve_model_prices(self, pricing_table: Dict[str, Any], model: str) -> Optional[Dict[str, Any]]:
+        """Resolve model prices with strict matching to avoid false positives.
+
+        Match order:
+        1. Exact match (case-sensitive)
+        2. Case-insensitive exact match
+        3. Model is a more specific version of a pricing key (model starts with key + separator)
+           e.g., "gpt-4o-2024-08-06" matches "gpt-4o" but "gpt-4o-mini" does NOT match "gpt-4o"
+        4. Longest matching key wins (prevents "gpt-4" from shadowing "gpt-4o")
+        """
         if model in pricing_table and isinstance(pricing_table[model], dict):
             return pricing_table[model]
+
         model_lower = model.lower()
+
+        # Case-insensitive exact match
+        for model_key, prices in pricing_table.items():
+            if not isinstance(prices, dict):
+                continue
+            if model_key.lower() == model_lower:
+                return prices
+
+        # Versioned prefix match: model starts with key followed by a separator.
+        # "gpt-4o-2024-08-06" matches key "gpt-4o" (separator = '-')
+        # "gpt-4o-mini" does NOT match "gpt-4o" because "mini" is a distinct variant.
+        # We pick the longest matching key to prefer "gpt-4o-mini" over "gpt-4o".
+        separators = ("-", ".", ":", "/", "@")
+        best_match = None
+        best_key_len = 0
+
         for model_key, prices in pricing_table.items():
             if not isinstance(prices, dict):
                 continue
             key_lower = model_key.lower()
-            if model_lower == key_lower or model_lower.startswith(key_lower) or key_lower in model_lower:
-                return prices
+            if not model_lower.startswith(key_lower):
+                continue
+            if len(key_lower) == len(model_lower):
+                # Already handled by exact match above
+                continue
+            # Check that the next character after the key is a separator (version delimiter)
+            next_char = model_lower[len(key_lower)]
+            if next_char in separators and len(key_lower) > best_key_len:
+                best_match = prices
+                best_key_len = len(key_lower)
+
+        return best_match
+
+    def _resolve_platform_prices(self, platform_section: Dict[str, Any],
+                                 model: str, attrs: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Resolve prices for platform providers (Azure, Bedrock, Vertex AI).
+
+        For Azure: handles tier-based pricing (global_standard, eu_standard, etc.)
+        For Bedrock/Vertex: flat pricing like direct API.
+        """
+        if not isinstance(platform_section, dict):
+            return None
+
+        chat_section = platform_section.get("chat", {})
+        if not isinstance(chat_section, dict):
+            return None
+
+        model_entry = self._resolve_model_prices(chat_section, model)
+        if not model_entry:
+            return None
+
+        # If the entry directly has promptPrice, it's flat pricing (Bedrock/Vertex)
+        if "promptPrice" in model_entry:
+            return model_entry
+
+        # Otherwise it's tier-based (Azure) — resolve the tier
+        tier = str(
+            attrs.get("neatlogs.azure.pricing_tier")
+            or attrs.get("azure.pricing_tier")
+            or "global_standard"
+        ).lower()
+        tier_prices = model_entry.get(tier)
+        if isinstance(tier_prices, dict):
+            return tier_prices
+
+        # Fallback: try global_standard, then first available tier
+        if tier != "global_standard":
+            fallback = model_entry.get("global_standard")
+            if isinstance(fallback, dict):
+                return fallback
+
+        # Last resort: pick the first tier that has promptPrice
+        for key, val in model_entry.items():
+            if isinstance(val, dict) and "promptPrice" in val:
+                return val
+
         return None
 
     def _apply_cost_from_pricing(self, attrs: Dict[str, Any]) -> Dict[str, Any]:
@@ -847,48 +927,126 @@ class UnifiedAttributeProcessor:
             return attrs
 
         # Enforce pricing.json as source of truth: clear pre-populated costs first.
-        attrs.pop("llm.cost.prompt", None)
-        attrs.pop("llm.cost.completion", None)
-        attrs.pop("llm.cost.total", None)
+        for cost_key in ("llm.cost.prompt", "llm.cost.completion", "llm.cost.total",
+                         "llm.cost.prompt_details.cache_read", "llm.cost.prompt_details.cache_write",
+                         "llm.cost.completion_details.reasoning",
+                         "llm.cost.completion_details.audio", "llm.cost.prompt_details.audio"):
+            attrs.pop(cost_key, None)
 
         prices: Optional[Dict[str, Any]] = None
         platform = str(attrs.get("neatlogs.platform", "")).lower()
 
-        # Platform-specific pricing (e.g., Azure OpenAI) takes precedence.
+        # Platform-specific pricing takes precedence.
         if platform == "azure_openai":
-            azure_chat_pricing = (
-                self.pricing.get("azure_openai", {}).get("chat", {})
-                if isinstance(self.pricing.get("azure_openai"), dict)
-                else {}
-            )
-            azure_model_prices = self._resolve_model_prices(azure_chat_pricing, model)
-            if azure_model_prices:
-                if "promptPrice" in azure_model_prices and "completionPrice" in azure_model_prices:
-                    prices = azure_model_prices
-                else:
-                    tier = str(
-                        attrs.get("neatlogs.azure.pricing_tier")
-                        or attrs.get("azure.pricing_tier")
-                        or "global_standard"
-                    )
-                    tier_prices = azure_model_prices.get(tier)
-                    if isinstance(tier_prices, dict):
-                        prices = tier_prices
+            prices = self._resolve_platform_prices(
+                self.pricing.get("azure_openai", {}), model, attrs)
+        elif platform == "bedrock":
+            prices = self._resolve_platform_prices(
+                self.pricing.get("bedrock", {}), model, attrs)
+        elif platform == "vertex_ai":
+            prices = self._resolve_platform_prices(
+                self.pricing.get("vertex_ai", {}), model, attrs)
 
-        # Default provider pricing.
+        # Fallback to direct API pricing.
         if not prices:
             chat_pricing = self.pricing.get("chat", {})
             if isinstance(chat_pricing, dict):
                 prices = self._resolve_model_prices(chat_pricing, model)
 
-        if prices and (prompt_tokens is not None or completion_tokens is not None):
-            p_tokens = float(prompt_tokens or 0)
-            c_tokens = float(completion_tokens or 0)
-            prompt_cost = (p_tokens / 1000) * float(prices.get("promptPrice", 0))
-            completion_cost = (c_tokens / 1000) * float(prices.get("completionPrice", 0))
-            attrs["llm.cost.prompt"] = round(prompt_cost, 6)
-            attrs["llm.cost.completion"] = round(completion_cost, 6)
-            attrs["llm.cost.total"] = round(prompt_cost + completion_cost, 6)
+        if not prices or (prompt_tokens is None and completion_tokens is None):
+            return attrs
+
+        # -----------------------------------------------------------------
+        # Read all token counts from telemetry
+        # -----------------------------------------------------------------
+        total_prompt = float(prompt_tokens or 0)
+        total_completion = float(completion_tokens or 0)
+
+        # Cache tokens (subset of prompt_tokens for OpenAI; separate for Anthropic)
+        cache_read = float(
+            attrs.get("llm.token_count.prompt_details.cache_read")
+            or attrs.get("gen_ai.usage.cache_read_input_tokens")
+            or 0
+        )
+        cache_write = float(
+            attrs.get("llm.token_count.prompt_details.cache_write")
+            or attrs.get("gen_ai.usage.cache_creation_input_tokens")
+            or 0
+        )
+
+        # Audio tokens
+        prompt_audio = float(attrs.get("llm.token_count.prompt_details.audio") or 0)
+        completion_audio = float(attrs.get("llm.token_count.completion_details.audio") or 0)
+
+        # -----------------------------------------------------------------
+        # Tiered pricing: check if prompt exceeds provider-specific threshold
+        # tierTokenThreshold is set per model in pricing.json (e.g., 200000 for Claude)
+        # -----------------------------------------------------------------
+        tier_threshold = prices.get("tierTokenThreshold", 0)
+        is_tiered = (
+            tier_threshold > 0
+            and total_prompt > tier_threshold
+            and prices.get("promptPriceAboveTier") is not None
+        )
+
+        prompt_rate = float(prices.get("promptPriceAboveTier" if is_tiered else "promptPrice", 0))
+        completion_rate = float(prices.get("completionPriceAboveTier" if is_tiered else "completionPrice", 0))
+        cache_read_rate = float(prices.get(
+            "cacheReadPriceAboveTier" if is_tiered else "cacheReadPrice",
+            prices.get("cacheReadPrice", prompt_rate)  # fallback: full input rate
+        ))
+        cache_write_rate = float(prices.get(
+            "cacheWritePriceAboveTier" if is_tiered else "cacheWritePrice",
+            0
+        ))
+
+        # -----------------------------------------------------------------
+        # Compute input cost
+        # -----------------------------------------------------------------
+        # Cache-read tokens are a SUBSET of prompt_tokens (OpenAI, Anthropic).
+        # Charge the non-cached portion at full rate, cached at discount rate.
+        # Cache-write tokens are ADDITIVE (Anthropic only) — separate charge.
+        uncached_prompt = max(total_prompt - cache_read - prompt_audio, 0)
+        input_cost = (uncached_prompt / 1000) * prompt_rate
+        cache_read_cost = (cache_read / 1000) * cache_read_rate
+        cache_write_cost = (cache_write / 1000) * cache_write_rate
+
+        # Audio input tokens
+        prompt_audio_rate = float(prices.get("promptAudioPrice", prompt_rate))
+        prompt_audio_cost = (prompt_audio / 1000) * prompt_audio_rate
+
+        total_input_cost = input_cost + cache_read_cost + cache_write_cost + prompt_audio_cost
+
+        # -----------------------------------------------------------------
+        # Compute output cost
+        # -----------------------------------------------------------------
+        # Reasoning tokens are already INCLUDED in completion_tokens (OpenAI o-series,
+        # Anthropic thinking). No separate charge — same output rate applies.
+        non_audio_completion = max(total_completion - completion_audio, 0)
+        output_cost = (non_audio_completion / 1000) * completion_rate
+
+        # Audio output tokens
+        completion_audio_rate = float(prices.get("completionAudioPrice", completion_rate))
+        completion_audio_cost = (completion_audio / 1000) * completion_audio_rate
+
+        total_output_cost = output_cost + completion_audio_cost
+
+        # -----------------------------------------------------------------
+        # Write cost breakdown to attributes
+        # -----------------------------------------------------------------
+        attrs["llm.cost.prompt"] = round(total_input_cost, 8)
+        attrs["llm.cost.completion"] = round(total_output_cost, 8)
+        attrs["llm.cost.total"] = round(total_input_cost + total_output_cost, 8)
+
+        # Granular cost breakdown (only set when the component is non-zero)
+        if cache_read_cost > 0:
+            attrs["llm.cost.prompt_details.cache_read"] = round(cache_read_cost, 8)
+        if cache_write_cost > 0:
+            attrs["llm.cost.prompt_details.cache_write"] = round(cache_write_cost, 8)
+        if prompt_audio_cost > 0:
+            attrs["llm.cost.prompt_details.audio"] = round(prompt_audio_cost, 8)
+        if completion_audio_cost > 0:
+            attrs["llm.cost.completion_details.audio"] = round(completion_audio_cost, 8)
 
         return attrs
 

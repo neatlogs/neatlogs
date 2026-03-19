@@ -211,6 +211,12 @@ def enrich_with_scope_detection(
         if gen_ai_system in provider_map:
             attrs["neatlogs.provider"] = provider_map[gen_ai_system]
     
+    # Detect platform from llm.provider attribute (e.g., llm.provider="azure" from OpenInference)
+    llm_provider = str(attrs.get("llm.provider", "")).lower()
+    if llm_provider and "neatlogs.platform" not in attrs:
+        if llm_provider in ("azure", "azure_openai"):
+            attrs["neatlogs.platform"] = "azure_openai"
+
     # Detect platform from model name patterns (e.g., "anthropic.claude-3-5-sonnet-v1:0" indicates Bedrock)
     llm_model = attrs.get("llm.model_name", "")
     if llm_model and "neatlogs.platform" not in attrs:

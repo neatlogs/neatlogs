@@ -27,6 +27,7 @@ Available span kinds:
 """
 
 from .core.context import trace
+from .core.crewai_task_registry import register_crewai_task
 from .core.llm_binder import bind_templates
 from .decorators import span
 from .init import flush, init, shutdown
@@ -41,6 +42,7 @@ __all__ = [
     "PromptTemplate",
     "UserPromptTemplate",
     "bind_templates",
+    "register_crewai_task",
 ]
 
 __version__ = "4.0.0"

@@ -17,11 +17,9 @@ class UnifiedAttributeProcessor:
     def __init__(
         self,
         mapping_config: Dict[str, Any],
-        pricing_config: Optional[Dict[str, Any]] = None,
         debug: bool = False,
     ):
         self.mapping = mapping_config
-        self.pricing = pricing_config or {}
         self.debug = debug
         self.logger = get_logger()
         
@@ -50,6 +48,21 @@ class UnifiedAttributeProcessor:
         scope_name = span.instrumentation_scope.name if span.instrumentation_scope else None
         # TODO: In future, track parent spans to get parent_scope_name for better framework detection
         enrich_with_scope_detection(attrs, scope_name, parent_scope_name=None)
+        if self.debug:
+            trace_id = f"{span.context.trace_id:032x}" if span.context else ""
+            span_id = f"{span.context.span_id:016x}" if span.context else ""
+            has_crewai_attrs = any(k.startswith("crewai.") for k in attrs.keys())
+            self.logger.debug(
+                "[ScopeDetection] trace_id=%s span_id=%s span_name=%s scope=%s framework=%s provider=%s platform=%s has_crewai_attrs=%s",
+                trace_id,
+                span_id,
+                span.name,
+                scope_name,
+                attrs.get("neatlogs.framework"),
+                attrs.get("neatlogs.provider"),
+                attrs.get("neatlogs.platform"),
+                has_crewai_attrs,
+            )
 
         attrs = self._normalize_conventions(span, attrs)
 
@@ -58,8 +71,6 @@ class UnifiedAttributeProcessor:
 
         event_attrs = self._upcycle_events(span)
         attrs.update(event_attrs)
-
-        attrs = self._apply_cost_from_pricing(attrs)
 
         try:
             from ..config import enrich_invocation_parameters
@@ -826,72 +837,6 @@ class UnifiedAttributeProcessor:
 
         return upcycled
 
-    def _resolve_model_prices(self, pricing_table: Dict[str, Any], model: str) -> Optional[Dict[str, Any]]:
-        if model in pricing_table and isinstance(pricing_table[model], dict):
-            return pricing_table[model]
-        model_lower = model.lower()
-        for model_key, prices in pricing_table.items():
-            if not isinstance(prices, dict):
-                continue
-            key_lower = model_key.lower()
-            if model_lower == key_lower or model_lower.startswith(key_lower) or key_lower in model_lower:
-                return prices
-        return None
-
-    def _apply_cost_from_pricing(self, attrs: Dict[str, Any]) -> Dict[str, Any]:
-        model = attrs.get("llm.model_name")
-        prompt_tokens = attrs.get("llm.token_count.prompt")
-        completion_tokens = attrs.get("llm.token_count.completion")
-
-        if not model or not self.pricing:
-            return attrs
-
-        # Enforce pricing.json as source of truth: clear pre-populated costs first.
-        attrs.pop("llm.cost.prompt", None)
-        attrs.pop("llm.cost.completion", None)
-        attrs.pop("llm.cost.total", None)
-
-        prices: Optional[Dict[str, Any]] = None
-        platform = str(attrs.get("neatlogs.platform", "")).lower()
-
-        # Platform-specific pricing (e.g., Azure OpenAI) takes precedence.
-        if platform == "azure_openai":
-            azure_chat_pricing = (
-                self.pricing.get("azure_openai", {}).get("chat", {})
-                if isinstance(self.pricing.get("azure_openai"), dict)
-                else {}
-            )
-            azure_model_prices = self._resolve_model_prices(azure_chat_pricing, model)
-            if azure_model_prices:
-                if "promptPrice" in azure_model_prices and "completionPrice" in azure_model_prices:
-                    prices = azure_model_prices
-                else:
-                    tier = str(
-                        attrs.get("neatlogs.azure.pricing_tier")
-                        or attrs.get("azure.pricing_tier")
-                        or "global_standard"
-                    )
-                    tier_prices = azure_model_prices.get(tier)
-                    if isinstance(tier_prices, dict):
-                        prices = tier_prices
-
-        # Default provider pricing.
-        if not prices:
-            chat_pricing = self.pricing.get("chat", {})
-            if isinstance(chat_pricing, dict):
-                prices = self._resolve_model_prices(chat_pricing, model)
-
-        if prices and (prompt_tokens is not None or completion_tokens is not None):
-            p_tokens = float(prompt_tokens or 0)
-            c_tokens = float(completion_tokens or 0)
-            prompt_cost = (p_tokens / 1000) * float(prices.get("promptPrice", 0))
-            completion_cost = (c_tokens / 1000) * float(prices.get("completionPrice", 0))
-            attrs["llm.cost.prompt"] = round(prompt_cost, 6)
-            attrs["llm.cost.completion"] = round(completion_cost, 6)
-            attrs["llm.cost.total"] = round(prompt_cost + completion_cost, 6)
-
-        return attrs
-
     def _apply_namespace_mapping(self, attrs: Dict[str, Any]) -> Dict[str, Any]:
         unified: Dict[str, Any] = {k: v for k, v in attrs.items() if k.startswith("neatlogs.")}
         mappings = self.mapping.get("mappings", {})
@@ -952,17 +897,32 @@ class UnifiedAttributeProcessor:
 
         # Framework detection fallback from OpenLLMetry/Traceloop attributes
         # Primary detection is from instrumentation_scope.name (done earlier in pipeline)
+        fallback_reason = None
         if not unified.get("neatlogs.framework"):
             # Check for LangGraph-specific attributes
             if (attrs.get("traceloop.association.properties.langgraph_node") or 
                 attrs.get("traceloop.association.properties.langgraph_step") or 
                 attrs.get("traceloop.association.properties.langgraph_checkpoint_ns")):
                 unified["neatlogs.framework"] = "langgraph"
+                fallback_reason = "traceloop.langgraph_association"
             # Check for generic traceloop attributes (LangChain via OpenLLMetry)
             elif (attrs.get("traceloop.workflow.name") or 
                   attrs.get("traceloop.entity.name") or 
                   attrs.get("traceloop.span.kind")):
                 unified["neatlogs.framework"] = "langchain"
+                fallback_reason = "traceloop.generic"
+
+        if self.debug:
+            self.logger.debug(
+                "[ScopeDetectionFinal] span_name=%s scope=%s framework=%s fallback_reason=%s traceloop_workflow=%s traceloop_entity=%s traceloop_kind=%s",
+                attrs.get("_span_name"),
+                attrs.get("neatlogs.instrumentation.name"),
+                unified.get("neatlogs.framework"),
+                fallback_reason,
+                bool(attrs.get("traceloop.workflow.name")),
+                bool(attrs.get("traceloop.entity.name")),
+                bool(attrs.get("traceloop.span.kind")),
+            )
 
         return unified
 

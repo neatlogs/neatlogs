@@ -76,17 +76,8 @@ class NeatlogsSpanProcessor(SpanProcessor):
             logger.error(f"Failed to load attribute-mapping.json: {e}")
             mapping_config = {}
 
-        pricing_path = os.path.join(base_path, "config", "pricing.json")
-        try:
-            with open(pricing_path, "r") as f:
-                pricing_config = json.load(f)
-        except Exception as e:
-            logger.warning(f"Failed to load pricing.json: {e}")
-            pricing_config = {}
-
         self.unified_processor = UnifiedAttributeProcessor(
             mapping_config=mapping_config,
-            pricing_config=pricing_config,
             debug=self.debug,
         )
 
@@ -215,7 +206,9 @@ class NeatlogsSpanProcessor(SpanProcessor):
                     )
 
             nl_kind = unified_attrs.get("neatlogs.span.kind")
-            if nl_kind not in ("llm", "embedding") and span.name != "PromptTemplate":
+            # crewai_task spans carry task-level template keys (neatlogs.task.*) which
+            # are distinct from LLM-level keys — do not strip them.
+            if nl_kind not in ("llm", "embedding", "crewai_task") and span.name != "PromptTemplate":
                 for k in (
                     "neatlogs.llm.prompt_template",
                     "neatlogs.llm.prompt_template_variables",
@@ -447,6 +440,7 @@ class NeatlogsSpanProcessor(SpanProcessor):
         emitted = self._suppress_traceloop_entity_spans(emitted)
         emitted = self._suppress_overlapping_llm_spans(emitted)
         emitted = self._normalize_framework_span_names(emitted)
+        emitted = self._inject_crewai_task_templates(emitted)
 
         return emitted
 
@@ -471,6 +465,34 @@ class NeatlogsSpanProcessor(SpanProcessor):
             if desc:
                 attrs.setdefault("neatlogs.task.description", desc)
             s["name"] = "crewai.task"
+            s["attributes"] = attrs
+
+        return spans
+
+    def _inject_crewai_task_templates(self, spans: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        For each OpenInference _execute_core AGENT span that has a task_id matching
+        a registered entry, stamp the user prompt template onto the span and relabel
+        its kind to CREWAI_TASK.
+
+        The OpenLLMetry crewai.task span is deleted by the backend trace-finalizer, so
+        the OI _execute_core AGENT span is the only surviving task-level span in ClickHouse.
+        """
+        from .crewai_task_registry import pop_entry
+
+        for s in spans:
+            attrs = s.get("attributes") or {}
+            task_id = attrs.get("neatlogs.raw.task_id")
+            if not task_id:
+                continue
+            entry = pop_entry(str(task_id))
+            if not entry:
+                continue
+            tpl_str, vars_json = entry
+            attrs["neatlogs.task.user_prompt_template"] = tpl_str
+            if vars_json:
+                attrs["neatlogs.task.user_prompt_template_variables"] = vars_json
+            attrs["neatlogs.span.kind"] = "crewai_task"
             s["attributes"] = attrs
 
         return spans

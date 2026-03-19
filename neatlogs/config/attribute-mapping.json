@@ -35,6 +35,7 @@
         "model_name": {
           "sources": [
             "llm.model_name",
+            "gen_ai.response.model",
             "gen_ai.request.model",
             "traceloop.association.properties.ls_model_name"
           ],
@@ -169,52 +170,6 @@
           },
           "target": "neatlogs.llm.tools.{i}",
           "indexed": true
-        },
-        "cost": {
-          "mappings": {
-            "total": {
-              "sources": [
-                "llm.cost.total"
-              ],
-              "target": "neatlogs.llm.cost.total"
-            },
-            "prompt": {
-              "sources": [
-                "llm.cost.prompt"
-              ],
-              "target": "neatlogs.llm.cost.prompt"
-            },
-            "completion": {
-              "sources": [
-                "llm.cost.completion"
-              ],
-              "target": "neatlogs.llm.cost.completion"
-            },
-            "reasoning": {
-              "sources": [
-                "llm.cost.completion_details.reasoning"
-              ],
-              "target": "neatlogs.llm.cost.reasoning"
-            },
-            "audio": {
-              "sources": [
-                "llm.cost.completion_details.audio"
-              ],
-              "target": "neatlogs.llm.cost.audio"
-            },
-            "cache_write": {
-              "sources": [
-                "llm.cost.prompt_details.cache_write"
-              ],
-              "target": "neatlogs.llm.cost.cache_write"
-            },
-            "cache_read": {
-              "sources": [
-                "llm.cost.prompt_details.cache_read"
-              ],
-              "target": "neatlogs.llm.cost.cache_read"
-            }
-          }
         },
         "messages": {
           "mappings": {

@@ -17,6 +17,7 @@ def trace(
     user_prompt_template: Optional[Union[str, "UserPromptTemplate"]] = None,
     user_prompt_variables: Optional[Dict[str, Any]] = None,
     version: Optional[str] = None,
+    capture_stdout: bool = False,
     **attributes,
 ):
     """
@@ -160,7 +161,10 @@ def trace(
         ctx = set_value("neatlogs.prompt_version", version, context=ctx)
         logger.debug(f"[trace] Set neatlogs.prompt_version in context: {version}")
 
+    from .log import _CaptureStdoutContext
+
     ctx_token = attach(ctx)
+    stdout_ctx = _CaptureStdoutContext() if capture_stdout else None
     try:
         if should_create_root_trace:
             logger.debug(f"[trace] Creating NEW root trace '{name}' (session_id={session_id})")
@@ -168,16 +172,28 @@ def trace(
                 _set_span_attributes(
                     span, kind, template_string, prompt_variables, version, attributes
                 )
-                yield span
-                _finalize_prompt_capture(span, is_prompt_template_obj, is_user_prompt_template_obj, logger)
+                if stdout_ctx:
+                    stdout_ctx.__enter__()
+                try:
+                    yield span
+                    _finalize_prompt_capture(span, is_prompt_template_obj, is_user_prompt_template_obj, logger)
+                finally:
+                    if stdout_ctx:
+                        stdout_ctx.__exit__(None, None, None)
         else:
             logger.debug(f"[trace] Creating child span '{name}'")
             with tracer.start_as_current_span(name, context=ctx) as span:
                 _set_span_attributes(
                     span, kind, template_string, prompt_variables, version, attributes
                 )
-                yield span
-                _finalize_prompt_capture(span, is_prompt_template_obj, is_user_prompt_template_obj, logger)
+                if stdout_ctx:
+                    stdout_ctx.__enter__()
+                try:
+                    yield span
+                    _finalize_prompt_capture(span, is_prompt_template_obj, is_user_prompt_template_obj, logger)
+                finally:
+                    if stdout_ctx:
+                        stdout_ctx.__exit__(None, None, None)
     finally:
         if is_prompt_template_obj:
             PromptContext.clear()

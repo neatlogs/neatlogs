@@ -140,6 +140,7 @@ def _decorate_span(
     attributes: Optional[Dict[str, Any]] = None,
     capture_input: Optional[bool] = None,
     capture_output: Optional[bool] = None,
+    capture_stdout: bool = False,
     postprocess_result: Optional[Callable[[Any, Any, Dict[str, Any]], None]] = None,
 ) -> Callable[[F], F]:
     """
@@ -158,6 +159,8 @@ def _decorate_span(
 
             @functools.wraps(func)
             async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
+                from ..core.log import _CaptureStdoutContext
+
                 with tracer.start_as_current_span(
                     span_name, kind=otel_trace.SpanKind.INTERNAL
                 ) as span:
@@ -181,7 +184,15 @@ def _decorate_span(
                         span.set_attribute("input.mime_type", "application/json")
 
                     try:
-                        result = await func(*args, **kwargs)
+                        stdout_ctx = _CaptureStdoutContext() if capture_stdout else None
+                        if stdout_ctx:
+                            stdout_ctx.__enter__()
+                        try:
+                            result = await func(*args, **kwargs)
+                        finally:
+                            if stdout_ctx:
+                                stdout_ctx.__exit__(None, None, None)
+
                         if postprocess_result is not None:
                             try:
                                 postprocess_result(span, result, bound_inputs or {})
@@ -201,6 +212,8 @@ def _decorate_span(
 
         @functools.wraps(func)
         def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
+            from ..core.log import _CaptureStdoutContext
+
             with tracer.start_as_current_span(span_name, kind=otel_trace.SpanKind.INTERNAL) as span:
                 _set_common_span_attrs(
                     span,
@@ -222,7 +235,15 @@ def _decorate_span(
                     span.set_attribute("input.mime_type", "application/json")
 
                 try:
-                    result = func(*args, **kwargs)
+                    stdout_ctx = _CaptureStdoutContext() if capture_stdout else None
+                    if stdout_ctx:
+                        stdout_ctx.__enter__()
+                    try:
+                        result = func(*args, **kwargs)
+                    finally:
+                        if stdout_ctx:
+                            stdout_ctx.__exit__(None, None, None)
+
                     if postprocess_result is not None:
                         try:
                             postprocess_result(span, result, bound_inputs or {})

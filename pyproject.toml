@@ -29,6 +29,7 @@ opentelemetry-instrumentation-httpx = ">=0.50b0"
 opentelemetry-instrumentation-urllib3 = ">=0.50b0"
 opentelemetry-instrumentation-aiohttp-client = ">=0.50b0"
 opentelemetry-instrumentation-threading = ">=0.50b0"
+opentelemetry-instrumentation-logging = ">=0.50b0"
 neatlogs-instrumentations = { version = ">=0.1.1", extras = ["azure-ai-inference"], optional = true }
 
 [tool.poetry.group.dev.dependencies]
@@ -83,6 +84,7 @@ dependencies = [
     "opentelemetry-instrumentation-urllib3>=0.50b0",
     "opentelemetry-instrumentation-aiohttp-client>=0.50b0",
     "opentelemetry-instrumentation-threading>=0.50b0",
+    "opentelemetry-instrumentation-logging>=0.50b0",
 ]
 
 [project.optional-dependencies]

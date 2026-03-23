@@ -25,6 +25,7 @@ from .core.logger import get_logger
 from .core.metrics_correlation import SpanMetricMeterProviderProxy
 from .core.span_processor import NeatlogsSpanProcessor
 from .instrumentation.manager import InstrumentationManager
+from .version import __version__
 
 logger = get_logger()
 
@@ -140,11 +141,23 @@ def init(
             logger.warning("Neatlogs already initialized, skipping re-initialization")
         return
 
-    api_key = api_key or os.getenv("NEATLOGS_API_KEY")
-    if not api_key:
-        raise ValueError(
-            "api_key required. Either pass it to init() or set NEATLOGS_API_KEY environment variable."
-        )
+    disable_export_resolved = bool(disable_export) or (
+        os.getenv("NEATLOGS_DISABLE_EXPORT", "").lower() in ("true", "1", "yes")
+    )
+
+    if api_key is not None and str(api_key).strip():
+        resolved_key = str(api_key).strip()
+    else:
+        resolved_key = (os.getenv("NEATLOGS_API_KEY") or "").strip()
+
+    if not resolved_key:
+        disable_export_resolved = True
+        resolved_key = "disabled"
+        if debug:
+            logger.warning(
+                "No NEATLOGS_API_KEY set; HTTP export disabled. "
+                "Set NEATLOGS_API_KEY (or pass api_key=) to send spans to the backend."
+            )
 
     if debug:
         import logging
@@ -174,6 +187,7 @@ def init(
 
     resource_attrs = {
         SERVICE_NAME: workflow_name or "neatlogs-app",
+        "service.version": __version__,
         "neatlogs.workflow_name": resolved_workflow_name,
     }
     if final_session_id:
@@ -217,12 +231,12 @@ def init(
     _tracer_provider = provider
 
     exporter = NeatlogsExporter(
-        api_key=api_key,
+        api_key=resolved_key,
         endpoint=endpoint,
         workflow_name=resolved_workflow_name,
         batch_size=batch_size,
         flush_interval=flush_interval,
-        disable_export=disable_export,
+        disable_export=disable_export_resolved,
     )
 
     global _span_processor

@@ -135,7 +135,7 @@ INSTRUMENTATION_REGISTRY = {
             "default_span_kind": "LLM",
         },
         "huggingface_hub": {
-            "openllmetry": "opentelemetry.instrumentation.huggingface_hub",
+            "openllmetry": None,
             "openinference": None,
             "default_span_kind": "LLM",
         },
@@ -165,7 +165,7 @@ INSTRUMENTATION_REGISTRY = {
             "default_span_kind": "AGENT",
         },
         "autogen": {
-            "openllmetry": "opentelemetry.instrumentation.autogen",
+            "openllmetry": None,
             "openinference": "openinference.instrumentation.autogen",
             "default_span_kind": "AGENT",
         },
@@ -175,7 +175,7 @@ INSTRUMENTATION_REGISTRY = {
             "default_span_kind": "CHAIN",
         },
         "dspy": {
-            "openllmetry": "opentelemetry.instrumentation.dspy",
+            "openllmetry": None,
             "openinference": "openinference.instrumentation.dspy",
             "default_span_kind": "CHAIN",
         },
@@ -225,7 +225,7 @@ INSTRUMENTATION_REGISTRY = {
             "default_span_kind": "RETRIEVER",
         },
         "opensearch": {
-            "openllmetry": "opentelemetry.instrumentation.opensearch",
+            "openllmetry": None,
             "openinference": None,
             "default_span_kind": "RETRIEVER",
         },
@@ -245,7 +245,7 @@ INSTRUMENTATION_REGISTRY = {
             "default_span_kind": "RETRIEVER",
         },
         "instructor": {
-            "openllmetry": "opentelemetry.instrumentation.instructor",
+            "openllmetry": None,
             "openinference": "openinference.instrumentation.instructor",
             "default_span_kind": "CHAIN",
         },
@@ -255,7 +255,7 @@ INSTRUMENTATION_REGISTRY = {
             "default_span_kind": "GUARDRAIL",
         },
         "letta": {
-            "openllmetry": "opentelemetry.instrumentation.letta",
+            "openllmetry": None,
             "openinference": None,
             "default_span_kind": "AGENT",
         },

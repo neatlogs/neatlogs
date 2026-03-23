@@ -1,1 +1,0 @@
-"""Detection demo workflow implementations."""

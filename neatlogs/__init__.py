@@ -32,6 +32,7 @@ from .core.llm_binder import bind_templates
 from .decorators import span
 from .init import flush, init, shutdown
 from .prompt.template import PromptTemplate, UserPromptTemplate
+from .version import __version__
 
 __all__ = [
     "init",
@@ -43,6 +44,5 @@ __all__ = [
     "UserPromptTemplate",
     "bind_templates",
     "register_crewai_task",
+    "__version__",
 ]
-
-__version__ = "4.0.0"

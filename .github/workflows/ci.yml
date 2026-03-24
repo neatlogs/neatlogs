@@ -24,7 +24,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e .
-          python -m pip install black isort pytest pytest-asyncio pytest-mock respx httpx numpy
+          python -m pip install black isort pytest pytest-asyncio pytest-mock respx
 
       - name: Format (black)
         run: black --check neatlogs tests

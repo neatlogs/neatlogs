@@ -6,10 +6,6 @@ All agents import `llm` from here so credentials are loaded once.
 """
 
 import os
-import sys
-
-# Allow running directly from the gobblecube/ directory OR from the repo root
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
 from dotenv import load_dotenv
 
@@ -17,7 +13,7 @@ from dotenv import load_dotenv
 # `override=True` ensures this example's local env is deterministic and
 # not accidentally shadowed by a parent shell export.
 _env_path = os.path.join(os.path.dirname(__file__), ".env")
-load_dotenv(_env_path if os.path.exists(_env_path) else None, override=True)
+load_dotenv(_env_path if os.path.exists(_env_path) else None, override=False)
 
 # ---------------------------------------------------------------------------
 # Neatlogs – initialise ONCE before any LLM import/call
@@ -34,7 +30,7 @@ os.environ.setdefault("NEATLOGS_LOG_METRICS_FILE", "metrics_gobblecube.log")
 
 neatlogs.init(
     api_key=os.getenv("NEATLOGS_API_KEY"),
-    endpoint="http://localhost:4100/api/data/v4/batch",
+    endpoint=os.getenv("NEATLOGS_ENDPOINT", "http://localhost:4100/api/data/v4/batch"),
     tags=["gobblecube", "langgraph", "demo"],
     instrumentations=["langchain", "azure_ai_inference"],   # auto-instruments LangChain + LangGraph
     workflow_name="gobblecube_v7",
@@ -51,7 +47,6 @@ llm = AzureChatOpenAI(
     api_version=os.getenv("AZURE_OPENAI_API_VERSION", "2024-08-01-preview"),
     azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
     azure_deployment=os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME"),
-    temperature=0,
 )
 
 print(

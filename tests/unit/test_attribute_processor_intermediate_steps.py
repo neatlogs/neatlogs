@@ -8,7 +8,7 @@ from neatlogs.core.attribute_processor import UnifiedAttributeProcessor
 
 def _mk_processor() -> UnifiedAttributeProcessor:
     # Mapping not needed for these unit tests; we only exercise normalization helpers.
-    return UnifiedAttributeProcessor(mapping_config={}, pricing_config={}, debug=False)
+    return UnifiedAttributeProcessor(mapping_config={}, debug=False)
 
 
 def test_intermediate_steps_extracted_from_output_messages() -> None:

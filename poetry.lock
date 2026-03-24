@@ -10750,4 +10750,4 @@ vertexai = ["openinference-instrumentation-vertexai"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10,<3.14"
-content-hash = "7765a25e5ce91bd5be8f753f7e3ef3995927e78b778bb569491ee1fdd93a58ec"
+content-hash = "737adee061e26c019b07efd698be0ec5dc6857a7841dd7fd0251bcf0ae242839"

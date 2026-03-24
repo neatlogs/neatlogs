@@ -19,12 +19,11 @@ import json
 import os
 import sys
 
-# Allow running from repo root  (python examples/gobblecube/main.py)
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
+# Allow running from any directory
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 
 import neatlogs
-from neatlogs.examples.gobblecube.supervisor import build_gobbs_gpt_supervisor
+from supervisor import build_gobbs_gpt_supervisor
 
 # ---------------------------------------------------------------------------
 # Demo scenarios (from the architecture doc)

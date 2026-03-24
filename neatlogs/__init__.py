@@ -42,6 +42,7 @@ from .prompt.client import (
     PromptStreamClient,
 )
 from .prompt.template import PromptTemplate, UserPromptTemplate
+from .version import __version__
 
 __all__ = [
     "init",
@@ -61,6 +62,5 @@ __all__ = [
     "PromptConnectionTimeoutError",
     "bind_templates",
     "register_crewai_task",
+    "__version__",
 ]
-
-__version__ = "4.0.0"

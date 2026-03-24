@@ -44,4 +44,10 @@ Thumbs.db
 docs
 neatlogs.jsonl
 logs/
-examples/example.jsonc
+.python-version
+
+# Internal — not published to remote
+neatlogs/examples/
+e2e_test/
+DEPENDENCIES.md
+examples/sdk_examples/support_bot/

@@ -1,4 +1,4 @@
-include README.md
+include README.MD
 include LICENSE
 include pyproject.toml
 
@@ -7,6 +7,9 @@ recursive-include neatlogs *.md
 recursive-include neatlogs *.txt
 recursive-include neatlogs *.yml
 recursive-include neatlogs *.yaml
+recursive-include neatlogs/config *.json
+prune neatlogs/examples
+recursive-exclude neatlogs/examples *
 
 global-exclude __pycache__
 global-exclude *.py[cod]
@@ -19,4 +22,3 @@ global-exclude *.log
 global-exclude venv/
 global-exclude .venv/
 global-exclude .python-version
-include uv.lock

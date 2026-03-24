@@ -28,7 +28,7 @@ import os
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(__file__))
 
-from neatlogs.examples.detection_demo.config import load_settings, init_neatlogs
+from config import load_settings, init_neatlogs
 import neatlogs
 
 
@@ -111,9 +111,9 @@ Examples:
     
     if args.workflow is None:
         # Run all workflows (skip CrewAI if not installed)
-        from neatlogs.examples.detection_demo.workflows.workflow_customer_support import run_customer_support_workflow
-        from neatlogs.examples.detection_demo.workflows.workflow_research_assistant import run_research_assistant_workflow
-        from neatlogs.examples.detection_demo.workflows.workflow_sales_qualification import run_sales_qualification_workflow
+        from workflows.workflow_customer_support import run_customer_support_workflow
+        from workflows.workflow_research_assistant import run_research_assistant_workflow
+        from workflows.workflow_sales_qualification import run_sales_qualification_workflow
         workflows = [
             ("Customer Support (LangGraph)", run_customer_support_workflow),
             ("Research Assistant (LangChain)", run_research_assistant_workflow),
@@ -121,21 +121,21 @@ Examples:
         ]
         # Try to add CrewAI workflow if available
         try:
-            from neatlogs.examples.detection_demo.workflows.workflow_content_moderation import run_content_moderation_workflow
+            from workflows.workflow_content_moderation import run_content_moderation_workflow
             workflows.insert(1, ("Content Moderation (CrewAI)", run_content_moderation_workflow))
         except ImportError:
             print("⚠️  Skipping Content Moderation (CrewAI not installed)\n")
     elif args.workflow == 1:
-        from neatlogs.examples.detection_demo.workflows.workflow_customer_support import run_customer_support_workflow
+        from workflows.workflow_customer_support import run_customer_support_workflow
         workflows = [("Customer Support (LangGraph)", run_customer_support_workflow)]
     elif args.workflow == 2:
-        from neatlogs.examples.detection_demo.workflows.workflow_content_moderation import run_content_moderation_workflow
+        from workflows.workflow_content_moderation import run_content_moderation_workflow
         workflows = [("Content Moderation (CrewAI)", run_content_moderation_workflow)]
     elif args.workflow == 3:
-        from neatlogs.examples.detection_demo.workflows.workflow_research_assistant import run_research_assistant_workflow
+        from workflows.workflow_research_assistant import run_research_assistant_workflow
         workflows = [("Research Assistant (LangChain)", run_research_assistant_workflow)]
     elif args.workflow == 4:
-        from neatlogs.examples.detection_demo.workflows.workflow_sales_qualification import run_sales_qualification_workflow
+        from workflows.workflow_sales_qualification import run_sales_qualification_workflow
         workflows = [("Sales Lead Qualification (LangGraph)", run_sales_qualification_workflow)]
 
     # Run workflows

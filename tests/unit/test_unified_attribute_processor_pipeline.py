@@ -38,7 +38,7 @@ def _mk_span(
 
 
 def test_process_marks_http_client_span_as_http_kind() -> None:
-    proc = UnifiedAttributeProcessor(mapping_config=_load_mapping(), pricing_config={}, debug=False)
+    proc = UnifiedAttributeProcessor(mapping_config=_load_mapping(), debug=False)
 
     span = _mk_span(
         kind=SpanKind.CLIENT,
@@ -55,7 +55,7 @@ def test_process_marks_http_client_span_as_http_kind() -> None:
 
 
 def test_process_infers_retriever_kind_from_db_system() -> None:
-    proc = UnifiedAttributeProcessor(mapping_config=_load_mapping(), pricing_config={}, debug=False)
+    proc = UnifiedAttributeProcessor(mapping_config=_load_mapping(), debug=False)
 
     span = _mk_span(
         kind=SpanKind.INTERNAL,
@@ -68,7 +68,7 @@ def test_process_infers_retriever_kind_from_db_system() -> None:
 
 
 def test_process_mcp_response_only_when_mcp_signals_present() -> None:
-    proc = UnifiedAttributeProcessor(mapping_config=_load_mapping(), pricing_config={}, debug=False)
+    proc = UnifiedAttributeProcessor(mapping_config=_load_mapping(), debug=False)
 
     # No MCP signals => should NOT set mcp.response.value
     span_no_signal = _mk_span(
@@ -97,7 +97,7 @@ def test_process_mcp_response_only_when_mcp_signals_present() -> None:
 
 
 def test_process_streaming_chunk_events_produce_time_per_output_token_metric() -> None:
-    proc = UnifiedAttributeProcessor(mapping_config=_load_mapping(), pricing_config={}, debug=False)
+    proc = UnifiedAttributeProcessor(mapping_config=_load_mapping(), debug=False)
 
     # Avoid depending on OTel meter internals; just ensure record() is called.
     recorded: dict = {}
@@ -137,7 +137,7 @@ def test_process_streaming_chunk_events_produce_time_per_output_token_metric() -
 
 
 def test_process_drops_vectordb_embedding_model_on_non_embedding_spans() -> None:
-    proc = UnifiedAttributeProcessor(mapping_config=_load_mapping(), pricing_config={}, debug=False)
+    proc = UnifiedAttributeProcessor(mapping_config=_load_mapping(), debug=False)
 
     span = _mk_span(
         kind=SpanKind.INTERNAL,
@@ -155,7 +155,7 @@ def test_process_drops_vectordb_embedding_model_on_non_embedding_spans() -> None
 
 
 def test_process_sets_framework_when_gen_ai_system_is_known_framework() -> None:
-    proc = UnifiedAttributeProcessor(mapping_config=_load_mapping(), pricing_config={}, debug=False)
+    proc = UnifiedAttributeProcessor(mapping_config=_load_mapping(), debug=False)
 
     span = _mk_span(
         kind=SpanKind.INTERNAL,

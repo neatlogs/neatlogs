@@ -13,9 +13,6 @@ from dotenv import load_dotenv
 # Load .env file from current directory
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
-# Add parent directory to path for neatlogs import
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../..")))
-
 import neatlogs
 
 os.environ.setdefault("LANGCHAIN_TRACING_V2", "false")
@@ -104,8 +101,8 @@ def init_neatlogs(settings: Settings):
     #     debug=True,
     # )
     neatlogs.init(
-        api_key="",
-        endpoint="http://52.53.40.222:4100/api/data/v4/batch",
+        api_key=os.getenv("NEATLOGS_API_KEY", ""),
+        endpoint=os.getenv("NEATLOGS_ENDPOINT", "http://52.53.40.222:4100/api/data/v4/batch"),
         workflow_name="sales-nsfw-1",
         tags=["detection-demo", "multi-framework"],
         instrumentations=["langchain", "openai", "crewai", "azure_ai_inference"],

@@ -132,25 +132,21 @@ class PromptStreamClient:
         self,
         *,
         base_url: str,
-        project_id: str,
         api_key: str,
         on_error: Optional[Callable[[Exception], None]] = None,
         connect_timeout_seconds: float = 10.0,
         read_timeout_seconds: float = 65.0,
         reconnect_initial_seconds: float = 2.0,
         reconnect_max_seconds: float = 30.0,
-        dev_user_id: Optional[str] = None,
         session: Optional[requests.Session] = None,
     ):
         self.base_url = base_url.rstrip("/")
-        self.project_id = project_id
         self.api_key = api_key
         self.on_error = on_error
         self.connect_timeout_seconds = connect_timeout_seconds
         self.read_timeout_seconds = read_timeout_seconds
         self.reconnect_initial_seconds = max(0.5, reconnect_initial_seconds)
         self.reconnect_max_seconds = max(self.reconnect_initial_seconds, reconnect_max_seconds)
-        self.dev_user_id = dev_user_id
 
         self._session = session or requests.Session()
 
@@ -269,18 +265,15 @@ class PromptStreamClient:
     # API helpers (Langfuse-style)
     # ----------------------------
 
-    def fetch_prompt(self, name: str, *, label: str, project_id: Optional[str] = None) -> CachedPrompt:
+    def fetch_prompt(self, name: str, *, label: str) -> CachedPrompt:
         """
         Fetch one prompt by name+label from /api/v1/prompts/:name/fetch.
-
-        This endpoint supports API key auth.
         """
-        pid = project_id or self.project_id
         path = f"/api/v1/prompts/{quote(name, safe='')}/fetch"
         payload = self._request_json(
             method="GET",
             path=path,
-            params={"projectId": pid, "label": label},
+            params={"label": label},
         )
         cached = _normalize_prompt_object(payload)
         self._merge_prompt_into_cache(cached)
@@ -289,7 +282,6 @@ class PromptStreamClient:
     def list_prompts(
         self,
         *,
-        project_id: Optional[str] = None,
         name: Optional[str] = None,
         source: Optional[str] = None,
         label: Optional[str] = None,
@@ -298,12 +290,8 @@ class PromptStreamClient:
     ) -> Dict[str, Any]:
         """
         List prompt versions from /api/managed-prompts.
-
-        Note: This route requires managed-prompt auth (session or x-dev-user-id in dev).
         """
-        pid = project_id or self.project_id
         params: Dict[str, Any] = {
-            "project_id": pid,
             "limit": max(1, min(limit, 500)),
             "offset": max(0, offset),
         }
@@ -326,7 +314,6 @@ class PromptStreamClient:
         tags: Optional[Sequence[str]] = None,
         config: Optional[Mapping[str, Any]] = None,
         commit_message: Optional[str] = None,
-        project_id: Optional[str] = None,
     ) -> PromptHandle:
         """
         Create a new prompt version via /api/managed-prompts.
@@ -343,8 +330,7 @@ class PromptStreamClient:
         if type == "chat" and not isinstance(prompt, list):
             raise ValueError("For type='chat', prompt must be a list of message dicts.")
 
-        pid = project_id or self.project_id
-        body: Dict[str, Any] = {"project_id": pid, "name": name, "type": type}
+        body: Dict[str, Any] = {"name": name, "type": type}
 
         if type == "chat":
             body["messages"] = list(prompt)  # type: ignore[arg-type]
@@ -371,7 +357,6 @@ class PromptStreamClient:
         name: str,
         version: int,
         new_labels: Sequence[str] = (),
-        project_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Move labels onto a specific prompt version via /api/managed-prompts/:promptId/labels.
@@ -382,8 +367,6 @@ class PromptStreamClient:
         """
         if not new_labels:
             raise ValueError("new_labels is required. Specify at least one label, e.g. new_labels=['production'].")
-
-        pid = project_id or self.project_id
 
         # Resolve prompt_id from cache
         prompt_id: Optional[str] = None
@@ -396,7 +379,7 @@ class PromptStreamClient:
 
         # Fallback to list_prompts
         if not prompt_id:
-            listing = self.list_prompts(name=name, project_id=pid)
+            listing = self.list_prompts(name=name)
             for item in listing.get("items", []):
                 if item.get("version") == version:
                     prompt_id = item.get("id")
@@ -411,7 +394,7 @@ class PromptStreamClient:
             last_response = self._request_json(
                 method="POST",
                 path=path,
-                json_body={"project_id": pid, "label": label},
+                json_body={"label": label},
             )
 
         return {"name": name, "version": version, "labels": list(new_labels), **last_response}
@@ -420,7 +403,6 @@ class PromptStreamClient:
         self,
         *,
         prompt_name: str,
-        project_id: Optional[str] = None,
         content: Optional[str] = None,
         messages: Optional[Sequence[Dict[str, str]]] = None,
         config: Optional[Mapping[str, Any]] = None,
@@ -430,13 +412,8 @@ class PromptStreamClient:
     ) -> Dict[str, Any]:
         """
         Save prompt content/messages to managed prompt versions via playground endpoint.
-
-        This route supports API-key auth.
         """
-        pid = project_id or self.project_id
-
         body: Dict[str, Any] = {
-            "projectId": pid,
             "promptName": prompt_name,
         }
         if content is not None:
@@ -489,7 +466,6 @@ class PromptStreamClient:
 
         with self._session.get(
             url,
-            params={"project_id": self.project_id},
             headers=headers,
             stream=True,
             timeout=(self.connect_timeout_seconds, self.read_timeout_seconds),
@@ -585,16 +561,11 @@ class PromptStreamClient:
             logger.warning("PromptStreamClient error: %s", error)
 
     def _auth_headers(self) -> Dict[str, str]:
-        headers = {
+        return {
             "Accept": "text/event-stream, application/json",
             "Authorization": f"Bearer {self.api_key}",
             "x-api-key": self.api_key,
         }
-
-        if self.dev_user_id:
-            headers["x-dev-user-id"] = self.dev_user_id
-
-        return headers
 
     def _request_json(
         self,

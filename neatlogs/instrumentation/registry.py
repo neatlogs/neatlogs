@@ -55,7 +55,7 @@ INSTRUMENTATION_REGISTRY = {
         ],
         "tool": ["langchain", "llamaindex", "haystack", "mcp"],
         "http": ["requests", "httpx", "urllib3", "aiohttp"],
-        "framework": ["instructor", "guardrails", "letta", "promptflow", "google_adk"],
+        "framework": ["instructor", "guardrails", "promptflow", "google_adk"],
     },
     "libraries": {
         "azure_ai_inference": {
@@ -253,11 +253,6 @@ INSTRUMENTATION_REGISTRY = {
             "openllmetry": None,
             "openinference": "openinference.instrumentation.guardrails",
             "default_span_kind": "GUARDRAIL",
-        },
-        "letta": {
-            "openllmetry": None,
-            "openinference": None,
-            "default_span_kind": "AGENT",
         },
         "google_genai": {
             "openllmetry": None,

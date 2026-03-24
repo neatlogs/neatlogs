@@ -47,7 +47,7 @@ logs/
 .python-version
 
 # Internal — not published to remote
-examples/
 neatlogs/examples/
 e2e_test/
 DEPENDENCIES.md
+examples/sdk_examples/support_bot/

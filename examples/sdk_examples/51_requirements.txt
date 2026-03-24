@@ -1,0 +1,27 @@
+# Example 51: Milvus Vector Search with Neatlogs Observability
+# =============================================================
+# No API keys needed — uses milvus-lite (embedded, no server).
+#
+# Optional env vars:
+#   NEATLOGS_API_KEY, NEATLOGS_ENDPOINT  (export disabled if not set)
+#   MILVUS_URI   (default: /tmp/neatlogs_milvus_demo.db — milvus-lite)
+#   MILVUS_TOKEN (only for Zilliz Cloud)
+#
+# To use a full Milvus server instead of lite:
+#   MILVUS_URI=http://localhost:19530
+#   docker run -d --name milvus -p 19530:19530 milvusdb/milvus:v2.4.13 standalone
+
+# Neatlogs SDK
+neatlogs==1.1.9
+
+# Milvus — pymilvus client + milvus-lite (embedded mode, no server needed)
+# IMPORTANT: pymilvus and milvus-lite must be the same minor version (e.g. both 2.4.x)
+# Mixing major.minor versions (e.g. pymilvus 2.6 + milvus-lite 2.4) causes a hang on connect.
+pymilvus>=2.4.0,<2.5.0
+milvus-lite>=2.4.0,<2.5.0
+
+# Numerical
+numpy>=1.24.0,<3.0.0
+
+# Utilities
+python-dotenv>=1.0.0,<2.0.0

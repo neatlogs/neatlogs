@@ -1,0 +1,25 @@
+# Example 50: Multi-Agent Iterative Research (LangGraph + Google GenAI + Tavily)
+# ================================================================================
+# Required env vars (.env):
+#   NEATLOGS_API_KEY, NEATLOGS_ENDPOINT
+#   GOOGLE_API_KEY  (Gemini API key)
+#   TAVILY_API_KEY  (web search)
+
+# Neatlogs SDK + Google GenAI instrumentation
+neatlogs[google-genai]==1.1.9
+
+# Google GenAI via LangChain
+langchain-google-genai>=2.0.0,<3.0.0
+google-genai>=1.55.0,<2.0.0
+
+# LangGraph + LangChain ecosystem
+langgraph>=1.0.4,<2.0.0
+langchain-core>=0.3.0,<1.0.0
+langchain-community>=0.4.1,<1.0.0
+
+# Tavily web search
+tavily-python>=0.3.0,<1.0.0
+
+# Utilities
+pydantic>=2.0.0,<3.0.0
+python-dotenv>=1.0.0,<2.0.0

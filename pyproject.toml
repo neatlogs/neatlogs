@@ -35,6 +35,7 @@ opentelemetry-instrumentation-httpx = ">=0.50b0"
 opentelemetry-instrumentation-urllib3 = ">=0.50b0"
 opentelemetry-instrumentation-aiohttp-client = ">=0.50b0"
 opentelemetry-instrumentation-threading = ">=0.50b0"
+opentelemetry-instrumentation-logging = ">=0.50b0"
 wrapt = ">=1.0.0"
 httpx = ">=0.27.0"
 aiohttp = ">=3.9.0"
@@ -206,6 +207,7 @@ dependencies = [
     "opentelemetry-instrumentation-urllib3>=0.50b0",
     "opentelemetry-instrumentation-aiohttp-client>=0.50b0",
     "opentelemetry-instrumentation-threading>=0.50b0",
+    "opentelemetry-instrumentation-logging>=0.50b0",
     "wrapt>=1.0.0",
     "httpx>=0.27.0",
     "aiohttp>=3.9.0",

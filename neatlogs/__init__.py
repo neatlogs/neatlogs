@@ -29,8 +29,18 @@ Available span kinds:
 from .core.context import trace
 from .core.crewai_task_registry import register_crewai_task
 from .core.llm_binder import bind_templates
+from .core.log import log
 from .decorators import span
 from .init import flush, init, shutdown
+from .prompt.client import (
+    CachedPrompt,
+    PromptApiError,
+    PromptClientError,
+    PromptConnectionTimeoutError,
+    PromptHandle,
+    PromptNotFoundError,
+    PromptStreamClient,
+)
 from .prompt.template import PromptTemplate, UserPromptTemplate
 from .version import __version__
 
@@ -40,8 +50,16 @@ __all__ = [
     "shutdown",
     "span",
     "trace",
+    "log",
     "PromptTemplate",
     "UserPromptTemplate",
+    "CachedPrompt",
+    "PromptHandle",
+    "PromptStreamClient",
+    "PromptClientError",
+    "PromptApiError",
+    "PromptNotFoundError",
+    "PromptConnectionTimeoutError",
     "bind_templates",
     "register_crewai_task",
     "__version__",

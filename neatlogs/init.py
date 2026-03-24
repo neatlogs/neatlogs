@@ -10,7 +10,13 @@ import time
 import uuid
 from typing import List, Optional
 
+try:
+    from opentelemetry import logs
+except ImportError:
+    from opentelemetry import _logs as logs  # type: ignore[no-redef]
 from opentelemetry import metrics, trace
+from opentelemetry.sdk._logs import LoggerProvider
+from opentelemetry.sdk._logs.export import SimpleLogRecordProcessor
 from opentelemetry.sdk.environment_variables import (
     OTEL_ATTRIBUTE_COUNT_LIMIT,
     OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT,
@@ -33,12 +39,19 @@ logger = get_logger()
 _initialized = False
 _tracer_provider = None
 _meter_provider = None
+_log_provider = None
 _span_processor = None
+_debug_mode = False
 _session_config = {
     "session_id": None,
     "user_id": None,
     "workflow_name": None,
 }
+
+
+def is_debug_enabled() -> bool:
+    """Return True if neatlogs was initialized with debug=True."""
+    return _debug_mode
 
 _DEFAULT_MAX_SPAN_ATTRIBUTES = 10_000
 
@@ -115,10 +128,12 @@ def init(
     flush_interval: float = 5.0,
     debug: bool = False,
     disable_export: bool = False,
+    capture_logs: bool = False,
+    log_level: str = "DEBUG",
 ) -> None:
     """
     Initialize Neatlogs SDK.
-    
+
     Args:
         api_key: Neatlogs API key (or set NEATLOGS_API_KEY env var)
         endpoint: Neatlogs backend endpoint
@@ -133,6 +148,10 @@ def init(
         flush_interval: Seconds between batch flushes
         debug: Enable debug logging
         disable_export: Disable data export (for testing)
+        capture_logs: Capture Python logging.* calls and neatlogs.log() as LOG spans.
+                      Default: False. Enable to see intermediate steps in the timeline.
+        log_level: Minimum Python logging level to capture when capture_logs=True.
+                   Default: "DEBUG" (captures all levels).
     """
     global _initialized
 
@@ -166,6 +185,9 @@ def init(
             level=logging.DEBUG,
             format="%(name)s - %(levelname)s - %(message)s",
         )
+
+    global _debug_mode
+    _debug_mode = debug
 
     _patch_semconv_ai_for_openllmetry(debug=debug)
     resolved_workflow_name = _resolve_workflow_name(workflow_name)
@@ -259,6 +281,42 @@ def init(
     if debug:
         logger.debug("Neatlogs meter provider initialized")
 
+    # --- Logs signal (opt-in) ---
+    # neatlogs.log(), capture_stdout=True, and logging.* auto-capture all require
+    # capture_logs=True. When False, nothing is captured as LOG spans.
+    global _log_provider
+    if capture_logs:
+        from .core.log_exporter import NeatlogsLogExporter
+
+        _log_provider = LoggerProvider(resource=resource)
+        _log_provider.add_log_record_processor(
+            SimpleLogRecordProcessor(NeatlogsLogExporter(exporter))
+        )
+        logs.set_logger_provider(_log_provider)
+
+        try:
+            import logging as _stdlib_logging
+
+            from opentelemetry.instrumentation.logging import LoggingInstrumentor
+
+            _stdlib_level = getattr(_stdlib_logging, log_level.upper(), _stdlib_logging.WARNING)
+            LoggingInstrumentor().instrument(
+                log_level=_stdlib_level,
+                logger_provider=_log_provider,
+            )
+            if debug:
+                logger.debug(
+                    f"Neatlogs log capture enabled (logging.* at {log_level.upper()}+)"
+                )
+        except ImportError:
+            if debug:
+                logger.debug(
+                    "opentelemetry-instrumentation-logging not installed — "
+                    "Install with: pip install opentelemetry-instrumentation-logging"
+                )
+    elif debug:
+        logger.debug("Log capture disabled (pass capture_logs=True to enable)")
+
     manager = InstrumentationManager(
         provider=provider,
         debug=debug,
@@ -323,7 +381,7 @@ def get_session_config():
 
 def shutdown(timeout_millis: int = 30000) -> bool:
     """Shutdown the SDK and flush pending spans/metrics."""
-    global _tracer_provider, _meter_provider, _span_processor, _initialized
+    global _tracer_provider, _meter_provider, _log_provider, _span_processor, _initialized
 
     try:
         atexit.unregister(shutdown)
@@ -358,10 +416,29 @@ def shutdown(timeout_millis: int = 30000) -> bool:
             logger.error(f"Error shutting down meter provider: {e}", exc_info=True)
             success = False
 
+    if _log_provider:
+        try:
+            logger.debug("Shutting down log provider...")
+            ok = _log_provider.shutdown()
+            success = (ok is None or bool(ok)) and success
+            logger.debug("Log provider shut down successfully")
+        except Exception as e:
+            logger.error(f"Error shutting down log provider: {e}", exc_info=True)
+            success = False
+
+    try:
+        from opentelemetry.instrumentation.logging import LoggingInstrumentor
+
+        LoggingInstrumentor().uninstrument()
+    except Exception:
+        pass
+
     _initialized = False
     _tracer_provider = None
     _meter_provider = None
+    _log_provider = None
     _span_processor = None
+    _debug_mode = False
     _session_config["session_id"] = None
     _session_config["user_id"] = None
     _session_config["workflow_name"] = None

@@ -177,6 +177,7 @@ def span(
     attributes: Optional[Dict[str, Any]] = None,
     capture_input: Optional[bool] = None,
     capture_output: Optional[bool] = None,
+    capture_stdout: bool = False,
     # Agent-specific
     agent_name: Optional[str] = None,
     role: Optional[str] = None,
@@ -344,6 +345,7 @@ def span(
         attributes=extra,
         capture_input=capture_input,
         capture_output=capture_output,
+        capture_stdout=capture_stdout,
         postprocess_result=postprocess_result,
     )
 

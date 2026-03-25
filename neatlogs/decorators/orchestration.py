@@ -178,6 +178,7 @@ def span(
     capture_input: Optional[bool] = None,
     capture_output: Optional[bool] = None,
     capture_stdout: bool = False,
+    mask: Optional[Callable] = None,
     # Agent-specific
     agent_name: Optional[str] = None,
     role: Optional[str] = None,
@@ -347,6 +348,7 @@ def span(
         capture_output=capture_output,
         capture_stdout=capture_stdout,
         postprocess_result=postprocess_result,
+        mask=mask,
     )
 
 

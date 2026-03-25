@@ -1,11 +1,8 @@
 from __future__ import annotations
 
-import json
 import re
-import threading
-import time
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Mapping, MutableMapping, Optional, Sequence, Union
+from typing import Any, Dict, List, Mapping, MutableMapping, Optional, Sequence, Union
 from urllib.parse import quote
 
 import requests
@@ -26,11 +23,7 @@ class PromptApiError(PromptClientError):
 
 
 class PromptNotFoundError(PromptClientError):
-    """Raised when a prompt/label pair is not in cache and no fallback is provided."""
-
-
-class PromptConnectionTimeoutError(PromptClientError):
-    """Raised when initial SSE snapshot is not received in time."""
+    """Raised when a prompt/label/version is not found and no fallback is provided."""
 
 
 @dataclass(frozen=True)
@@ -47,7 +40,7 @@ class CachedPrompt:
 
 
 class PromptHandle:
-    """Compiled prompt handle returned by PromptStreamClient.get_prompt()."""
+    """Compiled prompt handle returned by PromptClient.get_prompt()."""
 
     def __init__(self, prompt: CachedPrompt):
         self._prompt = prompt
@@ -81,11 +74,7 @@ class PromptHandle:
         return self._prompt.type
 
     def compile(self, variables: Mapping[str, str]) -> str:
-        """
-        Compile string content with {{variable}} replacement.
-
-        Unmatched placeholders are left unchanged.
-        """
+        """Compile string content with {{variable}} replacement."""
         if self._prompt.content:
             return _render_template(self._prompt.content, variables)
 
@@ -99,15 +88,16 @@ class PromptHandle:
         """
         Compile message list with {{variable}} replacement.
 
-        If no messages exist, this returns a single synthetic system message from content.
+        If no messages exist, returns a single synthetic system message from content.
         """
         if self._prompt.messages:
-            compiled_messages: List[Dict[str, str]] = []
-            for message in self._prompt.messages:
-                role = str(message.get("role", "system"))
-                content = _render_template(str(message.get("content", "")), variables)
-                compiled_messages.append({"role": role, "content": content})
-            return compiled_messages
+            return [
+                {
+                    "role": str(message.get("role", "system")),
+                    "content": _render_template(str(message.get("content", "")), variables),
+                }
+                for message in self._prompt.messages
+            ]
 
         return [
             {
@@ -117,15 +107,12 @@ class PromptHandle:
         ]
 
 
-class PromptStreamClient:
+class PromptClient:
     """
-    Event-driven prompt client for Neatlogs managed prompts.
+    Prompt client for Neatlogs managed prompts.
 
-    Features:
-    - Persistent SSE stream for prompt snapshot + label move updates
-    - In-memory cache keyed by prompt name + label
-    - Synchronous get_prompt() after connect() receives first snapshot
-    - Optional prompt API helpers (fetch/list/create/set-label/save-as-version)
+    Fetches prompts on-demand from the backend (Redis-backed, falls back to Postgres).
+    No persistent connection or in-memory cache is maintained.
     """
 
     def __init__(
@@ -133,80 +120,11 @@ class PromptStreamClient:
         *,
         base_url: str,
         api_key: str,
-        on_error: Optional[Callable[[Exception], None]] = None,
-        connect_timeout_seconds: float = 10.0,
-        read_timeout_seconds: float = 65.0,
-        reconnect_initial_seconds: float = 2.0,
-        reconnect_max_seconds: float = 30.0,
         session: Optional[requests.Session] = None,
     ):
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
-        self.on_error = on_error
-        self.connect_timeout_seconds = connect_timeout_seconds
-        self.read_timeout_seconds = read_timeout_seconds
-        self.reconnect_initial_seconds = max(0.5, reconnect_initial_seconds)
-        self.reconnect_max_seconds = max(self.reconnect_initial_seconds, reconnect_max_seconds)
-
         self._session = session or requests.Session()
-
-        self._cache: Dict[str, Dict[str, CachedPrompt]] = {}
-        self._cache_lock = threading.Lock()
-
-        self._snapshot_received = threading.Event()
-        self._stop_event = threading.Event()
-        self._connected_lock = threading.Lock()
-        self._connected = False
-
-        self._stream_thread: Optional[threading.Thread] = None
-        self._active_stream_response: Optional[requests.Response] = None
-
-    @property
-    def is_connected(self) -> bool:
-        with self._connected_lock:
-            return self._connected
-
-    def connect(self, timeout_seconds: float = 10.0) -> None:
-        """
-        Start the SSE stream and wait for the first snapshot.
-
-        Raises PromptConnectionTimeoutError if the initial snapshot is not received
-        before timeout.
-        """
-        if self._stream_thread and self._stream_thread.is_alive():
-            if self._snapshot_received.wait(timeout=timeout_seconds):
-                return
-            raise PromptConnectionTimeoutError(
-                f"Timed out after {timeout_seconds}s waiting for prompt snapshot"
-            )
-
-        self._stop_event.clear()
-        self._stream_thread = threading.Thread(
-            target=self._run_stream_loop,
-            name="neatlogs-prompt-stream",
-            daemon=True,
-        )
-        self._stream_thread.start()
-
-        if not self._snapshot_received.wait(timeout=timeout_seconds):
-            raise PromptConnectionTimeoutError(
-                f"Timed out after {timeout_seconds}s waiting for prompt snapshot"
-            )
-
-    def disconnect(self) -> None:
-        self._stop_event.set()
-        response = self._active_stream_response
-        if response is not None:
-            try:
-                response.close()
-            except Exception:
-                pass
-
-        if self._stream_thread and self._stream_thread.is_alive():
-            self._stream_thread.join(timeout=2.0)
-
-        with self._connected_lock:
-            self._connected = False
 
     def get_prompt(
         self,
@@ -218,66 +136,53 @@ class PromptStreamClient:
         fallback: Optional[Union[str, Sequence[Dict[str, str]]]] = None,
     ) -> PromptHandle:
         """
-        Return prompt handle from cache (or fallback).
+        Fetch a prompt from the backend (Redis → Postgres fallback).
 
-        connect() must be called beforehand for deterministic behavior.
-        If neither label nor version is provided, defaults to label="production".
+        - Default (no label, no version): returns the most recently created version.
+        - label: returns the version holding that label.
+        - version: returns that specific version number.
         """
         if label is not None and version is not None:
             raise ValueError("Cannot specify both label and version.")
 
-        resolved_label = label if label is not None else ("production" if version is None else None)
+        try:
+            if label is not None:
+                return PromptHandle(self.fetch_prompt(name, label=label))
 
-        with self._cache_lock:
-            by_label = self._cache.get(name, {})
-            cached: Optional[CachedPrompt] = None
-            if resolved_label is not None:
-                cached = by_label.get(resolved_label)
-            elif version is not None:
-                cached = next(
-                    (p for p in by_label.values() if p.version == version),
-                    None,
-                )
-            has_any_cached = bool(self._cache)
+            listing = self.list_prompts(name=name)
+            items = listing.get("items", [])
 
-        if cached is not None:
-            return PromptHandle(cached)
+            if not items:
+                raise PromptNotFoundError(f"No versions found for prompt '{name}'")
 
-        if fallback is not None:
-            fallback_label = resolved_label or f"v{version}"
-            fallback_prompt = _build_fallback_prompt(name=name, label=fallback_label, fallback=fallback)
-            return PromptHandle(fallback_prompt)
+            if version is not None:
+                for item in items:
+                    if item.get("version") == version:
+                        return PromptHandle(_normalize_prompt_object(item))
+                raise PromptNotFoundError(f"Prompt '{name}' version {version} not found")
 
-        if not has_any_cached and not self.is_connected:
-            raise PromptNotFoundError(
-                "Prompt cache is empty and stream is disconnected. Call connect() first."
-            )
+            # Default: most recently created version
+            latest = max(items, key=lambda x: x.get("createdAt") or x.get("created_at") or "")
+            return PromptHandle(_normalize_prompt_object(latest))
 
-        ref = f"label '{resolved_label}'" if resolved_label else f"version {version}"
-        raise PromptNotFoundError(f"Prompt '{name}' with {ref} not found in cache")
-
-    def get_cached_prompt(self, name: str, label: str) -> Optional[CachedPrompt]:
-        with self._cache_lock:
-            by_label = self._cache.get(name, {})
-            return by_label.get(label)
+        except (PromptNotFoundError, PromptApiError):
+            if fallback is not None:
+                fallback_label = label or (f"v{version}" if version is not None else "latest")
+                return PromptHandle(_build_fallback_prompt(name=name, label=fallback_label, fallback=fallback))
+            raise
 
     # ----------------------------
-    # API helpers (Langfuse-style)
+    # API helpers
     # ----------------------------
 
     def fetch_prompt(self, name: str, *, label: str) -> CachedPrompt:
         """
         Fetch one prompt by name+label from /api/v1/prompts/:name/fetch.
+        Backend checks Redis first, then Postgres.
         """
         path = f"/api/v1/prompts/{quote(name, safe='')}/fetch"
-        payload = self._request_json(
-            method="GET",
-            path=path,
-            params={"label": label},
-        )
-        cached = _normalize_prompt_object(payload)
-        self._merge_prompt_into_cache(cached)
-        return cached
+        payload = self._request_json(method="GET", path=path, params={"label": label})
+        return _normalize_prompt_object(payload)
 
     def list_prompts(
         self,
@@ -288,9 +193,7 @@ class PromptStreamClient:
         limit: int = 100,
         offset: int = 0,
     ) -> Dict[str, Any]:
-        """
-        List prompt versions from /api/managed-prompts.
-        """
+        """List prompt versions from /api/managed-prompts."""
         params: Dict[str, Any] = {
             "limit": max(1, min(limit, 500)),
             "offset": max(0, offset),
@@ -321,7 +224,6 @@ class PromptStreamClient:
         For type="text", prompt must be a str.
         For type="chat", prompt must be a list of {"role", "content"} dicts.
         labels is required — specify at least one label (e.g. "production", "staging").
-        Labels are moved atomically — existing holders of each label are updated.
         """
         if not labels:
             raise ValueError("labels is required. Specify at least one label, e.g. labels=['production'].")
@@ -331,12 +233,10 @@ class PromptStreamClient:
             raise ValueError("For type='chat', prompt must be a list of message dicts.")
 
         body: Dict[str, Any] = {"name": name, "type": type}
-
         if type == "chat":
             body["messages"] = list(prompt)  # type: ignore[arg-type]
         else:
             body["content"] = prompt
-
         if labels is not None:
             body["labels"] = list(labels)
         if tags is not None:
@@ -347,9 +247,7 @@ class PromptStreamClient:
             body["commit_message"] = commit_message
 
         payload = self._request_json(method="POST", path="/api/managed-prompts", json_body=body)
-        cached = _normalize_prompt_object(payload.get("prompt", payload))
-        self._merge_prompt_into_cache(cached)
-        return PromptHandle(cached)
+        return PromptHandle(_normalize_prompt_object(payload.get("prompt", payload)))
 
     def update_prompt(
         self,
@@ -361,29 +259,17 @@ class PromptStreamClient:
         """
         Move labels onto a specific prompt version via /api/managed-prompts/:promptId/labels.
 
-        Resolves prompt_id from name+version (cache first, then list_prompts fallback).
-        Each label is moved atomically — the old holder loses the label.
         new_labels is required — specify at least one label (e.g. new_labels=["production"]).
         """
         if not new_labels:
             raise ValueError("new_labels is required. Specify at least one label, e.g. new_labels=['production'].")
 
-        # Resolve prompt_id from cache
+        listing = self.list_prompts(name=name)
         prompt_id: Optional[str] = None
-        with self._cache_lock:
-            by_label = self._cache.get(name, {})
-            for cached in by_label.values():
-                if cached.version == version:
-                    prompt_id = cached.id
-                    break
-
-        # Fallback to list_prompts
-        if not prompt_id:
-            listing = self.list_prompts(name=name)
-            for item in listing.get("items", []):
-                if item.get("version") == version:
-                    prompt_id = item.get("id")
-                    break
+        for item in listing.get("items", []):
+            if item.get("version") == version:
+                prompt_id = item.get("id")
+                break
 
         if not prompt_id:
             raise PromptNotFoundError(f"Prompt '{name}' version {version} not found")
@@ -391,13 +277,52 @@ class PromptStreamClient:
         path = f"/api/managed-prompts/{quote(prompt_id, safe='')}/labels"
         last_response: Dict[str, Any] = {}
         for label in new_labels:
-            last_response = self._request_json(
-                method="POST",
-                path=path,
-                json_body={"label": label},
-            )
+            last_response = self._request_json(method="POST", path=path, json_body={"label": label})
 
         return {"name": name, "version": version, "labels": list(new_labels), **last_response}
+
+    def delete_prompt(
+        self,
+        name: str,
+        version: int,
+    ) -> Dict[str, Any]:
+        """
+        Soft-delete a specific prompt version via DELETE /api/managed-prompts/:promptId.
+        """
+        listing = self.list_prompts(name=name)
+        prompt_id: Optional[str] = None
+        for item in listing.get("items", []):
+            if item.get("version") == version:
+                prompt_id = item.get("id")
+                break
+
+        if not prompt_id:
+            raise PromptNotFoundError(f"Prompt '{name}' version {version} not found")
+
+        path = f"/api/managed-prompts/{quote(prompt_id, safe='')}"
+        return self._request_json(method="DELETE", path=path)
+
+    def remove_tag(
+        self,
+        name: str,
+        version: int,
+        tag: str,
+    ) -> Dict[str, Any]:
+        """
+        Remove a tag from a prompt version via DELETE /api/managed-prompts/:promptId/tags.
+        """
+        listing = self.list_prompts(name=name)
+        prompt_id: Optional[str] = None
+        for item in listing.get("items", []):
+            if item.get("version") == version:
+                prompt_id = item.get("id")
+                break
+
+        if not prompt_id:
+            raise PromptNotFoundError(f"Prompt '{name}' version {version} not found")
+
+        path = f"/api/managed-prompts/{quote(prompt_id, safe='')}/tags"
+        return self._request_json(method="DELETE", path=path, json_body={"tag": tag})
 
     def save_as_version(
         self,
@@ -410,12 +335,8 @@ class PromptStreamClient:
         labels: Optional[Sequence[str]] = None,
         tags: Optional[Sequence[str]] = None,
     ) -> Dict[str, Any]:
-        """
-        Save prompt content/messages to managed prompt versions via playground endpoint.
-        """
-        body: Dict[str, Any] = {
-            "promptName": prompt_name,
-        }
+        """Save prompt content/messages as a new version via the playground endpoint."""
+        body: Dict[str, Any] = {"promptName": prompt_name}
         if content is not None:
             body["content"] = content
         if messages is not None:
@@ -429,140 +350,15 @@ class PromptStreamClient:
         if tags is not None:
             body["tags"] = list(tags)
 
-        return self._request_json(
-            method="POST",
-            path="/api/prompt-playground/save-as-version",
-            json_body=body,
-        )
+        return self._request_json(method="POST", path="/api/prompt-playground/save-as-version", json_body=body)
 
     # ----------------
     # Internal helpers
     # ----------------
 
-    def _run_stream_loop(self) -> None:
-        reconnect_delay = self.reconnect_initial_seconds
-
-        while not self._stop_event.is_set():
-            try:
-                self._stream_once()
-                reconnect_delay = self.reconnect_initial_seconds
-            except Exception as exc:
-                with self._connected_lock:
-                    self._connected = False
-
-                if not self._stop_event.is_set():
-                    self._emit_error(exc)
-
-                if self._stop_event.is_set():
-                    break
-
-                time.sleep(reconnect_delay)
-                reconnect_delay = min(reconnect_delay * 2.0, self.reconnect_max_seconds)
-
-    def _stream_once(self) -> None:
-        url = f"{self.base_url}/api/managed-prompts/stream"
-
-        headers = self._auth_headers()
-
-        with self._session.get(
-            url,
-            headers=headers,
-            stream=True,
-            timeout=(self.connect_timeout_seconds, self.read_timeout_seconds),
-        ) as response:
-            self._active_stream_response = response
-
-            if response.status_code >= 400:
-                body = _safe_response_text(response)
-                raise PromptApiError(
-                    f"Prompt SSE stream failed ({response.status_code}): {body}"
-                )
-
-            with self._connected_lock:
-                self._connected = True
-
-            current_event = "message"
-            data_lines: List[str] = []
-
-            for raw_line in response.iter_lines(decode_unicode=True):
-                if self._stop_event.is_set():
-                    return
-
-                if raw_line is None:
-                    continue
-
-                line = raw_line.rstrip("\r")
-
-                if not line:
-                    self._handle_sse_event(current_event, data_lines)
-                    current_event = "message"
-                    data_lines = []
-                    continue
-
-                if line.startswith(":"):
-                    continue
-
-                if line.startswith("event:"):
-                    current_event = line[6:].strip() or "message"
-                    continue
-
-                if line.startswith("data:"):
-                    data_lines.append(line[5:].lstrip())
-                    continue
-
-            raise PromptClientError("Prompt SSE stream disconnected")
-
-    def _handle_sse_event(self, event_name: str, data_lines: Sequence[str]) -> None:
-        if not data_lines:
-            return
-
-        raw_data = "\n".join(data_lines)
-        try:
-            payload = json.loads(raw_data)
-        except json.JSONDecodeError:
-            logger.debug("Ignoring non-JSON prompt SSE event: %s", raw_data[:180])
-            return
-
-        if event_name == "snapshot":
-            if not isinstance(payload, list):
-                logger.debug("Ignoring snapshot event with invalid payload type: %s", type(payload))
-                return
-
-            prompts = [_normalize_prompt_object(item) for item in payload if isinstance(item, Mapping)]
-            with self._cache_lock:
-                self._cache = {}
-                for prompt in prompts:
-                    self._merge_prompt_into_cache_locked(prompt)
-
-            self._snapshot_received.set()
-            return
-
-        if isinstance(payload, Mapping) and str(payload.get("type", "")) == "label_moved":
-            prompt = _normalize_prompt_event(payload)
-            self._merge_prompt_into_cache(prompt)
-            return
-
-    def _merge_prompt_into_cache(self, prompt: CachedPrompt) -> None:
-        with self._cache_lock:
-            self._merge_prompt_into_cache_locked(prompt)
-
-    def _merge_prompt_into_cache_locked(self, prompt: CachedPrompt) -> None:
-        name_bucket = self._cache.setdefault(prompt.name, {})
-        for label in prompt.labels:
-            name_bucket[label] = prompt
-
-    def _emit_error(self, error: Exception) -> None:
-        if self.on_error:
-            try:
-                self.on_error(error)
-            except Exception:
-                logger.exception("PromptStreamClient on_error callback failed")
-        else:
-            logger.warning("PromptStreamClient error: %s", error)
-
     def _auth_headers(self) -> Dict[str, str]:
         return {
-            "Accept": "text/event-stream, application/json",
+            "Accept": "application/json",
             "Authorization": f"Bearer {self.api_key}",
             "x-api-key": self.api_key,
         }
@@ -583,11 +379,7 @@ class PromptStreamClient:
             url=url,
             params=params,
             json=json_body,
-            headers={
-                **self._auth_headers(),
-                "Accept": "application/json",
-                "Content-Type": "application/json",
-            },
+            headers={**self._auth_headers(), "Content-Type": "application/json"},
             timeout=timeout_seconds,
         )
 
@@ -622,7 +414,6 @@ def _safe_response_text(response: requests.Response, limit: int = 400) -> str:
 
 
 def _normalize_prompt_object(raw: Mapping[str, Any]) -> CachedPrompt:
-    # Accept both camelCase and snake_case keys for resilience.
     raw_messages = raw.get("messages")
     messages: Optional[List[Dict[str, str]]] = None
     if isinstance(raw_messages, Sequence) and not isinstance(raw_messages, (str, bytes, bytearray)):
@@ -684,45 +475,6 @@ def _normalize_prompt_object(raw: Mapping[str, Any]) -> CachedPrompt:
         updated_at=updated_at,
         type=prompt_type,
     )
-
-
-def _normalize_prompt_event(event: Mapping[str, Any]) -> CachedPrompt:
-    labels_raw = event.get("labels")
-    if isinstance(labels_raw, list) and labels_raw:
-        labels = [str(l) for l in labels_raw if str(l).strip()]
-    else:
-        single = str(event.get("label", ""))
-        labels = [single] if single.strip() else []
-
-    return CachedPrompt(
-        id=str(event.get("promptId", "")),
-        name=str(event.get("promptName", "")),
-        version=int(event.get("version", 0) or 0),
-        content=str(event.get("content", "")),
-        messages=_coerce_messages(event.get("messages")),
-        config=dict(event.get("config") or {}),
-        labels=labels,
-        updated_at=str(event.get("updatedAt", "")),
-        type="text",
-    )
-
-
-def _coerce_messages(raw_messages: Any) -> Optional[List[Dict[str, str]]]:
-    if not isinstance(raw_messages, Sequence) or isinstance(raw_messages, (str, bytes, bytearray)):
-        return None
-
-    messages: List[Dict[str, str]] = []
-    for item in raw_messages:
-        if not isinstance(item, Mapping):
-            continue
-        messages.append(
-            {
-                "role": str(item.get("role", "system")),
-                "content": str(item.get("content", "")),
-            }
-        )
-
-    return messages or None
 
 
 def _build_fallback_prompt(

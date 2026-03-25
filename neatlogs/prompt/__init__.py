@@ -6,10 +6,9 @@ from .client import (
     CachedPrompt,
     PromptApiError,
     PromptClientError,
-    PromptConnectionTimeoutError,
     PromptHandle,
     PromptNotFoundError,
-    PromptStreamClient,
+    PromptClient,
 )
 from .template import PromptTemplate, UserPromptTemplate
 
@@ -18,9 +17,8 @@ __all__ = [
     "UserPromptTemplate",
     "CachedPrompt",
     "PromptHandle",
-    "PromptStreamClient",
+    "PromptClient",
     "PromptClientError",
     "PromptApiError",
     "PromptNotFoundError",
-    "PromptConnectionTimeoutError",
 ]

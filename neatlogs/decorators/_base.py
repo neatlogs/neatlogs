@@ -8,7 +8,7 @@ import functools
 import inspect
 import json
 import os
-from typing import Any, Callable, Dict, Optional, Tuple, TypeVar
+from typing import Any, Callable, Dict, Optional, Tuple, TypeVar, Union
 
 from opentelemetry import trace as otel_trace
 from opentelemetry.trace import Status, StatusCode
@@ -142,6 +142,7 @@ def _decorate_span(
     capture_output: Optional[bool] = None,
     capture_stdout: bool = False,
     postprocess_result: Optional[Callable[[Any, Any, Dict[str, Any]], None]] = None,
+    mask: Optional[Callable] = None,
 ) -> Callable[[F], F]:
     """
     Generic decorator factory for a single span boundary.
@@ -160,6 +161,7 @@ def _decorate_span(
             @functools.wraps(func)
             async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
                 from ..core.log import _CaptureStdoutContext
+                from ..core.mask import register_mask
 
                 with tracer.start_as_current_span(
                     span_name, kind=otel_trace.SpanKind.INTERNAL
@@ -173,6 +175,8 @@ def _decorate_span(
                         metadata=metadata,
                         attributes=attributes,
                     )
+                    if mask is not None:
+                        span.set_attribute("neatlogs.mask_id", register_mask(mask))
                     if description:
                         span.set_attribute("neatlogs.description", description)
 
@@ -213,6 +217,7 @@ def _decorate_span(
         @functools.wraps(func)
         def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
             from ..core.log import _CaptureStdoutContext
+            from ..core.mask import register_mask
 
             with tracer.start_as_current_span(span_name, kind=otel_trace.SpanKind.INTERNAL) as span:
                 _set_common_span_attrs(
@@ -224,6 +229,8 @@ def _decorate_span(
                     metadata=metadata,
                     attributes=attributes,
                 )
+                if mask is not None:
+                    span.set_attribute("neatlogs.mask_id", register_mask(mask))
                 if description:
                     span.set_attribute("neatlogs.description", description)
 

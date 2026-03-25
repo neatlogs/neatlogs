@@ -35,11 +35,10 @@ from .init import flush, init, shutdown
 from .prompt.client import (
     CachedPrompt,
     PromptApiError,
+    PromptClient,
     PromptClientError,
-    PromptConnectionTimeoutError,
     PromptHandle,
     PromptNotFoundError,
-    PromptStreamClient,
 )
 from .prompt.template import PromptTemplate, UserPromptTemplate
 from .version import __version__
@@ -55,11 +54,10 @@ __all__ = [
     "UserPromptTemplate",
     "CachedPrompt",
     "PromptHandle",
-    "PromptStreamClient",
+    "PromptClient",
     "PromptClientError",
     "PromptApiError",
     "PromptNotFoundError",
-    "PromptConnectionTimeoutError",
     "bind_templates",
     "register_crewai_task",
     "__version__",

@@ -3,7 +3,7 @@ Context managers for manual span creation.
 """
 
 from contextlib import contextmanager
-from typing import Any, Dict, Optional, Union
+from typing import Any, Callable, Dict, Optional, Union
 
 from opentelemetry import trace as otel_trace
 
@@ -18,6 +18,7 @@ def trace(
     user_prompt_variables: Optional[Dict[str, Any]] = None,
     version: Optional[str] = None,
     capture_stdout: bool = False,
+    mask: Optional[Callable] = None,
     **attributes,
 ):
     """
@@ -172,6 +173,9 @@ def trace(
                 _set_span_attributes(
                     span, kind, template_string, prompt_variables, version, attributes
                 )
+                if mask is not None:
+                    from .mask import register_mask
+                    span.set_attribute("neatlogs.mask_id", register_mask(mask))
                 if stdout_ctx:
                     stdout_ctx.__enter__()
                 try:
@@ -186,6 +190,9 @@ def trace(
                 _set_span_attributes(
                     span, kind, template_string, prompt_variables, version, attributes
                 )
+                if mask is not None:
+                    from .mask import register_mask
+                    span.set_attribute("neatlogs.mask_id", register_mask(mask))
                 if stdout_ctx:
                     stdout_ctx.__enter__()
                 try:

@@ -7,7 +7,7 @@ import os
 import random
 import threading
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from opentelemetry.context import Context
 from opentelemetry.sdk.trace import ReadableSpan, Span, SpanProcessor
@@ -15,6 +15,7 @@ from opentelemetry.sdk.trace import ReadableSpan, Span, SpanProcessor
 from .attribute_processor import UnifiedAttributeProcessor
 from .exporter import NeatlogsExporter
 from .logger import get_logger
+from .mask import apply_mask
 
 logger = get_logger()
 
@@ -25,10 +26,12 @@ class NeatlogsSpanProcessor(SpanProcessor):
         exporter: NeatlogsExporter,
         sample_rate: float = 1.0,
         debug: bool = False,
+        mask: Optional[Callable[[Dict[str, Any]], Any]] = None,
     ):
         self.exporter = exporter
         self.sample_rate = sample_rate
         self.debug = debug
+        self.mask = mask
 
         self._init_processor()
 
@@ -411,6 +414,7 @@ class NeatlogsSpanProcessor(SpanProcessor):
 
         rewritten = self._dedupe_and_rewrite(ready)
         for s in rewritten:
+            s = apply_mask(s, self.mask)
             self.exporter.export(s)
             self.perf_stats["spans_exported"] += 1
 

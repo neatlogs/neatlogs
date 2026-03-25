@@ -8,7 +8,7 @@ import re
 import sys
 import time
 import uuid
-from typing import List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 try:
     from opentelemetry import logs
@@ -116,7 +116,7 @@ def _patch_semconv_ai_for_openllmetry(debug: bool) -> None:
 
 def init(
     api_key: Optional[str] = None,
-    endpoint: str = "http://localhost:3000/api/data/v4/batch",
+    endpoint: str = "https://staging-cloud.neatlogs.com/api/data/v4/batch",
     workflow_name: Optional[str] = None,
     session_id: Optional[str] = None,
     auto_session: bool = False,
@@ -130,6 +130,9 @@ def init(
     disable_export: bool = False,
     capture_logs: bool = False,
     log_level: str = "DEBUG",
+    mask: Optional[Callable[[Dict[str, Any]], Optional[Dict[str, Any]]]] = None,
+    pii_enabled: Optional[bool] = None,
+    pii_span_types: Optional[List[str]] = None,
 ) -> None:
     """
     Initialize Neatlogs SDK.
@@ -152,6 +155,27 @@ def init(
                       Default: False. Enable to see intermediate steps in the timeline.
         log_level: Minimum Python logging level to capture when capture_logs=True.
                    Default: "DEBUG" (captures all levels).
+        mask: Optional callable applied to every span dict before export.
+              Receives the full span dict and must return the (possibly modified) dict.
+              Use this to redact PII from inputs, outputs, and attributes.
+              Per-span masks (set via @span(mask=fn) or with trace(..., mask=fn))
+              take precedence over this global mask.
+              Example::
+
+                  def redact(span):
+                      attrs = span.get("attributes", {})
+                      for key in list(attrs):
+                          if "email" in key:
+                              attrs[key] = "***"
+                      return span
+
+                  neatlogs.init(mask=redact)
+        pii_enabled: Override the team-level server-side PII redaction toggle for this
+              project. True = enable redaction, False = disable redaction entirely.
+              When None (default), the team setting in the Neatlogs dashboard is used.
+        pii_span_types: Override which span types have server-side PII redaction applied.
+              Pass a list of span kind strings, e.g. ["LLM", "TOOL"]. When None (default),
+              the team setting is used. Pass an empty list to disable redaction for all types.
     """
     global _initialized
 
@@ -225,6 +249,10 @@ def init(
             raise ValueError("All tags must be strings")
         # Store as comma-separated string for OTel resource attributes
         resource_attrs["neatlogs.tags"] = ",".join(tags)
+    if pii_enabled is not None:
+        resource_attrs["neatlogs.pii.enabled"] = "true" if pii_enabled else "false"
+    if pii_span_types is not None:
+        resource_attrs["neatlogs.pii.span_types"] = ",".join(pii_span_types)
     resource = Resource.create(resource_attrs)
 
     global _tracer_provider
@@ -266,6 +294,7 @@ def init(
         exporter=exporter,
         sample_rate=sample_rate,
         debug=debug,
+        mask=mask,
     )
     provider.add_span_processor(_span_processor)
 

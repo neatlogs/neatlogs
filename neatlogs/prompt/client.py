@@ -374,14 +374,29 @@ class PromptClient:
     ) -> Dict[str, Any]:
         url = f"{self.base_url}{path}"
 
-        response = self._session.request(
-            method=method,
-            url=url,
-            params=params,
-            json=json_body,
-            headers={**self._auth_headers(), "Content-Type": "application/json"},
-            timeout=timeout_seconds,
-        )
+        try:
+            from opentelemetry.context import attach, detach, set_value
+            from opentelemetry.instrumentation.utils import _SUPPRESS_INSTRUMENTATION_KEY
+            _token = attach(set_value(_SUPPRESS_INSTRUMENTATION_KEY, True))
+        except Exception:
+            _token = None
+
+        try:
+            response = self._session.request(
+                method=method,
+                url=url,
+                params=params,
+                json=json_body,
+                headers={**self._auth_headers(), "Content-Type": "application/json"},
+                timeout=timeout_seconds,
+            )
+        finally:
+            if _token is not None:
+                try:
+                    from opentelemetry.context import detach
+                    detach(_token)
+                except Exception:
+                    pass
 
         if response.status_code >= 400:
             body = _safe_response_text(response)

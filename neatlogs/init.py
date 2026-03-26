@@ -46,6 +46,8 @@ _session_config = {
     "session_id": None,
     "user_id": None,
     "workflow_name": None,
+    "_api_key": None,
+    "_base_url": None,
 }
 
 
@@ -226,10 +228,16 @@ def init(
         if debug:
             logger.debug(f"Auto-generated session_id: {final_session_id}")
 
+    from urllib.parse import urlparse as _urlparse
+    _parsed = _urlparse(endpoint)
+    _base_url = f"{_parsed.scheme}://{_parsed.netloc}"
+
     global _session_config
     _session_config["session_id"] = final_session_id
     _session_config["user_id"] = user_id
     _session_config["workflow_name"] = resolved_workflow_name
+    _session_config["_api_key"] = resolved_key
+    _session_config["_base_url"] = _base_url
 
     resource_attrs = {
         SERVICE_NAME: workflow_name or "neatlogs-app",

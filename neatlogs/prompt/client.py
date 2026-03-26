@@ -73,6 +73,14 @@ class PromptHandle:
     def type(self) -> str:
         return self._prompt.type
 
+    @property
+    def content(self) -> str:
+        return self._prompt.content
+
+    @property
+    def messages(self) -> Optional[List[Dict[str, str]]]:
+        return list(self._prompt.messages) if self._prompt.messages else None
+
     def compile(self, variables: Mapping[str, str]) -> str:
         """Compile string content with {{variable}} replacement."""
         if self._prompt.content:
@@ -133,7 +141,6 @@ class PromptClient:
         label: Optional[str] = None,
         version: Optional[int] = None,
         type: str = "text",
-        fallback: Optional[Union[str, Sequence[Dict[str, str]]]] = None,
     ) -> PromptHandle:
         """
         Fetch a prompt from the backend (Redis → Postgres fallback).
@@ -145,31 +152,24 @@ class PromptClient:
         if label is not None and version is not None:
             raise ValueError("Cannot specify both label and version.")
 
-        try:
-            if label is not None:
-                return PromptHandle(self.fetch_prompt(name, label=label))
+        if label is not None:
+            return PromptHandle(self.fetch_prompt(name, label=label))
 
-            listing = self.list_prompts(name=name)
-            items = listing.get("items", [])
+        listing = self.list_prompts(name=name)
+        items = listing.get("items", [])
 
-            if not items:
-                raise PromptNotFoundError(f"No versions found for prompt '{name}'")
+        if not items:
+            raise PromptNotFoundError(f"No versions found for prompt '{name}'")
 
-            if version is not None:
-                for item in items:
-                    if item.get("version") == version:
-                        return PromptHandle(_normalize_prompt_object(item))
-                raise PromptNotFoundError(f"Prompt '{name}' version {version} not found")
+        if version is not None:
+            for item in items:
+                if item.get("version") == version:
+                    return PromptHandle(_normalize_prompt_object(item))
+            raise PromptNotFoundError(f"Prompt '{name}' version {version} not found")
 
-            # Default: most recently created version
-            latest = max(items, key=lambda x: x.get("createdAt") or x.get("created_at") or "")
-            return PromptHandle(_normalize_prompt_object(latest))
-
-        except (PromptNotFoundError, PromptApiError):
-            if fallback is not None:
-                fallback_label = label or (f"v{version}" if version is not None else "latest")
-                return PromptHandle(_build_fallback_prompt(name=name, label=fallback_label, fallback=fallback))
-            raise
+        # Default: most recently created version
+        latest = max(items, key=lambda x: x.get("createdAt") or x.get("created_at") or "")
+        return PromptHandle(_normalize_prompt_object(latest))
 
     # ----------------------------
     # API helpers
@@ -477,43 +477,101 @@ def _normalize_prompt_object(raw: Mapping[str, Any]) -> CachedPrompt:
     )
 
 
-def _build_fallback_prompt(
-    *,
-    name: str,
-    label: str,
-    fallback: Union[str, Sequence[Dict[str, str]]],
-) -> CachedPrompt:
-    if isinstance(fallback, str):
-        return CachedPrompt(
-            id="fallback",
-            name=name,
-            version=0,
-            content=fallback,
-            messages=None,
-            config={},
-            labels=[label],
-            updated_at="",
-            type="text",
+# ---------------------------------------------------------------------------
+# Module-level prompt API — credentials sourced from neatlogs.init()
+# ---------------------------------------------------------------------------
+
+_shared_client: Optional[PromptClient] = None
+
+
+def _get_shared_client() -> PromptClient:
+    global _shared_client
+    if _shared_client is not None:
+        return _shared_client
+
+    from ..init import _session_config
+
+    api_key = _session_config.get("_api_key") or ""
+    base_url = _session_config.get("_base_url") or ""
+
+    if not api_key or api_key == "disabled":
+        raise PromptClientError(
+            "No API key available. Call neatlogs.init(api_key=...) before using prompt methods."
         )
 
-    fallback_messages: List[Dict[str, str]] = []
-    for message in fallback:
-        if isinstance(message, Mapping):
-            fallback_messages.append(
-                {
-                    "role": str(message.get("role", "system")),
-                    "content": str(message.get("content", "")),
-                }
-            )
+    _shared_client = PromptClient(base_url=base_url, api_key=api_key)
+    return _shared_client
 
-    return CachedPrompt(
-        id="fallback",
-        name=name,
-        version=0,
-        content="",
-        messages=fallback_messages or None,
-        config={},
-        labels=[label],
-        updated_at="",
-        type="chat",
+
+def get_prompt(
+    name: str,
+    *,
+    label: Optional[str] = None,
+    version: Optional[int] = None,
+    type: str = "text",
+) -> PromptHandle:
+    return _get_shared_client().get_prompt(name, label=label, version=version, type=type)
+
+
+def fetch_prompt(name: str, *, label: str) -> CachedPrompt:
+    return _get_shared_client().fetch_prompt(name, label=label)
+
+
+def list_prompts(
+    *,
+    name: Optional[str] = None,
+    source: Optional[str] = None,
+    label: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> Dict[str, Any]:
+    return _get_shared_client().list_prompts(name=name, source=source, label=label, limit=limit, offset=offset)
+
+
+def create_prompt(
+    *,
+    name: str,
+    prompt: Union[str, Sequence[Dict[str, str]]],
+    type: str = "text",
+    labels: Sequence[str],
+    tags: Optional[Sequence[str]] = None,
+    config: Optional[Mapping[str, Any]] = None,
+    commit_message: Optional[str] = None,
+) -> PromptHandle:
+    return _get_shared_client().create_prompt(
+        name=name, prompt=prompt, type=type, labels=labels,
+        tags=tags, config=config, commit_message=commit_message,
     )
+
+
+def update_prompt(
+    *,
+    name: str,
+    version: int,
+    new_labels: Sequence[str] = (),
+) -> Dict[str, Any]:
+    return _get_shared_client().update_prompt(name=name, version=version, new_labels=new_labels)
+
+
+def save_as_version(
+    *,
+    prompt_name: str,
+    content: Optional[str] = None,
+    messages: Optional[Sequence[Dict[str, str]]] = None,
+    config: Optional[Mapping[str, Any]] = None,
+    commit_message: Optional[str] = None,
+    labels: Optional[Sequence[str]] = None,
+    tags: Optional[Sequence[str]] = None,
+) -> Dict[str, Any]:
+    return _get_shared_client().save_as_version(
+        prompt_name=prompt_name, content=content, messages=messages,
+        config=config, commit_message=commit_message, labels=labels, tags=tags,
+    )
+
+
+def delete_prompt(name: str, version: int) -> Dict[str, Any]:
+    return _get_shared_client().delete_prompt(name, version)
+
+
+def remove_tag(name: str, version: int, tag: str) -> Dict[str, Any]:
+    return _get_shared_client().remove_tag(name, version, tag)

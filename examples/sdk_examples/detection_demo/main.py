@@ -28,7 +28,7 @@ import os
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(__file__))
 
-from config import load_settings, init_neatlogs
+from examples.sdk_examples.detection_demo.config import load_settings, init_neatlogs
 import neatlogs
 
 
@@ -40,9 +40,9 @@ def print_banner():
 ║                  DETECTION DEMO - MULTI-FRAMEWORK WORKFLOWS                  ║
 ║                                                                              ║
 ║  Showcasing AI Agent Detection System with:                                 ║
-║  • 4 Workflows: Customer Support, Content Mod, Research, Sales              ║
-║  • 26 Test Scenarios                                                         ║
-║  • Detections: Classifiers, Regex, Conditional                              ║
+║  • 5 Workflows: Customer Support, Content Mod, Research, Sales, PII Demo    ║
+║  • 33 Test Scenarios                                                         ║
+║  • Detections: Classifiers, Regex, Conditional, PII Redaction               ║
 ║                                                                              ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
 """
@@ -64,6 +64,7 @@ def print_summary(workflows_run: list):
     print("  • Span nesting (WORKFLOW → AGENT → LLM/TOOL)")
     print("  • Detection triggers (nsfw, hate, jailbreaking, refusals)")
     print("  • RAG pipeline (RETRIEVER → RERANKER)")
+    print("  • PII redaction (SDK mask + server-side Presidio, all operators)")
     print(f"{'─'*80}\n")
 
 
@@ -84,8 +85,8 @@ Examples:
     parser.add_argument(
         "--workflow", "-w",
         type=int,
-        choices=[1, 2, 3, 4],
-        help="Run specific workflow (1=Customer Support, 2=Content Moderation, 3=Research Assistant, 4=Sales Qualification)",
+        choices=[1, 2, 3, 4, 5, 6, 7],
+        help="Run specific workflow (1=Customer Support, 2=Content Moderation, 3=Research Assistant, 4=Sales Qualification, 5=PII Redaction, 7=Gemini Async Streaming)",
     )
     args = parser.parse_args()
 
@@ -111,32 +112,43 @@ Examples:
     
     if args.workflow is None:
         # Run all workflows (skip CrewAI if not installed)
-        from workflows.workflow_customer_support import run_customer_support_workflow
-        from workflows.workflow_research_assistant import run_research_assistant_workflow
-        from workflows.workflow_sales_qualification import run_sales_qualification_workflow
+        from examples.sdk_examples.detection_demo.workflows.workflow_customer_support import run_customer_support_workflow
+        from examples.sdk_examples.detection_demo.workflows.workflow_research_assistant import run_research_assistant_workflow
+        from examples.sdk_examples.detection_demo.workflows.workflow_sales_qualification import run_sales_qualification_workflow
+        from examples.sdk_examples.detection_demo.workflows.workflow_pii_redaction import run_pii_redaction_workflow
         workflows = [
             ("Customer Support (LangGraph)", run_customer_support_workflow),
             ("Research Assistant (LangChain)", run_research_assistant_workflow),
             ("Sales Lead Qualification (LangGraph)", run_sales_qualification_workflow),
+            ("PII Redaction Demo", run_pii_redaction_workflow),
         ]
         # Try to add CrewAI workflow if available
         try:
-            from workflows.workflow_content_moderation import run_content_moderation_workflow
+            from examples.sdk_examples.detection_demo.workflows.workflow_content_moderation import run_content_moderation_workflow
             workflows.insert(1, ("Content Moderation (CrewAI)", run_content_moderation_workflow))
         except ImportError:
             print("⚠️  Skipping Content Moderation (CrewAI not installed)\n")
     elif args.workflow == 1:
-        from workflows.workflow_customer_support import run_customer_support_workflow
+        from examples.sdk_examples.detection_demo.workflows.workflow_customer_support import run_customer_support_workflow
         workflows = [("Customer Support (LangGraph)", run_customer_support_workflow)]
     elif args.workflow == 2:
-        from workflows.workflow_content_moderation import run_content_moderation_workflow
+        from examples.sdk_examples.detection_demo.workflows.workflow_content_moderation import run_content_moderation_workflow
         workflows = [("Content Moderation (CrewAI)", run_content_moderation_workflow)]
     elif args.workflow == 3:
-        from workflows.workflow_research_assistant import run_research_assistant_workflow
+        from examples.sdk_examples.detection_demo.workflows.workflow_research_assistant import run_research_assistant_workflow
         workflows = [("Research Assistant (LangChain)", run_research_assistant_workflow)]
     elif args.workflow == 4:
-        from workflows.workflow_sales_qualification import run_sales_qualification_workflow
+        from examples.sdk_examples.detection_demo.workflows.workflow_sales_qualification import run_sales_qualification_workflow
         workflows = [("Sales Lead Qualification (LangGraph)", run_sales_qualification_workflow)]
+    elif args.workflow == 5:
+        from examples.sdk_examples.detection_demo.workflows.workflow_pii_redaction import run_pii_redaction_workflow
+        workflows = [("PII Redaction Demo", run_pii_redaction_workflow)]
+    elif args.workflow == 6:
+        from examples.sdk_examples.detection_demo.workflows.workflow_prompt_management import run_prompt_management_workflow
+        workflows = [("Prompt Management", run_prompt_management_workflow)]
+    elif args.workflow == 7:
+        from examples.sdk_examples.detection_demo.workflows.workflow_gemini_async_streaming import run_gemini_async_streaming_workflow
+        workflows = [("Gemini Async Streaming", run_gemini_async_streaming_workflow)]
 
     # Run workflows
     completed_workflows = []

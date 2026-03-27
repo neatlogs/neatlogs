@@ -219,6 +219,9 @@ class InstrumentationManager:
             if convention == "openinference" and library == "litellm":
                 self._patch_openinference_litellm_ignore_instrumentation_suppression()
 
+            if convention == "openinference" and library == "google_genai":
+                self._patch_openinference_google_genai_stream_finally()
+
         except Exception as e:
             raise Exception(f"Failed to instrument {library} with {convention}: {e}")
 
@@ -604,6 +607,71 @@ class InstrumentationManager:
         except Exception as e:
             if self.debug:
                 logger.warning(f"⚠️  Failed to patch OpenLLMetry OpenAI suppression: {e}")
+
+    def _patch_openinference_google_genai_stream_finally(self) -> None:
+        """
+        Patch OpenInference google_genai _Stream.__aiter__ so async spans always end.
+
+        The upstream __aiter__ only calls _finish_tracing on natural exhaustion or
+        exception. If the async generator is abandoned early (caller breaks, discards
+        the stream, or GC collects without aclose()), the span is never ended.
+
+        This patch moves _finish_tracing into a finally block.
+        """
+        try:
+            from opentelemetry import trace as trace_api
+
+            from openinference.instrumentation.google_genai._stream import _Stream
+
+            async def _fixed_aiter(self):
+                status = trace_api.Status(status_code=trace_api.StatusCode.OK)
+                try:
+                    async for item in self.__wrapped__:
+                        try:
+                            chunk_text = ""
+                            if hasattr(item, "text") and item.text:
+                                chunk_text = item.text
+                            elif hasattr(item, "candidates") and item.candidates:
+                                for candidate in item.candidates:
+                                    if hasattr(candidate, "content") and candidate.content:
+                                        if hasattr(candidate.content, "parts") and candidate.content.parts:
+                                            for part in candidate.content.parts:
+                                                if hasattr(part, "text") and part.text:
+                                                    chunk_text += part.text
+                            if chunk_text:
+                                self._with_span.span.add_event(
+                                    name="gen_ai.content.chunk",
+                                    attributes={
+                                        "gen_ai.content.chunk.index": self._chunk_index,
+                                        "gen_ai.content.chunk.text": chunk_text[:500],
+                                    },
+                                )
+                                self._chunk_index += 1
+                        except Exception:
+                            pass
+                        self._response_accumulator.process_chunk(item)
+                        yield item
+                except Exception as exception:
+                    status = trace_api.Status(
+                        status_code=trace_api.StatusCode.ERROR,
+                        description=f"{type(exception).__name__}: {exception}",
+                    )
+                    self._with_span.record_exception(exception)
+                    raise
+                finally:
+                    self._finish_tracing(status=status)
+
+            _Stream.__aiter__ = _fixed_aiter
+
+            if self.debug:
+                logger.debug(
+                    "Patched OpenInference google_genai _Stream: try/finally async span completion"
+                )
+        except Exception as e:
+            if self.debug:
+                logger.warning(
+                    f"⚠️  Failed to patch OpenInference google_genai _Stream: {e}"
+                )
 
     def _get_instrumentor_class_name(self, library: str, convention: str) -> str:
         if convention == "neatlogs":

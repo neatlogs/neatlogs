@@ -1,0 +1,80 @@
+"""
+Neatlogs SDK - Simple, powerful LLM observability.
+
+Primary API:
+    - init(), flush(), shutdown() - Lifecycle management
+    - @span(kind="...") - Universal decorator for custom code instrumentation
+    - trace() - Context manager for prompt tracking and session management
+    - PromptTemplate - Structured prompt versioning
+
+Quick Start:
+    >>> from neatlogs import init, span, trace, PromptTemplate
+    >>> 
+    >>> init(api_key="...", instrumentations=["openai"])
+    >>> 
+    >>> @span(kind="WORKFLOW")
+    >>> def my_workflow(query: str):
+    ...     return process(query)
+
+Available span kinds:
+    - "WORKFLOW" - Top-level orchestration
+    - "AGENT" - Agent execution
+    - "CHAIN" - Sequential processing
+    - "TOOL" - Tool/function call
+    - "RETRIEVER" - RAG retrieval
+    - "EMBEDDING" - Embedding generation
+    - "MCP_TOOL" - MCP protocol tool (auto Pydantic handling)
+"""
+
+from .core.context import trace
+from .core.crewai_task_registry import register_crewai_task
+from .core.llm_binder import bind_templates
+from .core.log import log
+from .decorators import span
+from .init import flush, init, shutdown
+from .prompt.client import (
+    CachedPrompt,
+    PromptApiError,
+    PromptClient,
+    PromptClientError,
+    PromptHandle,
+    PromptNotFoundError,
+    get_prompt,
+    fetch_prompt,
+    list_prompts,
+    create_prompt,
+    update_prompt,
+    save_as_version,
+    delete_prompt,
+    remove_tag,
+)
+from .prompt.template import PromptTemplate, UserPromptTemplate
+from .version import __version__
+
+__all__ = [
+    "init",
+    "flush",
+    "shutdown",
+    "span",
+    "trace",
+    "log",
+    "PromptTemplate",
+    "UserPromptTemplate",
+    "CachedPrompt",
+    "PromptHandle",
+    "PromptClient",
+    "PromptClientError",
+    "PromptApiError",
+    "PromptNotFoundError",
+    "get_prompt",
+    "fetch_prompt",
+    "list_prompts",
+    "create_prompt",
+    "update_prompt",
+    "save_as_version",
+    "delete_prompt",
+    "remove_tag",
+    "bind_templates",
+    "register_crewai_task",
+    "__version__",
+]

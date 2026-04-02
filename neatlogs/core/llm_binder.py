@@ -54,33 +54,47 @@ def bind_templates(
     system_str = str(system_tpl.template)
     user_str = str(user_tpl.template) if user_tpl is not None else None
 
-    # Clone the LLM so different agents can each have their own binding
-    try:
-        llm_copy = llm.model_copy()   # Pydantic v2
-    except AttributeError:
+    # Clone the LLM so different agents can each have their own binding.
+    # Safe to bind in-place when each agent constructs its own LLM instance.
+    import copy as _copy
+    llm_copy = None
+    for _attempt in (
+        lambda: llm.model_copy(),  # Pydantic v2
+        lambda: llm.copy(),        # Pydantic v1
+        lambda: _copy.copy(llm),   # plain Python classes (e.g. crewai.LLM)
+    ):
         try:
-            llm_copy = llm.copy()     # Pydantic v1
+            llm_copy = _attempt()
+            break
         except Exception:
-            llm_copy = llm            # Fallback: mutate in place (last resort)
-            logger.warning(
-                "[bind_templates] Could not copy LLM — falling back to in-place binding. "
-                "Agents sharing this LLM instance may overwrite each other's templates."
-            )
-
-    # Capture the already-instrumented class-level invoke BEFORE we set the
-    # instance attribute, so our wrapper can delegate to it correctly.
-    # crewai-native LLMs (e.g. AzureCompletion) have no .invoke — skip wrapping.
-    if not hasattr(type(llm_copy), "invoke"):
+            continue
+    if llm_copy is None:
+        llm_copy = llm
         logger.debug(
-            "[bind_templates] LLM type %s has no invoke() — returning as-is.",
+            "[bind_templates] LLM type %s is not copyable — binding in place.",
+            type(llm).__name__,
+        )
+
+    # Capture the already-instrumented class-level method BEFORE we set the
+    # instance attribute, so our wrapper can delegate to it correctly.
+    # Prefer .invoke() (LangChain models); fall back to .call() (crewai.LLM).
+    if hasattr(type(llm_copy), "invoke"):
+        _method_name = "invoke"
+        _class_method = type(llm_copy).invoke
+    elif hasattr(type(llm_copy), "call"):
+        _method_name = "call"
+        _class_method = type(llm_copy).call
+    else:
+        logger.warning(
+            "[bind_templates] LLM type %s has neither invoke() nor call() — "
+            "prompt templates will not be captured on spans.",
             type(llm_copy).__name__,
         )
         return llm_copy
-    instrumented_class_invoke = type(llm_copy).invoke
 
-    def _invoke_with_templates(*args: Any, **kwargs: Any) -> Any:
+    def _wrapped_with_templates(*args: Any, **kwargs: Any) -> Any:
         # Push template strings into OTel context so that when the instrumented
-        # class invoke starts the LLM span, on_start() picks them up.
+        # method starts the LLM span, on_start() picks them up.
         ctx = get_current()
         ctx = set_value("neatlogs.prompt_template", system_str, context=ctx)
         if user_str is not None:
@@ -91,7 +105,7 @@ def bind_templates(
             if user_tpl is not None and compiled_vars:
                 user_tpl.compile(**compiled_vars)
             # Call the instrumented class method with our copy as `self`.
-            return instrumented_class_invoke(llm_copy, *args, **kwargs)
+            return _class_method(llm_copy, *args, **kwargs)
         finally:
             detach(token)
             PromptContext.clear()
@@ -100,5 +114,15 @@ def bind_templates(
 
     # Instance attribute takes precedence over the class attribute in Python's
     # MRO, so this runs BEFORE the OpenInference class-level patch.
-    llm_copy.invoke = _invoke_with_templates
+    # Pydantic v2 strict models reject direct attribute assignment — bypass via
+    # object.__setattr__ which works for any Python object.
+    try:
+        setattr(llm_copy, _method_name, _wrapped_with_templates)
+    except (ValueError, TypeError):
+        object.__setattr__(llm_copy, _method_name, _wrapped_with_templates)
+    logger.debug(
+        "[bind_templates] Wrapped %s.%s() with template injection.",
+        type(llm_copy).__name__,
+        _method_name,
+    )
     return llm_copy

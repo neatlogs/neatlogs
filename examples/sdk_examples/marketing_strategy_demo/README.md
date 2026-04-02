@@ -56,9 +56,10 @@ WORKFLOW: marketing_strategy_workflow
 
 ## Quick Start
 
-### 1. Install dependencies
+### 1. Navigate to the demo directory and install dependencies
 
 ```bash
+cd examples/sdk_examples/marketing_strategy_demo
 pip install -r requirements.txt
 ```
 

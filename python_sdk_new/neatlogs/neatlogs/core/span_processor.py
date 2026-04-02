@@ -39,6 +39,8 @@ class NeatlogsSpanProcessor(SpanProcessor):
             "spans_processed": 0,
             "spans_exported": 0,
         }
+        # Track parent span IDs scheduled for suppression (RETRIEVER dedup)
+        self._retrievers_to_suppress: set = set()
 
     def _init_processor(self) -> None:
         base_path = os.path.dirname(os.path.dirname(__file__))
@@ -90,6 +92,7 @@ class NeatlogsSpanProcessor(SpanProcessor):
         start_time = time.perf_counter()
         try:
             span_kind = span.attributes.get("openinference.span.kind") if span.attributes else None
+
             is_llm_span = (
                 span_kind == "LLM"
                 or "chat" in span.name.lower()
@@ -223,6 +226,28 @@ class NeatlogsSpanProcessor(SpanProcessor):
             if span.name == "PromptTemplate":
                 unified_attrs.setdefault("neatlogs.internal", True)
                 unified_attrs["neatlogs.span.kind"] = "Neatlogs.INTERNAL"
+
+            # 4b. Retriever span dedup: when a neatlogs RETRIEVER ends inside an OI
+            # RETRIEVER parent, schedule the OI parent for suppression.
+            # Then when the OI parent ends, mark it as internal.
+            if nl_kind == "retriever":
+                is_internal = unified_attrs.get("neatlogs.internal", False)
+                # When a neatlogs (internal) RETRIEVER ends, schedule its OI parent
+                # for suppression. OI attributes are set after span start so we can't
+                # track parent type in on_start — instead the nl_kind == "retriever"
+                # gate below ensures only RETRIEVER parents actually get suppressed.
+                if is_internal and span.parent:
+                    self._retrievers_to_suppress.add(span.parent.span_id)
+                if span.context.span_id in self._retrievers_to_suppress:
+                    self._retrievers_to_suppress.discard(span.context.span_id)
+                    unified_attrs["neatlogs.internal"] = True
+                    # Do NOT change neatlogs.span.kind — "retriever" must be preserved
+                    # so the backend stores span_type = "RETRIEVER" correctly.
+                    if self.debug:
+                        logger.debug(
+                            f"[Retriever Merge] Marked OI retriever '{span.name}' as internal "
+                            f"(had neatlogs retriever child)"
+                        )
 
             # 5. Build resource attributes
             resource_attrs = {}

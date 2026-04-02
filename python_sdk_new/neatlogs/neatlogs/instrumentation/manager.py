@@ -186,6 +186,8 @@ class InstrumentationManager:
                 elif library == "langchain":
                     self._patch_openinference_langchain_finish_reason()
                     self._patch_openinference_langchain_streaming_timing()
+                    self._patch_openinference_langchain_suppress_internal()
+                    self._patch_openinference_langchain_suppress_internal()
                 elif library == "litellm":
                     self._patch_openinference_litellm_ignore_instrumentation_suppression()
                     self._patch_openinference_litellm_streaming_timing()
@@ -511,6 +513,99 @@ class InstrumentationManager:
         except Exception as e:
             if self.debug:
                 logger.warning(f"⚠️  Failed to patch OI LangChain finish_reason: {e}")
+
+    def _patch_openinference_langchain_suppress_internal(self) -> None:
+        """
+        Suppress LCEL plumbing spans (PromptTemplate, RunnableSequence,
+        RunnableLambda, parsers, etc.) and transparently reparent their
+        children to the nearest kept ancestor.
+
+        When a run is suppressed in _start_trace, we map its run_id to its
+        parent's span in _spans_by_run so any child looking up parent_run_id
+        transparently finds the grandparent's span as context.
+        """
+        try:
+            from openinference.instrumentation.langchain._tracer import OpenInferenceTracer
+            from opentelemetry import trace as trace_api, context as context_api
+
+            if getattr(OpenInferenceTracer, "_NEATLOGS_PATCHED_SUPPRESS_INTERNAL", False):
+                return
+
+            _SUPPRESS_EXACT = frozenset({
+                "PromptTemplate",
+                "ChatPromptTemplate",
+                "RunnableLambda",
+                "RunnableSequence",
+                "ReActSingleInputOutputParser",
+                "StrOutputParser",
+                "JsonOutputParser",
+                "XMLOutputParser",
+            })
+            _SUPPRESS_PREFIXES = ("RunnableAssign", "RunnableParallel")
+
+            def _should_suppress(name):
+                if not name:
+                    return False
+                return name in _SUPPRESS_EXACT or any(
+                    name.startswith(p) for p in _SUPPRESS_PREFIXES
+                )
+
+            _orig_start_trace = OpenInferenceTracer._start_trace
+
+            def _patched_start_trace(self, run):
+                if _should_suppress(run.name):
+                    if not hasattr(self, "_nl_skipped_runs"):
+                        self._nl_skipped_runs = set()
+                    self._nl_skipped_runs.add(run.id)
+                    # Keep run indexed so BaseTracer.on_chain_end doesn't throw
+                    self.run_map[str(run.id)] = run
+                    # Map this run_id → parent's span so children reparent up
+                    if run.parent_run_id:
+                        parent_span = self._spans_by_run.get(run.parent_run_id)
+                        if parent_span is not None:
+                            self._spans_by_run[run.id] = parent_span
+                    return
+                _orig_start_trace(self, run)
+                # Attach the created span to thread-local OTel context so that
+                # neatlogs.trace(), HTTP instrumentation, and other OTel spans
+                # created inside LangChain callbacks see this span as parent.
+                span = self._spans_by_run.get(run.id)
+                if span is not None:
+                    ctx = trace_api.set_span_in_context(span)
+                    token = context_api.attach(ctx)
+                    if not hasattr(self, "_nl_context_tokens"):
+                        self._nl_context_tokens = {}
+                    self._nl_context_tokens[run.id] = token
+
+            # _end_trace may already be patched by streaming timing — chain on top
+            _prev_end_trace = OpenInferenceTracer._end_trace
+
+            def _patched_end_trace(self, run):
+                skipped = getattr(self, "_nl_skipped_runs", None)
+                if skipped and run.id in skipped:
+                    skipped.discard(run.id)
+                    self.run_map.pop(str(run.id), None)
+                    self._spans_by_run.pop(run.id, None)
+                    return
+                # Detach thread-local context before ending the span
+                tokens = getattr(self, "_nl_context_tokens", {})
+                token = tokens.pop(run.id, None)
+                if token is not None:
+                    context_api.detach(token)
+                _prev_end_trace(self, run)
+
+            OpenInferenceTracer._start_trace = _patched_start_trace
+            OpenInferenceTracer._end_trace = _patched_end_trace
+            OpenInferenceTracer._NEATLOGS_PATCHED_SUPPRESS_INTERNAL = True
+
+            if self.debug:
+                logger.debug(
+                    "Patched OI LangChain: suppress internal LCEL spans "
+                    "(PromptTemplate, RunnableSequence, RunnableLambda, parsers)"
+                )
+        except Exception as e:
+            if self.debug:
+                logger.warning(f"⚠️  Failed to patch OI LangChain suppress internal: {e}")
 
     # ---------------------------------------------------------------------------
     # OpenInference — LiteLLM patches

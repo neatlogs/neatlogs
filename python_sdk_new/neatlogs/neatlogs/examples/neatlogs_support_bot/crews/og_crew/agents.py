@@ -30,7 +30,18 @@ def make_question_extractor() -> Agent:
         "carefully to identify all questions, implied concerns, and the account context. "
         "You never assume — if something is unclear you note it as 'requires clarification'."
     )
-    bound_llm = neatlogs.bind_templates(LLM(model=f"azure/{AZURE_LLM_DEPLOYMENT}", base_url=AZURE_OPENAI_ENDPOINT, api_key=AZURE_OPENAI_API_KEY, api_version=OPENAI_API_VERSION), system_tpl)
+    bound_llm = neatlogs.bind_templates(
+        LLM(
+            model="azure/gpt-4o-mini",
+            base_url=AZURE_OPENAI_ENDPOINT,
+            api_key=AZURE_OPENAI_API_KEY,
+            api_version=OPENAI_API_VERSION,
+            temperature=0.2,
+            top_p=0.9,
+            max_completion_tokens=800,
+        ),
+        system_tpl,
+    )
     return Agent(
         role="Ticket Question Extractor",
         goal=(
@@ -58,7 +69,18 @@ def make_kb_rag_expert() -> Agent:
         "questions into short, high-signal search queries that maximize semantic similarity. "
         "You always cite the KB article IDs you used."
     )
-    bound_llm = neatlogs.bind_templates(LLM(model=f"azure/{AZURE_LLM_DEPLOYMENT}", base_url=AZURE_OPENAI_ENDPOINT, api_key=AZURE_OPENAI_API_KEY, api_version=OPENAI_API_VERSION), system_tpl)
+    bound_llm = neatlogs.bind_templates(
+        LLM(
+            model="azure/gpt-4o-mini",
+            base_url=AZURE_OPENAI_ENDPOINT,
+            api_key=AZURE_OPENAI_API_KEY,
+            api_version=OPENAI_API_VERSION,
+            temperature=0.2,
+            top_p=0.9,
+            max_completion_tokens=800,
+        ),
+        system_tpl,
+    )
     return Agent(
         role="KB RAG Expert",
         goal=(
@@ -86,7 +108,18 @@ def make_past_tickets_rag_expert() -> Agent:
         "with precision, identifying which prior resolutions are truly analogous to the "
         "current case. You always note the ticket IDs of cases you reference."
     )
-    bound_llm = neatlogs.bind_templates(LLM(model=f"azure/{AZURE_LLM_DEPLOYMENT}", base_url=AZURE_OPENAI_ENDPOINT, api_key=AZURE_OPENAI_API_KEY, api_version=OPENAI_API_VERSION), system_tpl)
+    bound_llm = neatlogs.bind_templates(
+        LLM(
+            model="azure/gpt-4o-mini",
+            base_url=AZURE_OPENAI_ENDPOINT,
+            api_key=AZURE_OPENAI_API_KEY,
+            api_version=OPENAI_API_VERSION,
+            temperature=0.2,
+            top_p=0.9,
+            max_completion_tokens=800,
+        ),
+        system_tpl,
+    )
     return Agent(
         role="Past Tickets RAG Expert",
         goal=(
@@ -114,7 +147,18 @@ def make_response_generator() -> Agent:
         "excellent written communication. You synthesize complex information into clear, "
         "actionable replies that customers can follow immediately."
     )
-    bound_llm = neatlogs.bind_templates(LLM(model=f"azure/{AZURE_LLM_DEPLOYMENT}", base_url=AZURE_OPENAI_ENDPOINT, api_key=AZURE_OPENAI_API_KEY, api_version=OPENAI_API_VERSION), system_tpl)
+    bound_llm = neatlogs.bind_templates(
+        LLM(
+            model="azure/gpt-4o-mini",
+            base_url=AZURE_OPENAI_ENDPOINT,
+            api_key=AZURE_OPENAI_API_KEY,
+            api_version=OPENAI_API_VERSION,
+            temperature=0.2,
+            top_p=0.9,
+            max_completion_tokens=800,
+        ),
+        system_tpl,
+    )
     return Agent(
         role="Support Response Generator",
         goal=(

@@ -25,7 +25,6 @@ The pipeline runs **5 sequential tasks**:
 
 - **Auto-instrumented traces** — every agent step, LLM call, and tool invocation
 - **Agent thoughts** — Thought / Action / Observation captured automatically
-- **Prompt templates** — system and user templates tracked via `PromptTemplate` / `UserPromptTemplate`
 - **Gemini tool spans** — nested LLM-inside-TOOL spans from the grounded search
 - **Structured output** — Pydantic models captured in trace output
 - **Delegation** — strategist can delegate sub-tasks to the analyst
@@ -99,7 +98,7 @@ DEMO_INPUTS = {
 ```
 marketing_strategy_demo/
 ├── main.py        # Entry point — inits Neatlogs, runs the crew
-├── agents.py      # 3 agents with Neatlogs prompt templates
+├── agents.py      # 3 agents with Azure OpenAI via crewai.LLM
 ├── task.py        # 5 tasks with Pydantic structured output
 ├── crew.py        # Crew assembly and execution
 ├── tools.py       # Gemini grounded search tools

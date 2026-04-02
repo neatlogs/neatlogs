@@ -39,7 +39,7 @@ neatlogs.init(
         "NEATLOGS_ENDPOINT",
         "https://staging-cloud.neatlogs.com/api/data/v4/batch",
     ),
-    instrumentations=["crewai", "google_genai"],
+    instrumentations=["openai", "crewai", "google_genai"],
     workflow_name="marketing-strategy-demo",
     tags=["demo", "crewai", "marketing-strategy"],
     debug=os.getenv("NEATLOGS_DEBUG", "false").lower() == "true",

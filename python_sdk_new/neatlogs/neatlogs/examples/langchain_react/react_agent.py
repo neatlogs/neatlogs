@@ -56,10 +56,11 @@ neatlogs.init(
 
 from typing import List
 from langchain_anthropic import ChatAnthropic
-from langchain_core.tools import tool
+from langchain_core.tools import tool, render_text_description
 from langchain_core.documents import Document
 from langchain_core.retrievers import BaseRetriever
 from langchain_core.callbacks import CallbackManagerForRetrieverRun
+from langchain_core.prompts import ChatPromptTemplate
 from langchain_classic.agents import AgentExecutor, create_react_agent
 from langchain_core.prompts import PromptTemplate as LCPromptTemplate
 
@@ -161,6 +162,12 @@ def calculate(expression: str) -> str:
         return f"Error: {e}"
 
 
+@tool
+def failing_tool(query: str) -> str:
+    """A tool that always raises an error — used to test error span capture."""
+    raise RuntimeError(f"Simulated tool failure for query: '{query}'")
+
+
 TOOLS = [knowledge_base_search, web_search, arxiv_search, calculate]
 
 # ---------------------------------------------------------------------------
@@ -173,16 +180,6 @@ _llm = ChatAnthropic(model="claude-haiku-4-5-20251001", temperature=0)
 # Prompt templates (neatlogs)
 # ---------------------------------------------------------------------------
 
-_agent_sys = PromptTemplate([{
-    "role": "system",
-    "content": (
-        "You are a research assistant. Use your tools to gather comprehensive information "
-        "before writing your final answer. Use knowledge_base_search for background facts, "
-        "web_search for current developments, arxiv_search for academic papers, "
-        "and calculate when numbers are needed."
-    ),
-}])
-_agent_user = UserPromptTemplate([{"role": "user", "content": "Research this topic: {{topic}}"}])
 
 _report_sys = PromptTemplate([{
     "role": "system",
@@ -214,17 +211,31 @@ _react_prompt = LCPromptTemplate.from_template(
     "Thought:{agent_scratchpad}"
 )
 
+_react_neatlogs_sys = PromptTemplate(
+    _react_prompt.template
+    .replace("Thought:{agent_scratchpad}", "")
+    .replace("{", "{{")
+    .replace("}", "}}")
+)
+
 _agent = create_react_agent(_llm, TOOLS, _react_prompt)
 _agent_executor = AgentExecutor(agent=_agent, tools=TOOLS, verbose=True, max_iterations=10)
+
+# Error-case agent: same prompt, but toolset includes failing_tool
+_error_tools = [failing_tool]
+_error_agent = create_react_agent(_llm, _error_tools, _react_prompt)
+_error_agent_executor = AgentExecutor(
+    agent=_error_agent, tools=_error_tools, verbose=True, max_iterations=3
+)
 
 # ---------------------------------------------------------------------------
 # Report-formatting chain
 # ---------------------------------------------------------------------------
 
-_report_lc_prompt = LCPromptTemplate.from_template(
-    "You are a technical writer. Format the research findings into a concise structured report.\n\n"
-    "Topic: {topic}\n\nResearch findings:\n{findings}\n\nWrite a short structured report."
-)
+_report_lc_prompt = ChatPromptTemplate.from_messages([
+    ("system", _report_sys.template[0]["content"]),
+    ("user", _report_user.template[0]["content"].replace("{{", "{").replace("}}", "}")),
+])
 _report_chain = _report_lc_prompt | _llm
 
 # ---------------------------------------------------------------------------
@@ -234,17 +245,48 @@ _report_chain = _report_lc_prompt | _llm
 @neatlogs.span(kind="WORKFLOW", name="react_research_workflow")
 def run_workflow(topic: str) -> str:
     # Step 1: ReAct agent gathers information using tools
-    with neatlogs.trace("react_agent", kind="LLM", prompt_template=_agent_sys, user_prompt_template=_agent_user):
-        agent_result = _agent_executor.invoke({"input": f"Research this topic thoroughly: {topic}"})
+    with neatlogs.trace("react_agent", kind="LLM", prompt_template=_react_neatlogs_sys):
+        _react_neatlogs_sys.compile(
+            tools=render_text_description(TOOLS),
+            tool_names=", ".join(t.name for t in TOOLS),
+            input=topic,
+        )
+        agent_result = _agent_executor.invoke({"input": topic})
     findings = agent_result.get("output", "")
 
-    # Step 2: Format findings into a report using a separate prompt|llm runnable
+    # Step 2: Format findings into a report
     with neatlogs.trace("report_writer", kind="LLM", prompt_template=_report_sys, user_prompt_template=_report_user):
+        _report_sys.compile()
+        _report_user.compile(topic=topic, findings=findings)
         report_result = _report_chain.invoke({"topic": topic, "findings": findings})
     if hasattr(report_result, "content"):
         return str(report_result.content)
     if isinstance(report_result, dict):
         return str(report_result.get("text") or report_result.get("output") or findings)
+    return str(report_result) if report_result is not None else findings
+
+
+@neatlogs.span(kind="WORKFLOW", name="error_research_workflow")
+def run_error_workflow(topic: str) -> str:
+    """Same structure as run_workflow but raises after the agent step to produce ERROR spans."""
+    # Step 1: ReAct agent gathers information
+    with neatlogs.trace("error_react_agent", kind="LLM", prompt_template=_react_neatlogs_sys):
+        _react_neatlogs_sys.compile(
+            tools=render_text_description(_error_tools),
+            tool_names=", ".join(t.name for t in _error_tools),
+            input=topic,
+        )
+        agent_result = _error_agent_executor.invoke({"input": topic})
+        raise RuntimeError(f"Simulated pipeline failure after agent step for topic: '{topic}'")
+    findings = agent_result.get("output", "")
+
+    # Step 2: Format findings into a report (only reached if agent recovers)
+    with neatlogs.trace("report_writer", kind="LLM", prompt_template=_report_sys, user_prompt_template=_report_user):
+        _report_sys.compile()
+        _report_user.compile(topic=topic, findings=findings)
+        report_result = _report_chain.invoke({"topic": topic, "findings": findings})
+    if hasattr(report_result, "content"):
+        return str(report_result.content)
     return str(report_result) if report_result is not None else findings
 
 
@@ -254,5 +296,12 @@ if __name__ == "__main__":
     report = run_workflow(topic)
     print("\n--- Final Report ---")
     print(report)
+
+    # print("\n--- Running error case ---")
+    # try:
+    #     run_error_workflow(topic)
+    # except Exception as exc:
+    #     print(f"Caught expected error: {exc}")
+
     neatlogs.flush()
     neatlogs.shutdown()

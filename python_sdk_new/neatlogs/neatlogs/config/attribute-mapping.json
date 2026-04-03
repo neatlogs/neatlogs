@@ -213,7 +213,6 @@
             },
             "system_prompt": {
               "sources": [
-                "llm.system",
                 "gen_ai.system_instructions"
               ],
               "target": "neatlogs.llm.system_prompt"

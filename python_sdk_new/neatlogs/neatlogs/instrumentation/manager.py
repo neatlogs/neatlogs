@@ -559,11 +559,19 @@ class InstrumentationManager:
                     self._nl_skipped_runs.add(run.id)
                     # Keep run indexed so BaseTracer.on_chain_end doesn't throw
                     self.run_map[str(run.id)] = run
-                    # Map this run_id → parent's span so children reparent up
+                    # Map this run_id → parent's span so children reparent up.
+                    # Priority: LangChain parent span → ambient OTel context span.
+                    # The OTel fallback handles the case where the suppressed span
+                    # has no LangChain parent (e.g. called from a neatlogs.trace block).
+                    parent_span = None
                     if run.parent_run_id:
                         parent_span = self._spans_by_run.get(run.parent_run_id)
-                        if parent_span is not None:
-                            self._spans_by_run[run.id] = parent_span
+                    if parent_span is None:
+                        current = trace_api.get_current_span()
+                        if current is not None and current.is_recording():
+                            parent_span = current
+                    if parent_span is not None:
+                        self._spans_by_run[run.id] = parent_span
                     return
                 _orig_start_trace(self, run)
                 # Attach the created span to thread-local OTel context so that

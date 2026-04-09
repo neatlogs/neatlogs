@@ -1,2 +1,0 @@
-neatlogs
-anthropic>=0.40

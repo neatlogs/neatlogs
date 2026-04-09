@@ -58,8 +58,6 @@ class AttributeMapper:
         if priority == "openinference":
             if "openinference.span.kind" in attributes:
                 span_kind_value = attributes["openinference.span.kind"]
-            elif "traceloop.span.kind" in attributes:
-                span_kind_value = attributes["traceloop.span.kind"]
         else:
             for source in sources:
                 if source in attributes:

@@ -6,6 +6,7 @@ These give agents access to real-time web information with source citations.
 """
 
 import os
+import neatlogs
 from crewai.tools import tool
 from google import genai
 from google.genai import types
@@ -15,7 +16,7 @@ from google.genai import types
 # Gemini client  (lazy init — auto-instrumented via "google_genai")
 # ---------------------------------------------------------------------------
 _gemini_client = None
-_GEMINI_MODEL = "gemini-2.0-flash"
+_GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 _GROUNDED_CONFIG = types.GenerateContentConfig(
     tools=[types.Tool(google_search=types.GoogleSearch())],
     temperature=0.2,
@@ -26,17 +27,18 @@ def _get_gemini_client() -> genai.Client:
     """Return a shared Gemini client, created on first use."""
     global _gemini_client
     if _gemini_client is None:
-        api_key = os.getenv("GEMINI_API_KEY")
+        api_key = os.getenv("GOOGLE_API_KEY")
         if not api_key:
             raise RuntimeError(
-                "GEMINI_API_KEY is not set. "
-                "Add it to your .env file (see .env.example)."
+                "GOOGLE_API_KEY is not set. "
+                "Add it to your .env file."
             )
         _gemini_client = genai.Client(api_key=api_key)
     return _gemini_client
 
 
-@tool("Search the internet with Google")
+@tool("Web Search Google")
+@neatlogs.span(kind="TOOL", name="Web Search Google")
 def search_web(query: str) -> str:
     """
     Search the internet using Google Search via Gemini grounding.
@@ -72,7 +74,8 @@ def search_web(query: str) -> str:
     return text
 
 
-@tool("Analyze website content")
+@tool("Analyze Website Content")
+@neatlogs.span(kind="TOOL", name="Analyze Website Content")
 def analyze_website(url: str) -> str:
     """
     Analyze and summarise the content of a specific website URL.

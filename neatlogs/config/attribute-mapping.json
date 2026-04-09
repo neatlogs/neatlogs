@@ -213,7 +213,6 @@
             },
             "system_prompt": {
               "sources": [
-                "llm.system",
                 "gen_ai.system_instructions"
               ],
               "target": "neatlogs.llm.system_prompt"
@@ -427,8 +426,7 @@
       "tool": {
         "name": {
           "sources": [
-            "tool.name",
-            "gen_ai.tool.name"
+            "tool.name"
           ],
           "target": "neatlogs.tool.name"
         },
@@ -473,6 +471,43 @@
             "agent.name"
           ],
           "target": "neatlogs.agent.name"
+        },
+        "role": {
+          "sources": [
+            "agent_role"
+          ],
+          "target": "neatlogs.agent.role"
+        }
+      },
+      "crewai": {
+        "description": "CrewAI framework attributes (from OpenInference instrumentation)",
+        "crew_id": {
+          "sources": ["crew_id"],
+          "target": "neatlogs.crewai.crew_id"
+        },
+        "crew_key": {
+          "sources": ["crew_key"],
+          "target": "neatlogs.crewai.crew_key"
+        },
+        "crew_number_of_agents": {
+          "sources": ["crew_number_of_agents"],
+          "target": "neatlogs.crewai.crew_number_of_agents"
+        },
+        "crew_number_of_tasks": {
+          "sources": ["crew_number_of_tasks"],
+          "target": "neatlogs.crewai.crew_number_of_tasks"
+        },
+        "version": {
+          "sources": ["crewai_version"],
+          "target": "neatlogs.crewai.version"
+        },
+        "task_id": {
+          "sources": ["task_id"],
+          "target": "neatlogs.task.id"
+        },
+        "task_key": {
+          "sources": ["task_key"],
+          "target": "neatlogs.task.key"
         }
       },
       "retriever": {
@@ -1002,8 +1037,12 @@
       "attributes": [
         "neatlogs.internal",
         "http.method",
+        "http.request.method",
         "http.url",
+        "url.full",
+        "url.path",
         "http.status_code",
+        "http.response.status_code",
         "http.request.body.size",
         "http.response.body.size",
         "service.name",

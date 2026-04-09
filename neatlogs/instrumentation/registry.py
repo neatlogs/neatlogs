@@ -163,6 +163,7 @@ INSTRUMENTATION_REGISTRY = {
             "openllmetry": "opentelemetry.instrumentation.crewai",
             "openinference": "openinference.instrumentation.crewai",
             "default_span_kind": "AGENT",
+            "auto_load": ["litellm"],
         },
         "autogen": {
             "openllmetry": None,

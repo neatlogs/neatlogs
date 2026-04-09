@@ -1,0 +1,6 @@
+-e ../../../[crewai,openai,langchain,azure-ai-inference]
+crewai>=1.9.3
+openai>=1.30.0
+langchain-openai>=0.2.0
+python-dotenv>=1.0.0
+numpy>=1.26.0

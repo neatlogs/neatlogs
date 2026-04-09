@@ -1,11 +1,11 @@
 """
-Neatlogs span processor.
+Neatlogs span processor — attribute normalization and file logging.
+Transport is handled by BatchSpanProcessor + OTLPSpanExporter (added in init.py).
 """
 
 import json
 import os
 import random
-import threading
 import time
 from typing import Any, Callable, Dict, List, Optional
 
@@ -13,7 +13,6 @@ from opentelemetry.context import Context
 from opentelemetry.sdk.trace import ReadableSpan, Span, SpanProcessor
 
 from .attribute_processor import UnifiedAttributeProcessor
-from .exporter import NeatlogsExporter
 from .logger import get_logger
 from .mask import apply_mask
 
@@ -23,43 +22,16 @@ logger = get_logger()
 class NeatlogsSpanProcessor(SpanProcessor):
     def __init__(
         self,
-        exporter: NeatlogsExporter,
         sample_rate: float = 1.0,
         debug: bool = False,
         mask: Optional[Callable[[Dict[str, Any]], Any]] = None,
     ):
-        self.exporter = exporter
         self.sample_rate = sample_rate
         self.debug = debug
         self.mask = mask
 
         self._init_processor()
-
-        self._log_raw_spans_enabled = self.debug or (
-            os.getenv("NEATLOGS_LOG_RAW_SPANS", "").lower() in ["true", "1", "yes"]
-        )
-        self._raw_log_file_path = None
-        self._raw_log_file_handle = None
-        if self._log_raw_spans_enabled:
-            self._raw_log_file_path = os.path.join(
-                os.getcwd(), os.getenv("NEATLOGS_LOG_RAW_SPANS_FILE", "spans_raw_optimized.log")
-            )
-            try:
-                self._raw_log_file_handle = open(self._raw_log_file_path, "a", encoding="utf-8")
-            except Exception:
-                self._raw_log_file_handle = None
-
-        self._pending: List[Dict[str, Any]] = []
-        self._pending_lock = threading.Lock()
-        self._pending_event = threading.Event()
-        self._stop_background = threading.Event()
-        self._dedupe_interval = float(os.getenv("NEATLOGS_DEDUPE_INTERVAL_S", "1.0"))
-        self._dedupe_latency_ns = int(os.getenv("NEATLOGS_DEDUPE_LATENCY_MS", "2000")) * 1_000_000
-        self._max_pending_spans = int(os.getenv("NEATLOGS_MAX_PENDING_SPANS", "5000"))
-        self._pending_high_watermark = 0
-        self._pending_dropped = 0
-        self._background_thread = threading.Thread(target=self._background_flush_loop, daemon=True)
-        self._background_thread.start()
+        self._init_file_logging()
 
         self.perf_stats = {
             "on_start_time": 0.0,
@@ -67,10 +39,11 @@ class NeatlogsSpanProcessor(SpanProcessor):
             "spans_processed": 0,
             "spans_exported": 0,
         }
+        # Track parent span IDs scheduled for suppression (RETRIEVER dedup)
+        self._retrievers_to_suppress: set = set()
 
     def _init_processor(self) -> None:
         base_path = os.path.dirname(os.path.dirname(__file__))
-
         mapping_path = os.path.join(base_path, "config", "attribute-mapping.json")
         try:
             with open(mapping_path, "r") as f:
@@ -78,16 +51,48 @@ class NeatlogsSpanProcessor(SpanProcessor):
         except Exception as e:
             logger.error(f"Failed to load attribute-mapping.json: {e}")
             mapping_config = {}
-
         self.unified_processor = UnifiedAttributeProcessor(
             mapping_config=mapping_config,
             debug=self.debug,
         )
 
+    def _init_file_logging(self) -> None:
+        # Raw OTel span JSON (before attribute normalization)
+        self._log_raw_spans_enabled = self.debug or (
+            os.getenv("NEATLOGS_LOG_RAW_SPANS", "").lower() in ["true", "1", "yes"]
+        )
+        self._raw_log_file_handle = None
+        if self._log_raw_spans_enabled:
+            raw_path = os.path.join(
+                os.getcwd(), os.getenv("NEATLOGS_LOG_RAW_SPANS_FILE", "spans_raw_optimized.log")
+            )
+            try:
+                self._raw_log_file_handle = open(raw_path, "a", encoding="utf-8")
+            except Exception:
+                self._raw_log_file_handle = None
+
+        # Processed span dict (after normalization — human-readable JSON lines)
+        self._log_processed_spans_enabled = os.getenv("NEATLOGS_LOG_SPANS", "").lower() in [
+            "true",
+            "1",
+            "yes",
+        ]
+        self._processed_log_file_handle = None
+        if self._log_processed_spans_enabled:
+            processed_path = os.path.join(
+                os.getcwd(), os.getenv("NEATLOGS_LOG_SPANS_FILE", "spans_optimized.log")
+            )
+            try:
+                self._processed_log_file_handle = open(processed_path, "a", encoding="utf-8")
+                logger.info(f"Processed span logging enabled: {processed_path}")
+            except Exception:
+                self._processed_log_file_handle = None
+
     def on_start(self, span: Span, parent_context: Optional[Context] = None) -> None:
         start_time = time.perf_counter()
         try:
             span_kind = span.attributes.get("openinference.span.kind") if span.attributes else None
+
             is_llm_span = (
                 span_kind == "LLM"
                 or "chat" in span.name.lower()
@@ -117,7 +122,6 @@ class NeatlogsSpanProcessor(SpanProcessor):
                 if captured_template:
                     template = captured_template
 
-            # Capture user prompt template and variables (separate from system prompt)
             user_template = get_value("neatlogs.user_prompt_template", context=ctx)
             user_variables_json = get_value("neatlogs.user_prompt_variables", context=ctx)
 
@@ -153,6 +157,11 @@ class NeatlogsSpanProcessor(SpanProcessor):
             self.perf_stats["on_start_time"] += time.perf_counter() - start_time
 
     def on_end(self, span: ReadableSpan) -> None:
+        # Skip processing for internal completion markers — they only need to
+        # be exported as-is by the downstream BatchSpanProcessor.
+        if span.name == "neatlogs.trace.complete":
+            return
+
         start_time = time.perf_counter()
         self.perf_stats["spans_processed"] += 1
 
@@ -160,7 +169,8 @@ class NeatlogsSpanProcessor(SpanProcessor):
             if self.debug:
                 logger.debug(f"[SpanProcessor.on_end] Span ending: {span.name}")
 
-            if self._raw_log_file_handle:
+            # 1. Log raw OTel span (before any processing)
+            if self._raw_log_file_handle and not self._raw_log_file_handle.closed:
                 try:
                     self._raw_log_file_handle.write(span.to_json() + "\n")
                     self._raw_log_file_handle.flush()
@@ -170,100 +180,95 @@ class NeatlogsSpanProcessor(SpanProcessor):
             if self.sample_rate < 1.0 and random.random() > self.sample_rate:
                 return
 
+            # 2. Process and normalize attributes
             unified_attrs = self.unified_processor.process(span)
 
-            # CRITICAL: Filter out large tokenized arrays for EMBEDDING/VECTOR_STORE spans
-            # These arrays can be 8+ MB and should NOT be sent to Kafka
+            # 3. Filter large tokenized arrays for EMBEDDING/VECTOR_STORE spans
             nl_kind = unified_attrs.get("neatlogs.span.kind")
             if nl_kind in ("embedding", "vector_store"):
-                # Check if this is a REAL embedding operation (flag set) or user's @span(kind="EMBEDDING")
-                skip_output = unified_attrs.get("neatlogs.raw._skip_output_value") == True
-                
+                skip_output = unified_attrs.get("neatlogs._skip_output_value") == True
+
                 keys_to_remove = []
                 for key in unified_attrs.keys():
-                    # Remove massive tokenized input/output arrays
                     if (
-                        "input_messages" in key or
-                        "output_messages" in key or
-                        "gen_ai.prompt" in key or
-                        "gen_ai.completion" in key or
-                        ".content" in key
+                        "input_messages" in key
+                        or "output_messages" in key
+                        or "gen_ai.prompt" in key
+                        or "gen_ai.completion" in key
+                        or ".content" in key
                     ):
                         keys_to_remove.append(key)
-                    # Only remove embedding input/output if it's a REAL embedding operation
                     elif skip_output and (
-                        key == "neatlogs.embedding.input" or
-                        key == "neatlogs.embedding.output" or
-                        key == "neatlogs.raw.embedding.input" or
-                        key == "neatlogs.raw.embedding.output"
+                        key == "neatlogs.embedding.input"
+                        or key == "neatlogs.embedding.output"
                     ):
                         keys_to_remove.append(key)
-                
+
                 for key in keys_to_remove:
                     unified_attrs.pop(key, None)
-                
+
                 if self.debug and keys_to_remove:
                     logger.debug(
                         f"[EMBEDDING Filter] Removed {len(keys_to_remove)} large attribute keys "
-                        f"from {nl_kind} span (skip_output={skip_output}) to prevent 8+ MB payloads"
+                        f"from {nl_kind} span (skip_output={skip_output})"
                     )
 
+            # 4. Filter prompt template keys for non-LLM spans
             nl_kind = unified_attrs.get("neatlogs.span.kind")
-            # crewai_task spans carry task-level template keys (neatlogs.task.*) which
-            # are distinct from LLM-level keys — do not strip them.
             if nl_kind not in ("llm", "embedding", "crewai_task") and span.name != "PromptTemplate":
                 for k in (
                     "neatlogs.llm.prompt_template",
                     "neatlogs.llm.prompt_template_variables",
                     "neatlogs.llm.prompt_template.version",
-                    "neatlogs.raw.llm.prompt_template",
-                    "neatlogs.raw.llm.prompt_template_variables",
-                    "neatlogs.raw.llm.prompt_template.version",
-                ):
-                    unified_attrs.pop(k, None)
-            else:
-                for k in (
-                    "neatlogs.raw.llm.token_count.prompt",
-                    "neatlogs.raw.llm.token_count.completion",
-                    "neatlogs.raw.llm.token_count.total",
-                ):
-                    unified_attrs.pop(k, None)
-
-                for k in (
-                    "neatlogs.raw.gen_ai.usage.input_tokens",
-                    "neatlogs.raw.gen_ai.usage.output_tokens",
                 ):
                     unified_attrs.pop(k, None)
 
             if span.name == "PromptTemplate":
                 unified_attrs.setdefault("neatlogs.internal", True)
                 unified_attrs["neatlogs.span.kind"] = "Neatlogs.INTERNAL"
-                unified_attrs["neatlogs.span.kind"] = "Neatlogs.INTERNAL"
 
-            # Include resource attributes for tags, session_id, user_id, etc.
+            # 4b. Retriever span dedup: when a neatlogs RETRIEVER ends inside an OI
+            # RETRIEVER parent, schedule the OI parent for suppression.
+            # Then when the OI parent ends, mark it as internal.
+            if nl_kind == "retriever":
+                is_internal = unified_attrs.get("neatlogs.internal", False)
+                # When a neatlogs (internal) RETRIEVER ends, schedule its OI parent
+                # for suppression. OI attributes are set after span start so we can't
+                # track parent type in on_start — instead the nl_kind == "retriever"
+                # gate below ensures only RETRIEVER parents actually get suppressed.
+                if is_internal and span.parent:
+                    self._retrievers_to_suppress.add(span.parent.span_id)
+                if span.context.span_id in self._retrievers_to_suppress:
+                    self._retrievers_to_suppress.discard(span.context.span_id)
+                    unified_attrs["neatlogs.internal"] = True
+                    # Do NOT change neatlogs.span.kind — "retriever" must be preserved
+                    # so the backend stores span_type = "RETRIEVER" correctly.
+                    if self.debug:
+                        logger.debug(
+                            f"[Retriever Merge] Marked OI retriever '{span.name}' as internal "
+                            f"(had neatlogs retriever child)"
+                        )
+
+            # 5. Build resource attributes
             resource_attrs = {}
             if span.resource and span.resource.attributes:
-                # Properly serialize OTel resource attributes (handles AttributeValue types)
                 for key, value in span.resource.attributes.items():
-                    # Convert AttributeValue to native Python types
                     if isinstance(value, (str, int, float, bool)):
                         resource_attrs[key] = value
                     elif isinstance(value, (list, tuple)):
                         resource_attrs[key] = list(value)
                     else:
                         resource_attrs[key] = str(value)
-                
-                # Debug logging for tags
+
                 if self.debug and "neatlogs.tags" in resource_attrs:
-                    logger.debug(f"[Tags] Span {span.name}: resource.neatlogs.tags = {resource_attrs['neatlogs.tags']}")
-            
+                    logger.debug(
+                        f"[Tags] Span {span.name}: resource.neatlogs.tags = {resource_attrs['neatlogs.tags']}"
+                    )
+
             trace_id = f"{span.context.trace_id:032x}"
             span_id = f"{span.context.span_id:016x}"
             parent_span_id = f"{span.parent.span_id:016x}" if span.parent else None
 
-            # Guard against corrupted/self-referential parenting (seen in some LangChain/LangGraph
-            # instrumentation edge cases where the SDK ends up exporting a span whose parent span id
-            # equals its own span id). This creates cycles and breaks trace trees downstream.
             if parent_span_id == span_id:
                 if self.debug:
                     logger.warning(
@@ -273,6 +278,7 @@ class NeatlogsSpanProcessor(SpanProcessor):
                     )
                 parent_span_id = None
 
+            # 6. Build span_data dict (used for file logging)
             span_data = {
                 "trace_id": trace_id,
                 "span_id": span_id,
@@ -283,7 +289,7 @@ class NeatlogsSpanProcessor(SpanProcessor):
                 "end_time": span.end_time,
                 "duration_ns": span.end_time - span.start_time if span.end_time else None,
                 "attributes": unified_attrs,
-                "resource": {"attributes": resource_attrs},  # Add resource attributes
+                "resource": {"attributes": resource_attrs},
                 "status": {
                     "code": span.status.status_code.name,
                     "description": span.status.description,
@@ -296,162 +302,94 @@ class NeatlogsSpanProcessor(SpanProcessor):
                             "attributes": dict(event.attributes) if event.attributes else {},
                         }
                         for event in span.events
-                        if not (
-                            any(
-                                e.name
-                                in {
-                                    "llm.content.completion.chunk",
-                                    "gen_ai.content.completion.chunk",
-                                    "neatlogs.gen_ai.content.completion.chunk",
-                                }
-                                for e in span.events
-                            )
-                            and event.name == "First Token Stream Event"
-                        )
                     ]
                     if span.events
                     else []
                 ),
             }
 
-            with self._pending_lock:
-                if len(self._pending) >= self._max_pending_spans:
-                    dropped_span = self._pending.pop(0)
-                    self._pending_dropped += 1
-                    logger.warning(
-                        f"Pending buffer full ({self._max_pending_spans} spans), "
-                        f"dropping oldest span: {dropped_span.get('name')} "
-                        f"(total dropped: {self._pending_dropped})"
+            # 7. Per-span post-processing (framework span name normalization, CrewAI tasks)
+            results = self._normalize_framework_span_names([span_data])
+            span_data = results[0] if results else span_data
+            results = self._inject_crewai_task_templates([span_data])
+            span_data = results[0] if results else span_data
+
+            # 7b. Write normalized neatlogs.* attributes back to the OTel span so that
+            # BatchSpanProcessor → OTLPSpanExporter exports them to the backend.
+            # ReadableSpan._attributes is a BoundedAttributes (MutableMapping) and is
+            # mutable even after span.end(). The original OI attributes stay on the span
+            # as-is; we only add the normalized neatlogs.* keys alongside them.
+            final_attrs = span_data.get("attributes") or {}
+            try:
+                span_attrs = span._attributes
+                if span_attrs is not None:
+                    for _k, _v in final_attrs.items():
+                        if isinstance(_v, (str, int, float, bool)):
+                            span_attrs[_k] = _v
+                        elif isinstance(_v, (list, tuple)) and all(
+                            isinstance(_i, (str, int, float, bool)) for _i in _v
+                        ):
+                            span_attrs[_k] = list(_v)
+            except Exception as _wb_exc:
+                if self.debug:
+                    logger.debug(f"[SpanProcessor] Attr write-back failed: {_wb_exc}")
+
+            # 8. Log processed span dict (human-readable JSON lines, same format as before)
+            if self._processed_log_file_handle and not self._processed_log_file_handle.closed:
+                try:
+                    span_data_for_log = apply_mask(dict(span_data), self.mask)
+                    self._processed_log_file_handle.write(
+                        json.dumps(span_data_for_log) + "\n"
                     )
+                    self._processed_log_file_handle.flush()
+                except Exception as e:
+                    logger.warning(f"Failed to write span to processed log file: {e}")
 
-                self._pending.append(span_data)
-                curr = len(self._pending)
-                if curr > self._pending_high_watermark:
-                    self._pending_high_watermark = curr
+            self.perf_stats["spans_exported"] += 1
 
-                if not span.parent:
-                    trace_id = span_data["trace_id"]
-                    marker_span_id = f"completion_{trace_id[:16]}"
+            # Emit a completion marker when a root span ends so the backend
+            # knows the trace is complete and can trigger simplification.
+            if not span.parent:
+                self._emit_completion_marker(span, trace_id, resource_attrs)
 
-                    completion_marker = {
-                        "trace_id": trace_id,
-                        "span_id": marker_span_id,
-                        "parent_span_id": None,
-                        "name": "neatlogs.trace.complete",
-                        "kind": "INTERNAL",
-                        "start_time": span.end_time,
-                        "end_time": span.end_time,
-                        "duration_ns": 0,
-                        "attributes": {
-                            "neatlogs.trace.complete": True,
-                            "neatlogs.internal": True,
-                            "neatlogs.span.kind": "Neatlogs.INTERNAL",
-                        },
-                        "status": {"code": "OK", "description": ""},
-                        "events": [],
-                    }
-                    self._pending.append(completion_marker)
-
-                    if self.debug:
-                        logger.debug(f"Added completion marker for trace {trace_id}")
-
-            self._pending_event.set()
         finally:
             self.perf_stats["on_end_time"] += time.perf_counter() - start_time
 
-    def _dedupe_and_rewrite(self, spans: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        by_trace: Dict[str, List[Dict[str, Any]]] = {}
-        for s in spans:
-            by_trace.setdefault(s["trace_id"], []).append(s)
+    def _emit_completion_marker(
+        self,
+        root_span: ReadableSpan,
+        trace_id: str,
+        resource_attrs: dict,
+    ) -> None:
+        """Emit a neatlogs.trace.complete span so the backend triggers simplification."""
+        try:
+            from opentelemetry import trace as otel_trace
+            from opentelemetry.trace import NonRecordingSpan, SpanContext, TraceFlags
 
-        out: List[Dict[str, Any]] = []
-        for trace_id, trace_spans in by_trace.items():
-            out.extend(self._dedupe_trace(trace_spans))
-
-        out.sort(key=lambda s: (s["trace_id"], s.get("start_time") or 0, s["span_id"]))
-        return out
-
-    def _background_flush_loop(self) -> None:
-        while not self._stop_background.is_set():
-            self._pending_event.wait(timeout=self._dedupe_interval)
-            self._pending_event.clear()
-            self._flush_ready_spans()
-
-    def _flush_ready_spans(self, force: bool = False) -> None:
-        with self._pending_lock:
-            pending = list(self._pending)
-            self._pending.clear()
-
-        if not pending:
-            return
-
-        now_ns = time.time_ns()
-        cutoff_ns = now_ns - self._dedupe_latency_ns
-
-        ready: List[Dict[str, Any]] = []
-        remaining: List[Dict[str, Any]] = []
-
-        for s in pending:
-            end_ts = s.get("end_time")
-            if force or (isinstance(end_ts, int) and end_ts <= cutoff_ns):
-                ready.append(s)
-            else:
-                remaining.append(s)
-
-        if not force:
-            if len(remaining) > self._max_pending_spans:
-                remaining.sort(key=lambda s: int(s.get("end_time") or 0))
-                overflow = len(remaining) - self._max_pending_spans
-                ready.extend(remaining[:overflow])
-                remaining = remaining[overflow:]
-            with self._pending_lock:
-                self._pending.extend(remaining)
-        else:
-            ready.extend(remaining)
-
-        if not ready:
-            return
-
-        rewritten = self._dedupe_and_rewrite(ready)
-        for s in rewritten:
-            s = apply_mask(s, self.mask)
-            self.exporter.export(s)
-            self.perf_stats["spans_exported"] += 1
-
-    def _dedupe_trace(self, spans: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        spans_by_id = {s["span_id"]: s for s in spans}
-
-        wrappers = [s for s in spans if self._is_openllmetry_provider_wrapper(s)]
-        canonicals = [s for s in spans if self._is_openinference_canonical(s)]
-
-        suppressed_wrapper_ids: set[str] = set()
-
-        for w in wrappers:
-            c = self._best_match_wrapper_to_canonical(w, canonicals)
-            if not c:
-                continue
-
-            self._merge_wrapper_attrs_into_canonical(wrapper=w, canonical=c)
-            suppressed_wrapper_ids.add(w["span_id"])
-
-            # Re-parent any children of the wrapper to the wrapper's parent.
-            replacement_parent = w.get("parent_span_id")
-            for s in spans:
-                if s.get("parent_span_id") == w["span_id"]:
-                    s["parent_span_id"] = replacement_parent
-
-        emitted = [s for s in spans if s["span_id"] not in suppressed_wrapper_ids]
-        emitted = self._suppress_traceloop_entity_spans(emitted)
-        emitted = self._suppress_overlapping_llm_spans(emitted)
-        emitted = self._normalize_framework_span_names(emitted)
-        emitted = self._inject_crewai_task_templates(emitted)
-
-        return emitted
+            # Build a context that sits in the same trace but has no parent,
+            # matching the old SDK's completion_marker behaviour.
+            span_ctx = SpanContext(
+                trace_id=root_span.context.trace_id,
+                span_id=root_span.context.span_id,
+                is_remote=False,
+                trace_flags=TraceFlags(TraceFlags.SAMPLED),
+            )
+            ctx = otel_trace.set_span_in_context(NonRecordingSpan(span_ctx))
+            tracer = otel_trace.get_tracer("neatlogs.internal")
+            marker = tracer.start_span("neatlogs.trace.complete", context=ctx)
+            marker.set_attribute("neatlogs.trace.complete", True)
+            marker.set_attribute("neatlogs.internal", True)
+            marker.set_attribute("neatlogs.span.kind", "Neatlogs.INTERNAL")
+            # Copy resource tags so the backend can route the marker correctly.
+            if resource_attrs.get("neatlogs.tags"):
+                marker.set_attribute("neatlogs.tags", resource_attrs["neatlogs.tags"])
+            marker.end()
+            if self.debug:
+                logger.debug(f"[SpanProcessor] Emitted completion marker for trace {trace_id}")
+        except Exception as e:
+            logger.warning(f"[SpanProcessor] Failed to emit completion marker: {e}")
 
     def _normalize_framework_span_names(self, spans: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """
-        Reduce very long span names produced by some framework instrumentations.
-        """
         for s in spans:
             name = s.get("name") or ""
             kind = s.get("kind") or (s.get("attributes") or {}).get("neatlogs.span.kind")
@@ -459,7 +397,7 @@ class NeatlogsSpanProcessor(SpanProcessor):
                 continue
 
             attrs = s.get("attributes") or {}
-            if not any(k.startswith("neatlogs.raw.crewai.") for k in attrs.keys()):
+            if not any(k.startswith("neatlogs.crewai.") for k in attrs.keys()):
                 continue
 
             desc = name[: -len(".task")].rstrip()
@@ -474,19 +412,11 @@ class NeatlogsSpanProcessor(SpanProcessor):
         return spans
 
     def _inject_crewai_task_templates(self, spans: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """
-        For each OpenInference _execute_core AGENT span that has a task_id matching
-        a registered entry, stamp the user prompt template onto the span and relabel
-        its kind to CREWAI_TASK.
-
-        The OpenLLMetry crewai.task span is deleted by the backend trace-finalizer, so
-        the OI _execute_core AGENT span is the only surviving task-level span in ClickHouse.
-        """
         from .crewai_task_registry import pop_entry
 
         for s in spans:
             attrs = s.get("attributes") or {}
-            task_id = attrs.get("neatlogs.raw.task_id")
+            task_id = attrs.get("neatlogs.task.id")
             if not task_id:
                 continue
             entry = pop_entry(str(task_id))
@@ -501,449 +431,22 @@ class NeatlogsSpanProcessor(SpanProcessor):
 
         return spans
 
-    def _suppress_traceloop_entity_spans(self, spans: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        by_id = {s["span_id"]: s for s in spans}
-
-        entity_spans = [s for s in spans if self._is_traceloop_entity_span(s)]
-        if not entity_spans:
-            return spans
-
-        by_name: Dict[str, List[Dict[str, Any]]] = {}
-        for s in spans:
-            by_name.setdefault(s.get("name") or "", []).append(s)
-
-        # IMPORTANT:
-        # We used to *suppress* Traceloop entity spans (e.g. `.task`, `.tool`, `.workflow`) and merge
-        # their attributes into the matching "base" span. This breaks parenting in practice because
-        # traces are often exported in multiple chunks by end_time; the entity span (often long-lived)
-        # arrives in a later chunk, but its children (shorter spans) have already been exported with
-        # `parent_span_id` pointing at the entity span_id. Once suppressed, ClickHouse/UX sees those
-        # children as "orphans" (missing parent in the trace).
-        #
-        # To preserve the trace tree, we keep the entity spans and ONLY merge their attributes into
-        # the base span when we can match them.
-        for e in entity_spans:
-            base_name = self._traceloop_base_name(e.get("name") or "")
-            if not base_name:
-                continue
-            candidates = by_name.get(base_name, [])
-            if not candidates:
-                continue
-
-            c = self._best_match_entity_to_base(entity=e, bases=candidates)
-            if not c:
-                continue
-
-            self._merge_traceloop_entity_attrs_into_base(entity=e, base=c)
-            # NOTE: Do NOT re-parent children here either. Re-parenting is only safe when you have
-            # the full trace buffered; otherwise it can create self-parenting (e.g. LangGraph.workflow
-            # matched to LangGraph base span) or partial rewrites across chunks.
-
-        return spans
-
-    def _is_traceloop_entity_span(self, span_data: Dict[str, Any]) -> bool:
-        name = span_data.get("name") or ""
-        return name.endswith(".task") or name.endswith(".tool") or name.endswith(".workflow")
-
-    def _traceloop_base_name(self, entity_name: str) -> Optional[str]:
-        for suffix in (".task", ".tool", ".workflow"):
-            if entity_name.endswith(suffix):
-                return entity_name[: -len(suffix)]
-        return None
-
-    def _best_match_entity_to_base(
-        self,
-        entity: Dict[str, Any],
-        bases: List[Dict[str, Any]],
-    ) -> Optional[Dict[str, Any]]:
-        best = None
-        best_score = 0
-        for b in bases:
-            score = self._score_time_overlap(entity, b)
-            if entity.get("parent_span_id") and entity.get("parent_span_id") == b.get(
-                "parent_span_id"
-            ):
-                score += 1
-            if (
-                self._start_delta_ns(entity, b) is not None
-                and self._start_delta_ns(entity, b) <= 5_000_000
-            ):
-                score += 1
-            if score > best_score:
-                best_score = score
-                best = b
-        return best if best_score >= 3 else None
-
-    def _score_time_overlap(self, a: Dict[str, Any], b: Dict[str, Any]) -> int:
-        a_s, a_e = a.get("start_time"), a.get("end_time")
-        b_s, b_e = b.get("start_time"), b.get("end_time")
-        if not all(isinstance(x, int) for x in (a_s, a_e, b_s, b_e)):
-            return 0
-        latest_start = max(a_s, b_s)
-        earliest_end = min(a_e, b_e)
-        if earliest_end < latest_start:
-            return 0
-        overlap = earliest_end - latest_start
-        dur_a = a_e - a_s
-        dur_b = b_e - b_s
-        shorter = min(dur_a, dur_b)
-        if shorter <= 0:
-            return 0
-        return 3 if overlap >= (shorter // 2) else 1
-
-    def _start_delta_ns(self, a: Dict[str, Any], b: Dict[str, Any]) -> Optional[int]:
-        a_s, b_s = a.get("start_time"), b.get("start_time")
-        if not (isinstance(a_s, int) and isinstance(b_s, int)):
-            return None
-        return abs(a_s - b_s)
-
-    def _merge_traceloop_entity_attrs_into_base(
-        self, entity: Dict[str, Any], base: Dict[str, Any]
-    ) -> None:
-        ea = entity.get("attributes", {})
-        ba = base.get("attributes", {})
-        for k, v in ea.items():
-            if k == "neatlogs.span.kind":
-                continue
-            if k not in ba:
-                ba[k] = v
-
-        base["attributes"] = ba
-
-    def _suppress_overlapping_llm_spans(self, spans: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        children: Dict[str, List[Dict[str, Any]]] = {}
-        for s in spans:
-            pid = s.get("parent_span_id")
-            if pid:
-                children.setdefault(pid, []).append(s)
-
-        def has_http_child(sid: str) -> bool:
-            for c in children.get(sid, []):
-                a = c.get("attributes") or {}
-                if a.get("neatlogs.span.kind") == "HTTP":
-                    return True
-            return False
-
-        llm_spans = [
-            s for s in spans if (s.get("attributes") or {}).get("neatlogs.span.kind") == "llm"
-        ]
-        
-        # Also handle LLM wrappers around EMBEDDING/RERANKER spans (e.g., openai.embeddings → CreateEmbeddings)
-        suppressed_embedding_wrappers: set[str] = set()
-        for llm_span in llm_spans:
-            llm_children = children.get(llm_span["span_id"], [])
-            for child in llm_children:
-                child_kind = (child.get("attributes") or {}).get("neatlogs.span.kind", "").lower()
-                if child_kind in ("embedding", "reranker"):
-                    # This LLM span is a wrapper around an embedding/reranker - suppress it
-                    suppressed_embedding_wrappers.add(llm_span["span_id"])
-                    if self.debug:
-                        logger.debug(
-                            f"[Dedup] Suppressing LLM wrapper {llm_span['span_id']} "
-                            f"(has {child_kind} child {child['span_id']})"
-                        )
-                    break
-        
-        if len(llm_spans) < 2 and not suppressed_embedding_wrappers:
-            return spans
-
-        provider_like = [s for s in llm_spans if has_http_child(s["span_id"])]
-        framework_like = [s for s in llm_spans if not has_http_child(s["span_id"])]
-        if not provider_like or not framework_like:
-            return spans
-
-        suppressed: set[str] = set()
-
-        for fw in framework_like:
-            best = None
-            best_score = 0
-            fwa = fw.get("attributes") or {}
-            fw_provider = (
-                fwa.get("neatlogs.llm.provider") or fwa.get("neatlogs.llm.system") or ""
-            ).lower()
-
-            for pv in provider_like:
-                score = self._score_time_overlap(fw, pv)
-                if fw.get("parent_span_id") and fw.get("parent_span_id") == pv.get(
-                    "parent_span_id"
-                ):
-                    score += 2
-                pva = pv.get("attributes") or {}
-                pv_provider = (
-                    pva.get("neatlogs.llm.provider") or pva.get("neatlogs.llm.system") or ""
-                ).lower()
-                if fw_provider and pv_provider and fw_provider == pv_provider:
-                    score += 1
-
-                if score > best_score:
-                    best_score = score
-                    best = pv
-
-            if not best or best_score < 4:
-                continue
-
-            self._merge_framework_llm_into_provider(framework=fw, provider=best)
-            suppressed.add(fw["span_id"])
-
-            for s in spans:
-                if s.get("parent_span_id") == fw["span_id"]:
-                    s["parent_span_id"] = best["span_id"]
-
-        # Combine both suppression sets
-        all_suppressed = suppressed | suppressed_embedding_wrappers
-        return [s for s in spans if s["span_id"] not in all_suppressed]
-
-    def _merge_framework_llm_into_provider(
-        self, framework: Dict[str, Any], provider: Dict[str, Any]
-    ) -> None:
-        fa = framework.get("attributes", {})
-        pa = provider.get("attributes", {})
-
-        prefer_oi_llm_names = os.getenv("NEATLOGS_PREFER_OPENINFERENCE_LLM_NAMES", "").lower() in (
-            "true",
-            "1",
-            "yes",
-        )
-
-        def _as_num(v: Any) -> float:
-            try:
-                if v is None:
-                    return 0.0
-                if isinstance(v, bool):
-                    return float(int(v))
-                return float(v)
-            except Exception:
-                return 0.0
-
-        def _prefer_if_missing_or_zero(key: str) -> None:
-            fv = fa.get(key)
-            if fv is None:
-                return
-            pv = pa.get(key)
-            if pv is None or _as_num(pv) <= 0:
-                pa[key] = fv
-
-        # Prefer OpenInference token counts when the provider wrapper doesn't have them populated.
-        for k in (
-            "neatlogs.llm.token_count.prompt",
-            "neatlogs.llm.token_count.completion",
-            "neatlogs.llm.token_count.total",
-            "neatlogs.llm.token_count.reasoning",
-            "neatlogs.llm.token_count.cache_read",
-            "neatlogs.llm.token_count.cached_read",
-            "neatlogs.llm.token_count.cache_write",
-            "neatlogs.llm.token_count.cached_write",
-            "neatlogs.llm.token_count.audio",
-            "neatlogs.llm.token_count.completion_audio",
-        ):
-            _prefer_if_missing_or_zero(k)
-
-        for k, v in fa.items():
-            if k == "neatlogs.span.kind":
-                continue
-            if k not in pa:
-                pa[k] = v
-
-        if prefer_oi_llm_names:
-            fw_name = str(framework.get("name") or "").strip()
-            pv_name = str(provider.get("name") or "").strip()
-
-            fw_name_l = fw_name.lower()
-            pv_name_l = pv_name.lower()
-
-            # Common provider-side / generic names we prefer to replace with the OpenInference name.
-            generic_provider_names = {"messages"}
-
-            if fw_name and pv_name and fw_name_l != pv_name_l:
-                if fw_name.startswith("Chat") and pv_name_l in generic_provider_names:
-                    pa.setdefault("neatlogs.dedupe.original_span_name", pv_name)
-                    pa.setdefault("neatlogs.dedupe.merged_from_span_id", framework.get("span_id"))
-                    provider["name"] = fw_name
-
-        provider["attributes"] = pa
-
-    def _is_openllmetry_provider_wrapper(self, span_data: Dict[str, Any]) -> bool:
-        attrs = span_data.get("attributes", {})
-        name = (span_data.get("name") or "").lower()
-        # Traceloop entity spans (e.g. LangGraph `.workflow` / Runnable `.task`) must NOT be treated
-        # as OpenLLMetry provider wrappers. If we suppress them during partial/interval flushes,
-        # their children may have already been exported with `parent_span_id` pointing to the entity
-        # span, which produces "orphan" spans downstream (ClickHouse/UI). These are handled by
-        # `_suppress_traceloop_entity_spans` instead (which preserves the tree).
-        if self._is_traceloop_entity_span(span_data):
-            return False
-        if (
-            "." in name
-            and attrs.get("neatlogs.raw.openinference.span.kind") not in ("LLM", "EMBEDDING")
-            and attrs.get("neatlogs.llm.request_type") is not None
-        ):
-            return True
-        return False
-
-    def _is_openinference_canonical(self, span_data: Dict[str, Any]) -> bool:
-        attrs = span_data.get("attributes", {})
-        raw_kind = attrs.get("neatlogs.raw.openinference.span.kind")
-        if raw_kind in ("LLM", "EMBEDDING"):
-            return True
-
-        kind = attrs.get("neatlogs.span.kind")
-        if kind == "embedding":
-            return True
-
-        if kind == "llm" and (attrs.get("neatlogs.llm.provider") is not None):
-            return True
-
-        return False
-
-    def _best_match_wrapper_to_canonical(
-        self,
-        wrapper: Dict[str, Any],
-        canonicals: List[Dict[str, Any]],
-    ) -> Optional[Dict[str, Any]]:
-        best = None
-        best_score = 0
-
-        for c in canonicals:
-            score = self._score_pair(wrapper, c)
-            if score > best_score:
-                best_score = score
-                best = c
-
-        return best if best_score >= 6 else None
-
-    def _score_pair(self, w: Dict[str, Any], c: Dict[str, Any]) -> int:
-        wa = w.get("attributes", {})
-        ca = c.get("attributes", {})
-
-        score = 0
-
-        if c.get("parent_span_id") == w.get("span_id"):
-            score += 6
-        if w.get("parent_span_id") == c.get("span_id"):
-            score += 6
-
-        w_provider = (
-            wa.get("neatlogs.llm.system") or wa.get("neatlogs.llm.provider") or ""
-        ).lower()
-        c_provider = (
-            ca.get("neatlogs.llm.system") or ca.get("neatlogs.llm.provider") or ""
-        ).lower()
-        if w_provider and c_provider and w_provider == c_provider:
-            score += 2
-
-        w_req_model = wa.get("neatlogs.raw.gen_ai.request.model") or wa.get(
-            "neatlogs.llm.model_name"
-        )
-        c_resp_model = ca.get("neatlogs.raw.llm.model_name") or ca.get("neatlogs.llm.model_name")
-        if w_req_model and c_resp_model:
-            if str(c_resp_model).startswith(str(w_req_model)):
-                score += 1
-
-        w_s, w_e = w.get("start_time"), w.get("end_time")
-        c_s, c_e = c.get("start_time"), c.get("end_time")
-        if all(isinstance(x, int) for x in (w_s, w_e, c_s, c_e)):
-            latest_start = max(w_s, c_s)
-            earliest_end = min(w_e, c_e)
-            if earliest_end >= latest_start:
-                score += 1
-
-        return score
-
-    def _merge_wrapper_attrs_into_canonical(
-        self, wrapper: Dict[str, Any], canonical: Dict[str, Any]
-    ) -> None:
-        wa = wrapper.get("attributes", {})
-        ca = canonical.get("attributes", {})
-
-        override_keys = {
-            "neatlogs.llm.model_name",
-            "neatlogs.framework",
-        }
-
-        for k, v in wa.items():
-            if k in override_keys:
-                ca[k] = v
-                continue
-            if k not in ca:
-                ca[k] = v
-
-        def _get(key: str):
-            if key in ca and ca[key] is not None:
-                return ca[key]
-            return None
-
-        def _set_if_missing(key: str, value):
-            if key not in ca and value is not None:
-                ca[key] = value
-
-        _set_if_missing(
-            "neatlogs.llm.token_count.prompt", _get("neatlogs.raw.gen_ai.usage.input_tokens")
-        )
-        _set_if_missing(
-            "neatlogs.llm.token_count.completion", _get("neatlogs.raw.gen_ai.usage.output_tokens")
-        )
-        _set_if_missing(
-            "neatlogs.llm.token_count.total", _get("neatlogs.raw.llm.usage.total_tokens")
-        )
-
-        _set_if_missing(
-            "neatlogs.llm.token_count.cache_read",
-            _get("neatlogs.raw.gen_ai.usage.cache_read_input_tokens"),
-        )
-        _set_if_missing(
-            "neatlogs.llm.token_count.cache_write",
-            _get("neatlogs.raw.gen_ai.usage.cache_creation_input_tokens"),
-        )
-
-        ca.pop("neatlogs.raw.llm.usage.total_tokens", None)
-
-        canonical["attributes"] = ca
-
-        we = wrapper.get("events") or []
-        if we:
-            ce = canonical.get("events") or []
-            existing = {(e.get("name"), e.get("timestamp")) for e in ce}
-            for e in we:
-                key = (e.get("name"), e.get("timestamp"))
-                if key not in existing:
-                    ce.append(e)
-                    existing.add(key)
-            if any(
-                e.get("name")
-                in {
-                    "llm.content.completion.chunk",
-                    "gen_ai.content.completion.chunk",
-                    "neatlogs.gen_ai.content.completion.chunk",
-                }
-                for e in ce
-            ):
-                ce = [e for e in ce if e.get("name") != "First Token Stream Event"]
-            canonical["events"] = ce
-
     def force_flush(self, timeout_millis: int = 30000) -> bool:
-        try:
-            self._flush_ready_spans(force=True)
-
-            self.exporter.flush(timeout=timeout_millis / 1000.0)
-            return True
-        except Exception:
-            return False
+        # Flushing is handled by BatchSpanProcessor downstream.
+        return True
 
     def shutdown(self) -> None:
-        try:
-            self._stop_background.set()
-            self._pending_event.set()
-            if self._background_thread.is_alive():
-                self._background_thread.join(timeout=1.0)
-            self.force_flush()
-        finally:
-            self._log_performance_stats()
-            self.exporter.shutdown()
-            if self._raw_log_file_handle:
-                try:
-                    self._raw_log_file_handle.close()
-                except Exception as e:
-                    logger.warning(f"Failed to close raw log file handle: {e}")
+        self._log_performance_stats()
+        if self._raw_log_file_handle:
+            try:
+                self._raw_log_file_handle.close()
+            except Exception as e:
+                logger.warning(f"Failed to close raw log file handle: {e}")
+        if self._processed_log_file_handle:
+            try:
+                self._processed_log_file_handle.close()
+            except Exception as e:
+                logger.warning(f"Failed to close processed log file handle: {e}")
 
     def _log_performance_stats(self) -> None:
         if not self.debug:
@@ -956,9 +459,8 @@ class NeatlogsSpanProcessor(SpanProcessor):
         try:
             logger.info(
                 f"Neatlogs overhead: {total_time * 1000:.2f}ms total, {avg_ms:.3f}ms/span "
-                f"({stats['spans_processed']} spans, "
-                f"pending high watermark: {self._pending_high_watermark}, "
-                f"total dropped: {self._pending_dropped})"
+                f"({stats['spans_processed']} spans processed, "
+                f"{stats['spans_exported']} spans logged)"
             )
         except (ValueError, OSError):
             pass

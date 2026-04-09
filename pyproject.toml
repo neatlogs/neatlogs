@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [tool.poetry]
 name = "neatlogs"
-version = "1.2.6"
+version = "1.2.7"
 description = "A Python package for extracting and managing LLM logs to build a collaborative workspace"
 readme = "README.MD"
 license = "MIT"
@@ -25,7 +25,6 @@ openinference-instrumentation = ">=0.1.27"
 openinference-semantic-conventions = ">=0.1.13"
 opentelemetry-api = ">=1.33.1"
 opentelemetry-exporter-otlp-proto-http = ">=1.33.1"
-opentelemetry-semantic-conventions-ai = ">=0.4.13"
 opentelemetry-sdk = ">=1.33.1"
 requests = ">=2.31.0"
 agnost = ">=0.1.8,<0.2.0"
@@ -63,34 +62,6 @@ openinference-instrumentation-portkey = ">=0.1.7"
 openinference-instrumentation-google-adk = ">=0.1.8"
 openinference-instrumentation-autogen-agentchat = ">=0.1.6"
 openinference-instrumentation-llama-index = ">=4.3.9"
-# OpenLLMetry (Traceloop) instrumentation adapters
-opentelemetry-instrumentation-openai = ">=0.50b0"
-opentelemetry-instrumentation-anthropic = ">=0.50b0"
-opentelemetry-instrumentation-cohere = ">=0.50b0"
-opentelemetry-instrumentation-bedrock = ">=0.50b0"
-opentelemetry-instrumentation-groq = ">=0.50b0"
-opentelemetry-instrumentation-together = ">=0.50b0"
-opentelemetry-instrumentation-vertexai = ">=0.50b0"
-opentelemetry-instrumentation-google-generativeai = ">=0.50b0"
-opentelemetry-instrumentation-mistralai = ">=0.50b0"
-opentelemetry-instrumentation-ollama = ">=0.50b0"
-opentelemetry-instrumentation-watsonx = ">=0.50b0"
-opentelemetry-instrumentation-alephalpha = ">=0.50b0"
-opentelemetry-instrumentation-replicate = ">=0.50b0"
-opentelemetry-instrumentation-sagemaker = ">=0.50b0"
-opentelemetry-instrumentation-langchain = ">=0.50b0"
-opentelemetry-instrumentation-llamaindex = ">=0.50b0"
-opentelemetry-instrumentation-crewai = ">=0.50b0"
-opentelemetry-instrumentation-haystack = ">=0.50b0"
-opentelemetry-instrumentation-chromadb = ">=0.50b0"
-opentelemetry-instrumentation-pinecone = ">=0.50b0"
-opentelemetry-instrumentation-weaviate = ">=0.50b0"
-opentelemetry-instrumentation-qdrant = ">=0.50b0"
-opentelemetry-instrumentation-milvus = ">=0.50b0"
-opentelemetry-instrumentation-elasticsearch = ">=0.50b0"
-opentelemetry-instrumentation-redis = ">=0.50b0"
-opentelemetry-instrumentation-marqo = ">=0.50b0"
-opentelemetry-instrumentation-mcp = ">=0.50b0"
 # Optional extras — underlying heavy libraries
 neatlogs-instrumentations = { version = ">=0.1.1", extras = ["azure-ai-inference"], optional = true }
 openai = { version = ">=1.0.0", optional = true }
@@ -168,7 +139,7 @@ milvus = ["pymilvus", "milvus-lite"]
 
 [project]
 name = "neatlogs"
-version = "1.2.6"
+version = "1.2.7"
 description = "A Python package for extracting and managing LLM logs to build a collaborative workspace"
 readme = "README.MD"
 license = {text = "MIT"}
@@ -197,7 +168,6 @@ dependencies = [
     "openinference-semantic-conventions>=0.1.13",
     "opentelemetry-api>=1.33.1",
     "opentelemetry-exporter-otlp-proto-http>=1.33.1",
-    "opentelemetry-semantic-conventions-ai>=0.4.13",
     "opentelemetry-sdk>=1.33.1",
     "requests>=2.31.0",
     "agnost>=0.1.8,<0.2.0",
@@ -236,35 +206,6 @@ dependencies = [
     "openinference-instrumentation-google-adk>=0.1.8",
     "openinference-instrumentation-autogen-agentchat>=0.1.6",
     "openinference-instrumentation-llama-index>=4.3.9",
-    # OpenLLMetry (Traceloop) instrumentation adapters — also lightweight, provide dual instrumentation.
-    # Only packages confirmed available on PyPI are listed here.
-    "opentelemetry-instrumentation-openai>=0.50b0",
-    "opentelemetry-instrumentation-anthropic>=0.50b0",
-    "opentelemetry-instrumentation-cohere>=0.50b0",
-    "opentelemetry-instrumentation-bedrock>=0.50b0",
-    "opentelemetry-instrumentation-groq>=0.50b0",
-    "opentelemetry-instrumentation-together>=0.50b0",
-    "opentelemetry-instrumentation-vertexai>=0.50b0",
-    "opentelemetry-instrumentation-google-generativeai>=0.50b0",
-    "opentelemetry-instrumentation-mistralai>=0.50b0",
-    "opentelemetry-instrumentation-ollama>=0.50b0",
-    "opentelemetry-instrumentation-watsonx>=0.50b0",
-    "opentelemetry-instrumentation-alephalpha>=0.50b0",
-    "opentelemetry-instrumentation-replicate>=0.50b0",
-    "opentelemetry-instrumentation-sagemaker>=0.50b0",
-    "opentelemetry-instrumentation-langchain>=0.50b0",
-    "opentelemetry-instrumentation-llamaindex>=0.50b0",
-    "opentelemetry-instrumentation-crewai>=0.50b0",
-    "opentelemetry-instrumentation-haystack>=0.50b0",
-    "opentelemetry-instrumentation-chromadb>=0.50b0",
-    "opentelemetry-instrumentation-pinecone>=0.50b0",
-    "opentelemetry-instrumentation-weaviate>=0.50b0",
-    "opentelemetry-instrumentation-qdrant>=0.50b0",
-    "opentelemetry-instrumentation-milvus>=0.50b0",
-    "opentelemetry-instrumentation-elasticsearch>=0.50b0",
-    "opentelemetry-instrumentation-redis>=0.50b0",
-    "opentelemetry-instrumentation-marqo>=0.50b0",
-    "opentelemetry-instrumentation-mcp>=0.50b0",
 ]
 
 [project.optional-dependencies]

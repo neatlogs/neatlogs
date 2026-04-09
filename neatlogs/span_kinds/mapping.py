@@ -1,26 +1,3 @@
-OPENINFERENCE_TO_TRACELOOP = {
-    "LLM": "task",
-    "EMBEDDING": "task",
-    "RETRIEVER": "task",
-    "RERANKER": "task",
-    "VECTOR_STORE": "task",
-    "CHAIN": "workflow",
-    "AGENT": "agent",
-    "TOOL": "tool",
-    "GUARDRAIL": "task",
-    "EVALUATOR": "task",
-    "UNKNOWN": "unknown",
-}
-
-TRACELOOP_TO_OPENINFERENCE = {
-    "workflow": "CHAIN",
-    "task": "CHAIN",
-    "agent": "AGENT",
-    "tool": "TOOL",
-    "unknown": "UNKNOWN",
-}
-
-
 def infer_span_kind_from_name(span_name: str) -> str:
     """
     Infer OpenInference span kind from span name.

@@ -1,11 +1,5 @@
-from .mapping import (
-    OPENINFERENCE_TO_TRACELOOP,
-    TRACELOOP_TO_OPENINFERENCE,
-    infer_span_kind_from_name,
-)
+from .mapping import infer_span_kind_from_name
 
 __all__ = [
-    "OPENINFERENCE_TO_TRACELOOP",
-    "TRACELOOP_TO_OPENINFERENCE",
     "infer_span_kind_from_name",
 ]

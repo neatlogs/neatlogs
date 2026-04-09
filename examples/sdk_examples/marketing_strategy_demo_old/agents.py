@@ -14,7 +14,6 @@ making the prompt visible in the NeatLogs trace view.
 import os
 from typing import Optional
 
-import neatlogs
 from crewai import Agent, LLM
 from tools import search_web, analyze_website
 
@@ -44,14 +43,12 @@ def _make_agent(
     allow_delegation: bool = False,
     max_iter: int = 3,
 ) -> Agent:
-    """Create an Agent with a fresh LLM instance and bound system prompt template."""
-    system_tpl = neatlogs.PromptTemplate(backstory)
-    bound_llm = neatlogs.bind_templates(_make_llm(), system_tpl)
+    """Create an Agent with a fresh LLM instance."""
     return Agent(
         role=role,
         goal=goal,
-        backstory=str(system_tpl.template),
-        llm=bound_llm,
+        backstory=backstory,
+        llm=_make_llm(),
         tools=tools or [],
         verbose=True,
         allow_delegation=allow_delegation,

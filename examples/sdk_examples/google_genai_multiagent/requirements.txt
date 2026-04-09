@@ -1,0 +1,4 @@
+-e ../../../[google-genai]
+google-genai>=1.0
+python-dotenv>=1.0.0
+duckduckgo-search>=6.0

@@ -4,7 +4,6 @@ Marketing Strategy Crew.
 Assembles the agents and tasks into a sequential CrewAI crew and runs it.
 """
 
-import neatlogs
 from crewai import Crew, Process
 from agents import (
     create_lead_market_analyst,
@@ -14,12 +13,6 @@ from agents import (
 from task import create_tasks
 
 
-@neatlogs.span(
-    kind="WORKFLOW",
-    name="Marketing Strategy Workflow",
-    tags=["demo", "crewai", "marketing-strategy"],
-    metadata={"agents": 3, "tasks": 5},
-)
 def run_marketing_crew(inputs: dict) -> str:
     """
     Build and run the marketing strategy crew.

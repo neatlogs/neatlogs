@@ -19,8 +19,6 @@ F = TypeVar("F", bound=Callable[..., Any])
 def _should_capture_content() -> bool:
     v = os.getenv("NEATLOGS_TRACE_CONTENT")
     if v is None:
-        v = os.getenv("TRACELOOP_TRACE_CONTENT")
-    if v is None:
         return True
     return v.lower() not in ("false", "0", "no")
 

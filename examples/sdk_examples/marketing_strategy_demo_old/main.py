@@ -13,51 +13,9 @@ so that auto-instrumentation hooks are registered first.
 
 import os
 import sys
-from datetime import datetime
-
-# ---------------------------------------------------------------------------
-# Add local SDK to path — must happen before neatlogs import
-# This file lives at: python_sdk_new/neatlogs/neatlogs/examples/marketing_strategy_demo/main.py
-# Three levels up is: python_sdk_new/neatlogs/ (contains the neatlogs/ package)
-# ---------------------------------------------------------------------------
-_sdk_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.."))
-if _sdk_root not in sys.path:
-    sys.path.insert(0, _sdk_root)
-
 from dotenv import load_dotenv
+
 load_dotenv()
-
-# ---------------------------------------------------------------------------
-# Timestamped run ID — each run writes to its own set of log files
-# ---------------------------------------------------------------------------
-_RUN_TS = datetime.now().strftime("%Y%m%d_%H%M%S")
-
-
-class _Tee:
-    """Write to both the original stream and a file simultaneously."""
-    def __init__(self, stream, filepath):
-        self._stream = stream
-        self._file = open(filepath, "w", buffering=1, encoding="utf-8")
-
-    def write(self, data):
-        self._stream.write(data)
-        self._file.write(data)
-
-    def flush(self):
-        self._stream.flush()
-        self._file.flush()
-
-    def fileno(self):
-        return self._stream.fileno()
-
-    def isatty(self):
-        return self._stream.isatty()
-
-
-_terminal_log = os.path.join(os.path.dirname(os.path.abspath(__file__)), f"run_{_RUN_TS}.log")
-sys.stdout = _Tee(sys.stdout, _terminal_log)
-sys.stderr = _Tee(sys.stderr, _terminal_log)
-print(f"[run] terminal output → {_terminal_log}")
 
 # ---------------------------------------------------------------------------
 # Toggle: set True for instant cached result, False to run real API calls
@@ -89,21 +47,13 @@ _REQUIRED_VARS = [
     "NEATLOGS_API_KEY",
     "AZURE_OPENAI_API_KEY",
     "AZURE_OPENAI_ENDPOINT",
-    "GOOGLE_API_KEY",
+    "GEMINI_API_KEY",
 ]
 _missing = [v for v in _REQUIRED_VARS if not os.getenv(v)]
 if _missing:
     print(f"ERROR: Missing required environment variables: {', '.join(_missing)}")
-    print("       Fill in your .env file before running.")
+    print("       Copy .env.example to .env and fill in your API keys.")
     sys.exit(1)
-
-# ---------------------------------------------------------------------------
-# Span file logging
-# ---------------------------------------------------------------------------
-os.environ.setdefault("NEATLOGS_LOG_SPANS", "true")
-os.environ.setdefault("NEATLOGS_LOG_SPANS_FILE", f"spans_{_RUN_TS}.log")
-os.environ.setdefault("NEATLOGS_LOG_RAW_SPANS", "true")
-os.environ.setdefault("NEATLOGS_LOG_RAW_SPANS_FILE", f"raw_spans_{_RUN_TS}.log")
 
 # ---------------------------------------------------------------------------
 # Neatlogs init -- MUST come before any LLM / CrewAI imports
@@ -112,25 +62,28 @@ import neatlogs  # noqa: E402
 
 neatlogs.init(
     api_key=os.getenv("NEATLOGS_API_KEY"),
-    endpoint=os.getenv("NEATLOGS_ENDPOINT", "http://localhost:4100"),
+    endpoint=os.getenv(
+        "NEATLOGS_ENDPOINT",
+        "https://staging-cloud.neatlogs.com/api/data/v4/batch",
+    ),
     instrumentations=[
         "openai",
         "crewai",
         "langchain",
         "azure_ai_inference",
         "google_genai",
-        "litellm",
-        # google_genai intentionally included: captures Gemini calls in tools
-        # as LLM spans in addition to the TOOL spans from @neatlogs.span.
+        # google_genai intentionally excluded: Gemini is used only as a search
+        # tool inside search_web/analyze_website. Those calls are already captured
+        # as TOOL spans by crewai OI. Including google_genai would also log them
+        # as LLM spans, which is misleading.
     ],
     workflow_name="Marketing Strategy Demo",
     tags=["demo", "crewai", "marketing-strategy"],
+    pii_enabled=True,
     debug=True,
 )
 
 # -- Now safe to import the rest ------------------------------------------------
-import sys as _sys
-_sys.path.insert(0, os.path.dirname(__file__))
 from crew import run_marketing_crew  # noqa: E402
 
 

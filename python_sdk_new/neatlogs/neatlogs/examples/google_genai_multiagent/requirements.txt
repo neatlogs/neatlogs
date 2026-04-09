@@ -1,2 +1,0 @@
-neatlogs
-google-genai>=1.0

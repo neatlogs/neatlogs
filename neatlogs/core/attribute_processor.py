@@ -17,6 +17,26 @@ from .instrumentation_scope_parser import enrich_with_scope_detection
 #   <MyClass object at 0x...>
 _PYTHON_REPR_RE = re.compile(r'^<[A-Za-z_].*?\bat\s+0x[0-9a-fA-F]+>$')
 
+# Maps neatlogs.provider values → neatlogs.llm.system
+# System values are from OpenInferenceLLMSystemValues (openai/anthropic/cohere/mistralai/vertexai)
+# For providers not in OI's LLMSystemValues we use the provider name as the system value.
+# "aws"/"bedrock" are intentionally omitted: on Bedrock, llm.system is set to the underlying
+# model vendor (e.g. "anthropic" for Claude) which is more informative than "aws".
+_PROVIDER_TO_SYSTEM: Dict[str, str] = {
+    "openai": "openai",
+    "azure": "openai",       # Azure OpenAI uses OpenAI's system
+    "azure_openai": "openai",
+    "anthropic": "anthropic",
+    "cohere": "cohere",
+    "mistral": "mistralai",  # OI LLMSystemValues.MISTRALAI = "mistralai"
+    "mistralai": "mistralai",
+    "google": "google",
+    "vertex_ai": "vertexai", # OI LLMSystemValues.VERTEXAI = "vertexai"
+    "groq": "groq",
+    "xai": "xai",
+    "deepseek": "deepseek",
+}
+
 
 def _is_python_repr(s: str) -> bool:
     return bool(_PYTHON_REPR_RE.match(s.strip()))
@@ -57,12 +77,6 @@ class UnifiedAttributeProcessor:
                 handler.setLevel(logging.DEBUG)
 
         self.meter = metrics.get_meter("neatlogs.sdk")
-
-        self.time_per_token_histogram = self.meter.create_histogram(
-            name="neatlogs.llm.metrics.time_per_output_token",
-            unit="ms",
-            description="Inter-token latency for streaming LLM responses (SDK-computed)",
-        )
 
     def _sanitize_io_value(self, val: Any) -> Any:
         """Remove Python object reprs from input.value / output.value JSON strings.
@@ -149,18 +163,16 @@ class UnifiedAttributeProcessor:
             attrs["openinference.span.kind"] = "CHAIN"
 
         self._add_crewai_token_usage_fallback(attrs)
+        self._add_reasoning_tokens_from_output_value(attrs)
         self._add_crewai_kickoff_telemetry(attrs)
         
-        # Extract tool calls from output messages
+        # Extract tool calls from output messages (OpenInference format)
         tool_calls: Dict[int, Dict[str, Any]] = {}
         oi_tool_re = re.compile(
             r"^llm\.output_messages\.(\d+)\.message\.tool_calls\.(\d+)\.tool_call\.function\.(name|arguments)$"
         )
         oi_tool_id_re = re.compile(
             r"^llm\.output_messages\.(\d+)\.message\.tool_calls\.(\d+)\.tool_call\.id$"
-        )
-        ol_tool_re = re.compile(
-            r"^gen_ai\.completion\.(\d+)\.tool_calls\.(\d+)\.(id|name|arguments)$"
         )
 
         keys_to_remove: List[str] = []
@@ -173,22 +185,13 @@ class UnifiedAttributeProcessor:
                 tool_calls.setdefault(idx, {})[field] = v
                 keys_to_remove.append(k)
                 continue
-            
+
             # OpenInference tool call id (separate pattern)
             m = oi_tool_id_re.match(k)
             if m:
                 _msg_idx, call_idx = m.groups()
                 idx = int(call_idx)
                 tool_calls.setdefault(idx, {})["id"] = v
-                keys_to_remove.append(k)
-                continue
-
-            # OpenLLMetry tool calls
-            m = ol_tool_re.match(k)
-            if m:
-                _comp_idx, call_idx, field = m.groups()
-                idx = int(call_idx)
-                tool_calls.setdefault(idx, {})[field] = v
                 keys_to_remove.append(k)
                 continue
 
@@ -295,9 +298,6 @@ class UnifiedAttributeProcessor:
 
         for k in keys_to_remove:
             attrs.pop(k, None)
-
-        if "openinference.span.kind" not in attrs and "traceloop.span.kind" in attrs:
-            attrs["openinference.span.kind"] = attrs["traceloop.span.kind"]
 
         if "openinference.span.kind" not in attrs:
             db_system = attrs.get("db.system")
@@ -442,7 +442,7 @@ class UnifiedAttributeProcessor:
             )
             
             if has_embedding_attrs:
-                attrs["_skip_output_value"] = True
+                attrs["neatlogs._skip_output_value"] = True
 
         if db_system == "chroma":
             doc_attrs = {}
@@ -518,44 +518,30 @@ class UnifiedAttributeProcessor:
         if not (span_name.startswith("Crew_") and span_name.endswith(".kickoff")):
             return
 
-        # Prefer existing values if instrumentation already provides them.
-        if "neatlogs.raw.crewai_version" not in attrs:
+        # Fill in computed values only when OpenInference didn't already set them.
+        if "crewai_version" not in attrs:
             try:
                 import crewai  # type: ignore
 
                 version = getattr(crewai, "__version__", None)
                 if version:
-                    attrs["neatlogs.raw.crewai_version"] = str(version)
+                    attrs["crewai_version"] = str(version)
             except Exception:
                 pass
 
-        if "neatlogs.raw.python_version" not in attrs:
-            try:
-                import platform
-
-                attrs["neatlogs.raw.python_version"] = platform.python_version()
-            except Exception:
-                pass
-
-        if "neatlogs.raw.crew_number_of_tasks" not in attrs:
+        if "crew_number_of_tasks" not in attrs:
             count = self._coerce_collection_count(
-                attrs.get("crew_number_of_tasks")
-                or attrs.get("neatlogs.raw.crew_number_of_tasks")
-                or attrs.get("crew_tasks")
-                or attrs.get("neatlogs.raw.crew_tasks")
+                attrs.get("crew_tasks")
             )
             if count is not None:
-                attrs["neatlogs.raw.crew_number_of_tasks"] = count
+                attrs["crew_number_of_tasks"] = count
 
-        if "neatlogs.raw.crew_number_of_agents" not in attrs:
+        if "crew_number_of_agents" not in attrs:
             count = self._coerce_collection_count(
-                attrs.get("crew_number_of_agents")
-                or attrs.get("neatlogs.raw.crew_number_of_agents")
-                or attrs.get("crew_agents")
-                or attrs.get("neatlogs.raw.crew_agents")
+                attrs.get("crew_agents")
             )
             if count is not None:
-                attrs["neatlogs.raw.crew_number_of_agents"] = count
+                attrs["crew_number_of_agents"] = count
 
     def _coerce_collection_count(self, value: Any) -> Optional[int]:
         if value is None:
@@ -612,7 +598,8 @@ class UnifiedAttributeProcessor:
           - llm.token_count.prompt_details.cache_read (best-effort)
         Only applies when token_count fields are not already present.
         """
-        usage = attrs.get("crewai.crew.token_usage")
+        # neatlogs.crew.token_usage: set by our OI CrewAI patch (_patch_openinference_crewai_crew_outputs)
+        usage = attrs.get("neatlogs.crew.token_usage")
         if not isinstance(usage, str) or not usage:
             return
 
@@ -643,6 +630,35 @@ class UnifiedAttributeProcessor:
         # CrewAI reports cached_prompt_tokens; treat as cache-read input tokens.
         if "cached_prompt_tokens" in parsed:
             attrs["llm.token_count.prompt_details.cache_read"] = parsed["cached_prompt_tokens"]
+
+    def _add_reasoning_tokens_from_output_value(self, attrs: Dict[str, Any]) -> None:
+        """
+        Fallback: parse output.value JSON to extract reasoning_tokens when
+        llm.token_count.completion_details.reasoning is absent as a span attribute.
+
+        Covers spans where the OpenInference OpenAI/LiteLLM instrumentor fails to
+        extract it as a top-level attribute (e.g. Azure deployments via LiteLLM in
+        CrewAI), even though the full API response in output.value contains the value.
+        """
+        if "llm.token_count.completion_details.reasoning" in attrs:
+            return
+        if "llm.usage.reasoning_tokens" in attrs:
+            return
+
+        output_value = attrs.get("output.value")
+        if not isinstance(output_value, str):
+            return
+
+        try:
+            parsed = json.loads(output_value)
+            # Standard OpenAI / Azure chat completions response shape
+            usage = parsed.get("usage") or {}
+            details = usage.get("completion_tokens_details") or {}
+            reasoning = details.get("reasoning_tokens")
+            if reasoning and reasoning > 0:
+                attrs["llm.token_count.completion_details.reasoning"] = reasoning
+        except Exception:
+            pass
 
     def _add_intermediate_steps(self, unified: Dict[str, Any]) -> None:
         """
@@ -780,39 +796,27 @@ class UnifiedAttributeProcessor:
         duration_ns = span.end_time - span.start_time
         computed["neatlogs.metrics.duration_ms"] = duration_ns / 1_000_000
 
+        # Skip event-based TTFT computation if already set live by a streaming patch
+        # (OpenAI/Anthropic/LangChain/LiteLLM patches set these directly on the span)
+        if attrs.get("neatlogs.llm.metrics.ttft_ms") is not None:
+            return computed
+
+        # Google GenAI emits "gen_ai.content.chunk" on every text chunk — use for TTFT + streaming_time_to_generate
         chunk_timestamps = []
         if span.events:
             for event in span.events:
-                if event.name in {
-                    "llm.content.completion.chunk",
-                    "gen_ai.content.completion.chunk",
-                    "neatlogs.gen_ai.content.completion.chunk",
-                }:
-                    chunk_timestamps.append(event.timestamp / 1_000_000)
+                if event.name == "gen_ai.content.chunk":
+                    chunk_timestamps.append(event.timestamp)
 
-        if len(chunk_timestamps) > 1:
-            diffs = [
-                chunk_timestamps[i] - chunk_timestamps[i - 1]
-                for i in range(1, len(chunk_timestamps))
-            ]
-            mean_gap_ms = sum(diffs) / len(diffs)
-            rounded_value = round(mean_gap_ms, 3)
-            computed["neatlogs.llm.metrics.time_per_output_token"] = rounded_value
+        if chunk_timestamps:
+            first_ns = chunk_timestamps[0]
+            ttft_ms = round((first_ns - span.start_time) / 1_000_000, 3)
+            computed["neatlogs.llm.metrics.ttft_ms"] = ttft_ms
 
-            metric_attributes = {
-                "trace_id": f"{span.context.trace_id:032x}",
-                "span_id": f"{span.context.span_id:016x}",
-            }
-            model = (
-                attrs.get("neatlogs.llm.model_name")
-                or attrs.get("neatlogs.gen_ai.request.model")
-                or attrs.get("gen_ai.request.model")
-                or attrs.get("llm.model_name")
-            )
-            if model:
-                metric_attributes["llm_model"] = model
-
-            self.time_per_token_histogram.record(rounded_value, attributes=metric_attributes)
+            if len(chunk_timestamps) >= 2:
+                last_ns = chunk_timestamps[-1]
+                stg_ms = round((last_ns - first_ns) / 1_000_000, 3)
+                computed["neatlogs.llm.metrics.streaming_time_to_generate_ms"] = stg_ms
 
         return computed
 
@@ -911,8 +915,8 @@ class UnifiedAttributeProcessor:
                     should_ignore = True
                     break
 
-            if not should_ignore:
-                unified[f"neatlogs.raw.{key}"] = value
+            # Unmapped attributes are not copied — they stay on the OTel span
+            # natively and are exported via OTLP as-is.
 
         # Ensure neatlogs.span.kind is always set (for simplified view)
         if "neatlogs.span.kind" not in unified:
@@ -941,36 +945,86 @@ class UnifiedAttributeProcessor:
         if span_kind not in ("embedding", "retriever", "vector_store"):
             unified.pop("neatlogs.vectordb.embedding_model", None)
 
-        # Framework detection fallback from OpenLLMetry/Traceloop attributes
-        # Primary detection is from instrumentation_scope.name (done earlier in pipeline)
-        fallback_reason = None
-        if not unified.get("neatlogs.framework"):
-            # Check for LangGraph-specific attributes
-            if (attrs.get("traceloop.association.properties.langgraph_node") or 
-                attrs.get("traceloop.association.properties.langgraph_step") or 
-                attrs.get("traceloop.association.properties.langgraph_checkpoint_ns")):
-                unified["neatlogs.framework"] = "langgraph"
-                fallback_reason = "traceloop.langgraph_association"
-            # Check for generic traceloop attributes (LangChain via OpenLLMetry)
-            elif (attrs.get("traceloop.workflow.name") or 
-                  attrs.get("traceloop.entity.name") or 
-                  attrs.get("traceloop.span.kind")):
-                unified["neatlogs.framework"] = "langchain"
-                fallback_reason = "traceloop.generic"
-
         if self.debug:
             self.logger.debug(
-                "[ScopeDetectionFinal] span_name=%s scope=%s framework=%s fallback_reason=%s traceloop_workflow=%s traceloop_entity=%s traceloop_kind=%s",
+                "[ScopeDetectionFinal] span_name=%s scope=%s framework=%s",
                 attrs.get("_span_name"),
                 attrs.get("neatlogs.instrumentation.name"),
                 unified.get("neatlogs.framework"),
-                fallback_reason,
-                bool(attrs.get("traceloop.workflow.name")),
-                bool(attrs.get("traceloop.entity.name")),
-                bool(attrs.get("traceloop.span.kind")),
             )
 
+        self._fill_provider_gaps(attrs, unified)
+
         return unified
+
+    def _fill_provider_gaps(self, attrs: Dict[str, Any], unified: Dict[str, Any]) -> None:
+        """
+        Fill neatlogs.llm.provider and neatlogs.llm.system when OpenInference doesn't set them.
+
+        OpenInference sets llm.provider for openai/anthropic/google_genai/bedrock/cohere but
+        NOT for groq, mistralai, vertexai. The scope-based detection in
+        enrich_with_scope_detection() already writes neatlogs.provider from the instrumentation
+        scope name, so we use that as a fallback. Model-name inference is the last resort.
+        """
+        # --- neatlogs.llm.provider ---
+        if not unified.get("neatlogs.llm.provider"):
+            # Fallback 1: scope-detected provider (set by enrich_with_scope_detection)
+            scope_provider = unified.get("neatlogs.provider") or attrs.get("neatlogs.provider", "")
+            if scope_provider:
+                unified["neatlogs.llm.provider"] = scope_provider
+            else:
+                # Fallback 2: infer from model name prefix
+                model = (
+                    attrs.get("llm.model_name")
+                    or attrs.get("gen_ai.request.model")
+                    or attrs.get("llm.model")
+                    or ""
+                )
+                inferred = self._infer_provider_from_model(str(model))
+                if inferred:
+                    unified["neatlogs.llm.provider"] = inferred
+
+        # --- neatlogs.llm.system ---
+        if not unified.get("neatlogs.llm.system"):
+            provider = (
+                unified.get("neatlogs.llm.provider")
+                or unified.get("neatlogs.provider")
+                or ""
+            ).lower()
+            system = _PROVIDER_TO_SYSTEM.get(provider, "")
+            if system:
+                unified["neatlogs.llm.system"] = system
+
+    def _infer_provider_from_model(self, model: str) -> str:
+        """Infer LLM provider from model name prefix as a last resort."""
+        if not model:
+            return ""
+        m = model.lower()
+        # OpenAI model families
+        if m.startswith(("gpt-", "o1-", "o3-", "o4-", "text-embedding-", "text-davinci-")):
+            return "openai"
+        # Anthropic
+        if m.startswith("claude-"):
+            return "anthropic"
+        # Google
+        if m.startswith(("gemini-", "gemma-")):
+            return "google"
+        # Mistral
+        if m.startswith(("mistral-", "mixtral-")):
+            return "mistralai"
+        # Cohere
+        if m.startswith(("command-", "embed-english", "embed-multilingual")):
+            return "cohere"
+        # Bedrock model IDs (e.g. "anthropic.claude-3-5-sonnet-v1:0", "meta.llama3-8b-instruct-v1:0")
+        if m.startswith(("anthropic.", "meta.", "amazon.", "nova-", "titan-")):
+            return "aws"
+        # xAI
+        if m.startswith("grok-"):
+            return "xai"
+        # DeepSeek
+        if m.startswith("deepseek-"):
+            return "deepseek"
+        return ""
 
     def _map_recursive(
         self,
@@ -1025,9 +1079,7 @@ class UnifiedAttributeProcessor:
             if isinstance(target_key, str) and "{span_kind}" in target_key:
                 resolved_kind = target.get("neatlogs.span.kind")
                 if not resolved_kind:
-                    resolved_kind = source.get("openinference.span.kind") or source.get(
-                        "traceloop.span.kind"
-                    )
+                    resolved_kind = source.get("openinference.span.kind")
                     if isinstance(resolved_kind, str):
                         resolved_kind = resolved_kind.strip()
                 if not resolved_kind:

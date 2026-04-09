@@ -1,4 +1,5 @@
-neatlogs>=1.2.6,<2.0.0
-crewai>=1.5.0,<2.0.0
+-e ../../../[crewai,google-genai,litellm,openinference-instrumentation-litellm,azure-ai-inference]
+crewai>=1.9.3
 google-genai>=1.0.0,<2.0.0
-python-dotenv>=1.0.0,<2.0.0
+python-dotenv>=1.0.0
+

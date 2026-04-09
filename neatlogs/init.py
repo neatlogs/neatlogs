@@ -21,14 +21,14 @@ from opentelemetry.sdk.environment_variables import (
     OTEL_ATTRIBUTE_COUNT_LIMIT,
     OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT,
 )
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.resources import SERVICE_NAME, Resource
 from opentelemetry.sdk.trace import SpanLimits, TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.sdk.trace.sampling import TraceIdRatioBased
 
-from .core.exporter import NeatlogsExporter
 from .core.logger import get_logger
-from .core.metrics_correlation import SpanMetricMeterProviderProxy
 from .core.span_processor import NeatlogsSpanProcessor
 from .instrumentation.manager import InstrumentationManager
 from .version import __version__
@@ -40,6 +40,7 @@ _initialized = False
 _tracer_provider = None
 _meter_provider = None
 _log_provider = None
+_log_span_exporter = None
 _span_processor = None
 _debug_mode = False
 _session_config = {
@@ -87,34 +88,6 @@ def _span_limits_for_capture_everything() -> SpanLimits:
     return SpanLimits(max_span_attributes=_DEFAULT_MAX_SPAN_ATTRIBUTES)
 
 
-def _patch_semconv_ai_for_openllmetry(debug: bool) -> None:
-    try:
-        from opentelemetry.semconv_ai import SpanAttributes
-    except Exception:
-        return
-
-    aliases = (
-        ("GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS", "LLM_USAGE_CACHE_READ_INPUT_TOKENS"),
-        (
-            "GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS",
-            "LLM_USAGE_CACHE_CREATION_INPUT_TOKENS",
-        ),
-    )
-
-    changed = False
-    for missing, existing in aliases:
-        if not hasattr(SpanAttributes, missing) and hasattr(SpanAttributes, existing):
-            setattr(SpanAttributes, missing, getattr(SpanAttributes, existing))
-            changed = True
-
-    if debug and changed:
-        from .core.logger import get_logger
-
-        logger = get_logger()
-        logger.debug(
-            "Patched opentelemetry.semconv_ai.SpanAttributes GEN_AI_* aliases for OpenLLMetry compatibility"
-        )
-
 
 def init(
     api_key: Optional[str] = None,
@@ -131,7 +104,7 @@ def init(
     debug: bool = False,
     disable_export: bool = False,
     capture_logs: bool = False,
-    log_level: str = "DEBUG",
+    log_level: str = "INFO",
     mask: Optional[Callable[[Dict[str, Any]], Optional[Dict[str, Any]]]] = None,
     pii_enabled: Optional[bool] = None,
     pii_span_types: Optional[List[str]] = None,
@@ -156,7 +129,7 @@ def init(
         capture_logs: Capture Python logging.* calls and neatlogs.log() as LOG spans.
                       Default: False. Enable to see intermediate steps in the timeline.
         log_level: Minimum Python logging level to capture when capture_logs=True.
-                   Default: "DEBUG" (captures all levels).
+                   Default: "INFO".
         mask: Optional callable applied to every span dict before export.
               Receives the full span dict and must return the (possibly modified) dict.
               Use this to redact PII from inputs, outputs, and attributes.
@@ -215,7 +188,6 @@ def init(
     global _debug_mode
     _debug_mode = debug
 
-    _patch_semconv_ai_for_openllmetry(debug=debug)
     resolved_workflow_name = _resolve_workflow_name(workflow_name)
 
     final_session_id = None
@@ -288,32 +260,42 @@ def init(
 
     _tracer_provider = provider
 
-    exporter = NeatlogsExporter(
-        api_key=resolved_key,
-        endpoint=endpoint,
-        workflow_name=resolved_workflow_name,
-        batch_size=batch_size,
-        flush_interval=flush_interval,
-        disable_export=disable_export_resolved,
-    )
-
+    # NeatlogsSpanProcessor: pure pre-processing (attribute normalization + file logging)
     global _span_processor
     _span_processor = NeatlogsSpanProcessor(
-        exporter=exporter,
         sample_rate=sample_rate,
         debug=debug,
         mask=mask,
     )
     provider.add_span_processor(_span_processor)
 
+    # BatchSpanProcessor + OTLPSpanExporter: standard transport
+    if not disable_export_resolved:
+        otlp_headers = {"x-api-key": resolved_key}
+        # Always send to {base_url}/v1/traces regardless of what endpoint string was passed.
+        # Users may pass the legacy /api/data/v4/batch path; we normalise to the OTLP path here.
+        traces_endpoint = endpoint if endpoint.endswith("/v1/traces") else f"{_base_url}/v1/traces"
+        otlp_exporter = OTLPSpanExporter(
+            endpoint=traces_endpoint,
+            headers=otlp_headers,
+        )
+        batch_processor = BatchSpanProcessor(
+            otlp_exporter,
+            max_export_batch_size=batch_size,
+            schedule_delay_millis=int(flush_interval * 1000),
+        )
+        provider.add_span_processor(batch_processor)
+        if debug:
+            logger.debug(f"OTLP trace exporter configured: {traces_endpoint}")
+    elif debug:
+        logger.debug("Export disabled — spans will not be sent to backend")
+
     if debug:
         logger.debug("Neatlogs tracer provider initialized")
 
     global _meter_provider
-    _meter_provider = MeterProvider(
-        resource=resource,
-    )
-    metrics.set_meter_provider(SpanMetricMeterProviderProxy(_meter_provider, exporter))
+    _meter_provider = MeterProvider(resource=resource)
+    metrics.set_meter_provider(_meter_provider)
 
     if debug:
         logger.debug("Neatlogs meter provider initialized")
@@ -321,13 +303,23 @@ def init(
     # --- Logs signal (opt-in) ---
     # neatlogs.log(), capture_stdout=True, and logging.* auto-capture all require
     # capture_logs=True. When False, nothing is captured as LOG spans.
-    global _log_provider
+    global _log_provider, _log_span_exporter
     if capture_logs:
+        from .core.exporter import NeatlogsExporter
         from .core.log_exporter import NeatlogsLogExporter
 
+        logs_batch_endpoint = f"{_base_url}/api/data/v4/batch"
+        _log_span_exporter = NeatlogsExporter(
+            api_key=resolved_key,
+            endpoint=logs_batch_endpoint,
+            workflow_name=resolved_workflow_name,
+            batch_size=batch_size,
+            flush_interval=flush_interval,
+            disable_export=disable_export_resolved,
+        )
         _log_provider = LoggerProvider(resource=resource)
         _log_provider.add_log_record_processor(
-            SimpleLogRecordProcessor(NeatlogsLogExporter(exporter))
+            SimpleLogRecordProcessor(NeatlogsLogExporter(_log_span_exporter))
         )
         logs.set_logger_provider(_log_provider)
 
@@ -343,7 +335,8 @@ def init(
             )
             if debug:
                 logger.debug(
-                    f"Neatlogs log capture enabled (logging.* at {log_level.upper()}+)"
+                    "Neatlogs log capture enabled "
+                    f"(logging.* at {log_level.upper()}+, endpoint: {logs_batch_endpoint})"
                 )
         except ImportError:
             if debug:
@@ -385,7 +378,7 @@ def init(
 
 def flush(timeout_millis: int = 30000) -> bool:
     """Flush all pending spans and metrics."""
-    global _tracer_provider, _meter_provider
+    global _tracer_provider, _meter_provider, _log_span_exporter
     success = True
 
     if _tracer_provider:
@@ -408,6 +401,15 @@ def flush(timeout_millis: int = 30000) -> bool:
             logger.error(f"Error flushing metrics: {e}", exc_info=True)
             success = False
 
+    if _log_span_exporter:
+        try:
+            logger.debug("Flushing log span exporter...")
+            _log_span_exporter.flush(timeout=timeout_millis / 1000.0)
+            logger.debug("Log span exporter flushed successfully")
+        except Exception as e:
+            logger.error(f"Error flushing logs: {e}", exc_info=True)
+            success = False
+
     return success
 
 
@@ -418,7 +420,7 @@ def get_session_config():
 
 def shutdown(timeout_millis: int = 30000) -> bool:
     """Shutdown the SDK and flush pending spans/metrics."""
-    global _tracer_provider, _meter_provider, _log_provider, _span_processor, _initialized
+    global _tracer_provider, _meter_provider, _log_provider, _log_span_exporter, _span_processor, _initialized
 
     try:
         atexit.unregister(shutdown)
@@ -463,6 +465,15 @@ def shutdown(timeout_millis: int = 30000) -> bool:
             logger.error(f"Error shutting down log provider: {e}", exc_info=True)
             success = False
 
+    if _log_span_exporter:
+        try:
+            logger.debug("Shutting down log span exporter...")
+            _log_span_exporter.shutdown()
+            logger.debug("Log span exporter shut down successfully")
+        except Exception as e:
+            logger.error(f"Error shutting down log span exporter: {e}", exc_info=True)
+            success = False
+
     try:
         from opentelemetry.instrumentation.logging import LoggingInstrumentor
 
@@ -474,6 +485,7 @@ def shutdown(timeout_millis: int = 30000) -> bool:
     _tracer_provider = None
     _meter_provider = None
     _log_provider = None
+    _log_span_exporter = None
     _span_processor = None
     _debug_mode = False
     _session_config["session_id"] = None

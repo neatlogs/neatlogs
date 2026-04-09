@@ -1,0 +1,5 @@
+-e ../../../[langchain]
+langchain>=0.3
+langchain-aws>=0.2
+python-dotenv>=1.0.0
+boto3>=1.34

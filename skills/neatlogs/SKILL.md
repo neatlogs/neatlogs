@@ -18,7 +18,7 @@ Built on OpenTelemetry + OpenInference standards.
 
 ## Installation
 
-Base install — includes lightweight OpenInference instrumentation adapters for all 40+ supported libraries (thin wrappers that do **not** pull in heavy LLM/framework dependencies):
+Base install — includes lightweight OpenInference instrumentation adapters for all 45+ supported libraries (thin wrappers that do **not** pull in heavy LLM/framework dependencies):
 
 ```bash
 pip install neatlogs
@@ -132,7 +132,8 @@ Pass these string values in the `instrumentations=[]` list to `neatlogs.init()`.
 |---|---|---|
 | `openai` | OpenAI | |
 | `anthropic` | Anthropic | |
-| `google_genai` | Google Generative AI | Client must be created **after** `init()` — see troubleshooting. Use this key, NOT `google_generativeai` (which has no instrumentor) |
+| `google_genai` | Google Generative AI (`google.genai`) | Client must be created **after** `init()` — see troubleshooting. Preferred key for the `google-genai` SDK |
+| `google_generativeai` | Google Generative AI (`google.generativeai`) | For the older `google-generativeai` SDK. Has OpenLLMetry instrumentor |
 | `azure_ai_inference` | Azure AI Inference | |
 | `litellm` | LiteLLM | |
 | `bedrock` | AWS Bedrock | |
@@ -140,6 +141,11 @@ Pass these string values in the `instrumentations=[]` list to `neatlogs.init()`.
 | `vertexai` | Google Vertex AI | |
 | `mistralai` | Mistral AI | |
 | `portkey` | Portkey | |
+| `watsonx` | IBM watsonx.ai | |
+| `replicate` | Replicate | |
+| `sagemaker` | AWS SageMaker | |
+| `alephalpha` | Aleph Alpha | |
+| ⚠️ `huggingface_hub` | Hugging Face Hub | No direct instrumentor — key is in the registry but silently skipped |
 | ⚠️ `together` | Together AI | No direct instrumentor — use `litellm` as a proxy or call via OpenAI-compatible endpoint with `openai` key |
 | ⚠️ `cohere` | Cohere | No direct instrumentor — use `litellm` as a proxy |
 | ⚠️ `ollama` | Ollama | No direct instrumentor — call via OpenAI-compatible endpoint with `openai` key |
@@ -175,6 +181,7 @@ Pass these string values in the `instrumentations=[]` list to `neatlogs.init()`.
 | `elasticsearch` | Elasticsearch | ⚠️ No direct instrumentor |
 | `redis` | Redis | ⚠️ No direct instrumentor |
 | `marqo` | Marqo | ⚠️ No direct instrumentor |
+| `opensearch` | OpenSearch | ⚠️ No direct instrumentor |
 
 > **Note**: Libraries marked ⚠️ above have no NeatLogs or OpenInference instrumentor — passing them to `instrumentations=[]` is silently skipped. Use `trace("op", kind="VECTOR_STORE")` with manual attributes for custom vector DB spans, or rely on higher-level framework instrumentation (e.g. LangChain retriever auto-instrumentation).
 
@@ -208,13 +215,17 @@ For deep dives, see the companion reference files:
 | Variable | Description |
 |---|---|
 | `NEATLOGS_API_KEY` | API key (alternative to `api_key` param) |
-| `NEATLOGS_ENDPOINT` | Backend endpoint URL |
 | `NEATLOGS_DISABLE_EXPORT` | Set to `"true"` to disable span export |
 | `NEATLOGS_LOG_SPANS` | Set to `"true"` to log spans to file |
-| `NEATLOGS_LOG_SPANS_FILE` | File path for span logs (default: `spans.log`) |
+| `NEATLOGS_LOG_SPANS_FILE` | File path for span logs (default: `spans_optimized.log`) |
 | `NEATLOGS_LOG_RAW_SPANS` | Set to `"true"` to log raw span JSON |
-| `NEATLOGS_LOG_RAW_SPANS_FILE` | File path for raw span logs |
+| `NEATLOGS_LOG_RAW_SPANS_FILE` | File path for raw span logs (default: `spans_raw_optimized.log`) |
 | `NEATLOGS_TRACE_CONTENT` | Set to `"false"` to globally disable input/output content capture on spans |
+| `NEATLOGS_LOG_METRICS` | Set to `"true"` to log metrics to file |
+| `NEATLOGS_LOG_METRICS_FILE` | File path for metrics logs (default: `metrics_optimized.log`) |
+| `NEATLOGS_LOG_LEVEL` | SDK internal log level (default: `INFO`) |
+| `NEATLOGS_LOG_FILE` | File path for SDK internal logs (if set, logs to file instead of stderr) |
+| `NEATLOGS_ENDPOINT` | Convention used in examples — **not** auto-read by `init()`. Pass explicitly: `endpoint=os.getenv("NEATLOGS_ENDPOINT")` |
 
 ---
 

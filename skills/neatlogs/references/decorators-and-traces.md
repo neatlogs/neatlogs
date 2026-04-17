@@ -285,13 +285,18 @@ def index_documents(docs: list):
 
 ### RETRIEVER Attributes
 
-| Attribute | Type | Description |
-|-----------|------|-------------|
-| `neatlogs.retrieval.query` | `str` | The retrieval query |
-| `neatlogs.retrieval.top_k` | `int` | Number of results requested |
-| `neatlogs.retrieval.documents` | `JSON str` | Retrieved documents |
+When using `@span(kind="RETRIEVER")`, the decorator auto-sets these attributes. For manual `span.set_attribute()` in `trace()` blocks, use the **raw** (OpenInference) names — the SDK normalizes them to `neatlogs.retriever.*` before export.
 
-> `@span(kind="RETRIEVER")` auto-extracts query from the first function argument and documents from the return value. Manual `set_attribute` is only needed for custom behavior.
+| Raw attribute (for `set_attribute()`) | Normalized (in dashboard) | Type | Description |
+|---|---|---|---|
+| `retrieval.query` | `neatlogs.retriever.query` | `str` | The retrieval query |
+| `retrieval.top_k` | `neatlogs.retriever.top_k` | `int` | Number of results requested |
+| `retrieval.documents.{i}.document.id` | `neatlogs.retriever.documents.{i}.document.id` | `str` | Document ID (indexed per result) |
+| `retrieval.documents.{i}.document.content` | `neatlogs.retriever.documents.{i}.document.content` | `str` | Document content (indexed per result) |
+| `retrieval.documents.{i}.document.score` | `neatlogs.retriever.documents.{i}.document.score` | `float` | Relevance score (indexed per result) |
+| `retrieval.documents.{i}.document.metadata` | `neatlogs.retriever.documents.{i}.document.metadata` | `str` | Document metadata (indexed per result) |
+
+> `@span(kind="RETRIEVER")` auto-extracts query from the first function argument and documents from the return value. Manual `set_attribute` is only needed for custom behavior inside `trace()` blocks. Documents are stored as indexed attributes (one per result), not as a single JSON blob.
 
 ### GUARDRAIL Attributes
 

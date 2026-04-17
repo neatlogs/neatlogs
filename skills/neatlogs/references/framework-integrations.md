@@ -344,6 +344,9 @@ response = completion(
     model="gpt-4o",
     messages=[{"role": "user", "content": "Hello!"}],
 )
+
+neatlogs.flush()
+neatlogs.shutdown()
 ```
 
 ---

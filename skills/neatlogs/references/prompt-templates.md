@@ -209,25 +209,30 @@ cached = neatlogs.fetch_prompt(name="research-agent", label="production")
 ### Creating and Managing Prompts
 
 ```python
-# Create
+# Create — `prompt=` is the template text, `labels=` is required
 new_prompt = neatlogs.create_prompt(
     name="research-agent",
-    content="You are a research assistant for {{topic}}.",
+    prompt="You are a research assistant for {{topic}}.",
+    labels=["staging"],
 )
 
-# Update
-neatlogs.update_prompt(id=new_prompt["id"], content="Updated template...")
+# Move labels to a specific version (does NOT update content)
+neatlogs.update_prompt(name="research-agent", version=1, new_labels=["production"])
 
-# Save as new version
-neatlogs.save_as_version(id=new_prompt["id"])
+# Save new content as a new version
+neatlogs.save_as_version(
+    prompt_name="research-agent",
+    content="Updated research assistant for {{topic}}.",
+    labels=["staging"],
+)
 
 # List all prompts
 all_prompts = neatlogs.list_prompts()
 
-# Delete
+# Delete a specific version
 neatlogs.delete_prompt(name="research-agent", version=1)
 
-# Remove a label/tag
+# Remove a label/tag from a version
 neatlogs.remove_tag(name="research-agent", version=2, tag="staging")
 ```
 

@@ -132,7 +132,7 @@ Pass these string values in the `instrumentations=[]` list to `neatlogs.init()`.
 |---|---|---|
 | `openai` | OpenAI | |
 | `anthropic` | Anthropic | |
-| `google_genai` | Google Generative AI | Client must be created **after** `init()` — see troubleshooting |
+| `google_genai` | Google Generative AI | Client must be created **after** `init()` — see troubleshooting. Use this key, NOT `google_generativeai` (which has no instrumentor) |
 | `azure_ai_inference` | Azure AI Inference | |
 | `litellm` | LiteLLM | |
 | `bedrock` | AWS Bedrock | |
@@ -160,6 +160,7 @@ Pass these string values in the `instrumentations=[]` list to `neatlogs.init()`.
 | `smolagents` | SmolAgents | |
 | `strands` | Strands | |
 | `pipecat` | Pipecat | |
+| `beeai` | BeeAI | |
 | ⚠️ `langgraph` | LangGraph | No direct instrumentor. Use `instrumentations=["langchain"]` — LangGraph is built on LangChain and is traced via the LangChain instrumentor |
 
 ### Retrieval / Vector Stores

@@ -36,7 +36,7 @@ For framework-managed LLM calls (e.g. CrewAI). Add `"crewai"` to instrumentation
 
 ```python
 neatlogs.init(instrumentations=["openai", "crewai", "langchain"])
-bound_llm = neatlogs.bind_templates(llm, system_tpl, domain="finance")
+bound_llm = neatlogs.bind_templates(llm, system_tpl)
 neatlogs.register_crewai_task(task, user_tpl, topic="AI chips")
 ```
 

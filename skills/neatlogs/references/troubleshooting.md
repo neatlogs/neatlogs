@@ -77,9 +77,30 @@ neatlogs.init(
 
 **Gotcha**: In services that call themselves (e.g., a webhook handler that triggers another endpoint on the same service), this can cause **infinite trace loops**.
 
-There is currently no way to disable HTTP auto-instrumentation.
+There is no built-in parameter to disable HTTP auto-instrumentation. However, you can uninstrument each HTTP library immediately after `neatlogs.init()`:
 
-**Workaround**: Filter out self-referencing HTTP spans server-side in the NeatLogs dashboard, or ensure your service doesn't recursively call its own endpoints within a traced context.
+```python
+import importlib
+import neatlogs
+
+neatlogs.init(api_key="...", instrumentations=["google_genai"])
+
+# Uninstrument HTTP libs — init() always enables them regardless of instrumentations=[]
+for cls_path in [
+    "opentelemetry.instrumentation.httpx.HTTPXClientInstrumentor",
+    "opentelemetry.instrumentation.requests.RequestsInstrumentor",
+    "opentelemetry.instrumentation.urllib3.URLLib3Instrumentor",
+    "opentelemetry.instrumentation.aiohttp_client.AioHttpClientInstrumentor",
+]:
+    try:
+        mod_path, cls_name = cls_path.rsplit(".", 1)
+        mod = importlib.import_module(mod_path)
+        getattr(mod, cls_name)().uninstrument()
+    except Exception:
+        pass  # Library not installed — safe to skip
+```
+
+**Alternative workaround**: Filter out self-referencing HTTP spans server-side in the NeatLogs dashboard, or ensure your service doesn't recursively call its own endpoints within a traced context.
 
 ---
 

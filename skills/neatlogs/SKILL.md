@@ -165,11 +165,9 @@ Pass these string values in the `instrumentations=[]` list to `neatlogs.init()`.
 
 ### Retrieval / Vector Stores
 
-> **Note**: The vector store libraries below are registered in the SDK but do not currently have a NeatLogs or OpenInference instrumentor. Passing them to `instrumentations=[]` will be silently skipped. Use `trace("op", kind="VECTOR_STORE")` with manual attributes for custom vector DB spans, or rely on higher-level framework instrumentation (e.g. LangChain retriever auto-instrumentation).
-
 | Key | Library | Status |
 |---|---|---|
-| `weaviate` | Weaviate | ✅ Has OpenInference instrumentor |
+| `weaviate` | Weaviate | ✅ Has OpenInference instrumentor — auto-instrumented when weaviate is installed |
 | `chromadb` | ChromaDB | ⚠️ No direct instrumentor — traced indirectly via LangChain retriever instrumentation |
 | `pinecone` | Pinecone | ⚠️ No direct instrumentor |
 | `qdrant` | Qdrant | ⚠️ No direct instrumentor |
@@ -177,6 +175,8 @@ Pass these string values in the `instrumentations=[]` list to `neatlogs.init()`.
 | `elasticsearch` | Elasticsearch | ⚠️ No direct instrumentor |
 | `redis` | Redis | ⚠️ No direct instrumentor |
 | `marqo` | Marqo | ⚠️ No direct instrumentor |
+
+> **Note**: Libraries marked ⚠️ above have no NeatLogs or OpenInference instrumentor — passing them to `instrumentations=[]` is silently skipped. Use `trace("op", kind="VECTOR_STORE")` with manual attributes for custom vector DB spans, or rely on higher-level framework instrumentation (e.g. LangChain retriever auto-instrumentation).
 
 ### Other
 
@@ -186,7 +186,7 @@ Pass these string values in the `instrumentations=[]` list to `neatlogs.init()`.
 | `instructor` | Instructor | |
 | `guardrails` | Guardrails AI | |
 | `google_adk` | Google ADK | |
-| `promptflow` | PromptFlow | |
+| `promptflow` | PromptFlow | ⚠️ No pip extra — `pip install openinference-instrumentation-promptflow` separately |
 
 > **HTTP libraries** (`requests`, `httpx`, `urllib3`, `aiohttp`) are always auto-instrumented by `neatlogs.init()` for trace context propagation — you do not need to list them in `instrumentations=[]`.
 

@@ -137,9 +137,11 @@ Set to `False` to suppress serialization — useful for large payloads or sensit
 
 ```python
 import neatlogs
-from openai import OpenAI
 
 neatlogs.init(api_key="...", workflow_name="research-app", instrumentations=["openai"])
+
+from openai import OpenAI  # Import AFTER init() for auto-instrumentation
+
 client = OpenAI()
 
 @neatlogs.span(kind="TOOL", tool_name="web_search")
@@ -341,22 +343,22 @@ with neatlogs.trace("llm_call", kind="LLM") as span:
 ## 6. Error Handling on Manual Spans
 
 ```python
-from opentelemetry.trace import StatusCode
+from opentelemetry.trace import StatusCode, Status
 
 with neatlogs.trace("my_operation", kind="CHAIN") as span:
     try:
         result = do_work()
     except Exception as e:
         span.record_exception(e)
-        span.set_status(StatusCode.ERROR, str(e))
+        span.set_status(Status(StatusCode.ERROR, str(e)))
         raise
 ```
 
 | Wrong | Right |
 |-------|-------|
-| `span.set_attribute("error", str(e))` | `span.record_exception(e)` + `span.set_status(StatusCode.ERROR, str(e))` |
+| `span.set_attribute("error", str(e))` | `span.record_exception(e)` + `span.set_status(Status(StatusCode.ERROR, str(e)))` |
 
-Setting an `"error"` attribute does NOT mark the span as failed in the backend. You must use OTel's `record_exception()` and `set_status()` methods.
+Setting an `"error"` attribute does NOT mark the span as failed in the backend. You must use OTel's `record_exception()` and `set_status()` methods. Note: `set_status()` requires a `Status` object, not bare `StatusCode` + string.
 
 > **Note**: `@span()` automatically calls `record_exception()` and `set_status(StatusCode.ERROR)` when the decorated function raises an exception. Manual error handling is only needed inside `trace()` blocks.
 
@@ -384,7 +386,7 @@ neatlogs.init(capture_logs=True, log_level="INFO")
 ```
 
 - Auto-captures stdlib `logging.info()`, `logging.warning()`, `logging.error()` calls as LOG spans inside `@span` or `trace()` blocks
-- `log_level` (default `"WARNING"`) sets the minimum level to capture
+- `log_level` (default `"INFO"`) sets the minimum level to capture
 - Only captures logs that occur within an active span context
 
 ---

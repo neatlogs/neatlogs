@@ -172,18 +172,7 @@ neatlogs.shutdown()
 
 ### Wrong vs Right (Google GenAI)
 
-```python
-# WRONG — client created before init, transport already cached
-from google import genai
-client = genai.Client(api_key="...")
-neatlogs.init(instrumentations=["google_genai"])  # Too late!
-
-# RIGHT — init before client instantiation
-import neatlogs
-neatlogs.init(instrumentations=["google_genai"])
-from google import genai
-client = genai.Client(api_key="...")  # Now instrumentation hooks are in place
-```
+See [`troubleshooting.md` §2](troubleshooting.md#2-google-genai-instantiation-ordering) for the full wrong/right code examples on Google GenAI client ordering.
 
 ---
 
@@ -217,6 +206,10 @@ def run_agent(query: str) -> str:
         sys_tpl.compile(domain="science")
         result = agent_executor.invoke({"input": query})
     return result["output"]
+
+result = run_agent("Explain black holes")
+neatlogs.flush()
+neatlogs.shutdown()
 ```
 
 ---
@@ -264,6 +257,10 @@ graph.add_node("supervisor", supervisor_node)
 graph.add_node("researcher", researcher_node)
 # ... add edges ...
 app = graph.compile()
+
+result = app.invoke({"query": "latest AI trends"})
+neatlogs.flush()
+neatlogs.shutdown()
 ```
 
 ---
@@ -288,15 +285,17 @@ neatlogs.init(
 
 from crewai import Agent, Task, Crew, LLM
 
-# System template for the agent's LLM
-analyst_tpl = PromptTemplate("You are a senior {{domain}} analyst.")
+# System template for the agent's LLM — must NOT have required placeholders
+# because bind_templates() calls system_tpl.compile() with no arguments.
+# Pre-render the template string if you need dynamic values.
+analyst_tpl = PromptTemplate("You are a senior market analyst.")
 
 # User template for the task
 task_tpl = UserPromptTemplate("Analyze {{topic}} trends for {{year}}.")
 
 # Create and bind LLM
 llm = LLM(model="gpt-4o")
-bound_llm = neatlogs.bind_templates(llm, analyst_tpl, domain="market")
+bound_llm = neatlogs.bind_templates(llm, analyst_tpl)
 
 # Create agent with bound LLM
 analyst = Agent(
@@ -391,4 +390,8 @@ def multi_model_pipeline(query: str) -> dict:
         "claude": claude_response.content[0].text,
         "gemini": gemini_response.text,
     }
+
+result = multi_model_pipeline("Compare approaches to AGI")
+neatlogs.flush()
+neatlogs.shutdown()
 ```

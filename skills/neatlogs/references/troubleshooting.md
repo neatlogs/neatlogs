@@ -143,23 +143,9 @@ neatlogs.init(debug=True)
 
 ## 8. Error Tracking on Manual Spans
 
-| Wrong | Right |
-|-------|-------|
-| `span.set_attribute("error", str(e))` | `span.record_exception(e)` + `span.set_status(StatusCode.ERROR, str(e))` |
+Setting `span.set_attribute("error", str(e))` does **NOT** mark the span as failed. You must use `span.record_exception(e)` + `span.set_status(Status(StatusCode.ERROR, str(e)))`.
 
-Setting an `"error"` attribute does **NOT** mark the span as failed in the backend. You must use the OpenTelemetry API's `record_exception()` and `set_status()` methods for the span to appear as an error in the NeatLogs dashboard.
-
-```python
-from opentelemetry.trace import StatusCode
-
-with neatlogs.trace("my_operation", kind="CHAIN") as span:
-    try:
-        result = do_work()
-    except Exception as e:
-        span.record_exception(e)
-        span.set_status(StatusCode.ERROR, str(e))
-        raise
-```
+See [`decorators-and-traces.md` §6](decorators-and-traces.md#6-error-handling-on-manual-spans) for the full pattern and code example. Note that `@span()` handles this automatically — manual error handling is only needed inside `trace()` blocks.
 
 ---
 
@@ -175,29 +161,17 @@ with neatlogs.trace("my_operation", kind="CHAIN") as span:
 | Using `@span` on `StreamingResponse` endpoints | Decorator closes span when function returns, before async generator produces data | Use `trace()` inside the generator body instead |
 | Setting `input.value` as JSON for manual LLM spans | Dashboard won't render structured message views | Use flat indexed attributes: `llm.input_messages.0.message.role` etc. |
 | Using `tool_name` attribute with `trace()` | Dashboard expects `tool.name` (dotted) | Use `span.set_attribute("tool.name", "my_tool")` |
-| Using `span.set_attribute("error", str(e))` for errors | Does not mark span as failed | Use `span.record_exception(e)` + `span.set_status(StatusCode.ERROR, str(e))` |
 | Using `@span(kind="RERANKER")` or `@span(kind="VECTOR_STORE")` | `@span()` raises `ValueError` for these kinds | Use `trace("name", kind="RERANKER")` or `trace("name", kind="VECTOR_STORE")` instead |
+
+> For error handling anti-patterns, see [§8 above](#8-error-tracking-on-manual-spans).
 
 ---
 
 ## 10. Data Masking
 
-### Client-Side Masking
+For the full client-side masking example and server-side PII redaction configuration, see the [Data Masking and PII section in SKILL.md](../SKILL.md#data-masking-and-pii).
 
-Global mask via `init(mask=fn)` — applied to every span dict before export:
-
-```python
-def redact_pii(span):
-    attrs = span.get("attributes", {})
-    for key in list(attrs):
-        if "email" in key or "password" in key:
-            attrs[key] = "[REDACTED]"
-    return span
-
-neatlogs.init(mask=redact_pii)
-```
-
-Per-span mask via `@span(mask=fn)` or `trace(..., mask=fn)` — overrides global mask for that span:
+**Per-span mask override**: You can pass `mask=fn` to `@span(mask=fn)` or `trace(..., mask=fn)` to override the global mask for a specific span:
 
 ```python
 @neatlogs.span(kind="TOOL", tool_name="lookup_user", mask=redact_pii)
@@ -205,13 +179,4 @@ def lookup_user(email: str) -> dict:
     return db.find_user(email)
 ```
 
-### Server-Side PII Redaction
-
-```python
-neatlogs.init(
-    pii_enabled=True,
-    pii_span_types=["LLM", "TOOL"],  # Which span types to redact
-)
-```
-
-Uses Presidio-based redaction on the NeatLogs backend. No client-side processing needed.
+> **Note**: Per-span mask takes precedence — the global `init(mask=fn)` mask is skipped for that span.

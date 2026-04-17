@@ -108,10 +108,10 @@ neatlogs.shutdown()
 | `auto_session` | `bool` | `False` | Auto-generate session IDs for multi-turn conversations |
 | `session_id` | `str` | `None` | Explicit session ID (overrides `auto_session`) |
 | `sample_rate` | `float` | `1.0` | Sampling rate (0.0 to 1.0) |
-| `flush_interval` | `int` | `5000` | Batch flush interval in milliseconds |
-| `batch_size` | `int` | `512` | Max spans per batch |
+| `flush_interval` | `float` | `5.0` | Seconds between batch flushes |
+| `batch_size` | `int` | `100` | Max spans per batch |
 | `debug` | `bool` | `False` | Enable verbose logging to stderr |
-| `log_level` | `str` | `"WARNING"` | Stdlib logging level for auto-capture. Captures `logging.info()`, `logging.warning()`, `logging.error()` as LOG spans inside `@span` or `trace()` blocks |
+| `log_level` | `str` | `"INFO"` | Stdlib logging level for auto-capture. Captures `logging.info()`, `logging.warning()`, `logging.error()` as LOG spans inside `@span` or `trace()` blocks |
 | `capture_logs` | `bool` | `False` | Enable stdlib logging auto-capture |
 | `disable_export` | `bool` | `False` | Disable span export (for local testing) |
 | `pii_enabled` | `bool` | `False` | Enable server-side PII redaction |
@@ -124,67 +124,70 @@ neatlogs.shutdown()
 
 Pass these string values in the `instrumentations=[]` list to `neatlogs.init()`.
 
+> **How it works**: `_instrument_dual()` tries a NeatLogs custom instrumentor first, then OpenInference. Libraries that have neither are silently skipped. Keys marked ⚠️ below have no direct instrumentor — use the noted alternative instead.
+
 ### LLM Providers
 
-| Key | Library |
-|---|---|
-| `openai` | OpenAI |
-| `anthropic` | Anthropic |
-| `google_genai` | Google Generative AI |
-| `azure_ai_inference` | Azure AI Inference |
-| `litellm` | LiteLLM |
-| `bedrock` | AWS Bedrock |
-| `groq` | Groq |
-| `together` | Together AI |
-| `vertexai` | Google Vertex AI |
-| `mistralai` | Mistral AI |
-| `ollama` | Ollama |
-| `cohere` | Cohere |
-| `portkey` | Portkey |
+| Key | Library | Notes |
+|---|---|---|
+| `openai` | OpenAI | |
+| `anthropic` | Anthropic | |
+| `google_genai` | Google Generative AI | Client must be created **after** `init()` — see troubleshooting |
+| `azure_ai_inference` | Azure AI Inference | |
+| `litellm` | LiteLLM | |
+| `bedrock` | AWS Bedrock | |
+| `groq` | Groq | |
+| `vertexai` | Google Vertex AI | |
+| `mistralai` | Mistral AI | |
+| `portkey` | Portkey | |
+| ⚠️ `together` | Together AI | No direct instrumentor — use `litellm` as a proxy or call via OpenAI-compatible endpoint with `openai` key |
+| ⚠️ `cohere` | Cohere | No direct instrumentor — use `litellm` as a proxy |
+| ⚠️ `ollama` | Ollama | No direct instrumentor — call via OpenAI-compatible endpoint with `openai` key |
 
 ### Agent Frameworks
 
-| Key | Framework |
-|---|---|
-| `langchain` | LangChain |
-| `langgraph` | LangGraph |
-| `crewai` | CrewAI |
-| `llamaindex` | LlamaIndex |
-| `autogen` | AutoGen |
-| `haystack` | Haystack |
-| `dspy` | DSPy |
-| `agno` | Agno |
-| `pydantic_ai` | Pydantic AI |
-| `openai_agents` | OpenAI Agents |
-| `smolagents` | SmolAgents |
-| `strands` | Strands |
-| `pipecat` | Pipecat |
+| Key | Framework | Notes |
+|---|---|---|
+| `langchain` | LangChain | Also covers LangGraph execution — see below |
+| `crewai` | CrewAI | Auto-loads `litellm`; also add provider keys (e.g. `openai`) |
+| `llamaindex` | LlamaIndex | |
+| `autogen` | AutoGen | |
+| `haystack` | Haystack | |
+| `dspy` | DSPy | |
+| `agno` | Agno | |
+| `pydantic_ai` | Pydantic AI | |
+| `openai_agents` | OpenAI Agents | |
+| `smolagents` | SmolAgents | |
+| `strands` | Strands | |
+| `pipecat` | Pipecat | |
+| ⚠️ `langgraph` | LangGraph | No direct instrumentor. Use `instrumentations=["langchain"]` — LangGraph is built on LangChain and is traced via the LangChain instrumentor |
 
 ### Retrieval / Vector Stores
 
-| Key | Library |
-|---|---|
-| `chromadb` | ChromaDB |
-| `pinecone` | Pinecone |
-| `qdrant` | Qdrant |
-| `milvus` | Milvus |
-| `weaviate` | Weaviate |
-| `elasticsearch` | Elasticsearch |
-| `redis` | Redis |
-| `marqo` | Marqo |
+> **Note**: The vector store libraries below are registered in the SDK but do not currently have a NeatLogs or OpenInference instrumentor. Passing them to `instrumentations=[]` will be silently skipped. Use `trace("op", kind="VECTOR_STORE")` with manual attributes for custom vector DB spans, or rely on higher-level framework instrumentation (e.g. LangChain retriever auto-instrumentation).
+
+| Key | Library | Status |
+|---|---|---|
+| `weaviate` | Weaviate | ✅ Has OpenInference instrumentor |
+| `chromadb` | ChromaDB | ⚠️ No direct instrumentor — traced indirectly via LangChain retriever instrumentation |
+| `pinecone` | Pinecone | ⚠️ No direct instrumentor |
+| `qdrant` | Qdrant | ⚠️ No direct instrumentor |
+| `milvus` | Milvus | ⚠️ No direct instrumentor |
+| `elasticsearch` | Elasticsearch | ⚠️ No direct instrumentor |
+| `redis` | Redis | ⚠️ No direct instrumentor |
+| `marqo` | Marqo | ⚠️ No direct instrumentor |
 
 ### Other
 
-| Key | Library |
-|---|---|
-| `mcp` | Model Context Protocol |
-| `requests` | Requests (HTTP) |
-| `httpx` | HTTPX (HTTP) |
-| `aiohttp` | aiohttp (HTTP) |
-| `instructor` | Instructor |
-| `guardrails` | Guardrails AI |
-| `google_adk` | Google ADK |
-| `promptflow` | PromptFlow |
+| Key | Library | Notes |
+|---|---|---|
+| `mcp` | Model Context Protocol | |
+| `instructor` | Instructor | |
+| `guardrails` | Guardrails AI | |
+| `google_adk` | Google ADK | |
+| `promptflow` | PromptFlow | |
+
+> **HTTP libraries** (`requests`, `httpx`, `urllib3`, `aiohttp`) are always auto-instrumented by `neatlogs.init()` for trace context propagation — you do not need to list them in `instrumentations=[]`.
 
 ---
 
@@ -210,6 +213,7 @@ For deep dives, see the companion reference files:
 | `NEATLOGS_LOG_SPANS_FILE` | File path for span logs (default: `spans.log`) |
 | `NEATLOGS_LOG_RAW_SPANS` | Set to `"true"` to log raw span JSON |
 | `NEATLOGS_LOG_RAW_SPANS_FILE` | File path for raw span logs |
+| `NEATLOGS_TRACE_CONTENT` | Set to `"false"` to globally disable input/output content capture on spans |
 
 ---
 

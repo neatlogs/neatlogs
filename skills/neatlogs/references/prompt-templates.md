@@ -59,9 +59,11 @@ Pattern from sdk-v3 examples:
 ```python
 import neatlogs
 from neatlogs import PromptTemplate, UserPromptTemplate
-from openai import OpenAI
 
 neatlogs.init(api_key="...", workflow_name="research", instrumentations=["openai"])
+
+from openai import OpenAI  # Import AFTER init() for auto-instrumentation
+
 client = OpenAI()
 
 sys_tpl = PromptTemplate([{
@@ -128,11 +130,13 @@ neatlogs.init(
     instrumentations=["openai", "crewai", "langchain"],
 )
 
-analyst_tpl = PromptTemplate("You are a senior market analyst for {{industry}}.")
+# System template must NOT have required placeholders — bind_templates()
+# calls system_tpl.compile() with no arguments. Pre-render if needed.
+analyst_tpl = PromptTemplate("You are a senior market analyst for the tech industry.")
 llm = LLM(model="azure/gpt-4o", api_key="...", base_url="...")
 
 # Bind template to LLM — returns a new LLM instance
-bound_llm = neatlogs.bind_templates(llm, analyst_tpl, industry="tech")
+bound_llm = neatlogs.bind_templates(llm, analyst_tpl)
 
 analyst = Agent(
     role="Market Analyst",

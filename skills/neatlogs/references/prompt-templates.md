@@ -9,7 +9,9 @@ Prompt template tracking and management in NeatLogs SDK v3. Covers local templat
 System/AI instruction prompt with `{{variable}}` placeholders.
 
 - Constructor accepts a **string** OR a **list of message dicts**
-- `.compile(**variables)` renders the template, returns compiled messages, **and** sets prompt context in OTel for automatic span capture
+- `.compile(**variables)` renders the template, **sets prompt context in OTel for automatic span capture**, and returns:
+  - A `str` if constructed with a string template
+  - A `List[Dict[str, str]]` (message list) if constructed with a message list — ready to pass directly to `messages=` in OpenAI/Anthropic calls
 - `.variables` property lists extracted variable names
 
 ```python

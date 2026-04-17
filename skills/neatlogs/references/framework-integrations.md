@@ -123,7 +123,7 @@ client = Anthropic()
 @neatlogs.span(kind="AGENT", name="analyst")
 def analyst(query: str) -> str:
     response = client.messages.create(
-        model="claude-sonnet-4-20250514",
+        model="claude-sonnet-4-6",
         max_tokens=1024,
         messages=[{"role": "user", "content": query}],
     )
@@ -160,7 +160,7 @@ client = genai.Client(api_key="...")
 @neatlogs.span(kind="AGENT", name="researcher")
 def researcher(topic: str) -> str:
     response = client.models.generate_content(
-        model="gemini-2.0-flash",
+        model="gemini-2.5-flash",
         contents=topic,
     )
     return response.text
@@ -194,9 +194,24 @@ neatlogs.init(
 )
 
 from langchain_openai import ChatOpenAI
-from langchain.agents import create_react_agent, AgentExecutor
+from langchain_classic.agents import create_react_agent, AgentExecutor
+from langchain_core.tools import tool
+from langchain_core.prompts import ChatPromptTemplate
 
 llm = ChatOpenAI(model="gpt-4o")
+
+@tool
+def web_search(query: str) -> str:
+    """Search the web for information."""
+    return f"Search results for: {query}"
+
+# Build a ReAct agent
+react_prompt = ChatPromptTemplate.from_messages([
+    ("system", "You are a helpful research assistant."),
+    ("human", "{input}\n\nThink step by step. {agent_scratchpad}"),
+])
+agent = create_react_agent(llm, [web_search], react_prompt)
+agent_executor = AgentExecutor(agent=agent, tools=[web_search])
 
 sys_tpl = PromptTemplate("You are a helpful research assistant for {{domain}}.")
 
@@ -380,12 +395,12 @@ def multi_model_pipeline(query: str) -> dict:
         messages=[{"role": "user", "content": query}],
     )
     claude_response = anthropic_client.messages.create(
-        model="claude-sonnet-4-20250514",
+        model="claude-sonnet-4-6",
         max_tokens=1024,
         messages=[{"role": "user", "content": query}],
     )
     gemini_response = gemini_client.models.generate_content(
-        model="gemini-2.0-flash",
+        model="gemini-2.5-flash",
         contents=query,
     )
     return {

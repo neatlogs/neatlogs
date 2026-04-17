@@ -166,6 +166,28 @@ neatlogs.flush()
 neatlogs.shutdown()
 ```
 
+### Using `@span()` on Class Methods
+
+`@span()` works on both regular functions and class methods. Place the decorator directly on the method:
+
+```python
+class ResearchAgent:
+    def __init__(self, client):
+        self.client = client
+
+    @neatlogs.span(kind="AGENT", name="researcher", role="Research Analyst")
+    def run(self, topic: str) -> str:
+        response = self.client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": topic}],
+        )
+        return response.choices[0].message.content
+
+    @neatlogs.span(kind="TOOL", tool_name="summarize")
+    def summarize(self, text: str) -> str:
+        return text[:200]
+```
+
 ---
 
 ## 2. `neatlogs.trace()` Context Manager
@@ -194,6 +216,20 @@ with neatlogs.trace(
 **IMPORTANT**: Unlike `@span()`, `trace()` does NOT validate the kind string. It accepts any value. This is the ONLY way to create `RERANKER`, `VECTOR_STORE`, and `LLM` kind spans.
 
 When `kind` is not provided, it defaults to `"CHAIN"`.
+
+### Span Object Methods
+
+The `span` object yielded by `trace()` is an OpenTelemetry `Span`. Available methods:
+
+```python
+with neatlogs.trace("my_op", kind="CHAIN") as span:
+    span.set_attribute("key", "value")          # Add a custom attribute
+    span.record_exception(exception)             # Record an exception (use in except block)
+    span.set_status(Status(StatusCode.ERROR, "msg"))  # Mark span as failed
+    span.add_event("event_name", {"key": "val"}) # Add a timestamped event
+```
+
+> **Note**: `@span()` decorators return the decorated function's own return value — not the span object. To access the span within a decorated function, use a nested `trace()` context.
 
 ### Use Cases for `trace()`
 
@@ -305,6 +341,8 @@ When using `@span(kind="RETRIEVER")`, the decorator auto-sets these attributes. 
 | `neatlogs.guardrail.input` | `str` | Input to the guardrail |
 | `neatlogs.guardrail.passed` | `bool` | Whether the guardrail check passed |
 | `neatlogs.guardrail.output` | `str` | Output/result of the guardrail |
+
+> **Note**: These attribute names are not currently standardized in the SDK's attribute-mapping.json. They pass through as raw `neatlogs.*` attributes and appear in the span, but are not specially normalized or rendered in the dashboard. Use them as custom attributes for your own filtering and analysis.
 
 ### TOOL Attributes
 

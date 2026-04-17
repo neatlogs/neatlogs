@@ -47,10 +47,51 @@ Requires Python >= 3.10, < 3.14. Notable version pins: `crewai >= 1.9.3`, `qdran
 ## Core Principles
 
 1. **Import order matters**: `neatlogs.init()` MUST be called **before** importing any LLM libraries (OpenAI, Anthropic, etc.) for auto-instrumentation patching to work.
-2. **Always end scripts** with `neatlogs.flush()` then `neatlogs.shutdown()`.
+2. **Scripts**: end with `neatlogs.flush()` then `neatlogs.shutdown()`. **Servers**: call `init()` once at startup; do NOT call `flush()` or `shutdown()` on every request — see [Long-Running Servers](#long-running-servers-fastapi-flask-django) below.
 3. **Use `@span` decorators** for custom code; use `trace()` context manager only for prompt template tracking, session management, or span kinds not supported by `@span` (`RERANKER`, `VECTOR_STORE`).
 4. **Prefer auto-instrumentation** (`instrumentations=["openai"]`) over manual wrapping when possible.
-5. **Read reference docs** before implementing — NeatLogs updates frequently.
+5. **Init is single-shot**: `neatlogs.init()` configures the global telemetry provider. Calling it a second time raises `ValueError`. If you need to reinitialize, call `neatlogs.shutdown()` first (rare).
+6. **Read reference docs** before implementing — NeatLogs updates frequently.
+
+---
+
+## Long-Running Servers (FastAPI, Flask, Django)
+
+For server applications, `neatlogs.init()` is called **once at startup**. Do NOT call `flush()` or `shutdown()` on every request — spans batch automatically every `flush_interval` (default 5 seconds).
+
+```python
+import neatlogs
+from fastapi import FastAPI
+from contextlib import asynccontextmanager
+
+neatlogs.init(api_key="...", workflow_name="my-api", instrumentations=["openai"])
+
+from openai import OpenAI  # Import AFTER init()
+
+client = OpenAI()
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    yield
+    # Called once when the server shuts down — flush remaining spans
+    import asyncio
+    await asyncio.to_thread(neatlogs.flush)
+    await asyncio.to_thread(neatlogs.shutdown)
+
+app = FastAPI(lifespan=lifespan)
+
+@app.get("/ask")
+async def ask(q: str):
+    # Auto-instrumented — spans are batched and exported automatically
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": q}],
+    )
+    return {"answer": response.choices[0].message.content}
+    # DO NOT call flush() here — it would flush on every request (performance issue)
+```
+
+For Flask/Django, call `neatlogs.flush()` and `neatlogs.shutdown()` via an `atexit` handler or framework shutdown hook. See [`references/troubleshooting.md` §6](references/troubleshooting.md#6-flushshutdown-gotcha) for the async gotcha.
 
 ---
 
@@ -99,22 +140,22 @@ neatlogs.shutdown()
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
-| `api_key` | `str` | `None` | API key (or set `NEATLOGS_API_KEY` env var) |
+| `api_key` | `str` | `None` | API key (or set `NEATLOGS_API_KEY` env var). If neither is set, spans are created locally but **silently not exported** — no error is raised |
 | `endpoint` | `str` | `"https://staging-cloud.neatlogs.com/api/data/v4/batch"` | Backend endpoint URL |
 | `workflow_name` | `str` | `None` | Name for this workflow/application |
 | `instrumentations` | `list[str]` | `None` | Libraries to auto-instrument (e.g. `["openai", "langchain"]`) |
 | `tags` | `list[str]` | `None` | Tags for filtering in dashboard |
 | `user_id` | `str` | `None` | User identifier for trace attribution |
-| `auto_session` | `bool` | `False` | Auto-generate session IDs for multi-turn conversations |
-| `session_id` | `str` | `None` | Explicit session ID (overrides `auto_session`) |
+| `auto_session` | `bool` | `False` | Auto-generate a session ID on first use and reuse it for the process lifetime. Useful for chatbots/multi-turn conversations |
+| `session_id` | `str` | `None` | Explicit session ID — overrides `auto_session`. Pass a per-user or per-conversation ID to group turns in the dashboard |
 | `sample_rate` | `float` | `1.0` | Sampling rate (0.0 to 1.0) |
 | `flush_interval` | `float` | `5.0` | Seconds between batch flushes |
 | `batch_size` | `int` | `100` | Max spans per batch |
 | `debug` | `bool` | `False` | Enable verbose logging to stderr |
-| `log_level` | `str` | `"INFO"` | Stdlib logging level for auto-capture. Captures `logging.info()`, `logging.warning()`, `logging.error()` as LOG spans inside `@span` or `trace()` blocks |
+| `log_level` | `str` | `"INFO"` | Minimum stdlib logging level to capture. Only applies when `capture_logs=True`. Captures `logging.INFO` and above as LOG spans inside `@span` or `trace()` blocks |
 | `capture_logs` | `bool` | `False` | Enable stdlib logging auto-capture |
 | `disable_export` | `bool` | `False` | Disable span export (for local testing) |
-| `pii_enabled` | `bool` | `False` | Enable server-side PII redaction |
+| `pii_enabled` | `Optional[bool]` | `None` | Override the team-level server-side PII redaction setting. `True` = enable, `False` = disable, `None` (default) = use the team setting in the NeatLogs dashboard |
 | `pii_span_types` | `list[str]` | `None` | Span types for PII redaction (e.g. `["LLM", "TOOL"]`) |
 | `mask` | `callable` | `None` | Client-side mask function `(span_dict) -> span_dict` |
 
@@ -254,8 +295,8 @@ Enable automatic server-side redaction by setting `pii_enabled=True` and optiona
 
 ```python
 neatlogs.init(
-    pii_enabled=True,
-    pii_span_types=["LLM", "TOOL"],
+    pii_enabled=True,          # Override team default — enable redaction for this project
+    pii_span_types=["LLM", "TOOL"],  # Limit to specific span kinds; None = all kinds
 )
 ```
 

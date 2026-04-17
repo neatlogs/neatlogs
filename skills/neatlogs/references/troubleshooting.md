@@ -123,6 +123,33 @@ neatlogs.flush()
 neatlogs.shutdown()
 ```
 
+### Long-Running Servers (FastAPI, Flask, Django)
+
+For servers, call `neatlogs.init()` **once at startup** and `flush()` / `shutdown()` **once at shutdown** — NOT on every request:
+
+```python
+# WRONG — flush on every request is a performance disaster
+@app.get("/ask")
+async def ask(q: str):
+    response = client.chat.completions.create(...)
+    neatlogs.flush()    # ← Don't do this
+    return {"answer": response.choices[0].message.content}
+
+# RIGHT — use FastAPI lifespan (or a framework shutdown hook)
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    yield  # Server runs
+    import asyncio
+    await asyncio.to_thread(neatlogs.flush)
+    await asyncio.to_thread(neatlogs.shutdown)
+
+app = FastAPI(lifespan=lifespan)
+```
+
+**Why?** `flush()` on every request sends one HTTP batch per request instead of one every 5 seconds — this risks API throttling and adds latency. Spans batch automatically via `flush_interval` (default 5s).
+
 ### Async Gotcha
 
 `flush()` and `shutdown()` are **synchronous** and will block the event loop if called directly in async code. Use `asyncio.to_thread()`:

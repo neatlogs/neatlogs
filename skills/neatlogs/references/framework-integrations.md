@@ -120,19 +120,19 @@ from anthropic import Anthropic
 client = Anthropic()
 
 sys_tpl = PromptTemplate("You are a market analysis expert for {{industry}}.")
-user_tpl = UserPromptTemplate("Analyze: {{query}}")
+user_tpl = UserPromptTemplate([{"role": "user", "content": "Analyze: {{query}}"}])
 
 @neatlogs.span(kind="AGENT", name="analyst")
 def analyst(query: str) -> str:
     with neatlogs.trace("llm_call", kind="LLM",
                         prompt_template=sys_tpl,
                         user_prompt_template=user_tpl):
-        sys_msgs = sys_tpl.compile(industry="technology")
+        sys_str = sys_tpl.compile(industry="technology")
         user_msgs = user_tpl.compile(query=query)
         response = client.messages.create(
             model="claude-sonnet-4-6",
             max_tokens=1024,
-            system=sys_msgs,
+            system=sys_str,
             messages=user_msgs,
         )
     return response.content[0].text

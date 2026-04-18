@@ -40,6 +40,21 @@ bound_llm = neatlogs.bind_templates(llm, system_tpl)
 neatlogs.register_crewai_task(task, user_tpl, topic="AI chips")
 ```
 
+### 1d. Auto-Instrumentation + `trace()` + `PromptTemplate`
+
+For any integration where you want to track prompt templates and variables in the dashboard. Wrap your LLM call in `trace()` and pass `PromptTemplate` instances — the SDK captures the template and compiled variables automatically.
+
+```python
+neatlogs.init(instrumentations=["openai"])
+
+sys_tpl = PromptTemplate("You are a {{role}} assistant.")
+user_tpl = UserPromptTemplate("{{query}}")
+
+with neatlogs.trace("llm_call", kind="LLM", prompt_template=sys_tpl, user_prompt_template=user_tpl):
+    msgs = sys_tpl.compile(role="research") + user_tpl.compile(query=query)
+    response = client.chat.completions.create(model="gpt-4o", messages=msgs)
+```
+
 ---
 
 ## 2. OpenAI
@@ -48,13 +63,14 @@ neatlogs.register_crewai_task(task, user_tpl, topic="AI chips")
 - **Covers**: The `openai` Python SDK — both `OpenAI()` and `AzureOpenAI()` (which is part of the same `openai` package)
 - **Import order critical**: `neatlogs.init()` BEFORE `from openai import OpenAI`
 - **Supports**: Sync, async, streaming
-- **Install**: `pip install neatlogs[openai]==1.2.7`
+- **Install**: `pip install neatlogs[openai]`
 
 ```python
 import neatlogs
+from neatlogs import PromptTemplate, UserPromptTemplate
 
 neatlogs.init(
-    api_key="...",
+    api_key="...",  # or set NEATLOGS_API_KEY env var
     workflow_name="my-app",
     instrumentations=["openai"],
 )
@@ -63,12 +79,16 @@ from openai import OpenAI
 
 client = OpenAI()
 
+sys_tpl = PromptTemplate("You are a helpful assistant specializing in {{domain}}.")
+user_tpl = UserPromptTemplate("Question: {{query}}")
+
 @neatlogs.span(kind="WORKFLOW")
 def run(query: str) -> str:
-    response = client.chat.completions.create(
-        model="gpt-4o",
-        messages=[{"role": "user", "content": query}],
-    )
+    with neatlogs.trace("llm_call", kind="LLM",
+                        prompt_template=sys_tpl,
+                        user_prompt_template=user_tpl):
+        msgs = sys_tpl.compile(domain="science") + user_tpl.compile(query=query)
+        response = client.chat.completions.create(model="gpt-4o", messages=msgs)
     return response.choices[0].message.content
 
 result = run("Explain quantum computing")
@@ -78,40 +98,19 @@ neatlogs.shutdown()
 
 ---
 
-## 3. Azure AI Inference
-
-- **Instrumentation key**: `instrumentations=["azure_ai_inference"]`
-- **Covers**: Microsoft's **separate** `azure-ai-inference` SDK (`azure.ai.inference`), NOT `openai.AzureOpenAI`
-- **If you use the `openai` package with Azure endpoints** (i.e. the `AzureOpenAI` class), use `instrumentations=["openai"]` instead
-- **Install**: `pip install neatlogs[azure-ai-inference]==1.2.7`
-
-```python
-import neatlogs
-
-neatlogs.init(
-    api_key="...",
-    workflow_name="azure-app",
-    instrumentations=["azure_ai_inference"],
-)
-
-from azure.ai.inference import ChatCompletionsClient
-# ... use the Azure AI Inference SDK
-```
-
----
-
-## 4. Anthropic
+## 3. Anthropic
 
 - **Instrumentation key**: `instrumentations=["anthropic"]`
 - **Supports**: Extended thinking, streaming, tool use
 - **Also works with `AnthropicBedrock`**: Still use `instrumentations=["anthropic"]`
-- **Install**: `pip install neatlogs[anthropic]==1.2.7`
+- **Install**: `pip install neatlogs[anthropic]`
 
 ```python
 import neatlogs
+from neatlogs import PromptTemplate, UserPromptTemplate
 
 neatlogs.init(
-    api_key="...",
+    api_key="...",  # or set NEATLOGS_API_KEY env var
     workflow_name="anthropic-app",
     instrumentations=["anthropic"],
 )
@@ -120,13 +119,22 @@ from anthropic import Anthropic
 
 client = Anthropic()
 
+sys_tpl = PromptTemplate("You are a market analysis expert for {{industry}}.")
+user_tpl = UserPromptTemplate("Analyze: {{query}}")
+
 @neatlogs.span(kind="AGENT", name="analyst")
 def analyst(query: str) -> str:
-    response = client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=1024,
-        messages=[{"role": "user", "content": query}],
-    )
+    with neatlogs.trace("llm_call", kind="LLM",
+                        prompt_template=sys_tpl,
+                        user_prompt_template=user_tpl):
+        sys_msgs = sys_tpl.compile(industry="technology")
+        user_msgs = user_tpl.compile(query=query)
+        response = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=1024,
+            system=sys_msgs,
+            messages=user_msgs,
+        )
     return response.content[0].text
 
 result = analyst("Analyze market trends")
@@ -136,18 +144,19 @@ neatlogs.shutdown()
 
 ---
 
-## 5. Google GenAI (Gemini)
+## 4. Google GenAI (Gemini)
 
 - **Instrumentation key**: `instrumentations=["google_genai"]`
 - **Stricter init ordering**: `neatlogs.init()` must precede `google.genai.Client()` **instantiation**, not just import. The client object caches the transport at construction time.
 - **Supports**: Sync, streaming, async streaming
-- **Install**: `pip install neatlogs[google-genai]==1.2.7`
+- **Install**: `pip install neatlogs[google-genai]`
 
 ```python
 import neatlogs
+from neatlogs import PromptTemplate, UserPromptTemplate
 
 neatlogs.init(
-    api_key="...",
+    api_key="...",  # or set NEATLOGS_API_KEY env var
     workflow_name="gemini-app",
     instrumentations=["google_genai"],
 )
@@ -157,12 +166,19 @@ from google import genai
 
 client = genai.Client(api_key="...")
 
+sys_tpl = PromptTemplate("You are a research assistant for {{domain}}.")
+user_tpl = UserPromptTemplate("Research topic: {{topic}}")
+
 @neatlogs.span(kind="AGENT", name="researcher")
 def researcher(topic: str) -> str:
-    response = client.models.generate_content(
-        model="gemini-2.5-flash",
-        contents=topic,
-    )
+    with neatlogs.trace("llm_call", kind="LLM",
+                        prompt_template=sys_tpl,
+                        user_prompt_template=user_tpl):
+        prompt = sys_tpl.compile(domain="science") + " " + user_tpl.compile(topic=topic)
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt,
+        )
     return response.text
 
 result = researcher("quantum computing advances")
@@ -176,19 +192,19 @@ See [`troubleshooting.md` §2](troubleshooting.md#2-google-genai-instantiation-o
 
 ---
 
-## 6. LangChain
+## 5. LangChain
 
 - **Instrumentation key**: `instrumentations=["langchain"]`
 - **Auto-instruments**: LLM calls, chains, agents, tools, retrievers
 - **Works with**: AgentExecutor, ReAct agents, LCEL chains
-- **Install**: `pip install neatlogs[langchain]==1.2.7`
+- **Install**: `pip install neatlogs[langchain]`
 
 ```python
 import neatlogs
 from neatlogs import PromptTemplate
 
 neatlogs.init(
-    api_key="...",
+    api_key="...",  # or set NEATLOGS_API_KEY env var
     workflow_name="langchain-app",
     instrumentations=["langchain"],
 )
@@ -229,18 +245,18 @@ neatlogs.shutdown()
 
 ---
 
-## 7. LangGraph
+## 6. LangGraph
 
 - **Instrumentation key**: `instrumentations=["langchain"]` (LangGraph uses LangChain instrumentation)
 - **Tracks**: Graph execution, nodes, tool loops, fan-out/fan-in
-- **Install**: `pip install neatlogs[langchain,langgraph]==1.2.7`
+- **Install**: `pip install neatlogs[langchain,langgraph]`
 
 ```python
 import neatlogs
 from neatlogs import PromptTemplate, UserPromptTemplate
 
 neatlogs.init(
-    api_key="...",
+    api_key="...",  # or set NEATLOGS_API_KEY env var
     workflow_name="langgraph-app",
     instrumentations=["langchain"],
 )
@@ -280,12 +296,12 @@ neatlogs.shutdown()
 
 ---
 
-## 8. CrewAI
+## 7. CrewAI
 
 - **Instrumentation key**: `instrumentations=["openai", "crewai", "langchain"]` (CrewAI uses LiteLLM internally; also include provider instrumentations)
 - **Use `bind_templates()`** to attach prompt context to agent LLMs
 - **Use `register_crewai_task(task, user_tpl, **vars)`** for task-level prompt tracking
-- **Install**: `pip install neatlogs[crewai]==1.2.7` (pulls in `crewai >= 1.9.3` and `litellm`)
+- **Install**: `pip install neatlogs[crewai]` (pulls in `crewai >= 1.9.3` and `litellm`)
 - **Note**: SDK pins `crewai >= 1.9.3`. CrewAI API has changed significantly between versions — ensure version compatibility.
 
 ```python
@@ -293,7 +309,7 @@ import neatlogs
 from neatlogs import PromptTemplate, UserPromptTemplate
 
 neatlogs.init(
-    api_key="...",
+    api_key="...",  # or set NEATLOGS_API_KEY env var
     workflow_name="crewai-app",
     instrumentations=["openai", "crewai", "langchain"],
 )
@@ -330,7 +346,12 @@ neatlogs.register_crewai_task(task, task_tpl, topic="AI chips", year="2025")
 
 # Run crew
 crew = Crew(agents=[analyst], tasks=[task])
-result = crew.kickoff()
+
+@neatlogs.span(kind="WORKFLOW")
+def run_crew():
+    return crew.kickoff()
+
+result = run_crew()
 
 neatlogs.flush()
 neatlogs.shutdown()
@@ -338,43 +359,53 @@ neatlogs.shutdown()
 
 ---
 
-## 9. LiteLLM
+## 8. LiteLLM
 
 - **Instrumentation key**: `instrumentations=["litellm"]`
 - **Auto-instruments**: LiteLLM's unified API across all providers
-- **Install**: `pip install neatlogs[litellm]==1.2.7`
+- **Install**: `pip install neatlogs[litellm]`
 
 ```python
 import neatlogs
+from neatlogs import PromptTemplate, UserPromptTemplate
 
 neatlogs.init(
-    api_key="...",
+    api_key="...",  # or set NEATLOGS_API_KEY env var
     workflow_name="litellm-app",
     instrumentations=["litellm"],
 )
 
 from litellm import completion
 
-response = completion(
-    model="gpt-4o",
-    messages=[{"role": "user", "content": "Hello!"}],
-)
+sys_tpl = PromptTemplate("You are a helpful assistant.")
+user_tpl = UserPromptTemplate("{{query}}")
 
+@neatlogs.span(kind="WORKFLOW")
+def run(query: str) -> str:
+    with neatlogs.trace("llm_call", kind="LLM",
+                        prompt_template=sys_tpl,
+                        user_prompt_template=user_tpl):
+        msgs = sys_tpl.compile() + user_tpl.compile(query=query)
+        response = completion(model="gpt-4o", messages=msgs)
+    return response.choices[0].message.content
+
+result = run("Hello!")
 neatlogs.flush()
 neatlogs.shutdown()
 ```
 
 ---
 
-## 10. Multi-Provider
+## 9. Multi-Provider
 
 When using multiple LLM providers, list all of them in `instrumentations`:
 
 ```python
 import neatlogs
+from neatlogs import PromptTemplate, UserPromptTemplate
 
 neatlogs.init(
-    api_key="...",
+    api_key="...",  # or set NEATLOGS_API_KEY env var
     workflow_name="multi-provider-app",
     instrumentations=["openai", "anthropic", "google_genai", "langchain"],
 )
@@ -387,13 +418,16 @@ openai_client = OpenAI()
 anthropic_client = Anthropic()
 gemini_client = genai.Client(api_key="...")
 
+sys_tpl = PromptTemplate("You are an expert analyst.")
+user_tpl = UserPromptTemplate("{{query}}")
+
 @neatlogs.span(kind="WORKFLOW")
 def multi_model_pipeline(query: str) -> dict:
     # Each provider's LLM calls are auto-instrumented independently
-    gpt_response = openai_client.chat.completions.create(
-        model="gpt-4o",
-        messages=[{"role": "user", "content": query}],
-    )
+    with neatlogs.trace("openai_call", kind="LLM", prompt_template=sys_tpl, user_prompt_template=user_tpl):
+        msgs = sys_tpl.compile() + user_tpl.compile(query=query)
+        gpt_response = openai_client.chat.completions.create(model="gpt-4o", messages=msgs)
+
     claude_response = anthropic_client.messages.create(
         model="claude-sonnet-4-6",
         max_tokens=1024,

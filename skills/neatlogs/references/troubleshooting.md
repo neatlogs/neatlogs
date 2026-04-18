@@ -53,21 +53,11 @@ client = genai.Client(api_key="...")  # Transport hooks now active
 
 If traces are not appearing in the NeatLogs dashboard, check these in order:
 
-1. **Is `neatlogs.init()` called?** → No → Add `neatlogs.init(...)` at the top of your application.
+1. **Is `neatlogs.init()` called?** → No → Add `neatlogs.init(...)` as the **very first NeatLogs call** at the top of your entry file, before any other imports or logic.
 2. **Is it called BEFORE LLM library imports?** → No → Move `neatlogs.init()` before `import openai` / `import anthropic` / etc.
-3. **Is the provider listed in `instrumentations=[]`?** → No → Add it (e.g. `instrumentations=["openai"]`).
+3. **Is the provider listed in `instrumentations=[]`?** → No → Add it (e.g. `instrumentations=["openai"]`). See the [Supported Instrumentations table in SKILL.md](../SKILL.md#supported-instrumentations) for valid keys.
 4. **Is `NEATLOGS_API_KEY` set?** → No → Set it via env var or `api_key=` param. Without it, export is **silently disabled** with no error.
-5. **Is `disable_export=True`?** → Yes → Remove it or set to `False`.
-6. **Still missing?** → Enable `debug=True` in `neatlogs.init()` and check stderr output for clues.
-
-```python
-# Enable debug mode to diagnose
-neatlogs.init(
-    api_key="...",
-    instrumentations=["openai"],
-    debug=True,  # Verbose logging to stderr
-)
-```
+5. **Still missing?** → Enable `debug=True` in `neatlogs.init()` and check stderr output for clues.
 
 ---
 
@@ -100,22 +90,22 @@ for cls_path in [
         pass  # Library not installed — safe to skip
 ```
 
-**Alternative workaround**: Filter out self-referencing HTTP spans server-side in the NeatLogs dashboard, or ensure your service doesn't recursively call its own endpoints within a traced context.
-
 ---
 
 ## 5. Duplicate Span Issues
 
-- When using CrewAI with `instrumentations=["crewai", "openai"]`, both CrewAI and OpenAI instrumentations may fire for the same LLM call. This is **expected** — CrewAI spans wrap the OpenAI LLM spans in a parent-child hierarchy.
-- Do NOT add both `"litellm"` and provider-specific instrumentations (e.g. `"openai"`) if CrewAI is managing LLM calls through LiteLLM internally — this can create duplicate LLM spans.
+When using CrewAI, adding both provider-specific and framework instrumentations creates intentional parent-child hierarchies — but the wrong combination causes duplicate spans:
+
+- **Correct** `["crewai", "openai"]` → CrewAI wraps OpenAI in a parent-child hierarchy (expected)
+- **Duplicate** `["crewai", "openai", "litellm"]` → LiteLLM and OpenAI both fire for the same internal LLM call → duplicate LLM spans
+
+Do NOT add both `"litellm"` and a provider-specific key (e.g. `"openai"`) when CrewAI is routing through LiteLLM internally.
 
 ---
 
 ## 6. Flush/Shutdown Gotcha
 
-Scripts (not long-running servers) **MUST** call `neatlogs.flush()` then `neatlogs.shutdown()` before exit. Without this, the last batch of spans may be lost because the `BatchSpanProcessor` hasn't flushed yet.
-
-An `atexit` handler is registered automatically, but explicit flush is recommended for reliability.
+Scripts (not long-running servers) **MUST** call `neatlogs.flush()` then `neatlogs.shutdown()` before exit — these two calls are compulsory. Without them, the last batch of spans may not be exported.
 
 ```python
 # At the end of your script
@@ -189,33 +179,23 @@ neatlogs.init(debug=True)
 
 ---
 
-## 8. Error Tracking on Manual Spans
-
-Setting `span.set_attribute("error", str(e))` does **NOT** mark the span as failed. You must use `span.record_exception(e)` + `span.set_status(Status(StatusCode.ERROR, str(e)))`.
-
-See [`decorators-and-traces.md` §6](decorators-and-traces.md#6-error-handling-on-manual-spans) for the full pattern and code example. Note that `@span()` handles this automatically — manual error handling is only needed inside `trace()` blocks.
-
----
-
-## 9. Common Anti-Patterns Table
+## 8. Common Anti-Patterns Table
 
 | Anti-Pattern | Why It's Wrong | Fix |
 |-------------|----------------|-----|
 | Wrapping `@span(kind="WORKFLOW")` in `trace()` | Redundant — `@span` already creates a span | Just call the decorated function directly |
-| Using `trace()` for custom functions | That's what `@span` is for (unless you need RERANKER/VECTOR_STORE kind) | Use `@span(kind="CHAIN")` or appropriate kind |
+| Using `trace()` for custom functions where `@span` would work | That's what `@span` is for | Use `@span(kind="CHAIN")` or the appropriate kind instead |
 | Calling `.compile()` outside `trace()` context | Variable bindings won't be captured on the span | Move `.compile()` inside the `with trace(...)` block |
 | Not listing all providers in `instrumentations` | Some LLM calls won't be traced | Add all providers your code uses |
-| Mixing `mask` on `init()` and per-span | Per-span mask takes precedence; global mask is skipped for that span | Use one or the other consistently |
+| Mixing `mask` on `init()` and per-span | Both can coexist — per-span mask takes precedence over the global mask for that specific span | This is expected behavior, not a bug |
 | Using `@span` on `StreamingResponse` endpoints | Decorator closes span when function returns, before async generator produces data | Use `trace()` inside the generator body instead |
 | Setting `input.value` as JSON for manual LLM spans | Dashboard won't render structured message views | Use flat indexed attributes: `llm.input_messages.0.message.role` etc. |
 | Using `tool_name` attribute with `trace()` | Dashboard expects `tool.name` (dotted) | Use `span.set_attribute("tool.name", "my_tool")` |
 | Using `@span(kind="RERANKER")` or `@span(kind="VECTOR_STORE")` | `@span()` raises `ValueError` for these kinds | Use `trace("name", kind="RERANKER")` or `trace("name", kind="VECTOR_STORE")` instead |
 
-> For error handling anti-patterns, see [§8 above](#8-error-tracking-on-manual-spans).
-
 ---
 
-## 10. Data Masking
+## 9. Data Masking
 
 For the full client-side masking example and server-side PII redaction configuration, see the [Data Masking and PII section in SKILL.md](../SKILL.md#data-masking-and-pii).
 

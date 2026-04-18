@@ -12,8 +12,6 @@ description: >
 NeatLogs auto-instruments LLM calls, agent frameworks, and custom code with just 6 exports:
 `init()`, `flush()`, `shutdown()`, `@span()`, `trace()`, and `PromptTemplate`.
 
-Built on OpenTelemetry + OpenInference standards.
-
 ---
 
 ## Installation
@@ -27,18 +25,18 @@ pip install neatlogs
 **Optional extras** install the actual underlying LLM/framework libraries:
 
 ```bash
-pip install neatlogs[openai]==1.2.7
-pip install neatlogs[anthropic]==1.2.7
-pip install neatlogs[google-genai]==1.2.7
-pip install neatlogs[langchain]==1.2.7
-pip install neatlogs[langchain,langgraph]==1.2.7
-pip install neatlogs[crewai]==1.2.7
-pip install neatlogs[crewai,google-genai,litellm,azure-ai-inference]==1.2.7
+pip install neatlogs[openai]
+pip install neatlogs[anthropic]
+pip install neatlogs[google-genai]
+pip install neatlogs[langchain]
+pip install neatlogs[langchain,langgraph]
+pip install neatlogs[crewai]
+pip install neatlogs[crewai,google-genai,litellm]
 ```
 
-Combine multiple extras with commas: `pip install neatlogs[crewai,google-genai,litellm]==1.2.7`
+Combine multiple extras with commas: `pip install neatlogs[crewai,google-genai,litellm]`
 
-Full list of available extras: `openai`, `anthropic`, `langchain`, `langgraph`, `crewai`, `litellm`, `google-genai`, `google-adk`, `bedrock`, `groq`, `agno`, `dspy`, `openai-agents`, `guardrails`, `haystack`, `instructor`, `mcp`, `mistralai`, `portkey`, `pydantic-ai`, `smolagents`, `vertexai`, `autogen-agentchat`, `milvus`, `llama-index`, `azure-ai-inference`
+Full list of available extras: `openai`, `anthropic`, `langchain`, `langgraph`, `crewai`, `litellm`, `google-genai`, `google-adk`, `bedrock`, `groq`, `agno`, `dspy`, `openai-agents`, `guardrails`, `haystack`, `instructor`, `mcp`, `mistralai`, `portkey`, `pydantic-ai`, `smolagents`, `vertexai`, `autogen-agentchat`, `milvus`, `llama-index`
 
 Requires Python >= 3.10, < 3.14. Notable version pins: `crewai >= 1.9.3`, `qdrant-client < 1.16` (langchain extra).
 
@@ -48,7 +46,7 @@ Requires Python >= 3.10, < 3.14. Notable version pins: `crewai >= 1.9.3`, `qdran
 
 1. **Import order matters**: `neatlogs.init()` MUST be called **before** importing any LLM libraries (OpenAI, Anthropic, etc.) for auto-instrumentation patching to work.
 2. **Scripts**: end with `neatlogs.flush()` then `neatlogs.shutdown()`. **Servers**: call `init()` once at startup; do NOT call `flush()` or `shutdown()` on every request — see [Long-Running Servers](#long-running-servers-fastapi-flask-django) below.
-3. **Use `@span` decorators** for custom code; use `trace()` context manager only for prompt template tracking, session management, or span kinds not supported by `@span` (`RERANKER`, `VECTOR_STORE`).
+3. **Use `@span` decorators** for custom code; use `trace()` context manager for prompt template tracking or span kinds not supported by `@span` (`RERANKER`, `VECTOR_STORE`, `LLM`).
 4. **Prefer auto-instrumentation** (`instrumentations=["openai"]`) over manual wrapping when possible.
 5. **Init is single-shot**: `neatlogs.init()` configures the global telemetry provider. Calling it a second time raises `ValueError`. If you need to reinitialize, call `neatlogs.shutdown()` first (rare).
 6. **Read reference docs** before implementing — NeatLogs updates frequently.
@@ -130,9 +128,9 @@ neatlogs.shutdown()
 2. **Instrument**: Choose the correct approach:
    - Auto-instrumentation for providers → add to `instrumentations=[]`
    - `@span` decorators for custom orchestration code
-   - `trace()` for prompt template tracking or span kinds not available in `@span` (`RERANKER`, `VECTOR_STORE`)
+   - `trace()` for prompt template tracking or span kinds not available in `@span` (`RERANKER`, `VECTOR_STORE`, `LLM`)
 3. **Init**: Add `neatlogs.init()` **BEFORE** any LLM library imports with the correct `instrumentations` list.
-4. **Verify**: Enable `debug=True` and check stderr output, or check the NeatLogs dashboard.
+4. **Verify**: Check the NeatLogs dashboard for incoming traces.
 
 ---
 
@@ -152,9 +150,6 @@ neatlogs.shutdown()
 | `flush_interval` | `float` | `5.0` | Seconds between batch flushes |
 | `batch_size` | `int` | `100` | Max spans per batch |
 | `debug` | `bool` | `False` | Enable verbose logging to stderr |
-| `log_level` | `str` | `"INFO"` | Minimum stdlib logging level to capture. Only applies when `capture_logs=True`. Captures `logging.INFO` and above as LOG spans inside `@span` or `trace()` blocks |
-| `capture_logs` | `bool` | `False` | Enable stdlib logging auto-capture |
-| `disable_export` | `bool` | `False` | Disable span export (for local testing) |
 | `pii_enabled` | `Optional[bool]` | `None` | Override the team-level server-side PII redaction setting. `True` = enable, `False` = disable, `None` (default) = use the team setting in the NeatLogs dashboard |
 | `pii_span_types` | `list[str]` | `None` | Span types for PII redaction (e.g. `["LLM", "TOOL"]`) |
 | `mask` | `callable` | `None` | Client-side mask function `(span_dict) -> span_dict` |
@@ -257,16 +252,7 @@ For deep dives, see the companion reference files:
 |---|---|
 | `NEATLOGS_API_KEY` | API key (alternative to `api_key` param) |
 | `NEATLOGS_DISABLE_EXPORT` | Set to `"true"` to disable span export |
-| `NEATLOGS_LOG_SPANS` | Set to `"true"` to log spans to file |
-| `NEATLOGS_LOG_SPANS_FILE` | File path for span logs (default: `spans_optimized.log`) |
-| `NEATLOGS_LOG_RAW_SPANS` | Set to `"true"` to log raw span JSON |
-| `NEATLOGS_LOG_RAW_SPANS_FILE` | File path for raw span logs (default: `spans_raw_optimized.log`) |
 | `NEATLOGS_TRACE_CONTENT` | Set to `"false"` to globally disable input/output content capture on spans |
-| `NEATLOGS_LOG_METRICS` | Set to `"true"` to log metrics to file |
-| `NEATLOGS_LOG_METRICS_FILE` | File path for metrics logs (default: `metrics_optimized.log`) |
-| `NEATLOGS_LOG_LEVEL` | SDK internal log level (default: `INFO`) |
-| `NEATLOGS_LOG_FILE` | File path for SDK internal logs (if set, logs to file instead of stderr) |
-| `NEATLOGS_ENDPOINT` | Convention used in examples — **not** auto-read by `init()`. Pass explicitly: `endpoint=os.getenv("NEATLOGS_ENDPOINT")` |
 
 ---
 

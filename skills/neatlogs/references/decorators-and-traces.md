@@ -17,21 +17,14 @@ The primary manual instrumentation API for custom code. Wraps a function to crea
     description=None,        # Optional: span description
     version=None,            # Optional: version string
     tags=None,               # Optional: list of tags
-    metadata=None,           # Optional: dict of metadata
-    attributes=None,         # Optional: dict of custom attributes
     capture_input=True,      # Serialize function args to span attributes
     capture_output=True,     # Serialize return value to span attributes
-    capture_stdout=False,    # Capture stdout during execution
     mask=None,               # Per-span mask function
     # Kind-specific parameters:
-    agent_name=None,         # AGENT: agent name
-    role=None,               # AGENT: agent role (sets agent.name if agent_name not set)
+    role=None,               # AGENT: agent role (sets agent.name)
     goal=None,               # AGENT: agent goal
     tool_name=None,          # TOOL/MCP_TOOL: tool name
     parameters=None,         # TOOL: tool parameters
-    tool_json_schema=None,   # MCP_TOOL: JSON schema for the tool
-    model=None,              # EMBEDDING: model name
-    dimension=None,          # EMBEDDING: embedding dimension
 )
 ```
 
@@ -40,6 +33,8 @@ The primary manual instrumentation API for custom code. Wraps a function to crea
 `@span()` raises `ValueError` for any kind not in this set:
 
 `WORKFLOW`, `AGENT`, `CHAIN`, `TOOL`, `RETRIEVER`, `EMBEDDING`, `GUARDRAIL`, `MCP_TOOL`
+
+> **Note**: `RERANKER`, `VECTOR_STORE`, and `LLM` are **not** valid for `@span()`. Use `trace()` for these kinds — see §3.
 
 ### When to Use Each Kind
 
@@ -57,7 +52,7 @@ def run_research_pipeline(topic: str) -> str:
 
 #### AGENT
 
-Function representing an AI agent with a specific role/goal. The `role` parameter sets `agent.name` if `agent_name` is not explicitly provided.
+Function representing an AI agent with a specific role/goal. The `role` parameter sets `agent.name` on the span.
 
 ```python
 @neatlogs.span(kind="AGENT", name="researcher", role="Research Analyst", goal="Find relevant information")
@@ -86,9 +81,25 @@ def web_search(query: str) -> str:
     return search_api.search(query)
 ```
 
+To attach a JSON schema for the tool, use `span.set_attribute()` inside a nested `trace()`:
+
+```python
+import json
+
+@neatlogs.span(kind="TOOL", tool_name="web_search")
+def web_search(query: str) -> str:
+    with neatlogs.trace("web_search_schema") as span:
+        span.set_attribute("neatlogs.tool.json_schema", json.dumps({
+            "type": "object",
+            "properties": {"query": {"type": "string"}},
+            "required": ["query"],
+        }))
+    return search_api.search(query)
+```
+
 #### RETRIEVER
 
-RAG retrieval. Auto-extracts query from the first function argument and documents from the return value. Supports extracting query from args named `query`, `question`, or `text` (falls back to first string arg). Documents are extracted from list/tuple return values, or from dict return values with keys `documents`, `docs`, `results`, `matches`, `items`, or `data`.
+RAG retrieval. Use `@span(kind="RETRIEVER")` for supported retrieval libraries — attributes like `top_k` and documents are captured automatically. For custom implementations, add `span.set_attribute()` calls inside a nested `trace()` block (see §4 for attribute names).
 
 ```python
 @neatlogs.span(kind="RETRIEVER")
@@ -98,17 +109,17 @@ def retrieve_docs(query: str, top_k: int = 5) -> list:
 
 #### EMBEDDING
 
-Embedding generation.
+Embedding generation. Use `@span(kind="EMBEDDING")` for supported embedding libraries — model and dimension are captured automatically. For custom implementations, add `span.set_attribute()` calls with the attribute names from §4.
 
 ```python
-@neatlogs.span(kind="EMBEDDING", model="text-embedding-3-small", dimension=1536)
+@neatlogs.span(kind="EMBEDDING")
 def embed_texts(texts: list[str]) -> list[list[float]]:
     return embedding_model.encode(texts)
 ```
 
 #### GUARDRAIL
 
-Input/output validation and safety checks.
+Input/output validation and safety checks. Use `@span(kind="GUARDRAIL")` for supported guardrail libraries — attributes are captured automatically. For custom implementations, add `span.set_attribute()` calls with the attribute names from §4.
 
 ```python
 @neatlogs.span(kind="GUARDRAIL")
@@ -127,11 +138,9 @@ async def get_weather(location: str) -> str:
     return f"Weather in {location}: Sunny, 72°F"
 ```
 
-### `capture_input` / `capture_output` Behavior
+### `capture_input` / `capture_output`
 
-Default is `True` for both. When enabled, function arguments are serialized to the `input.value` span attribute, and the return value is serialized to the `output.value` span attribute (both as JSON with `application/json` mime type).
-
-Set to `False` to suppress serialization — useful for large payloads or sensitive data. The `NEATLOGS_TRACE_CONTENT` environment variable can also be set to `"false"` to globally disable content capture.
+Default is `True` for both. Set to `False` to suppress serialization — useful for large payloads or sensitive data. The `NEATLOGS_TRACE_CONTENT` env var can be set to `"false"` to globally disable content capture.
 
 ### Complete Multi-Agent Example
 
@@ -204,10 +213,8 @@ with neatlogs.trace(
     user_prompt_template=None,   # Optional: UserPromptTemplate instance
     prompt_variables=None,       # Optional: dict of prompt variables
     user_prompt_variables=None,  # Optional: dict of user prompt variables
-    version=None,                # Optional: version string
     capture_stdout=False,        # Capture stdout
     mask=None,                   # Per-span mask function
-    **attributes,                # Additional span attributes
 ) as span:
     # span.set_attribute(key, value) to add custom attributes
     ...
@@ -229,14 +236,13 @@ with neatlogs.trace("my_op", kind="CHAIN") as span:
     span.add_event("event_name", {"key": "val"}) # Add a timestamped event
 ```
 
-> **Note**: `@span()` decorators return the decorated function's own return value — not the span object. To access the span within a decorated function, use a nested `trace()` context.
-
 ### Use Cases for `trace()`
 
-1. **Prompt template tracking** — captures template + variables for versioning on LLM spans
-2. **Multi-turn session management** — groups turns within a session (when `session_id` is set and no active parent span exists, creates a new root trace)
+1. **Prompt template tracking** — pass `prompt_template=` / `user_prompt_template=` to capture template + variables on LLM spans (primary use case)
+2. **Custom attribute capture** — use `span.set_attribute()` for non-standard libraries where `@span()` can't auto-extract attributes
 3. **Span kinds not available in `@span()`**: `RERANKER`, `VECTOR_STORE`, `LLM`
-4. **Grouping multiple operations** under a single span
+
+> **`as span:` is optional** when only tracking prompt templates — the `with neatlogs.trace(...):` block is sufficient. The `as span` binding is only needed when you want to call `span.set_attribute()` or other span methods inside the block.
 
 ### Common Anti-Pattern
 
@@ -359,6 +365,8 @@ When using `@span(kind="RETRIEVER")`, the decorator auto-sets these attributes. 
 
 ## 5. Manual LLM Span Attributes (OpenInference Format)
 
+> **Only needed when calling a model's REST endpoint directly** (no SDK). Skip this section if you are using `instrumentations=["openai"]` or other auto-instrumentation keys — those handle attribute formatting automatically.
+
 When creating manual LLM spans via `trace(kind="LLM")`, the NeatLogs dashboard requires OpenInference flat indexed attributes to render structured message views:
 
 ```python
@@ -385,6 +393,8 @@ with neatlogs.trace("llm_call", kind="LLM") as span:
 
 ## 6. Error Handling on Manual Spans
 
+> **Only needed inside `trace()` blocks.** `@span()` automatically calls `record_exception()` and `set_status(StatusCode.ERROR)` when the decorated function raises — no manual handling needed.
+
 ```python
 from opentelemetry.trace import StatusCode, Status
 
@@ -400,10 +410,6 @@ with neatlogs.trace("my_operation", kind="CHAIN") as span:
 | Wrong | Right |
 |-------|-------|
 | `span.set_attribute("error", str(e))` | `span.record_exception(e)` + `span.set_status(Status(StatusCode.ERROR, str(e)))` |
-
-Setting an `"error"` attribute does NOT mark the span as failed in the backend. You must use OTel's `record_exception()` and `set_status()` methods. Note: `set_status()` requires a `Status` object, not bare `StatusCode` + string.
-
-> **Note**: `@span()` automatically calls `record_exception()` and `set_status(StatusCode.ERROR)` when the decorated function raises an exception. Manual error handling is only needed inside `trace()` blocks.
 
 ---
 

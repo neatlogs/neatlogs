@@ -56,6 +56,8 @@ user_msgs = user_tpl.compile(topic="quantum entanglement", focus="recent experim
 
 Pass `prompt_template=` and `user_prompt_template=` to `trace()` for automatic capture on LLM spans. **IMPORTANT**: Call `.compile()` **INSIDE** the `trace()` context for variable bindings to be captured.
 
+> **`neatlogs.PromptTemplate` vs framework prompt templates**: `neatlogs.PromptTemplate` is NeatLogs' own class for template *tracking* in the dashboard — it is independent of LangChain's `ChatPromptTemplate`, OpenAI prompt strings, etc. Use `neatlogs.PromptTemplate` alongside whatever framework prompt class your code already uses.
+
 Pattern from sdk-v3 examples:
 
 ```python

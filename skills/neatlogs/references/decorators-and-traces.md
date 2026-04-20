@@ -209,7 +209,7 @@ For prompt template tracking AND additional span kinds not available in `@span()
 with neatlogs.trace(
     name,                        # Required: span name
     kind=None,                   # Optional: span kind (any string accepted)
-    prompt_template=None,        # Optional: PromptTemplate instance
+    prompt_template=None,        # Optional: SystemPromptTemplate instance
     user_prompt_template=None,   # Optional: UserPromptTemplate instance
     prompt_variables=None,       # Optional: dict of prompt variables
     user_prompt_variables=None,  # Optional: dict of user prompt variables

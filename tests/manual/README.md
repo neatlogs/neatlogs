@@ -28,7 +28,7 @@ python tests/manual/test_async_flush.py
 
 ---
 
-## Test 2 — Async `trace()` + PromptTemplate (`test_async_trace.py`)
+## Test 2 — Async `trace()` + SystemPromptTemplate (`test_async_trace.py`)
 
 **PR comment**: troubleshooting.md line 172 — "same question as above"
 

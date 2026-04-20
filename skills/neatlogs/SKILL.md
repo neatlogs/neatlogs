@@ -10,7 +10,7 @@ description: >
 # NeatLogs SDK v3 — Agent Skill
 
 NeatLogs auto-instruments LLM calls, agent frameworks, and custom code with just 6 exports:
-`init()`, `flush()`, `shutdown()`, `@span()`, `trace()`, and `PromptTemplate`.
+`init()`, `flush()`, `shutdown()`, `@span()`, `trace()`, and `SystemPromptTemplate`.
 
 ---
 
@@ -36,9 +36,9 @@ pip install neatlogs[crewai,google-genai,litellm]
 
 Combine multiple extras with commas: `pip install neatlogs[crewai,google-genai,litellm]`
 
-Full list of available extras: `openai`, `anthropic`, `langchain`, `langgraph`, `crewai`, `litellm`, `google-genai`, `google-adk`, `bedrock`, `groq`, `agno`, `dspy`, `openai-agents`, `guardrails`, `haystack`, `instructor`, `mcp`, `mistralai`, `portkey`, `pydantic-ai`, `smolagents`, `vertexai`, `autogen-agentchat`, `milvus`, `llama-index`
+Full list of available extras: `openai`, `anthropic`, `langchain`, `langgraph`, `crewai`, `litellm`, `google-genai`, `bedrock`, `groq`, `guardrails`, `mcp`, `vertexai`
 
-Requires Python >= 3.10, < 3.14. Notable version pins: `crewai >= 1.9.3`, `qdrant-client < 1.16` (langchain extra).
+Requires Python >= 3.10, < 3.14. Notable version pins: `crewai >= 1.9.3`.
 
 ---
 
@@ -160,8 +160,6 @@ neatlogs.shutdown()
 
 Pass these string values in the `instrumentations=[]` list to `neatlogs.init()`.
 
-> **How it works**: `_instrument_dual()` tries a NeatLogs custom instrumentor first, then OpenInference. Libraries that have neither are silently skipped. Keys marked ⚠️ below have no direct instrumentor — use the noted alternative instead.
-
 ### LLM Providers
 
 | Key | Library | Notes |
@@ -169,21 +167,11 @@ Pass these string values in the `instrumentations=[]` list to `neatlogs.init()`.
 | `openai` | OpenAI | |
 | `anthropic` | Anthropic | |
 | `google_genai` | Google Generative AI (`google.genai`) | Client must be created **after** `init()` — see troubleshooting. Preferred key for the `google-genai` SDK |
-| `google_generativeai` | Google Generative AI (`google.generativeai`) | For the older `google-generativeai` SDK. Has OpenLLMetry instrumentor |
-| `azure_ai_inference` | Azure AI Inference | |
+| `google_generativeai` | Google Generative AI (`google.generativeai`) | For the older `google-generativeai` SDK |
 | `litellm` | LiteLLM | |
 | `bedrock` | AWS Bedrock | |
 | `groq` | Groq | |
 | `vertexai` | Google Vertex AI | |
-| `mistralai` | Mistral AI | |
-| `portkey` | Portkey | |
-| `watsonx` | IBM watsonx.ai | |
-| `replicate` | Replicate | |
-| `sagemaker` | AWS SageMaker | |
-| `alephalpha` | Aleph Alpha | |
-| ⚠️ `huggingface_hub` | Hugging Face Hub | No direct instrumentor — key is in the registry but silently skipped |
-| ⚠️ `together` | Together AI | No direct instrumentor — use `litellm` as a proxy or call via OpenAI-compatible endpoint with `openai` key |
-| ⚠️ `cohere` | Cohere | No direct instrumentor — use `litellm` as a proxy |
 | ⚠️ `ollama` | Ollama | No direct instrumentor — call via OpenAI-compatible endpoint with `openai` key |
 
 ### Agent Frameworks
@@ -193,43 +181,21 @@ Pass these string values in the `instrumentations=[]` list to `neatlogs.init()`.
 | `langchain` | LangChain | Also covers LangGraph execution — see below |
 | `crewai` | CrewAI | Auto-loads `litellm`; also add provider keys (e.g. `openai`) |
 | `llamaindex` | LlamaIndex | |
-| `autogen` | AutoGen | |
-| `haystack` | Haystack | |
-| `dspy` | DSPy | |
-| `agno` | Agno | |
-| `pydantic_ai` | Pydantic AI | |
-| `openai_agents` | OpenAI Agents | |
-| `smolagents` | SmolAgents | |
-| `strands` | Strands | |
-| `pipecat` | Pipecat | |
-| `beeai` | BeeAI | |
 | ⚠️ `langgraph` | LangGraph | No direct instrumentor. Use `instrumentations=["langchain"]` — LangGraph is built on LangChain and is traced via the LangChain instrumentor |
 
 ### Retrieval / Vector Stores
 
-| Key | Library | Status |
-|---|---|---|
-| `weaviate` | Weaviate | ✅ Has OpenInference instrumentor — auto-instrumented when weaviate is installed |
-| `chromadb` | ChromaDB | ⚠️ No direct instrumentor — traced indirectly via LangChain retriever instrumentation |
-| `pinecone` | Pinecone | ⚠️ No direct instrumentor |
-| `qdrant` | Qdrant | ⚠️ No direct instrumentor |
-| `milvus` | Milvus | ⚠️ No direct instrumentor |
-| `elasticsearch` | Elasticsearch | ⚠️ No direct instrumentor |
-| `redis` | Redis | ⚠️ No direct instrumentor |
-| `marqo` | Marqo | ⚠️ No direct instrumentor |
-| `opensearch` | OpenSearch | ⚠️ No direct instrumentor |
+For vector store operations, use `trace("op", kind="VECTOR_STORE")` with manual attributes. There is no `instrumentations=[]` key that auto-instruments vector DBs directly.
 
-> **Note**: Libraries marked ⚠️ above have no NeatLogs or OpenInference instrumentor — passing them to `instrumentations=[]` is silently skipped. Use `trace("op", kind="VECTOR_STORE")` with manual attributes for custom vector DB spans, or rely on higher-level framework instrumentation (e.g. LangChain retriever auto-instrumentation).
+> **Tip**: If you use LangChain retrievers, add `"langchain"` to `instrumentations=[]` — retriever spans are captured automatically via the LangChain instrumentor.
 
 ### Other
 
 | Key | Library | Notes |
 |---|---|---|
 | `mcp` | Model Context Protocol | |
-| `instructor` | Instructor | |
 | `guardrails` | Guardrails AI | |
 | `google_adk` | Google ADK | |
-| `promptflow` | PromptFlow | ⚠️ No pip extra — `pip install openinference-instrumentation-promptflow` separately |
 
 > **HTTP libraries** (`requests`, `httpx`, `urllib3`, `aiohttp`) are always auto-instrumented by `neatlogs.init()` for trace context propagation — you do not need to list them in `instrumentations=[]`.
 

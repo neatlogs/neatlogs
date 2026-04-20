@@ -32,7 +32,7 @@ def bind_templates(
 
     Args:
         llm: Any LangChain-compatible chat model (ChatOpenAI, AzureChatOpenAI, …)
-        system_tpl: neatlogs.PromptTemplate for the agent backstory / system role
+        system_tpl: neatlogs.SystemPromptTemplate for the agent backstory / system role
         user_tpl: Optional neatlogs.UserPromptTemplate for the task description /
                   user turn. In CrewAI, prefer register_crewai_task() instead so
                   the template lands on the CREWAI_TASK span rather than LLM spans.

@@ -1,10 +1,10 @@
 # Prompt Templates — NeatLogs SDK v3 Reference
 
-Prompt template tracking and management in NeatLogs SDK v3. Covers local template classes (`PromptTemplate`, `UserPromptTemplate`), integration with `trace()` and `bind_templates()`, CrewAI task-level tracking, and the server-side Prompt Management API.
+Prompt template tracking and management in NeatLogs SDK v3. Covers local template classes (`SystemPromptTemplate`, `UserPromptTemplate`), integration with `trace()` and `bind_templates()`, CrewAI task-level tracking, and the server-side Prompt Management API.
 
 ---
 
-## 1. `PromptTemplate` Class
+## 1. `SystemPromptTemplate` Class
 
 System/AI instruction prompt with `{{variable}}` placeholders.
 
@@ -15,13 +15,13 @@ System/AI instruction prompt with `{{variable}}` placeholders.
 - `.variables` property lists extracted variable names
 
 ```python
-from neatlogs import PromptTemplate
+from neatlogs import SystemPromptTemplate
 
 # String form
-sys_tpl = PromptTemplate("You are a {{role}} assistant specialized in {{domain}}.")
+sys_tpl = SystemPromptTemplate("You are a {{role}} assistant specialized in {{domain}}.")
 
 # Message list form (preferred for chat models)
-sys_tpl = PromptTemplate([{
+sys_tpl = SystemPromptTemplate([{
     "role": "system",
     "content": "You are a {{role}} assistant specialized in {{domain}}."
 }])
@@ -37,7 +37,7 @@ messages = sys_tpl.compile(role="research", domain="quantum physics")
 
 ## 2. `UserPromptTemplate` Class
 
-Same API as `PromptTemplate` but for the user/human turn.
+Same API as `SystemPromptTemplate` but for the user/human turn.
 
 ```python
 from neatlogs import UserPromptTemplate
@@ -56,13 +56,13 @@ user_msgs = user_tpl.compile(topic="quantum entanglement", focus="recent experim
 
 Pass `prompt_template=` and `user_prompt_template=` to `trace()` for automatic capture on LLM spans. **IMPORTANT**: Call `.compile()` **INSIDE** the `trace()` context for variable bindings to be captured.
 
-> **`neatlogs.PromptTemplate` vs framework prompt templates**: `neatlogs.PromptTemplate` is NeatLogs' own class for template *tracking* in the dashboard — it is independent of LangChain's `ChatPromptTemplate`, OpenAI prompt strings, etc. Use `neatlogs.PromptTemplate` alongside whatever framework prompt class your code already uses.
+> **`neatlogs.SystemPromptTemplate` vs framework prompt templates**: `neatlogs.SystemPromptTemplate` is NeatLogs' own class for template *tracking* in the dashboard — it is independent of LangChain's `ChatPromptTemplate`, OpenAI prompt strings, etc. Use `neatlogs.SystemPromptTemplate` alongside whatever framework prompt class your code already uses.
 
 Pattern from sdk-v3 examples:
 
 ```python
 import neatlogs
-from neatlogs import PromptTemplate, UserPromptTemplate
+from neatlogs import SystemPromptTemplate, UserPromptTemplate
 
 neatlogs.init(api_key="...", workflow_name="research", instrumentations=["openai"])
 
@@ -70,7 +70,7 @@ from openai import OpenAI  # Import AFTER init() for auto-instrumentation
 
 client = OpenAI()
 
-sys_tpl = PromptTemplate([{
+sys_tpl = SystemPromptTemplate([{
     "role": "system",
     "content": "You are a {{role}} assistant. Always be thorough."
 }])
@@ -126,7 +126,7 @@ neatlogs.bind_templates(llm, system_tpl, user_tpl=None, **variables)
 ```python
 from crewai import Agent, Task, Crew, LLM
 import neatlogs
-from neatlogs import PromptTemplate
+from neatlogs import SystemPromptTemplate
 
 neatlogs.init(
     api_key="...",
@@ -136,7 +136,7 @@ neatlogs.init(
 
 # System template must NOT have required placeholders — bind_templates()
 # calls system_tpl.compile() with no arguments. Pre-render if needed.
-analyst_tpl = PromptTemplate("You are a senior market analyst for the tech industry.")
+analyst_tpl = SystemPromptTemplate("You are a senior market analyst for the tech industry.")
 llm = LLM(model="azure/gpt-4o", api_key="...", base_url="...")
 
 # Bind template to LLM — returns a new LLM instance

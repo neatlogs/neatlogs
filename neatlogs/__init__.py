@@ -5,10 +5,10 @@ Primary API:
     - init(), flush(), shutdown() - Lifecycle management
     - @span(kind="...") - Universal decorator for custom code instrumentation
     - trace() - Context manager for prompt tracking and session management
-    - PromptTemplate - Structured prompt versioning
+    - SystemPromptTemplate - Structured prompt versioning (formerly PromptTemplate)
 
 Quick Start:
-    >>> from neatlogs import init, span, trace, PromptTemplate
+    >>> from neatlogs import init, span, trace, SystemPromptTemplate
     >>> 
     >>> init(api_key="...", instrumentations=["openai"])
     >>> 
@@ -48,7 +48,7 @@ from .prompt.client import (
     delete_prompt,
     remove_tag,
 )
-from .prompt.template import PromptTemplate, UserPromptTemplate
+from .prompt.template import SystemPromptTemplate, PromptTemplate, UserPromptTemplate
 from .version import __version__
 
 __all__ = [
@@ -58,7 +58,8 @@ __all__ = [
     "span",
     "trace",
     "log",
-    "PromptTemplate",
+    "SystemPromptTemplate",
+    "PromptTemplate",  # backward-compatible alias
     "UserPromptTemplate",
     "CachedPrompt",
     "PromptHandle",

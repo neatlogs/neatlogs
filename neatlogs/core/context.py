@@ -12,7 +12,7 @@ from opentelemetry import trace as otel_trace
 def trace(
     name: str,
     kind: Optional[str] = None,
-    prompt_template: Optional[Union[str, "PromptTemplate"]] = None,
+    prompt_template: Optional[Union[str, "SystemPromptTemplate"]] = None,
     prompt_variables: Optional[Dict[str, Any]] = None,
     user_prompt_template: Optional[Union[str, "UserPromptTemplate"]] = None,
     user_prompt_variables: Optional[Dict[str, Any]] = None,
@@ -46,7 +46,7 @@ def trace(
     Args:
         name: Span name
         kind: OpenInference span kind (rarely needed - auto-inferred)
-        prompt_template: PromptTemplate object for system prompt versioning
+        prompt_template: SystemPromptTemplate object for system prompt versioning
         prompt_variables: Dict of system prompt variables (legacy string templates only)
         user_prompt_template: UserPromptTemplate object for user/human prompt versioning
         user_prompt_variables: Dict of user prompt variables (legacy string templates only)
@@ -57,7 +57,7 @@ def trace(
         
         Use Case 1: Prompt template tracking (inside your function):
         
-        >>> template = PromptTemplate([{"role": "user", "content": "{{query}}"}])
+        >>> template = SystemPromptTemplate([{"role": "user", "content": "{{query}}"}])
         >>> 
         >>> @span(kind="AGENT")
         >>> def my_agent(query: str):
@@ -103,7 +103,7 @@ def trace(
     from opentelemetry.context import attach, detach, get_current, set_value
 
     from ..init import get_session_config
-    from ..prompt.template import PromptContext, PromptTemplate, UserPromptContext, UserPromptTemplate
+    from ..prompt.template import PromptContext, SystemPromptTemplate, UserPromptContext, UserPromptTemplate
 
     logger = logging.getLogger(__name__)
     tracer = otel_trace.get_tracer(__name__)
@@ -120,11 +120,11 @@ def trace(
     is_prompt_template_obj = False
 
     if prompt_template is not None:
-        if isinstance(prompt_template, PromptTemplate):
+        if isinstance(prompt_template, SystemPromptTemplate):
             is_prompt_template_obj = True
             template_string = str(prompt_template.template)
             logger.debug(
-                f"[trace] Using PromptTemplate object with variables: {prompt_template.variables}"
+                f"[trace] Using SystemPromptTemplate object with variables: {prompt_template.variables}"
             )
         else:
             template_string = prompt_template

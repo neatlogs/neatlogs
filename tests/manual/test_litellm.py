@@ -6,7 +6,7 @@ What to verify:
   1. `instrumentations=["litellm"]` instruments LiteLLM calls automatically.
   2. The `@neatlogs.span(kind="WORKFLOW")` wrapper creates a parent WORKFLOW span.
   3. The inner `neatlogs.trace("llm_call", kind="LLM", ...)` captures the
-     PromptTemplate and UserPromptTemplate on the span.
+     SystemPromptTemplate and UserPromptTemplate on the span.
   4. In the NeatLogs dashboard (workflow "test-litellm"), you see:
        - A WORKFLOW span "run"
        - A child LLM span "llm_call" with prompt template + variables captured
@@ -28,7 +28,7 @@ Expected output (no errors):
 
 import os
 import neatlogs
-from neatlogs import PromptTemplate, UserPromptTemplate
+from neatlogs import SystemPromptTemplate, UserPromptTemplate
 
 neatlogs.init(
     api_key=None,  # reads NEATLOGS_API_KEY from env
@@ -39,7 +39,7 @@ neatlogs.init(
 
 from litellm import completion
 
-sys_tpl = PromptTemplate("You are a helpful assistant.")
+sys_tpl = SystemPromptTemplate("You are a helpful assistant.")
 user_tpl = UserPromptTemplate("{{query}}")
 
 

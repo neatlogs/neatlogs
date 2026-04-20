@@ -10,9 +10,10 @@ from .client import (
     PromptNotFoundError,
     PromptClient,
 )
-from .template import PromptTemplate, UserPromptTemplate
+from .template import SystemPromptTemplate, PromptTemplate, UserPromptTemplate
 
 __all__ = [
+    "SystemPromptTemplate",
     "PromptTemplate",
     "UserPromptTemplate",
     "CachedPrompt",

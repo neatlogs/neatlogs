@@ -40,14 +40,14 @@ bound_llm = neatlogs.bind_templates(llm, system_tpl)
 neatlogs.register_crewai_task(task, user_tpl, topic="AI chips")
 ```
 
-### 1d. Auto-Instrumentation + `trace()` + `PromptTemplate`
+### 1d. Auto-Instrumentation + `trace()` + `SystemPromptTemplate`
 
-For any integration where you want to track prompt templates and variables in the dashboard. Wrap your LLM call in `trace()` and pass `PromptTemplate` instances — the SDK captures the template and compiled variables automatically.
+For any integration where you want to track prompt templates and variables in the dashboard. Wrap your LLM call in `trace()` and pass `SystemPromptTemplate` instances — the SDK captures the template and compiled variables automatically.
 
 ```python
 neatlogs.init(instrumentations=["openai"])
 
-sys_tpl = PromptTemplate("You are a {{role}} assistant.")
+sys_tpl = SystemPromptTemplate("You are a {{role}} assistant.")
 user_tpl = UserPromptTemplate("{{query}}")
 
 with neatlogs.trace("llm_call", kind="LLM", prompt_template=sys_tpl, user_prompt_template=user_tpl):
@@ -67,7 +67,7 @@ with neatlogs.trace("llm_call", kind="LLM", prompt_template=sys_tpl, user_prompt
 
 ```python
 import neatlogs
-from neatlogs import PromptTemplate, UserPromptTemplate
+from neatlogs import SystemPromptTemplate, UserPromptTemplate
 
 neatlogs.init(
     api_key="...",  # or set NEATLOGS_API_KEY env var
@@ -79,7 +79,7 @@ from openai import OpenAI
 
 client = OpenAI()
 
-sys_tpl = PromptTemplate("You are a helpful assistant specializing in {{domain}}.")
+sys_tpl = SystemPromptTemplate("You are a helpful assistant specializing in {{domain}}.")
 user_tpl = UserPromptTemplate("Question: {{query}}")
 
 @neatlogs.span(kind="WORKFLOW")
@@ -107,7 +107,7 @@ neatlogs.shutdown()
 
 ```python
 import neatlogs
-from neatlogs import PromptTemplate, UserPromptTemplate
+from neatlogs import SystemPromptTemplate, UserPromptTemplate
 
 neatlogs.init(
     api_key="...",  # or set NEATLOGS_API_KEY env var
@@ -119,7 +119,7 @@ from anthropic import Anthropic
 
 client = Anthropic()
 
-sys_tpl = PromptTemplate("You are a market analysis expert for {{industry}}.")
+sys_tpl = SystemPromptTemplate("You are a market analysis expert for {{industry}}.")
 user_tpl = UserPromptTemplate([{"role": "user", "content": "Analyze: {{query}}"}])
 
 @neatlogs.span(kind="AGENT", name="analyst")
@@ -153,7 +153,7 @@ neatlogs.shutdown()
 
 ```python
 import neatlogs
-from neatlogs import PromptTemplate, UserPromptTemplate
+from neatlogs import SystemPromptTemplate, UserPromptTemplate
 
 neatlogs.init(
     api_key="...",  # or set NEATLOGS_API_KEY env var
@@ -166,7 +166,7 @@ from google import genai
 
 client = genai.Client(api_key="...")
 
-sys_tpl = PromptTemplate("You are a research assistant for {{domain}}.")
+sys_tpl = SystemPromptTemplate("You are a research assistant for {{domain}}.")
 user_tpl = UserPromptTemplate("Research topic: {{topic}}")
 
 @neatlogs.span(kind="AGENT", name="researcher")
@@ -201,7 +201,7 @@ See [`troubleshooting.md` §2](troubleshooting.md#2-google-genai-instantiation-o
 
 ```python
 import neatlogs
-from neatlogs import PromptTemplate
+from neatlogs import SystemPromptTemplate
 
 neatlogs.init(
     api_key="...",  # or set NEATLOGS_API_KEY env var
@@ -229,7 +229,7 @@ react_prompt = ChatPromptTemplate.from_messages([
 agent = create_react_agent(llm, [web_search], react_prompt)
 agent_executor = AgentExecutor(agent=agent, tools=[web_search])
 
-sys_tpl = PromptTemplate("You are a helpful research assistant for {{domain}}.")
+sys_tpl = SystemPromptTemplate("You are a helpful research assistant for {{domain}}.")
 
 @neatlogs.span(kind="WORKFLOW")
 def run_agent(query: str) -> str:
@@ -253,7 +253,7 @@ neatlogs.shutdown()
 
 ```python
 import neatlogs
-from neatlogs import PromptTemplate, UserPromptTemplate
+from neatlogs import SystemPromptTemplate, UserPromptTemplate
 
 neatlogs.init(
     api_key="...",  # or set NEATLOGS_API_KEY env var
@@ -267,8 +267,8 @@ from langchain_openai import ChatOpenAI
 llm = ChatOpenAI(model="gpt-4o")
 
 # Define templates per node
-supervisor_tpl = PromptTemplate("You are a supervisor routing tasks to agents...")
-researcher_tpl = PromptTemplate("You are a research agent for {{domain}}.")
+supervisor_tpl = SystemPromptTemplate("You are a supervisor routing tasks to agents...")
+researcher_tpl = SystemPromptTemplate("You are a research agent for {{domain}}.")
 
 def supervisor_node(state):
     with neatlogs.trace("supervisor_llm", kind="LLM", prompt_template=supervisor_tpl):
@@ -306,7 +306,7 @@ neatlogs.shutdown()
 
 ```python
 import neatlogs
-from neatlogs import PromptTemplate, UserPromptTemplate
+from neatlogs import SystemPromptTemplate, UserPromptTemplate
 
 neatlogs.init(
     api_key="...",  # or set NEATLOGS_API_KEY env var
@@ -319,7 +319,7 @@ from crewai import Agent, Task, Crew, LLM
 # System template for the agent's LLM — must NOT have required placeholders
 # because bind_templates() calls system_tpl.compile() with no arguments.
 # Pre-render the template string if you need dynamic values.
-analyst_tpl = PromptTemplate("You are a senior market analyst.")
+analyst_tpl = SystemPromptTemplate("You are a senior market analyst.")
 
 # User template for the task
 task_tpl = UserPromptTemplate("Analyze {{topic}} trends for {{year}}.")
@@ -367,7 +367,7 @@ neatlogs.shutdown()
 
 ```python
 import neatlogs
-from neatlogs import PromptTemplate, UserPromptTemplate
+from neatlogs import SystemPromptTemplate, UserPromptTemplate
 
 neatlogs.init(
     api_key="...",  # or set NEATLOGS_API_KEY env var
@@ -377,7 +377,7 @@ neatlogs.init(
 
 from litellm import completion
 
-sys_tpl = PromptTemplate("You are a helpful assistant.")
+sys_tpl = SystemPromptTemplate("You are a helpful assistant.")
 user_tpl = UserPromptTemplate("{{query}}")
 
 @neatlogs.span(kind="WORKFLOW")
@@ -402,7 +402,7 @@ When using multiple LLM providers, list all of them in `instrumentations`:
 
 ```python
 import neatlogs
-from neatlogs import PromptTemplate, UserPromptTemplate
+from neatlogs import SystemPromptTemplate, UserPromptTemplate
 
 neatlogs.init(
     api_key="...",  # or set NEATLOGS_API_KEY env var
@@ -418,7 +418,7 @@ openai_client = OpenAI()
 anthropic_client = Anthropic()
 gemini_client = genai.Client(api_key="...")
 
-sys_tpl = PromptTemplate("You are an expert analyst.")
+sys_tpl = SystemPromptTemplate("You are an expert analyst.")
 user_tpl = UserPromptTemplate("{{query}}")
 
 @neatlogs.span(kind="WORKFLOW")

@@ -1,6 +1,6 @@
 """
-TEST 2: async trace() + PromptTemplate
-Covers troubleshooting.md line 172 — using neatlogs.trace() and PromptTemplate
+TEST 2: async trace() + SystemPromptTemplate
+Covers troubleshooting.md line 172 — using neatlogs.trace() and SystemPromptTemplate
 inside an async function (the reviewer asked if this was tested).
 
 What to verify:
@@ -22,7 +22,7 @@ Expected output (no errors):
 import asyncio
 import os
 import neatlogs
-from neatlogs import PromptTemplate, UserPromptTemplate
+from neatlogs import SystemPromptTemplate, UserPromptTemplate
 
 
 async def main():
@@ -33,7 +33,7 @@ async def main():
         disable_export=False,
     )
 
-    sys_tpl = PromptTemplate("You are a helpful assistant in {{domain}}.")
+    sys_tpl = SystemPromptTemplate("You are a helpful assistant in {{domain}}.")
     user_tpl = UserPromptTemplate("Answer this: {{question}}")
 
     @neatlogs.span(kind="CHAIN")

@@ -11,7 +11,6 @@ import pytest
 
 from neatlogs.core.log_exporter import NeatlogsLogFilter, _is_external_module
 
-
 # ---------------------------------------------------------------------------
 # _is_external_module
 # ---------------------------------------------------------------------------

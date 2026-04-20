@@ -154,6 +154,24 @@ def _decorate_span(
         cap_in = cap if capture_input is None else capture_input
         cap_out = cap if capture_output is None else capture_output
 
+        # Capture code location once at decoration time — these are static
+        # properties of the decorated function so there is no per-call overhead.
+        code_attrs: Dict[str, Any] = {}
+        try:
+            code_attrs["code.file.path"] = inspect.getfile(func)
+        except (TypeError, OSError):
+            pass
+        code_attrs["code.function.name"] = func.__qualname__
+        try:
+            _, lineno = inspect.getsourcelines(func)
+            code_attrs["code.line.number"] = lineno
+        except (TypeError, OSError):
+            pass
+        if func.__module__:
+            code_attrs["code.namespace"] = func.__module__
+
+        merged_attrs = {**(attributes or {}), **code_attrs}
+
         if inspect.iscoroutinefunction(func):
 
             @functools.wraps(func)
@@ -171,7 +189,7 @@ def _decorate_span(
                         version=version,
                         tags=tags,
                         metadata=metadata,
-                        attributes=attributes,
+                        attributes=merged_attrs,
                     )
                     if mask is not None:
                         span.set_attribute("neatlogs.mask_id", register_mask(mask))
@@ -225,7 +243,7 @@ def _decorate_span(
                     version=version,
                     tags=tags,
                     metadata=metadata,
-                    attributes=attributes,
+                    attributes=merged_attrs,
                 )
                 if mask is not None:
                     span.set_attribute("neatlogs.mask_id", register_mask(mask))

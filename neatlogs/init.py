@@ -18,7 +18,7 @@ except ImportError:
 from opentelemetry import metrics, trace
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk._logs import LoggerProvider
-from opentelemetry.sdk._logs.export import SimpleLogRecordProcessor
+from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 from opentelemetry.sdk.environment_variables import (
     OTEL_ATTRIBUTE_COUNT_LIMIT,
     OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT,
@@ -307,22 +307,23 @@ def init(
     # capture_logs=True. When False, nothing is captured as LOG spans.
     global _log_provider, _log_span_exporter
     if capture_logs:
-        from .core.exporter import NeatlogsExporter
-        from .core.log_exporter import NeatlogsLogExporter
+        from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
 
-        logs_batch_endpoint = f"{_base_url}/api/data/v4/batch"
-        _log_span_exporter = NeatlogsExporter(
-            api_key=resolved_key,
-            endpoint=logs_batch_endpoint,
-            workflow_name=resolved_workflow_name,
-            batch_size=batch_size,
-            flush_interval=flush_interval,
-            disable_export=disable_export_resolved,
+        from .core.log_exporter import NeatlogsLogFilter
+
+        logs_endpoint = f"{_base_url}/v1/logs"
+        _otlp_log_exporter = OTLPLogExporter(
+            endpoint=logs_endpoint,
+            headers={"x-api-key": resolved_key},
         )
         _log_provider = LoggerProvider(resource=resource)
+        # NeatlogsLogFilter drops external-module and no-trace records before
+        # BatchLogRecordProcessor batches and sends them via OTLPLogExporter.
         _log_provider.add_log_record_processor(
-            SimpleLogRecordProcessor(NeatlogsLogExporter(_log_span_exporter))
+            NeatlogsLogFilter(BatchLogRecordProcessor(_otlp_log_exporter))
         )
+        # Keep _log_span_exporter reference for flush/shutdown compatibility
+        _log_span_exporter = _otlp_log_exporter
         logs.set_logger_provider(_log_provider)
 
         try:
@@ -338,7 +339,7 @@ def init(
             if debug:
                 logger.debug(
                     "Neatlogs log capture enabled "
-                    f"(logging.* at {log_level.upper()}+, endpoint: {logs_batch_endpoint})"
+                    f"(logging.* at {log_level.upper()}+, endpoint: {logs_endpoint})"
                 )
         except ImportError:
             if debug:
@@ -403,11 +404,11 @@ def flush(timeout_millis: int = 30000) -> bool:
             logger.error(f"Error flushing metrics: {e}", exc_info=True)
             success = False
 
-    if _log_span_exporter:
+    if _log_provider:
         try:
-            logger.debug("Flushing log span exporter...")
-            _log_span_exporter.flush(timeout=timeout_millis / 1000.0)
-            logger.debug("Log span exporter flushed successfully")
+            logger.debug("Flushing log provider...")
+            _log_provider.force_flush(timeout_millis=timeout_millis)
+            logger.debug("Log provider flushed successfully")
         except Exception as e:
             logger.error(f"Error flushing logs: {e}", exc_info=True)
             success = False
@@ -465,15 +466,6 @@ def shutdown(timeout_millis: int = 30000) -> bool:
             logger.debug("Log provider shut down successfully")
         except Exception as e:
             logger.error(f"Error shutting down log provider: {e}", exc_info=True)
-            success = False
-
-    if _log_span_exporter:
-        try:
-            logger.debug("Shutting down log span exporter...")
-            _log_span_exporter.shutdown()
-            logger.debug("Log span exporter shut down successfully")
-        except Exception as e:
-            logger.error(f"Error shutting down log span exporter: {e}", exc_info=True)
             success = False
 
     try:

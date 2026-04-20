@@ -15,7 +15,7 @@ from typing import Any, Callable, Dict, Optional, TypeVar
 from opentelemetry import trace as otel_trace
 from opentelemetry.trace import Status, StatusCode
 
-from ._base import _decorate_span, _safe_json_dumps
+from ._base import _capture_code_attrs, _decorate_span, _safe_json_dumps
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +43,14 @@ def _create_mcp_tool_decorator(
         tool_name_attr = tool_name or func.__name__
         tracer = otel_trace.get_tracer(__name__)
 
+        # Capture code-location attrs once at decoration time so that MCP_TOOL
+        # spans carry the same ``code.*`` metadata as every other kind.
+        code_attrs = _capture_code_attrs(func)
+
+        def _apply_code_attrs(span):
+            for k, v in code_attrs.items():
+                span.set_attribute(k, v)
+
         if inspect.iscoroutinefunction(func):
 
             @functools.wraps(func)
@@ -54,6 +62,7 @@ def _create_mcp_tool_decorator(
                     span.set_attribute("mcp.tool.name", tool_name_attr)
                     span.set_attribute("openinference.span.kind", "MCP_TOOL")
                     span.set_attribute("tool.name", tool_name_attr)
+                    _apply_code_attrs(span)
 
                     if description:
                         span.set_attribute("tool.description", description)
@@ -114,6 +123,7 @@ def _create_mcp_tool_decorator(
                     span.set_attribute("mcp.tool.name", tool_name_attr)
                     span.set_attribute("openinference.span.kind", "MCP_TOOL")
                     span.set_attribute("tool.name", tool_name_attr)
+                    _apply_code_attrs(span)
 
                     if description:
                         span.set_attribute("tool.description", description)

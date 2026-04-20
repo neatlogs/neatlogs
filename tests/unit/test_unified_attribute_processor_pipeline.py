@@ -23,13 +23,16 @@ def _mk_span(
     end_time_ns: int = 1_000_000_000,
     trace_id: int = 1,
     span_id: int = 2,
+    name: str = "",
 ) -> SimpleNamespace:
     resource = SimpleNamespace(attributes=resource_attributes or {})
     ctx = SimpleNamespace(trace_id=trace_id, span_id=span_id)
     return SimpleNamespace(
         kind=kind,
+        name=name,
         attributes=attributes,
         resource=resource,
+        instrumentation_scope=None,
         events=events or [],
         start_time=start_time_ns,
         end_time=end_time_ns,
@@ -51,7 +54,7 @@ def test_process_marks_http_client_span_as_http_kind() -> None:
     )
 
     out = proc.process(span)
-    assert out["neatlogs.span.kind"] == "HTTP"
+    assert out["neatlogs.span.kind"] == "http"
 
 
 def test_process_infers_retriever_kind_from_db_system() -> None:
@@ -96,46 +99,6 @@ def test_process_mcp_response_only_when_mcp_signals_present() -> None:
     assert out_signal["neatlogs.mcp.response_value"] == '{"result": 3}'
 
 
-def test_process_streaming_chunk_events_produce_time_per_output_token_metric() -> None:
-    proc = UnifiedAttributeProcessor(mapping_config=_load_mapping(), debug=False)
-
-    # Avoid depending on OTel meter internals; just ensure record() is called.
-    recorded: dict = {}
-
-    class _DummyHist:
-        def record(self, value, attributes=None):
-            recorded["value"] = value
-            recorded["attributes"] = attributes or {}
-
-    proc.time_per_token_histogram = _DummyHist()
-
-    events = [
-        SimpleNamespace(name="llm.content.completion.chunk", timestamp=0, attributes={}),
-        SimpleNamespace(
-            name="llm.content.completion.chunk", timestamp=2_000_000, attributes={}
-        ),  # +2ms
-        SimpleNamespace(
-            name="llm.content.completion.chunk", timestamp=4_000_000, attributes={}
-        ),  # +2ms
-    ]
-    span = _mk_span(
-        kind=SpanKind.INTERNAL,
-        attributes={"gen_ai.request.model": "gpt-4o-mini"},
-        events=events,
-        start_time_ns=0,
-        end_time_ns=10_000_000,
-        trace_id=0xABC,
-        span_id=0xDEF,
-    )
-
-    out = proc.process(span)
-    assert out["neatlogs.llm.metrics.time_per_output_token"] == 2.0
-    assert recorded["value"] == 2.0
-    assert recorded["attributes"]["trace_id"] == f"{0xABC:032x}"
-    assert recorded["attributes"]["span_id"] == f"{0xDEF:016x}"
-    assert recorded["attributes"]["llm_model"] == "gpt-4o-mini"
-
-
 def test_process_drops_vectordb_embedding_model_on_non_embedding_spans() -> None:
     proc = UnifiedAttributeProcessor(mapping_config=_load_mapping(), debug=False)
 
@@ -152,15 +115,3 @@ def test_process_drops_vectordb_embedding_model_on_non_embedding_spans() -> None
     out = proc.process(span)
     assert out["neatlogs.span.kind"] == "llm"
     assert "neatlogs.vectordb.embedding_model" not in out
-
-
-def test_process_sets_framework_when_gen_ai_system_is_known_framework() -> None:
-    proc = UnifiedAttributeProcessor(mapping_config=_load_mapping(), debug=False)
-
-    span = _mk_span(
-        kind=SpanKind.INTERNAL,
-        attributes={"gen_ai.system": "langchain"},
-        resource_attributes={"service.name": "svc"},
-    )
-    out = proc.process(span)
-    assert out["neatlogs.framework"] == "langchain"

@@ -23,6 +23,41 @@ def _should_capture_content() -> bool:
     return v.lower() not in ("false", "0", "no")
 
 
+def _capture_code_attrs(func: Callable[..., Any]) -> Dict[str, Any]:
+    """
+    Capture static code-location attributes for a decorated function.
+
+    Uses ``inspect.unwrap(func)`` so that when ``@neatlogs.span`` is stacked on
+    top of other decorators (e.g. ``@retry``) that correctly set ``__wrapped__``
+    via ``functools.wraps``, the reported file / line / qualname point at the
+    user's source rather than at the inner decorator module.
+
+    All lookups are best-effort; built-ins and C-extension callables raise
+    ``TypeError`` / ``OSError`` and are silently skipped.
+    """
+    try:
+        target = inspect.unwrap(func)
+    except ValueError:
+        # Cycle in the __wrapped__ chain — fall back to the outer callable.
+        target = func
+
+    attrs: Dict[str, Any] = {}
+    try:
+        attrs["code.file.path"] = inspect.getfile(target)
+    except (TypeError, OSError):
+        pass
+    attrs["code.function.name"] = getattr(target, "__qualname__", target.__name__)
+    try:
+        _, lineno = inspect.getsourcelines(target)
+        attrs["code.line.number"] = lineno
+    except (TypeError, OSError):
+        pass
+    module = getattr(target, "__module__", None)
+    if module:
+        attrs["code.namespace"] = module
+    return attrs
+
+
 def _serialize_obj(obj: Any) -> Any:
     """
     Convert complex objects to JSON-serializable dicts.
@@ -156,21 +191,10 @@ def _decorate_span(
 
         # Capture code location once at decoration time — these are static
         # properties of the decorated function so there is no per-call overhead.
-        code_attrs: Dict[str, Any] = {}
-        try:
-            code_attrs["code.file.path"] = inspect.getfile(func)
-        except (TypeError, OSError):
-            pass
-        code_attrs["code.function.name"] = func.__qualname__
-        try:
-            _, lineno = inspect.getsourcelines(func)
-            code_attrs["code.line.number"] = lineno
-        except (TypeError, OSError):
-            pass
-        if func.__module__:
-            code_attrs["code.namespace"] = func.__module__
-
-        merged_attrs = {**(attributes or {}), **code_attrs}
+        # Caller-supplied ``attributes`` intentionally win on key collision so
+        # that users can override auto-captured values if needed.
+        code_attrs = _capture_code_attrs(func)
+        merged_attrs = {**code_attrs, **(attributes or {})}
 
         if inspect.iscoroutinefunction(func):
 

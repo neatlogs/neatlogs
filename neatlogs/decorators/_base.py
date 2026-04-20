@@ -31,41 +31,41 @@ def _serialize_obj(obj: Any) -> Any:
     # Handle None, primitives
     if obj is None or isinstance(obj, (str, int, float, bool)):
         return obj
-    
+
     # Handle lists and tuples
     if isinstance(obj, (list, tuple)):
         return [_serialize_obj(item) for item in obj]
-    
+
     # Handle dicts
     if isinstance(obj, dict):
         return {k: _serialize_obj(v) for k, v in obj.items()}
-    
+
     # Try common serialization methods (Pydantic, dataclasses, etc.)
-    for method in ['model_dump', 'dict', 'to_dict', 'to_json', 'as_dict']:
+    for method in ["model_dump", "dict", "to_dict", "to_json", "as_dict"]:
         if hasattr(obj, method):
             try:
                 result = getattr(obj, method)()
                 # to_json returns string, need to parse it
-                if method == 'to_json' and isinstance(result, str):
+                if method == "to_json" and isinstance(result, str):
                     return json.loads(result)
                 return _serialize_obj(result) if isinstance(result, dict) else result
             except Exception:
                 continue
-    
+
     # Try extracting __dict__ (works for many custom classes)
-    if hasattr(obj, '__dict__'):
+    if hasattr(obj, "__dict__"):
         try:
             # Filter out private attributes and methods
             obj_dict = {
-                k: _serialize_obj(v) 
-                for k, v in obj.__dict__.items() 
-                if not k.startswith('_') and not callable(v)
+                k: _serialize_obj(v)
+                for k, v in obj.__dict__.items()
+                if not k.startswith("_") and not callable(v)
             }
             if obj_dict:  # Only return if we got some data
                 return obj_dict
         except Exception:
             pass
-    
+
     # Last resort: convert to string
     return str(obj)
 
@@ -105,7 +105,7 @@ def _set_common_span_attrs(
     span.set_attribute("neatlogs.internal", True)
 
     span.set_attribute("openinference.span.kind", openinference_kind)
-    
+
     # Set neatlogs.span.kind for simplified view
     span.set_attribute("neatlogs.span.kind", openinference_kind.lower())
 

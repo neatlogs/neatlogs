@@ -228,7 +228,9 @@ class InstrumentationManager:
                     yield "llm.is_streaming", bool(stream)
                 if user := request_parameters.get("user"):
                     yield "llm.user", str(user)
-                headers = request_parameters.get("extra_headers") or request_parameters.get("headers")
+                headers = request_parameters.get("extra_headers") or request_parameters.get(
+                    "headers"
+                )
                 if headers:
                     yield "llm.headers", str(headers)
                 if reasoning_effort := request_parameters.get("reasoning_effort"):
@@ -320,7 +322,7 @@ class InstrumentationManager:
                     from anthropic.types import ThinkingBlock
 
                     thinking_index = 1
-                    for block in (getattr(response, "content", None) or []):
+                    for block in getattr(response, "content", None) or []:
                         if isinstance(block, ThinkingBlock) and block.thinking:
                             yield f"{LLM_OUTPUT_MESSAGES}.{thinking_index}.message.role", "thinking"
                             yield f"{LLM_OUTPUT_MESSAGES}.{thinking_index}.message.content", block.thinking
@@ -365,7 +367,10 @@ class InstrumentationManager:
                             elif hasattr(item, "candidates") and item.candidates:
                                 for candidate in item.candidates:
                                     if hasattr(candidate, "content") and candidate.content:
-                                        if hasattr(candidate.content, "parts") and candidate.content.parts:
+                                        if (
+                                            hasattr(candidate.content, "parts")
+                                            and candidate.content.parts
+                                        ):
                                             for part in candidate.content.parts:
                                                 if hasattr(part, "text") and part.text:
                                                     chunk_text += part.text
@@ -423,7 +428,11 @@ class InstrumentationManager:
                 candidates = getattr(response, "candidates", None) or []
                 for i, candidate in enumerate(candidates):
                     if finish_reason := getattr(candidate, "finish_reason", None):
-                        finish_str = finish_reason.name if hasattr(finish_reason, "name") else str(finish_reason)
+                        finish_str = (
+                            finish_reason.name
+                            if hasattr(finish_reason, "name")
+                            else str(finish_reason)
+                        )
                         yield f"llm.output_messages.{i}.message.finish_reason", finish_str
 
                     safety_ratings = getattr(candidate, "safety_ratings", None)
@@ -431,12 +440,22 @@ class InstrumentationManager:
                         try:
                             ratings_list = [
                                 {
-                                    "category": r.category.name if hasattr(r.category, "name") else str(r.category),
-                                    "probability": r.probability.name if hasattr(r.probability, "name") else str(r.probability),
+                                    "category": (
+                                        r.category.name
+                                        if hasattr(r.category, "name")
+                                        else str(r.category)
+                                    ),
+                                    "probability": (
+                                        r.probability.name
+                                        if hasattr(r.probability, "name")
+                                        else str(r.probability)
+                                    ),
                                 }
                                 for r in safety_ratings
                             ]
-                            yield f"llm.output_messages.{i}.message.safety_ratings", json.dumps(ratings_list)
+                            yield f"llm.output_messages.{i}.message.safety_ratings", json.dumps(
+                                ratings_list
+                            )
                         except Exception:
                             pass
 
@@ -452,13 +471,17 @@ class InstrumentationManager:
                     if thinking_texts:
                         thinking_slot = len(candidates) + i
                         yield f"llm.output_messages.{thinking_slot}.message.role", "thinking"
-                        yield f"llm.output_messages.{thinking_slot}.message.content", "\n".join(thinking_texts)
+                        yield f"llm.output_messages.{thinking_slot}.message.content", "\n".join(
+                            thinking_texts
+                        )
 
             _ResponseAttributesExtractor._get_attributes_from_generate_content = _patched
             _ResponseAttributesExtractor._NEATLOGS_PATCHED_RESPONSE_EXTRAS = True
 
             if self.debug:
-                logger.debug("Patched OI google_genai: response extras (finish_reason/safety_ratings/thinking)")
+                logger.debug(
+                    "Patched OI google_genai: response extras (finish_reason/safety_ratings/thinking)"
+                )
         except Exception as e:
             if self.debug:
                 logger.warning(f"⚠️  Failed to patch OI google_genai response extras: {e}")
@@ -531,16 +554,18 @@ class InstrumentationManager:
             if getattr(OpenInferenceTracer, "_NEATLOGS_PATCHED_SUPPRESS_INTERNAL", False):
                 return
 
-            _SUPPRESS_EXACT = frozenset({
-                "PromptTemplate",
-                "ChatPromptTemplate",
-                "RunnableLambda",
-                "RunnableSequence",
-                "ReActSingleInputOutputParser",
-                "StrOutputParser",
-                "JsonOutputParser",
-                "XMLOutputParser",
-            })
+            _SUPPRESS_EXACT = frozenset(
+                {
+                    "PromptTemplate",
+                    "ChatPromptTemplate",
+                    "RunnableLambda",
+                    "RunnableSequence",
+                    "ReActSingleInputOutputParser",
+                    "StrOutputParser",
+                    "JsonOutputParser",
+                    "XMLOutputParser",
+                }
+            )
             _SUPPRESS_PREFIXES = ("RunnableAssign", "RunnableParallel")
 
             def _should_suppress(name):
@@ -704,7 +729,9 @@ class InstrumentationManager:
                                 "neatlogs.crew.tasks_output",
                                 str(result.tasks_output),
                             )
-                        token_usage = getattr(result, "token_usage", None) or getattr(result, "usage_metrics", None)
+                        token_usage = getattr(result, "token_usage", None) or getattr(
+                            result, "usage_metrics", None
+                        )
                         if token_usage:
                             span.set_attribute(
                                 "neatlogs.crew.token_usage",
@@ -762,9 +789,7 @@ class InstrumentationManager:
                         try:
                             result = fn(**kwargs)
                             try:
-                                span.set_attribute(
-                                    "output.value", str(result)[:10000]
-                                )
+                                span.set_attribute("output.value", str(result)[:10000])
                             except Exception:
                                 pass
                             span.set_status(_SC.OK)
@@ -1169,7 +1194,9 @@ def _extract_structured_output_schema(response_format) -> Optional[str]:
             return None
 
         # Pydantic BaseModel subclass or instance
-        if hasattr(response_format, "model_json_schema") and callable(response_format.model_json_schema):
+        if hasattr(response_format, "model_json_schema") and callable(
+            response_format.model_json_schema
+        ):
             return _json.dumps(response_format.model_json_schema())
 
         # TypeAdapter or other pydantic construct

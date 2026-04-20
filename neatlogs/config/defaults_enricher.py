@@ -104,7 +104,7 @@ def enrich_invocation_parameters(
 
     # Use the new provider detection that considers platform/framework
     provider = get_effective_provider_for_defaults(merged_attrs)
-    
+
     # For EMBEDDING spans, use embedding.model_name; for LLM spans, use llm.model_name
     if span_kind == "EMBEDDING":
         model = merged_attrs.get("embedding.model_name", "")

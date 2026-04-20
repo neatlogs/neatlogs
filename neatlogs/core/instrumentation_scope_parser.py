@@ -10,7 +10,6 @@ Parses OpenTelemetry instrumentation_scope.name to extract:
 from typing import Dict, Optional, Tuple
 import re
 
-
 # Instrumentation scope patterns to framework/platform mappings
 SCOPE_PATTERNS = {
     # OpenInference instrumentations
@@ -22,7 +21,6 @@ SCOPE_PATTERNS = {
     "openinference.instrumentation.mistralai": {"provider": "mistral"},
     "openinference.instrumentation.cohere": {"provider": "cohere"},
     "openinference.instrumentation.groq": {"provider": "groq"},
-    
     # OpenInference frameworks
     "openinference.instrumentation.langchain": {"framework": "langchain"},
     "openinference.instrumentation.llama_index": {"framework": "llamaindex"},
@@ -30,7 +28,6 @@ SCOPE_PATTERNS = {
     "openinference.instrumentation.crewai": {"framework": "crewai"},
     "openinference.instrumentation.haystack": {"framework": "haystack"},
     "openinference.instrumentation.dspy": {"framework": "dspy"},
-    
     # OpenLLMetry (Traceloop) instrumentations
     "opentelemetry.instrumentation.openai": {"provider": "openai"},
     "opentelemetry.instrumentation.anthropic": {"provider": "anthropic"},
@@ -39,13 +36,11 @@ SCOPE_PATTERNS = {
     "opentelemetry.instrumentation.vertexai": {"provider": "vertex_ai", "platform": "vertex_ai"},
     "opentelemetry.instrumentation.cohere": {"provider": "cohere"},
     "opentelemetry.instrumentation.mistralai": {"provider": "mistral"},
-    
     # OpenLLMetry frameworks
     "opentelemetry.instrumentation.langchain": {"framework": "langchain"},
     "opentelemetry.instrumentation.llamaindex": {"framework": "llamaindex"},
     "opentelemetry.instrumentation.crewai": {"framework": "crewai"},
     "opentelemetry.instrumentation.haystack": {"framework": "haystack"},
-    
     # Native framework telemetry
     "haystack.telemetry": {"framework": "haystack"},
     "crewai": {"framework": "crewai"},
@@ -66,20 +61,20 @@ PROVIDER_VARIANTS = {
     "google": {
         "vertex": {"platform": "vertex_ai"},
         "vertexai": {"platform": "vertex_ai"},
-    }
+    },
 }
 
 
 def parse_instrumentation_scope(scope_name: Optional[str]) -> Dict[str, str]:
     """
     Parse instrumentation scope name to extract provider/framework/platform.
-    
+
     Args:
         scope_name: The instrumentation_scope.name from the span
-        
+
     Returns:
         Dictionary with detected: provider, framework, platform (if found)
-        
+
     Examples:
         "openinference.instrumentation.openai" → {"provider": "openai"}
         "openinference.instrumentation.langchain" → {"framework": "langchain"}
@@ -88,21 +83,21 @@ def parse_instrumentation_scope(scope_name: Optional[str]) -> Dict[str, str]:
     """
     if not scope_name:
         return {}
-    
+
     scope_lower = scope_name.lower()
-    
+
     # Direct exact match
     if scope_lower in SCOPE_PATTERNS:
         return SCOPE_PATTERNS[scope_lower].copy()
-    
+
     # Prefix match (handles versioned scopes like "openinference.instrumentation.openai.v1")
     for pattern, info in SCOPE_PATTERNS.items():
         if scope_lower.startswith(pattern):
             return info.copy()
-    
+
     # Fuzzy extraction as fallback
     result = {}
-    
+
     # Check for framework indicators
     if "langchain" in scope_lower:
         result["framework"] = "langchain"
@@ -114,7 +109,7 @@ def parse_instrumentation_scope(scope_name: Optional[str]) -> Dict[str, str]:
         result["framework"] = "haystack"
     elif "dspy" in scope_lower:
         result["framework"] = "dspy"
-    
+
     # Check for provider indicators
     if "openai" in scope_lower:
         result["provider"] = "openai"
@@ -138,30 +133,28 @@ def parse_instrumentation_scope(scope_name: Optional[str]) -> Dict[str, str]:
         result["provider"] = "cohere"
     elif "groq" in scope_lower:
         result["provider"] = "groq"
-    
+
     return result
 
 
 def enrich_with_scope_detection(
-    attrs: Dict[str, any],
-    scope_name: Optional[str],
-    parent_scope_name: Optional[str] = None
+    attrs: Dict[str, any], scope_name: Optional[str], parent_scope_name: Optional[str] = None
 ) -> None:
     """
     Enrich attributes with framework/platform/provider detected from instrumentation scope.
-    
+
     Modifies attrs in-place by adding:
     - neatlogs.instrumentation.name: Original scope name
     - neatlogs.instrumentation.version: Scope version (if available)
     - neatlogs.provider: LLM provider (e.g., "openai", "anthropic")
     - neatlogs.framework: Orchestration framework (e.g., "langchain", "llamaindex")
     - neatlogs.platform: Cloud platform (e.g., "bedrock", "vertex_ai", "azure_openai")
-    
+
     Logic:
     1. Parse current span's scope → gives provider/platform
     2. Parse parent span's scope (if provided) → gives orchestrating framework
     3. Only set attributes if not already present (explicit attrs take precedence)
-    
+
     Args:
         attrs: Span attributes dictionary to enrich
         scope_name: Current span's instrumentation_scope.name
@@ -170,28 +163,28 @@ def enrich_with_scope_detection(
     # Store original instrumentation scope info
     if scope_name:
         attrs.setdefault("neatlogs.instrumentation.name", scope_name)
-    
+
     # Parse current span's scope
     current_info = parse_instrumentation_scope(scope_name)
-    
+
     # Set provider (from current span's scope)
     if "provider" in current_info and "neatlogs.provider" not in attrs:
         attrs["neatlogs.provider"] = current_info["provider"]
-    
+
     # Set platform (from current span's scope)
     if "platform" in current_info and "neatlogs.platform" not in attrs:
         attrs["neatlogs.platform"] = current_info["platform"]
-    
+
     # Set framework - prioritize parent scope, fallback to current scope
     if parent_scope_name:
         parent_info = parse_instrumentation_scope(parent_scope_name)
         if "framework" in parent_info and "neatlogs.framework" not in attrs:
             attrs["neatlogs.framework"] = parent_info["framework"]
-    
+
     # If no framework from parent, check current scope
     if "neatlogs.framework" not in attrs and "framework" in current_info:
         attrs["neatlogs.framework"] = current_info["framework"]
-    
+
     # Cross-reference with gen_ai.system if available
     # gen_ai.system provides the actual LLM provider used
     gen_ai_system = attrs.get("gen_ai.system", "").lower()
@@ -210,11 +203,15 @@ def enrich_with_scope_detection(
         }
         if gen_ai_system in provider_map:
             attrs["neatlogs.provider"] = provider_map[gen_ai_system]
-    
+
     # Detect platform from model name patterns (e.g., "anthropic.claude-3-5-sonnet-v1:0" indicates Bedrock)
     llm_model = attrs.get("llm.model_name", "")
     if llm_model and "neatlogs.platform" not in attrs:
-        if llm_model.startswith("anthropic.") or llm_model.startswith("meta.") or llm_model.startswith("amazon."):
+        if (
+            llm_model.startswith("anthropic.")
+            or llm_model.startswith("meta.")
+            or llm_model.startswith("amazon.")
+        ):
             attrs["neatlogs.platform"] = "bedrock"
         elif "azure" in llm_model.lower():
             attrs["neatlogs.platform"] = "azure_openai"
@@ -223,12 +220,12 @@ def enrich_with_scope_detection(
 def get_effective_provider_for_pricing(attrs: Dict[str, any]) -> str:
     """
     Get the effective provider to use for pricing lookups.
-    
+
     Logic:
     1. Use neatlogs.platform if it's set (bedrock/vertex_ai/azure_openai)
     2. Otherwise use neatlogs.provider
     3. Fallback to gen_ai.system or llm.system
-    
+
     Returns:
         Provider string for pricing lookup (e.g., "openai", "bedrock", "anthropic")
     """
@@ -243,12 +240,12 @@ def get_effective_provider_for_pricing(attrs: Dict[str, any]) -> str:
         }
         if platform in platform_pricing_map:
             return platform_pricing_map[platform]
-    
+
     # Use detected provider
     provider = attrs.get("neatlogs.provider", "").lower()
     if provider:
         return provider
-    
+
     # Fallback to gen_ai.system or llm.system
     return attrs.get("gen_ai.system", attrs.get("llm.system", "")).lower()
 
@@ -256,10 +253,10 @@ def get_effective_provider_for_pricing(attrs: Dict[str, any]) -> str:
 def get_effective_provider_for_defaults(attrs: Dict[str, any]) -> str:
     """
     Get the effective provider to use for defaults lookups.
-    
+
     Similar to pricing, but platform-specific defaults are important
     (e.g., Bedrock Claude has different parameter constraints).
-    
+
     Returns:
         Provider string for defaults lookup (e.g., "openai", "bedrock", "anthropic")
     """

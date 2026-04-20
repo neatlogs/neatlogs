@@ -15,7 +15,7 @@ from .instrumentation_scope_parser import enrich_with_scope_detection
 #   <function BaseTool.<lambda> at 0x110107be0>
 #   <bound method Foo.bar at 0x7f...>
 #   <MyClass object at 0x...>
-_PYTHON_REPR_RE = re.compile(r'^<[A-Za-z_].*?\bat\s+0x[0-9a-fA-F]+>$')
+_PYTHON_REPR_RE = re.compile(r"^<[A-Za-z_].*?\bat\s+0x[0-9a-fA-F]+>$")
 
 # Maps neatlogs.provider values → neatlogs.llm.system
 # System values are from OpenInferenceLLMSystemValues (openai/anthropic/cohere/mistralai/vertexai)
@@ -24,14 +24,14 @@ _PYTHON_REPR_RE = re.compile(r'^<[A-Za-z_].*?\bat\s+0x[0-9a-fA-F]+>$')
 # model vendor (e.g. "anthropic" for Claude) which is more informative than "aws".
 _PROVIDER_TO_SYSTEM: Dict[str, str] = {
     "openai": "openai",
-    "azure": "openai",       # Azure OpenAI uses OpenAI's system
+    "azure": "openai",  # Azure OpenAI uses OpenAI's system
     "azure_openai": "openai",
     "anthropic": "anthropic",
     "cohere": "cohere",
     "mistral": "mistralai",  # OI LLMSystemValues.MISTRALAI = "mistralai"
     "mistralai": "mistralai",
     "google": "google",
-    "vertex_ai": "vertexai", # OI LLMSystemValues.VERTEXAI = "vertexai"
+    "vertex_ai": "vertexai",  # OI LLMSystemValues.VERTEXAI = "vertexai"
     "groq": "groq",
     "xai": "xai",
     "deepseek": "deepseek",
@@ -69,7 +69,7 @@ class UnifiedAttributeProcessor:
         self.mapping = mapping_config
         self.debug = debug
         self.logger = get_logger()
-        
+
         # Enable debug logging if debug mode is on
         if self.debug:
             self.logger.setLevel(logging.DEBUG)
@@ -100,10 +100,10 @@ class UnifiedAttributeProcessor:
     def process(self, span: ReadableSpan) -> Dict[str, Any]:
         res_attrs = dict(span.resource.attributes) if span.resource else {}
         attrs = {**res_attrs, **dict(span.attributes)}
-        
+
         # Add span name for downstream processing
         attrs["_span_name"] = span.name
-        
+
         # Extract framework/platform/provider from instrumentation scope
         scope_name = span.instrumentation_scope.name if span.instrumentation_scope else None
         # TODO: In future, track parent spans to get parent_scope_name for better framework detection
@@ -141,7 +141,7 @@ class UnifiedAttributeProcessor:
 
         unified = self._apply_namespace_mapping(attrs)
         self._add_intermediate_steps(unified)
-        
+
         # 🔥 CRITICAL: Filter out massive embedding vectors before export
         # Embedding vectors can be 4MB+ (1000 embeddings × 4096 dimensions), causing:
         # - Kafka message size limits (1MB default)
@@ -150,7 +150,7 @@ class UnifiedAttributeProcessor:
         span_kind = (unified.get("neatlogs.span.kind") or "").lower()
         if span_kind in ("embedding", "vector_store"):
             unified = self._filter_embedding_vectors(unified)
-        
+
         return unified
 
     def _normalize_conventions(self, span: ReadableSpan, attrs: Dict[str, Any]) -> Dict[str, Any]:
@@ -165,7 +165,7 @@ class UnifiedAttributeProcessor:
         self._add_crewai_token_usage_fallback(attrs)
         self._add_reasoning_tokens_from_output_value(attrs)
         self._add_crewai_kickoff_telemetry(attrs)
-        
+
         # Extract tool calls from output messages (OpenInference format)
         tool_calls: Dict[int, Dict[str, Any]] = {}
         oi_tool_re = re.compile(
@@ -206,7 +206,7 @@ class UnifiedAttributeProcessor:
 
         for k in keys_to_remove:
             attrs.pop(k, None)
-        
+
         # Extract tool_call_id and name from input messages (tool response messages)
         input_msg_tool_re = re.compile(
             r"^llm\.input_messages\.(\d+)\.message\.(tool_call_id|name)$"
@@ -217,7 +217,7 @@ class UnifiedAttributeProcessor:
                 msg_idx, field = m.groups()
                 # Map to new structured format
                 attrs[f"llm.input_messages.{msg_idx}.{field}"] = v
-        
+
         # Extract invalid_tool_calls from output (LangChain AIMessage often includes this)
         # Look for patterns like: llm.output or gen_ai.completion containing invalid_tool_calls
         llm_output = attrs.get("llm.output") or attrs.get("output.value")
@@ -235,7 +235,7 @@ class UnifiedAttributeProcessor:
                             attrs["llm.invalid_tool_calls"] = json.dumps(invalid_calls)
             except (json.JSONDecodeError, TypeError, AttributeError):
                 pass
-        
+
         # Extract tool_call_id from tool.output (for TOOL kind spans)
         # This provides structured field that Kafka consumer currently extracts from JSON
         tool_output = attrs.get("tool.output") or attrs.get("output.value")
@@ -302,7 +302,7 @@ class UnifiedAttributeProcessor:
         if "openinference.span.kind" not in attrs:
             db_system = attrs.get("db.system")
             db_operation = attrs.get("db.operation", "").lower()
-          
+
             if isinstance(db_system, str) and db_system.lower() in {
                 "chroma",
                 "chromadb",
@@ -318,20 +318,39 @@ class UnifiedAttributeProcessor:
             }:
                 # Use db.operation (if available) or span name to distinguish RETRIEVER vs VECTOR_STORE
                 span_name = attrs.get("_span_name", "").lower()
-                
+
                 # Read operations (retrieval)
                 retrieval_ops = [
-                    "query", "search", "get", "fetch", "find",
-                    "retrieve", "scroll", "peek", "discover", "recommend",
-                    "aggregate", "hybrid_search", "select"
+                    "query",
+                    "search",
+                    "get",
+                    "fetch",
+                    "find",
+                    "retrieve",
+                    "scroll",
+                    "peek",
+                    "discover",
+                    "recommend",
+                    "aggregate",
+                    "hybrid_search",
+                    "select",
                 ]
-                
+
                 # Write operations
                 write_ops = [
-                    "upsert", "insert", "add", "update", "delete", "create",
-                    "drop", "put", "set", "upload", "index"
+                    "upsert",
+                    "insert",
+                    "add",
+                    "update",
+                    "delete",
+                    "create",
+                    "drop",
+                    "put",
+                    "set",
+                    "upload",
+                    "index",
                 ]
-                
+
                 # Check db.operation first (most reliable)
                 is_retrieval = False
                 if db_operation:
@@ -340,7 +359,7 @@ class UnifiedAttributeProcessor:
                 else:
                     # Fallback to span name
                     is_retrieval = any(op in span_name for op in retrieval_ops)
-                
+
                 if is_retrieval:
                     attrs["openinference.span.kind"] = "RETRIEVER"
                 else:
@@ -437,10 +456,9 @@ class UnifiedAttributeProcessor:
             # Only skip output if it's a REAL embedding operation from OpenLLMetry
             # (has actual embedding attributes, not just user's @span(kind="EMBEDDING"))
             has_embedding_attrs = any(
-                k.startswith("embedding.") or k.startswith("gen_ai.embedding")
-                for k in attrs.keys()
+                k.startswith("embedding.") or k.startswith("gen_ai.embedding") for k in attrs.keys()
             )
-            
+
             if has_embedding_attrs:
                 attrs["neatlogs._skip_output_value"] = True
 
@@ -530,16 +548,12 @@ class UnifiedAttributeProcessor:
                 pass
 
         if "crew_number_of_tasks" not in attrs:
-            count = self._coerce_collection_count(
-                attrs.get("crew_tasks")
-            )
+            count = self._coerce_collection_count(attrs.get("crew_tasks"))
             if count is not None:
                 attrs["crew_number_of_tasks"] = count
 
         if "crew_number_of_agents" not in attrs:
-            count = self._coerce_collection_count(
-                attrs.get("crew_agents")
-            )
+            count = self._coerce_collection_count(attrs.get("crew_agents"))
             if count is not None:
                 attrs["crew_number_of_agents"] = count
 
@@ -926,19 +940,24 @@ class UnifiedAttributeProcessor:
             else:
                 # Fallback: infer from span name
                 from ..span_kinds.mapping import infer_span_kind_from_name
+
                 span_name = attrs.get("_span_name", "")  # Will be set by span processor
                 if span_name:
                     inferred_kind = infer_span_kind_from_name(span_name)
                     unified["neatlogs.span.kind"] = inferred_kind.lower()
-        
+
         # Detect RERANKER operations from llm.request.type or gen_ai.operation.name
         llm_request_type = attrs.get("llm.request.type", "").lower()
         gen_ai_operation = attrs.get("gen_ai.operation.name", "").lower()
         span_name_lower = attrs.get("_span_name", "").lower()
-        
-        if llm_request_type == "rerank" or gen_ai_operation == "rerank" or "rerank" in span_name_lower:
+
+        if (
+            llm_request_type == "rerank"
+            or gen_ai_operation == "rerank"
+            or "rerank" in span_name_lower
+        ):
             unified["neatlogs.span.kind"] = "reranker"
-        
+
         span_kind = (
             attrs.get("neatlogs.span.kind") or attrs.get("openinference.span.kind") or ""
         ).lower()
@@ -987,9 +1006,7 @@ class UnifiedAttributeProcessor:
         # --- neatlogs.llm.system ---
         if not unified.get("neatlogs.llm.system"):
             provider = (
-                unified.get("neatlogs.llm.provider")
-                or unified.get("neatlogs.provider")
-                or ""
+                unified.get("neatlogs.llm.provider") or unified.get("neatlogs.provider") or ""
             ).lower()
             system = _PROVIDER_TO_SYSTEM.get(provider, "")
             if system:
@@ -1097,14 +1114,16 @@ class UnifiedAttributeProcessor:
                         # Skip output.value if _skip_output_value flag is set (for real embedding operations)
                         if src_key == "output.value":
                             skip_flag = source.get("_skip_output_value")
-                            
+
                             if skip_flag:
                                 if self.debug:
                                     span_name = source.get("_span_name", "unknown")
-                                    self.logger.debug(f"[AttributeProcessor] Skipping output.value for '{span_name}' due to _skip_output_value flag")
+                                    self.logger.debug(
+                                        f"[AttributeProcessor] Skipping output.value for '{span_name}' due to _skip_output_value flag"
+                                    )
                                 consumed.add(src_key)  # Mark as consumed but don't copy value
                                 break
-                        
+
                         val = source[src_key]
                         if "values" in config:
                             val = config["values"].get(val, val)
@@ -1187,11 +1206,11 @@ class UnifiedAttributeProcessor:
 
             if not found_any:
                 break
-    
+
     def _filter_embedding_vectors(self, attrs: Dict[str, Any]) -> Dict[str, Any]:
         """
         Filter out massive embedding vectors that cause memory/network issues.
-        
+
         Removes:
         - embedding.embeddings.*.embedding.vector (4KB-4MB per embedding)
         - Any array with >1000 elements (likely a vector)
@@ -1203,13 +1222,15 @@ class UnifiedAttributeProcessor:
                 if self.debug:
                     self.logger.debug(f"[FILTER] Dropped embedding vector key: {key}")
                 continue
-            
+
             # Skip large arrays (likely embedding vectors)
             if isinstance(value, (list, tuple)) and len(value) > 1000:
                 if self.debug:
-                    self.logger.debug(f"[FILTER] Dropped large array ({len(value)} elements): {key}")
+                    self.logger.debug(
+                        f"[FILTER] Dropped large array ({len(value)} elements): {key}"
+                    )
                 continue
-            
+
             filtered[key] = value
-        
+
         return filtered

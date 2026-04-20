@@ -56,6 +56,7 @@ def is_debug_enabled() -> bool:
     """Return True if neatlogs was initialized with debug=True."""
     return _debug_mode
 
+
 _DEFAULT_MAX_SPAN_ATTRIBUTES = 10_000
 
 
@@ -86,7 +87,6 @@ def _span_limits_for_capture_everything() -> SpanLimits:
     if span_limit.strip() or general_limit.strip():
         return SpanLimits()
     return SpanLimits(max_span_attributes=_DEFAULT_MAX_SPAN_ATTRIBUTES)
-
 
 
 def init(
@@ -201,6 +201,7 @@ def init(
             logger.debug(f"Auto-generated session_id: {final_session_id}")
 
     from urllib.parse import urlparse as _urlparse
+
     _parsed = _urlparse(endpoint)
     _base_url = f"{_parsed.scheme}://{_parsed.netloc}"
 

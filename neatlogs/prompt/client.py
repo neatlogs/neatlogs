@@ -87,7 +87,10 @@ class PromptHandle:
             return _render_template(self._prompt.content, variables)
 
         if self._prompt.messages:
-            rendered = [_render_template(message.get("content", ""), variables) for message in self._prompt.messages]
+            rendered = [
+                _render_template(message.get("content", ""), variables)
+                for message in self._prompt.messages
+            ]
             return "\n\n".join(part for part in rendered if part)
 
         return ""
@@ -226,7 +229,9 @@ class PromptClient:
         labels is required — specify at least one label (e.g. "production", "staging").
         """
         if not labels:
-            raise ValueError("labels is required. Specify at least one label, e.g. labels=['production'].")
+            raise ValueError(
+                "labels is required. Specify at least one label, e.g. labels=['production']."
+            )
         if type == "text" and not isinstance(prompt, str):
             raise ValueError("For type='text', prompt must be a string.")
         if type == "chat" and not isinstance(prompt, list):
@@ -262,7 +267,9 @@ class PromptClient:
         new_labels is required — specify at least one label (e.g. new_labels=["production"]).
         """
         if not new_labels:
-            raise ValueError("new_labels is required. Specify at least one label, e.g. new_labels=['production'].")
+            raise ValueError(
+                "new_labels is required. Specify at least one label, e.g. new_labels=['production']."
+            )
 
         listing = self.list_prompts(name=name)
         prompt_id: Optional[str] = None
@@ -350,7 +357,9 @@ class PromptClient:
         if tags is not None:
             body["tags"] = list(tags)
 
-        return self._request_json(method="POST", path="/api/prompt-playground/save-as-version", json_body=body)
+        return self._request_json(
+            method="POST", path="/api/prompt-playground/save-as-version", json_body=body
+        )
 
     # ----------------
     # Internal helpers
@@ -377,6 +386,7 @@ class PromptClient:
         try:
             from opentelemetry.context import attach, detach, set_value
             from opentelemetry.instrumentation.utils import _SUPPRESS_INSTRUMENTATION_KEY
+
             _token = attach(set_value(_SUPPRESS_INSTRUMENTATION_KEY, True))
         except Exception:
             _token = None
@@ -394,6 +404,7 @@ class PromptClient:
             if _token is not None:
                 try:
                     from opentelemetry.context import detach
+
                     detach(_token)
                 except Exception:
                     pass
@@ -540,7 +551,9 @@ def list_prompts(
     limit: int = 100,
     offset: int = 0,
 ) -> Dict[str, Any]:
-    return _get_shared_client().list_prompts(name=name, source=source, label=label, limit=limit, offset=offset)
+    return _get_shared_client().list_prompts(
+        name=name, source=source, label=label, limit=limit, offset=offset
+    )
 
 
 def create_prompt(
@@ -554,8 +567,13 @@ def create_prompt(
     commit_message: Optional[str] = None,
 ) -> PromptHandle:
     return _get_shared_client().create_prompt(
-        name=name, prompt=prompt, type=type, labels=labels,
-        tags=tags, config=config, commit_message=commit_message,
+        name=name,
+        prompt=prompt,
+        type=type,
+        labels=labels,
+        tags=tags,
+        config=config,
+        commit_message=commit_message,
     )
 
 
@@ -579,8 +597,13 @@ def save_as_version(
     tags: Optional[Sequence[str]] = None,
 ) -> Dict[str, Any]:
     return _get_shared_client().save_as_version(
-        prompt_name=prompt_name, content=content, messages=messages,
-        config=config, commit_message=commit_message, labels=labels, tags=tags,
+        prompt_name=prompt_name,
+        content=content,
+        messages=messages,
+        config=config,
+        commit_message=commit_message,
+        labels=labels,
+        tags=tags,
     )
 
 

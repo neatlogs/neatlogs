@@ -16,10 +16,10 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 import neatlogs
 from neatlogs.decorators._base import _decorate_span
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_provider():
     exporter = InMemorySpanExporter()
@@ -32,10 +32,12 @@ def _make_provider():
 # Tests
 # ---------------------------------------------------------------------------
 
+
 class TestCodeParamsOnDecoratedSpans:
     def test_sync_decorator_sets_code_file_path(self):
         provider, exporter = _make_provider()
         from opentelemetry import trace
+
         trace.set_tracer_provider(provider)
 
         @_decorate_span(openinference_kind="CHAIN")
@@ -53,6 +55,7 @@ class TestCodeParamsOnDecoratedSpans:
     def test_sync_decorator_sets_code_function_name(self):
         provider, exporter = _make_provider()
         from opentelemetry import trace
+
         trace.set_tracer_provider(provider)
 
         @_decorate_span(openinference_kind="TOOL")
@@ -64,18 +67,24 @@ class TestCodeParamsOnDecoratedSpans:
         spans = exporter.get_finished_spans()
         assert len(spans) == 1
         attrs = spans[0].attributes
-        assert attrs.get("code.function.name") == "TestCodeParamsOnDecoratedSpans.test_sync_decorator_sets_code_function_name.<locals>.my_tool_function"
+        assert (
+            attrs.get("code.function.name")
+            == "TestCodeParamsOnDecoratedSpans.test_sync_decorator_sets_code_function_name.<locals>.my_tool_function"
+        )
 
     def test_sync_decorator_sets_code_line_number(self):
         provider, exporter = _make_provider()
         from opentelemetry import trace
+
         trace.set_tracer_provider(provider)
 
         @_decorate_span(openinference_kind="AGENT")
         def my_agent():
             pass
 
-        expected_lineno = inspect.getsourcelines(my_agent.__wrapped__ if hasattr(my_agent, "__wrapped__") else my_agent)[1]
+        expected_lineno = inspect.getsourcelines(
+            my_agent.__wrapped__ if hasattr(my_agent, "__wrapped__") else my_agent
+        )[1]
 
         my_agent()
 
@@ -89,6 +98,7 @@ class TestCodeParamsOnDecoratedSpans:
     def test_sync_decorator_sets_code_namespace(self):
         provider, exporter = _make_provider()
         from opentelemetry import trace
+
         trace.set_tracer_provider(provider)
 
         @_decorate_span(openinference_kind="WORKFLOW")
@@ -105,6 +115,7 @@ class TestCodeParamsOnDecoratedSpans:
     def test_async_decorator_sets_code_attributes(self):
         provider, exporter = _make_provider()
         from opentelemetry import trace
+
         trace.set_tracer_provider(provider)
 
         @_decorate_span(openinference_kind="CHAIN")
@@ -125,6 +136,7 @@ class TestCodeParamsOnDecoratedSpans:
         """User-supplied attributes should not be overwritten by code params."""
         provider, exporter = _make_provider()
         from opentelemetry import trace
+
         trace.set_tracer_provider(provider)
 
         @_decorate_span(openinference_kind="TOOL", attributes={"custom.key": "custom_value"})
@@ -145,6 +157,7 @@ class TestCodeParamsOnDecoratedSpans:
         """Spans created without the neatlogs decorator should not have code params."""
         provider, exporter = _make_provider()
         from opentelemetry import trace
+
         trace.set_tracer_provider(provider)
 
         tracer = trace.get_tracer("test")

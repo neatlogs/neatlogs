@@ -9,9 +9,9 @@ Primary API:
 
 Quick Start:
     >>> from neatlogs import init, span, trace, PromptTemplate
-    >>> 
+    >>>
     >>> init(api_key="...", instrumentations=["openai"])
-    >>> 
+    >>>
     >>> @span(kind="WORKFLOW")
     >>> def my_workflow(query: str):
     ...     return process(query)

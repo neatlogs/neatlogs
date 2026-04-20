@@ -110,8 +110,8 @@ class NeatlogsLogExporter(LogRecordExporter):
             "openinference.span.kind": "LOG",
             "neatlogs.span.kind": "log",
             "neatlogs.internal": True,
-            "neatlogs.input.value": body,   # kafka consumer maps this → input_value column
-            "input.value": body,            # OpenInference standard key (kept for compatibility)
+            "neatlogs.input.value": body,  # kafka consumer maps this → input_value column
+            "input.value": body,  # OpenInference standard key (kept for compatibility)
             "input.mime_type": "text/plain",
             "log.level": level,
         }

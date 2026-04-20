@@ -51,3 +51,7 @@ neatlogs/examples/
 e2e_test/
 DEPENDENCIES.md
 examples/sdk_examples/support_bot/
+
+# Vorflux agent artifacts
+.vorflux/
+smoke_test.py

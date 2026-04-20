@@ -1,15 +1,15 @@
+import ast
 import json
 import logging
 import re
-import ast
 from typing import Any, Dict, List, Optional
 
 from opentelemetry import metrics
 from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.trace import SpanKind
 
-from .logger import get_logger
 from .instrumentation_scope_parser import enrich_with_scope_detection
+from .logger import get_logger
 
 # Matches Python object repr strings like:
 #   <function BaseTool.<lambda> at 0x110107be0>

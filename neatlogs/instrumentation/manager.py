@@ -11,8 +11,8 @@ from typing import List, Optional, Set
 from opentelemetry.instrumentation.threading import ThreadingInstrumentor
 from opentelemetry.sdk.trace import TracerProvider
 
-from .registry import INSTRUMENTATION_REGISTRY, get_libraries_by_tag
 from .http_context_propagation import patch_http_context_propagation
+from .registry import INSTRUMENTATION_REGISTRY, get_libraries_by_tag
 
 logger = logging.getLogger(__name__)
 
@@ -352,9 +352,8 @@ class InstrumentationManager:
         the stream, or GC collects without aclose()), the span is never ended.
         """
         try:
-            from opentelemetry import trace as trace_api
-
             from openinference.instrumentation.google_genai._stream import _Stream
+            from opentelemetry import trace as trace_api
 
             async def _fixed_aiter(self):
                 status = trace_api.Status(status_code=trace_api.StatusCode.OK)
@@ -549,7 +548,8 @@ class InstrumentationManager:
         """
         try:
             from openinference.instrumentation.langchain._tracer import OpenInferenceTracer
-            from opentelemetry import trace as trace_api, context as context_api
+            from opentelemetry import context as context_api
+            from opentelemetry import trace as trace_api
 
             if getattr(OpenInferenceTracer, "_NEATLOGS_PATCHED_SUPPRESS_INTERNAL", False):
                 return
@@ -771,7 +771,9 @@ class InstrumentationManager:
             def _make_tool_wrapper(fn, tool_name, _tracer):
                 def _wrapped_tool(**kwargs):
                     import json as _json
-                    from opentelemetry.trace import SpanKind as _SK, StatusCode as _SC
+
+                    from opentelemetry.trace import SpanKind as _SK
+                    from opentelemetry.trace import StatusCode as _SC
 
                     with _tracer.start_as_current_span(
                         tool_name,

@@ -7,8 +7,8 @@ Parses OpenTelemetry instrumentation_scope.name to extract:
 - Platform: Cloud platform (bedrock, vertex_ai, azure_openai, etc.)
 """
 
-from typing import Dict, Optional, Tuple
 import re
+from typing import Dict, Optional, Tuple
 
 # Instrumentation scope patterns to framework/platform mappings
 SCOPE_PATTERNS = {

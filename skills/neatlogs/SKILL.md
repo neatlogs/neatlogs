@@ -31,12 +31,12 @@ pip install neatlogs[google-genai]
 pip install neatlogs[langchain]
 pip install neatlogs[langchain,langgraph]
 pip install neatlogs[crewai]
-pip install neatlogs[crewai,google-genai,litellm]
+pip install neatlogs[crewai,google-genai,litellm,azure-ai-inference]
 ```
 
 Combine multiple extras with commas: `pip install neatlogs[crewai,google-genai,litellm]`
 
-Full list of available extras: `openai`, `anthropic`, `langchain`, `langgraph`, `crewai`, `litellm`, `google-genai`, `bedrock`, `groq`, `guardrails`, `mcp`, `vertexai`
+Full list of available extras: `openai`, `anthropic`, `langchain`, `langgraph`, `crewai`, `litellm`, `google-genai`, `bedrock`, `groq`, `guardrails`, `mcp`, `vertexai`, `azure-ai-inference`
 
 Requires Python >= 3.10, < 3.14. Notable version pins: `crewai >= 1.9.3`.
 
@@ -150,6 +150,9 @@ neatlogs.shutdown()
 | `flush_interval` | `float` | `5.0` | Seconds between batch flushes |
 | `batch_size` | `int` | `100` | Max spans per batch |
 | `debug` | `bool` | `False` | Enable verbose logging to stderr |
+| `disable_export` | `bool` | `False` | Disable span export (for local testing without sending to dashboard) |
+| `capture_logs` | `bool` | `False` | Auto-capture stdlib `logging` calls as LOG spans inside active span contexts |
+| `log_level` | `str` | `"INFO"` | Minimum log level to capture when `capture_logs=True` |
 | `pii_enabled` | `Optional[bool]` | `None` | Override the team-level server-side PII redaction setting. `True` = enable, `False` = disable, `None` (default) = use the team setting in the NeatLogs dashboard |
 | `pii_span_types` | `list[str]` | `None` | Span types for PII redaction (e.g. `["LLM", "TOOL"]`) |
 | `mask` | `callable` | `None` | Client-side mask function `(span_dict) -> span_dict` |
@@ -168,6 +171,7 @@ Pass these string values in the `instrumentations=[]` list to `neatlogs.init()`.
 | `anthropic` | Anthropic | |
 | `google_genai` | Google Generative AI (`google.genai`) | Client must be created **after** `init()` — see troubleshooting. Preferred key for the `google-genai` SDK |
 | `google_generativeai` | Google Generative AI (`google.generativeai`) | For the older `google-generativeai` SDK |
+| `azure_ai_inference` | Azure AI Inference | |
 | `litellm` | LiteLLM | |
 | `bedrock` | AWS Bedrock | |
 | `groq` | Groq | |

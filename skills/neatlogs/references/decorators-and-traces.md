@@ -140,7 +140,7 @@ async def get_weather(location: str) -> str:
 
 ### `capture_input` / `capture_output`
 
-Default is `True` for both. Set to `False` to suppress serialization — useful for large payloads or sensitive data. The `NEATLOGS_TRACE_CONTENT` env var can be set to `"false"` to globally disable content capture.
+Default is `True` for both. Set to `False` to suppress serialization — useful for large payloads or sensitive data.
 
 ### Complete Multi-Agent Example
 
@@ -307,7 +307,7 @@ Manual attributes:
 | `neatlogs.vectordb.vector_dimension` | `int` | Dimension of stored vectors |
 | `neatlogs.vectordb.similarity_algorithm` | `str` | Distance metric (e.g. `cosine`, `dot_product`) |
 
-> **Note**: Supported vector DBs (Chroma, Pinecone, Qdrant, Weaviate, Milvus, Elasticsearch, Redis, Marqo) auto-create `VECTOR_STORE` spans via `instrumentations`. Only use manual spans for custom implementations.
+> **Note**: There is no `instrumentations=[]` key that auto-instruments vector DBs directly. Use `trace("op", kind="VECTOR_STORE")` with manual attributes for all vector DB spans.
 
 ```python
 import neatlogs

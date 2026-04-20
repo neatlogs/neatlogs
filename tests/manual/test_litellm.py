@@ -26,11 +26,13 @@ Expected output (no errors):
     PASS
 """
 
+import os
 import neatlogs
 from neatlogs import PromptTemplate, UserPromptTemplate
 
 neatlogs.init(
     api_key=None,  # reads NEATLOGS_API_KEY from env
+    endpoint=os.environ.get("NEATLOGS_ENDPOINT", "https://staging-cloud.neatlogs.com/api/data/v4/batch"),
     workflow_name="test-litellm",
     instrumentations=["litellm"],
 )
@@ -46,8 +48,17 @@ def run(query: str) -> str:
     with neatlogs.trace("llm_call", kind="LLM",
                         prompt_template=sys_tpl,
                         user_prompt_template=user_tpl):
-        msgs = sys_tpl.compile() + user_tpl.compile(query=query)
-        response = completion(model="gpt-4o", messages=msgs)
+        msgs = [
+            {"role": "system", "content": sys_tpl.compile()},
+            {"role": "user", "content": user_tpl.compile(query=query)},
+        ]
+        response = completion(
+            model="azure/gpt-5-nano",
+            messages=msgs,
+            api_key=os.environ.get("AZURE_API_KEY"),
+            api_base=os.environ.get("AZURE_API_BASE"),
+            api_version=os.environ.get("AZURE_API_VERSION", "2025-01-01-preview"),
+        )
     return response.choices[0].message.content
 
 

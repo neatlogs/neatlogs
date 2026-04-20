@@ -1032,6 +1032,27 @@
         }
       }
     },
+    "code": {
+      "description": "OTel code source location attributes (set by @neatlogs.span decorator)",
+      "mappings": {
+        "file_path": {
+          "sources": ["code.file.path"],
+          "target": "neatlogs.code.file.path"
+        },
+        "function_name": {
+          "sources": ["code.function.name"],
+          "target": "neatlogs.code.function.name"
+        },
+        "line_number": {
+          "sources": ["code.line.number"],
+          "target": "neatlogs.code.line.number"
+        },
+        "namespace": {
+          "sources": ["code.namespace"],
+          "target": "neatlogs.code.namespace"
+        }
+      }
+    },
     "keep_as_is": {
       "description": "OpenTelemetry standard attributes to keep unchanged",
       "attributes": [
@@ -1049,14 +1070,17 @@
         "service.version",
         "telemetry.sdk.name",
         "telemetry.sdk.version",
-        "telemetry.sdk.language"
+        "telemetry.sdk.language",
+        "code.file.path",
+        "code.function.name",
+        "code.line.number",
+        "code.namespace"
       ]
     },
     "ignore": {
       "description": "Attributes to ignore/drop during ingestion",
       "patterns": [
         "telemetry.distro.*",
-        "code.*",
         "exception.*"
       ]
     }

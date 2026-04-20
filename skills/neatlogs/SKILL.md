@@ -218,7 +218,6 @@ For deep dives, see the companion reference files:
 |---|---|
 | `NEATLOGS_API_KEY` | API key (alternative to `api_key` param) |
 | `NEATLOGS_DISABLE_EXPORT` | Set to `"true"` to disable span export |
-| `NEATLOGS_TRACE_CONTENT` | Set to `"false"` to globally disable input/output content capture on spans |
 
 ---
 

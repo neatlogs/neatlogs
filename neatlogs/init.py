@@ -384,6 +384,19 @@ def flush(timeout_millis: int = 30000) -> bool:
     global _tracer_provider, _meter_provider, _log_span_exporter
     success = True
 
+    # Log provider must flush BEFORE tracer provider: the tracer batch includes
+    # the neatlogs.trace.complete marker which triggers server-side finalization.
+    # Flushing logs first guarantees LOG records reach ClickHouse before the
+    # completion marker fires the trace-finalizer query.
+    if _log_provider:
+        try:
+            logger.debug("Flushing log provider...")
+            _log_provider.force_flush(timeout_millis=timeout_millis)
+            logger.debug("Log provider flushed successfully")
+        except Exception as e:
+            logger.error(f"Error flushing logs: {e}", exc_info=True)
+            success = False
+
     if _tracer_provider:
         try:
             logger.debug("Flushing tracer provider...")
@@ -402,15 +415,6 @@ def flush(timeout_millis: int = 30000) -> bool:
             logger.debug("Meter provider flushed successfully")
         except Exception as e:
             logger.error(f"Error flushing metrics: {e}", exc_info=True)
-            success = False
-
-    if _log_provider:
-        try:
-            logger.debug("Flushing log provider...")
-            _log_provider.force_flush(timeout_millis=timeout_millis)
-            logger.debug("Log provider flushed successfully")
-        except Exception as e:
-            logger.error(f"Error flushing logs: {e}", exc_info=True)
             success = False
 
     return success

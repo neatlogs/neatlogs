@@ -10,6 +10,8 @@ done server-side by the /v1/logs OTLP receiver.
 
 from __future__ import annotations
 
+import json
+import os
 import sys
 from typing import TYPE_CHECKING
 
@@ -20,6 +22,9 @@ if TYPE_CHECKING:
 
 # Python 3.10+ exposes stdlib module names directly; fall back to empty set on older versions.
 _STDLIB_MODULE_NAMES: frozenset = getattr(sys, "stdlib_module_names", frozenset())
+
+_LOG_LOGS = os.environ.get("NEATLOGS_LOG_LOGS", "").lower() in ("1", "true", "yes")
+_LOG_LOGS_FILE = os.environ.get("NEATLOGS_LOG_LOGS_FILE", "")
 
 
 def _is_external_module(logger_name: str) -> bool:
@@ -59,12 +64,39 @@ class NeatlogsLogFilter(LogRecordProcessor):
 
     def __init__(self, downstream: LogRecordProcessor) -> None:
         self._downstream = downstream
+        self._log_file = open(_LOG_LOGS_FILE, "a") if _LOG_LOGS_FILE else None
+
+    def _debug_log(self, action: str, log_data: "LogData", reason: str = "") -> None:
+        if not _LOG_LOGS:
+            return
+        lr = log_data.log_record
+        entry = {
+            "action": action,
+            "trace_id": f"{lr.trace_id:032x}" if lr.trace_id else "",
+            "span_id": f"{lr.span_id:016x}" if lr.span_id else "",
+            "body": str(lr.body)[:200] if lr.body else "",
+            "severity": lr.severity_text or "",
+            "scope": getattr(getattr(log_data, "instrumentation_scope", None), "name", ""),
+        }
+        if reason:
+            entry["reason"] = reason
+        if lr.attributes:
+            template = lr.attributes.get("log.template", "")
+            if template:
+                entry["template"] = str(template)
+        line = json.dumps(entry)
+        if self._log_file:
+            self._log_file.write(line + "\n")
+            self._log_file.flush()
+        else:
+            print(f"[neatlogs:log] {line}", file=sys.stderr)
 
     def on_emit(self, log_data: "LogData") -> None:
         lr = log_data.log_record
 
         # Drop records with no active trace (logged outside a span)
         if not lr.trace_id or lr.trace_id == 0:
+            self._debug_log("DROP", log_data, reason="no_trace_id")
             return
 
         # Drop logs from stdlib or site-packages (httpcore, asyncio, openai SDK, etc.)
@@ -72,13 +104,16 @@ class NeatlogsLogFilter(LogRecordProcessor):
         scope = getattr(log_data, "instrumentation_scope", None)
         scope_name = getattr(scope, "name", "") or ""
         if _is_external_module(scope_name):
+            self._debug_log("DROP", log_data, reason=f"external_module:{scope_name}")
             return
 
         # Fallback: check code.filepath attribute set by LoggingInstrumentor
         filepath = (lr.attributes or {}).get("code.filepath", "") or ""
         if "site-packages" in filepath or "/dist-packages/" in filepath:
+            self._debug_log("DROP", log_data, reason=f"site_packages_path:{filepath}")
             return
 
+        self._debug_log("PASS", log_data)
         self._downstream.on_emit(log_data)
 
     def shutdown(self) -> None:

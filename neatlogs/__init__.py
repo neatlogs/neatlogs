@@ -11,10 +11,10 @@ from .instrumentation.manager import setup_import_monitor
 import logging
 import atexit
 import threading
-from typing import List, Optional
+from typing import List, Optional, Dict
 
 __version__ = "1.1.8"
-__all__ = ['init', 'get_tracker', 'add_tags', 'get_langchain_callback_handler']
+__all__ = ['init', 'get_tracker', 'add_tags', 'get_session_stats', 'get_langchain_callback_handler']
 
 # --- Global Tracker Instance and Initialization ---
 
@@ -116,6 +116,50 @@ def add_tags(tags: List[str]):
             "Tracker not initialized. Call neatlogs.init() first.")
 
     tracker.add_tags(tags)
+
+
+def get_session_stats() -> Dict:
+    """
+    Get statistics for all LLM calls in the current session.
+
+
+    Returns statistics including total calls, tokens, cost, and breakdowns
+    by provider and model.
+
+    Returns:
+        dict: Session statistics with keys:
+            - total_calls: Number of LLM calls
+            - total_tokens_input: Total input tokens
+            - total_tokens_output: Total output tokens
+            - total_tokens: Combined total tokens
+            - total_cost: Total cost in USD
+            - average_response_time: Average response time in seconds
+            - provider_breakdown: Stats per provider
+            - model_breakdown: Stats per model
+            - status_breakdown: Count by status (SUCCESS/FAILURE)
+
+    Example:
+        >>> import neatlogs
+        >>> neatlogs.init(api_key="key")
+        >>> # ... make some LLM calls ...
+        >>> stats = neatlogs.get_session_stats()
+        >>> print(f"Total calls: {stats['total_calls']}")
+        >>> print(f"Total cost: ${stats['total_cost']:.4f}")
+    """
+    tracker = get_tracker()
+    if not tracker:
+        return {
+            "total_calls": 0,
+            "total_tokens_input": 0,
+            "total_tokens_output": 0,
+            "total_tokens": 0,
+            "total_cost": 0.0,
+            "average_response_time": 0.0,
+            "provider_breakdown": {},
+            "model_breakdown": {},
+            "status_breakdown": {},
+        }
+    return tracker.get_session_stats()
 
 
 # --- Automatic Instrumentation Setup ---

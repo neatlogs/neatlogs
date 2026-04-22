@@ -321,6 +321,79 @@ class LLMTracker:
                 "Neatlogs: Creating background thread to send call_data to server")
             self._send_data_to_server(call_data)
 
+    def get_session_stats(self) -> Dict:
+        """
+        Get statistics for all completed LLM calls in this session.
+
+        Returns:
+            Dict: Statistics including total_calls, tokens, cost, and breakdowns
+        """
+        with self._lock:
+            if not self._completed_calls:
+                return {
+                    "total_calls": 0,
+                    "total_tokens_input": 0,
+                    "total_tokens_output": 0,
+                    "total_tokens": 0,
+                    "total_cost": 0.0,
+                    "average_response_time": 0.0,
+                    "provider_breakdown": {},
+                    "model_breakdown": {},
+                    "status_breakdown": {},
+                }
+
+            total_calls = len(self._completed_calls)
+            total_prompt_tokens = sum(c.prompt_tokens for c in self._completed_calls)
+            total_completion_tokens = sum(c.completion_tokens for c in self._completed_calls)
+            total_tokens = total_prompt_tokens + total_completion_tokens
+            total_cost = sum(c.cost for c in self._completed_calls)
+
+            response_times = [
+                c.duration for c in self._completed_calls if c.duration > 0
+            ]
+            avg_response_time = sum(response_times) / len(response_times) if response_times else 0.0
+
+            provider_breakdown = {}
+            for c in self._completed_calls:
+                provider = c.provider or "unknown"
+                if provider not in provider_breakdown:
+                    provider_breakdown[provider] = {
+                        "calls": 0, "cost": 0.0, "tokens": 0
+                    }
+                provider_breakdown[provider]["calls"] += 1
+                provider_breakdown[provider]["cost"] += c.cost
+                provider_breakdown[provider]["tokens"] += c.total_tokens
+
+            model_breakdown = {}
+            for c in self._completed_calls:
+                model = c.model or "unknown"
+                if model not in model_breakdown:
+                    model_breakdown[model] = {
+                        "calls": 0, "cost": 0.0, "tokens": 0
+                    }
+                model_breakdown[model]["calls"] += 1
+                model_breakdown[model]["cost"] += c.cost
+                model_breakdown[model]["tokens"] += c.total_tokens
+
+            status_breakdown = {}
+            for c in self._completed_calls:
+                status = c.status or "unknown"
+                if status not in status_breakdown:
+                    status_breakdown[status] = 0
+                status_breakdown[status] += 1
+
+            return {
+                "total_calls": total_calls,
+                "total_tokens_input": total_prompt_tokens,
+                "total_tokens_output": total_completion_tokens,
+                "total_tokens": total_tokens,
+                "total_cost": round(total_cost, 6),
+                "average_response_time": round(avg_response_time, 3),
+                "provider_breakdown": provider_breakdown,
+                "model_breakdown": model_breakdown,
+                "status_breakdown": status_breakdown,
+            }
+
     def add_tags(self, tags: List[str]):
         """Add tags to the tracker."""
         with self._lock:

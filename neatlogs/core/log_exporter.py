@@ -1,27 +1,30 @@
 """
-NeatlogsLogExporter — converts OTel LogRecords into span-format payloads
-and routes them through the existing NeatlogsExporter HTTP batch pipeline.
+NeatlogsLogFilter — a LogRecordProcessor that drops unwanted log records
+(no active trace, stdlib/site-packages internals) before forwarding to
+the downstream exporter (OTLPLogExporter → /v1/logs).
 
-Each log record is stored as a row in ClickHouse spans table with
-span_type = 'LOG', appearing as a child of the active span in the timeline.
+Replaces the old NeatlogsLogExporter which converted LogRecords into
+span-shaped JSON payloads for /api/data/v4/batch. The conversion is now
+done server-side by the /v1/logs OTLP receiver.
 """
 
 from __future__ import annotations
 
-import random
+import json
+import os
 import sys
-import time
-from typing import TYPE_CHECKING, Sequence
+from typing import TYPE_CHECKING
 
-from opentelemetry.sdk._logs.export import LogRecordExporter, LogRecordExportResult
+from opentelemetry.sdk._logs import LogRecordProcessor
 
 if TYPE_CHECKING:
-    from opentelemetry.sdk._logs import ReadableLogRecord
-
-    from .exporter import NeatlogsExporter
+    from opentelemetry.sdk._logs import LogData, LoggerProvider
 
 # Python 3.10+ exposes stdlib module names directly; fall back to empty set on older versions.
 _STDLIB_MODULE_NAMES: frozenset = getattr(sys, "stdlib_module_names", frozenset())
+
+_LOG_LOGS = os.environ.get("NEATLOGS_LOG_LOGS", "").lower() in ("1", "true", "yes")
+_LOG_LOGS_FILE = os.environ.get("NEATLOGS_LOG_LOGS_FILE", "")
 
 
 def _is_external_module(logger_name: str) -> bool:
@@ -47,107 +50,74 @@ def _is_external_module(logger_name: str) -> bool:
     return False
 
 
-class NeatlogsLogExporter(LogRecordExporter):
+class NeatlogsLogFilter(LogRecordProcessor):
     """
-    Converts OTel LogRecords into the span payload format used by NeatlogsExporter,
-    then forwards them through the existing HTTP batch pipeline.
+    Filtering LogRecordProcessor that drops records before they reach OTLPLogExporter.
 
-    Filtering:
-    - Records with no trace_id (logged outside a traced span) are dropped.
-    - Records from neatlogs internals (logger name "neatlogs") are dropped.
+    Drops:
+    - Records with no trace_id (logged outside a traced span)
+    - Records from stdlib or site-packages (httpcore, asyncio, openai SDK internals, etc.)
+
+    All other records are forwarded to the wrapped processor (typically a
+    BatchLogRecordProcessor wrapping OTLPLogExporter → /v1/logs).
     """
 
-    def __init__(self, span_exporter: "NeatlogsExporter") -> None:
-        self._span_exporter = span_exporter
+    def __init__(self, downstream: LogRecordProcessor) -> None:
+        self._downstream = downstream
+        self._log_file = open(_LOG_LOGS_FILE, "a") if _LOG_LOGS_FILE else None
 
-    def export(self, batch: Sequence["ReadableLogRecord"]) -> LogRecordExportResult:
-        for readable in batch:
-            payload = self._to_span_payload(readable)
-            if payload is not None:
-                self._span_exporter.export(payload)
-        return LogRecordExportResult.SUCCESS
+    def _debug_log(self, action: str, log_data: "LogData", reason: str = "") -> None:
+        if not _LOG_LOGS:
+            return
+        lr = log_data.log_record
+        entry = {
+            "action": action,
+            "trace_id": f"{lr.trace_id:032x}" if lr.trace_id else "",
+            "span_id": f"{lr.span_id:016x}" if lr.span_id else "",
+            "body": str(lr.body)[:200] if lr.body else "",
+            "severity": lr.severity_text or "",
+            "scope": getattr(getattr(log_data, "instrumentation_scope", None), "name", ""),
+        }
+        if reason:
+            entry["reason"] = reason
+        if lr.attributes:
+            template = lr.attributes.get("log.template", "")
+            if template:
+                entry["template"] = str(template)
+        line = json.dumps(entry)
+        if self._log_file:
+            self._log_file.write(line + "\n")
+            self._log_file.flush()
+        else:
+            print(f"[neatlogs:log] {line}", file=sys.stderr)
 
-    def shutdown(self) -> None:
-        pass
+    def on_emit(self, log_data: "LogData") -> None:
+        lr = log_data.log_record
 
-    def force_flush(self, timeout_millis: int = 30_000) -> bool:
-        return True
-
-    def _to_span_payload(self, readable: "ReadableLogRecord") -> dict | None:
-        lr = readable.log_record
-
-        # Drop records with no active trace (outside a span)
+        # Drop records with no active trace (logged outside a span)
         if not lr.trace_id or lr.trace_id == 0:
-            return None
+            self._debug_log("DROP", log_data, reason="no_trace_id")
+            return
 
         # Drop logs from stdlib or site-packages (httpcore, asyncio, openai SDK, etc.)
-        # Check instrumentation_scope.name (= Python logger name set by LoggingInstrumentor)
-        scope = getattr(readable, "instrumentation_scope", None)
+        # instrumentation_scope.name is the Python logger name set by LoggingInstrumentor
+        scope = getattr(log_data, "instrumentation_scope", None)
         scope_name = getattr(scope, "name", "") or ""
         if _is_external_module(scope_name):
-            return None
+            self._debug_log("DROP", log_data, reason=f"external_module:{scope_name}")
+            return
 
-        # Fallback: check code.filepath if set by LoggingInstrumentor
+        # Fallback: check code.filepath attribute set by LoggingInstrumentor
         filepath = (lr.attributes or {}).get("code.filepath", "") or ""
         if "site-packages" in filepath or "/dist-packages/" in filepath:
-            return None
+            self._debug_log("DROP", log_data, reason=f"site_packages_path:{filepath}")
+            return
 
-        trace_id = f"{lr.trace_id:032x}"
-        # lr.span_id is the ACTIVE span — becomes the parent of this log row
-        parent_span_id = f"{lr.span_id:016x}" if lr.span_id else None
+        self._debug_log("PASS", log_data)
+        self._downstream.on_emit(log_data)
 
-        # Generate a new unique span_id for this log row in ClickHouse
-        new_span_id = f"{random.getrandbits(64):016x}"
+    def shutdown(self) -> None:
+        self._downstream.shutdown()
 
-        # Timing — use nanoseconds (same as spans)
-        ts_ns = lr.timestamp or lr.observed_timestamp or time.time_ns()
-
-        body = str(lr.body) if lr.body is not None else ""
-        level = (lr.severity_text or "info").lower()
-
-        # Build attributes
-        attrs: dict = {
-            "openinference.span.kind": "LOG",
-            "neatlogs.span.kind": "log",
-            "neatlogs.internal": True,
-            "neatlogs.input.value": body,   # kafka consumer maps this → input_value column
-            "input.value": body,            # OpenInference standard key (kept for compatibility)
-            "input.mime_type": "text/plain",
-            "log.level": level,
-        }
-
-        # Merge structured attributes from LogRecord (log.template, log.{key}, etc.)
-        if lr.attributes:
-            for k, v in lr.attributes.items():
-                # Coerce to str for OTel attribute compatibility
-                attrs[k] = v if isinstance(v, (str, int, float, bool)) else str(v)
-
-        # Use log.template as span name (low-cardinality) if neatlogs.log() set it,
-        # otherwise fall back to the rendered body
-        span_name = attrs.get("log.template") or body
-
-        # Include resource attributes (workflow_name, session_id, etc.)
-        resource_attrs: dict = {}
-        if readable.resource and readable.resource.attributes:
-            for k, v in readable.resource.attributes.items():
-                if isinstance(v, (str, int, float, bool)):
-                    resource_attrs[k] = v
-                elif isinstance(v, (list, tuple)):
-                    resource_attrs[k] = list(v)
-                else:
-                    resource_attrs[k] = str(v)
-
-        return {
-            "trace_id": trace_id,
-            "span_id": new_span_id,
-            "parent_span_id": parent_span_id,
-            "name": span_name,
-            "kind": "log",
-            "start_time": ts_ns,
-            "end_time": ts_ns,
-            "duration_ns": 0,
-            "attributes": attrs,
-            "resource": {"attributes": resource_attrs},
-            "status": {"code": "OK", "description": ""},
-            "events": [],
-        }
+    def force_flush(self, timeout_millis: int = 30_000) -> bool:
+        return self._downstream.force_flush(timeout_millis)

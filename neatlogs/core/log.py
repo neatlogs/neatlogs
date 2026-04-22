@@ -52,15 +52,13 @@ def _console_echo(rendered: str, data: dict[str, Any], level: str) -> None:
         kv_str = "  ".join(f"{BOLD}{k}{RESET}={v!r}" for k, v in data.items())
         print(
             f"{DIM}[neatlogs]{RESET} {DIM}{timestamp}{RESET}  "
-            f"{level_color}LOG{RESET}  {rendered}"
-            + (f"  {kv_str}" if kv_str else ""),
+            f"{level_color}LOG{RESET}  {rendered}" + (f"  {kv_str}" if kv_str else ""),
             file=sys.stderr,
         )
     else:
         kv_str = "  ".join(f"{k}={v!r}" for k, v in data.items())
         print(
-            f"[neatlogs] {timestamp}  LOG  {rendered}"
-            + (f"  {kv_str}" if kv_str else ""),
+            f"[neatlogs] {timestamp}  LOG  {rendered}" + (f"  {kv_str}" if kv_str else ""),
             file=sys.stderr,
         )
 

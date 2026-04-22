@@ -3,7 +3,7 @@ Decorators for Neatlogs SDK.
 
 Primary decorator:
     @span(kind="...") - Universal decorator for custom code instrumentation
-    
+
 Available kinds:
     - "WORKFLOW" - Top-level orchestration entry point
     - "AGENT" - Agent execution with role/goal

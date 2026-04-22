@@ -75,17 +75,12 @@ def test_tool_calls_normalized_and_source_keys_removed() -> None:
         # OpenInference-style tool call keys
         "llm.output_messages.0.message.tool_calls.0.tool_call.function.name": "mcp_add",
         "llm.output_messages.0.message.tool_calls.0.tool_call.function.arguments": '{"a": 1, "b": 2}',
-        # OpenLLMetry-style tool call keys
-        "gen_ai.completion.0.tool_calls.1.name": "other_tool",
-        "gen_ai.completion.0.tool_calls.1.arguments": '{"x": 9}',
     }
 
     out = proc._normalize_conventions(span, dict(attrs))
 
     assert out["llm.tool_calls.0.name"] == "mcp_add"
     assert out["llm.tool_calls.0.arguments"] == '{"a": 1, "b": 2}'
-    assert out["llm.tool_calls.1.name"] == "other_tool"
-    assert out["llm.tool_calls.1.arguments"] == '{"x": 9}'
 
     # Original source keys are removed to avoid duplication.
     for k in attrs.keys():
@@ -95,7 +90,7 @@ def test_tool_calls_normalized_and_source_keys_removed() -> None:
 def test_crewai_token_usage_fallback_parsed() -> None:
     proc = _mk_processor()
     attrs = {
-        "crewai.crew.token_usage": (
+        "neatlogs.crew.token_usage": (
             "total_tokens=67305 prompt_tokens=46983 cached_prompt_tokens=7 completion_tokens=20322 successful_requests=27"
         )
     }

@@ -13,10 +13,37 @@ from neatlogs.config.client import (
     ConfigApiError,
     ConfigClient,
     ConfigClientError,
+    ConfigConflictError,
     ConfigNotFoundError,
+    _build_inference_body,
     _normalize_config_object,
 )
 import neatlogs.config.client as config_client_module
+
+
+# ---------------------------------------------------------------------------
+# Shared fixtures
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def reset_config_client():
+    """Save/restore module-level _session_config and _shared_config_client.
+
+    Lets individual tests mutate these globals without leaking into other
+    tests; originally inlined at each call site (~25 lines of boilerplate
+    across two tests).
+    """
+    import sys
+
+    init_module = sys.modules["neatlogs.init"]
+    prev_key = init_module._session_config.get("_api_key")
+    prev_url = init_module._session_config.get("_base_url")
+    prev_client = config_client_module._shared_config_client
+    yield init_module
+    init_module._session_config["_api_key"] = prev_key
+    init_module._session_config["_base_url"] = prev_url
+    config_client_module._shared_config_client = prev_client
 
 
 BASE_URL = "https://api.example.com"
@@ -209,7 +236,8 @@ def test_update_config_no_fields_returns_existing():
     assert mock_request.call_args.kwargs["method"] == "GET"
 
 
-def test_set_config_labels():
+def test_add_config_labels_appends_each_label():
+    """add_config_labels POSTs once per label and returns an informative shape."""
     client = _make_client()
     list_payload = {"items": [_sample_config_payload()]}
     post_response = {"ok": True}
@@ -217,24 +245,36 @@ def test_set_config_labels():
     with patch("requests.Session.request") as mock_request:
         mock_request.side_effect = [
             _mock_response(json_body=list_payload),  # get_config list
-            _mock_response(json_body=post_response),  # POST label
+            _mock_response(json_body=post_response),  # POST label "staging"
+            _mock_response(json_body=post_response),  # POST label "canary"
         ]
-        result = client.set_config_labels("foo", new_labels=["staging"])
+        result = client.add_config_labels("foo", new_labels=["staging", "canary"])
 
+    # The method APPENDS — the return shape reflects that by exposing what
+    # was requested via `added`, not a misleading `labels=[...]` that might
+    # be read as the new canonical set.
     assert result["name"] == "foo"
-    assert result["labels"] == ["staging"]
-    assert result["ok"] is True
+    assert result["added"] == ["staging", "canary"]
+    assert result["last_response"] == {"ok": True}
 
-    post_call = mock_request.call_args_list[1]
-    assert post_call.kwargs["method"] == "POST"
-    assert post_call.kwargs["url"] == f"{BASE_URL}/api/prompt-configs/cfg-1/labels"
-    assert post_call.kwargs["json"] == {"label": "staging"}
+    # Each label posted individually.
+    assert mock_request.call_count == 3
+    for call in mock_request.call_args_list[1:]:
+        assert call.kwargs["method"] == "POST"
+        assert call.kwargs["url"] == f"{BASE_URL}/api/prompt-configs/cfg-1/labels"
+    assert mock_request.call_args_list[1].kwargs["json"] == {"label": "staging"}
+    assert mock_request.call_args_list[2].kwargs["json"] == {"label": "canary"}
 
 
-def test_set_config_labels_empty_raises():
+def test_set_config_labels_is_alias_for_add_config_labels():
+    """The legacy name `set_config_labels` still works and delegates to add_config_labels."""
+    assert ConfigClient.set_config_labels is ConfigClient.add_config_labels
+
+
+def test_add_config_labels_empty_raises():
     client = _make_client()
     with pytest.raises(ValueError):
-        client.set_config_labels("foo", new_labels=[])
+        client.add_config_labels("foo", new_labels=[])
 
 
 def test_delete_config():
@@ -283,27 +323,14 @@ def test_api_error_on_500():
             client.list_configs()
 
 
-def test_not_initialized_raises():
-    # Ensure no cached module-level client
+def test_not_initialized_raises(reset_config_client):
+    init_module = reset_config_client
     config_client_module._shared_config_client = None
-    # Ensure init session_config does not already have an api_key.
-    # Note: neatlogs.init is the function (shadows the submodule), so grab
-    # the real submodule via sys.modules.
-    import sys
-
-    init_module = sys.modules["neatlogs.init"]
-    original_api_key = init_module._session_config.get("_api_key")
-    original_base_url = init_module._session_config.get("_base_url")
     init_module._session_config["_api_key"] = None
     init_module._session_config["_base_url"] = None
 
-    try:
-        with pytest.raises(ConfigClientError):
-            neatlogs.get_config("foo")
-    finally:
-        init_module._session_config["_api_key"] = original_api_key
-        init_module._session_config["_base_url"] = original_base_url
-        config_client_module._shared_config_client = None
+    with pytest.raises(ConfigClientError):
+        neatlogs.get_config("foo")
 
 
 def test_normalize_camelcase():
@@ -338,60 +365,109 @@ def test_normalize_camelcase():
     assert cfg.updated_at == "2024-05-02T00:00:00Z"
 
 
-def test_reinit_with_new_api_key_creates_new_client():
+def test_reinit_with_new_api_key_creates_new_client(reset_config_client):
     """After shutdown() + init() with a different key, module-level functions must
     use the NEW key, not the cached client from the previous init().
 
     Regression test for: _shared_config_client is never invalidated when credentials
     change between init() calls (e.g. key rotation or project switch).
     """
-    import sys
+    init_module = reset_config_client
 
-    init_module = sys.modules["neatlogs.init"]
-    original_api_key = init_module._session_config.get("_api_key")
-    original_base_url = init_module._session_config.get("_base_url")
-    original_client = config_client_module._shared_config_client
+    # Simulate first init() → client created with key-A
+    init_module._session_config["_api_key"] = "key-A"
+    init_module._session_config["_base_url"] = "https://api.example.com"
+    config_client_module._shared_config_client = None  # fresh start
 
-    try:
-        # Simulate first init() → client created with key-A
-        init_module._session_config["_api_key"] = "key-A"
-        init_module._session_config["_base_url"] = "https://api.example.com"
-        config_client_module._shared_config_client = None  # fresh start
-
-        payload = {"items": [{"id": "c1", "name": "foo", "labels": [], "createdAt": "t", "updatedAt": "t"}]}
-        with patch("requests.Session.request") as mock_request:
-            mock_request.return_value = MagicMock(
-                spec=requests.Response,
-                status_code=200,
-                json=lambda: payload,
-                text="",
-            )
-            neatlogs.get_config("foo")
-        client_a = config_client_module._shared_config_client
-        assert client_a is not None
-        assert client_a.api_key == "key-A"
-
-        # Simulate shutdown() + init() with key-B
-        init_module._session_config["_api_key"] = "key-B"
-        init_module._session_config["_base_url"] = "https://api.example.com"
-        # _shared_config_client is still the stale key-A client — this is the bug scenario
-
-        with patch("requests.Session.request") as mock_request:
-            mock_request.return_value = MagicMock(
-                spec=requests.Response,
-                status_code=200,
-                json=lambda: payload,
-                text="",
-            )
-            neatlogs.get_config("foo")
-        client_b = config_client_module._shared_config_client
-
-        # After the fix: a NEW client must be created with key-B
-        assert client_b is not client_a, "must create a new client after key rotation"
-        assert client_b.api_key == "key-B", (
-            f"new client must use key-B, got {client_b.api_key!r}"
+    payload = {"items": [{"id": "c1", "name": "foo", "labels": [], "createdAt": "t", "updatedAt": "t"}]}
+    with patch("requests.Session.request") as mock_request:
+        mock_request.return_value = MagicMock(
+            spec=requests.Response,
+            status_code=200,
+            json=lambda: payload,
+            text="",
         )
-    finally:
-        init_module._session_config["_api_key"] = original_api_key
-        init_module._session_config["_base_url"] = original_base_url
-        config_client_module._shared_config_client = original_client
+        neatlogs.get_config("foo")
+    client_a = config_client_module._shared_config_client
+    assert client_a is not None
+    assert client_a.api_key == "key-A"
+
+    # Simulate shutdown() + init() with key-B
+    init_module._session_config["_api_key"] = "key-B"
+    init_module._session_config["_base_url"] = "https://api.example.com"
+    # _shared_config_client is still the stale key-A client — this is the bug scenario
+
+    with patch("requests.Session.request") as mock_request:
+        mock_request.return_value = MagicMock(
+            spec=requests.Response,
+            status_code=200,
+            json=lambda: payload,
+            text="",
+        )
+        neatlogs.get_config("foo")
+    client_b = config_client_module._shared_config_client
+
+    # After the fix: a NEW client must be created with key-B
+    assert client_b is not client_a, "must create a new client after key rotation"
+    assert client_b.api_key == "key-B", (
+        f"new client must use key-B, got {client_b.api_key!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Extra coverage for simplification refactors
+# ---------------------------------------------------------------------------
+
+
+def test_build_inference_body_skips_none_fields():
+    """The shared helper underlies both create_config and update_config."""
+    body = _build_inference_body(
+        provider="openai",
+        temperature=0.5,
+        top_p=None,  # must be skipped
+        labels=["x", "y"],
+    )
+    assert body == {
+        "provider": "openai",
+        "temperature": 0.5,
+        "labels": ["x", "y"],
+    }
+
+
+def test_build_inference_body_empty_returns_empty_dict():
+    assert _build_inference_body() == {}
+
+
+def test_build_inference_body_labels_empty_list_is_sent():
+    """labels=[] is intentionally different from labels=None — it is sent."""
+    body = _build_inference_body(labels=[])
+    assert body == {"labels": []}
+
+
+def test_create_config_conflict_maps_to_conflict_error():
+    """Backend returns 409 on duplicate (project_id, name)."""
+    client = _make_client()
+
+    with patch("requests.Session.request") as mock_request:
+        mock_request.return_value = _mock_response(
+            status_code=409, text='{"error":"A config with that name already exists"}'
+        )
+        with pytest.raises(ConfigConflictError):
+            client.create_config("foo")
+
+
+def test_create_config_accepts_raw_row_response():
+    """Backend always returns the raw row, not a {config: row} wrapper.
+    The old payload.get('config', payload) fallback has been removed.
+    """
+    client = _make_client()
+    payload = _sample_config_payload()
+
+    with patch("requests.Session.request") as mock_request:
+        mock_request.return_value = _mock_response(json_body=payload)
+        cfg = client.create_config("foo", provider="openai")
+
+    assert isinstance(cfg, CachedConfig)
+    assert cfg.id == payload["id"]
+    assert cfg.name == payload["name"]
+    assert cfg.provider == "openai"

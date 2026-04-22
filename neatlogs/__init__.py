@@ -48,6 +48,20 @@ from .prompt.client import (
     save_as_version,
     update_prompt,
 )
+from .config.client import (
+    CachedConfig,
+    ConfigApiError,
+    ConfigClient,
+    ConfigClientError,
+    ConfigNotFoundError,
+    create_config,
+    delete_config,
+    get_config,
+    list_configs,
+    remove_config_label,
+    set_config_labels,
+    update_config,
+)
 from .prompt.template import PromptTemplate, UserPromptTemplate
 from .version import __version__
 
@@ -74,6 +88,18 @@ __all__ = [
     "save_as_version",
     "delete_prompt",
     "remove_tag",
+    "CachedConfig",
+    "ConfigClient",
+    "ConfigClientError",
+    "ConfigApiError",
+    "ConfigNotFoundError",
+    "get_config",
+    "list_configs",
+    "create_config",
+    "update_config",
+    "set_config_labels",
+    "delete_config",
+    "remove_config_label",
     "bind_templates",
     "register_crewai_task",
     "__version__",

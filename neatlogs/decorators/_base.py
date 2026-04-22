@@ -8,6 +8,7 @@ import functools
 import inspect
 import json
 import os
+from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple, TypeVar, Union
 
 from opentelemetry import trace as otel_trace
@@ -43,7 +44,9 @@ def _capture_code_attrs(func: Callable[..., Any]) -> Dict[str, Any]:
 
     attrs: Dict[str, Any] = {}
     try:
-        attrs["code.file.path"] = inspect.getfile(target)
+        abs_path = inspect.getfile(target)
+        home = str(Path.home())
+        attrs["code.file.path"] = abs_path[len(home):].lstrip("/") if abs_path.startswith(home) else abs_path
     except (TypeError, OSError):
         pass
     attrs["code.function.name"] = getattr(target, "__qualname__", target.__name__)

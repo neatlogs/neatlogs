@@ -41,7 +41,6 @@ _initialized = False
 _tracer_provider = None
 _meter_provider = None
 _log_provider = None
-_log_span_exporter = None
 _span_processor = None
 _debug_mode = False
 _session_config = {
@@ -305,7 +304,7 @@ def init(
     # --- Logs signal (opt-in) ---
     # neatlogs.log(), capture_stdout=True, and logging.* auto-capture all require
     # capture_logs=True. When False, nothing is captured as LOG spans.
-    global _log_provider, _log_span_exporter
+    global _log_provider
     if capture_logs:
         from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
 
@@ -322,8 +321,6 @@ def init(
         _log_provider.add_log_record_processor(
             NeatlogsLogFilter(BatchLogRecordProcessor(_otlp_log_exporter))
         )
-        # Keep _log_span_exporter reference for flush/shutdown compatibility
-        _log_span_exporter = _otlp_log_exporter
         logs.set_logger_provider(_log_provider)
 
         try:
@@ -381,7 +378,7 @@ def init(
 
 def flush(timeout_millis: int = 30000) -> bool:
     """Flush all pending spans and metrics."""
-    global _tracer_provider, _meter_provider, _log_span_exporter
+    global _tracer_provider, _meter_provider
     success = True
 
     # Log provider must flush BEFORE tracer provider: the tracer batch includes
@@ -427,7 +424,7 @@ def get_session_config():
 
 def shutdown(timeout_millis: int = 30000) -> bool:
     """Shutdown the SDK and flush pending spans/metrics."""
-    global _tracer_provider, _meter_provider, _log_provider, _log_span_exporter, _span_processor, _initialized
+    global _tracer_provider, _meter_provider, _log_provider, _span_processor, _initialized
 
     try:
         atexit.unregister(shutdown)
@@ -483,7 +480,6 @@ def shutdown(timeout_millis: int = 30000) -> bool:
     _tracer_provider = None
     _meter_provider = None
     _log_provider = None
-    _log_span_exporter = None
     _span_processor = None
     _debug_mode = False
     _session_config["session_id"] = None

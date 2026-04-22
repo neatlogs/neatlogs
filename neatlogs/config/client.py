@@ -363,7 +363,13 @@ def _get_config_client() -> ConfigClient:
             "No API key available. Call neatlogs.init(api_key=...) before using config methods."
         )
 
-    if _shared_config_client is None:
+    # Re-create the client if credentials have changed (e.g., after shutdown() + init()
+    # with a different api_key). Without this check the stale client from the previous
+    # init() call would be silently reused.
+    if _shared_config_client is None or (
+        _shared_config_client.api_key != api_key
+        or _shared_config_client.base_url != base_url
+    ):
         _shared_config_client = ConfigClient(base_url=base_url, api_key=api_key)
     return _shared_config_client
 

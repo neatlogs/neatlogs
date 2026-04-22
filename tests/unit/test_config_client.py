@@ -336,3 +336,62 @@ def test_normalize_camelcase():
     assert cfg.labels == ["production", "canary"]
     assert cfg.created_at == "2024-05-01T00:00:00Z"
     assert cfg.updated_at == "2024-05-02T00:00:00Z"
+
+
+def test_reinit_with_new_api_key_creates_new_client():
+    """After shutdown() + init() with a different key, module-level functions must
+    use the NEW key, not the cached client from the previous init().
+
+    Regression test for: _shared_config_client is never invalidated when credentials
+    change between init() calls (e.g. key rotation or project switch).
+    """
+    import sys
+
+    init_module = sys.modules["neatlogs.init"]
+    original_api_key = init_module._session_config.get("_api_key")
+    original_base_url = init_module._session_config.get("_base_url")
+    original_client = config_client_module._shared_config_client
+
+    try:
+        # Simulate first init() → client created with key-A
+        init_module._session_config["_api_key"] = "key-A"
+        init_module._session_config["_base_url"] = "https://api.example.com"
+        config_client_module._shared_config_client = None  # fresh start
+
+        payload = {"items": [{"id": "c1", "name": "foo", "labels": [], "createdAt": "t", "updatedAt": "t"}]}
+        with patch("requests.Session.request") as mock_request:
+            mock_request.return_value = MagicMock(
+                spec=requests.Response,
+                status_code=200,
+                json=lambda: payload,
+                text="",
+            )
+            neatlogs.get_config("foo")
+        client_a = config_client_module._shared_config_client
+        assert client_a is not None
+        assert client_a.api_key == "key-A"
+
+        # Simulate shutdown() + init() with key-B
+        init_module._session_config["_api_key"] = "key-B"
+        init_module._session_config["_base_url"] = "https://api.example.com"
+        # _shared_config_client is still the stale key-A client — this is the bug scenario
+
+        with patch("requests.Session.request") as mock_request:
+            mock_request.return_value = MagicMock(
+                spec=requests.Response,
+                status_code=200,
+                json=lambda: payload,
+                text="",
+            )
+            neatlogs.get_config("foo")
+        client_b = config_client_module._shared_config_client
+
+        # After the fix: a NEW client must be created with key-B
+        assert client_b is not client_a, "must create a new client after key rotation"
+        assert client_b.api_key == "key-B", (
+            f"new client must use key-B, got {client_b.api_key!r}"
+        )
+    finally:
+        init_module._session_config["_api_key"] = original_api_key
+        init_module._session_config["_base_url"] = original_base_url
+        config_client_module._shared_config_client = original_client

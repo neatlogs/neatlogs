@@ -117,15 +117,7 @@ def _normalize_config_object(data: Mapping[str, Any]) -> CachedConfig:
 # Inference-parameter body builder
 # ---------------------------------------------------------------------------
 
-_INFERENCE_FIELD_NAMES = (
-    "provider",
-    "model",
-    "temperature",
-    "max_tokens",
-    "top_p",
-    "top_k",
-    "description",
-)
+_SENTINEL = object()  # distinguishes "not passed" from None
 
 
 def _build_inference_body(
@@ -137,13 +129,12 @@ def _build_inference_body(
     top_p: Optional[float] = None,
     top_k: Optional[int] = None,
     description: Optional[str] = None,
-    labels: Optional[Sequence[str]] = None,
+    labels=_SENTINEL,
 ) -> Dict[str, Any]:
     """Build the snake_case request body for create/update, skipping None fields.
 
-    `labels` is included only when non-None; a caller explicitly passing
-    `labels=[]` will see an empty array sent, which the backend interprets as
-    "no labels".
+    `labels` is included only when explicitly passed; passing `labels=[]`
+    sends an empty array (clears all labels).
     """
     values = {
         "provider": provider,
@@ -155,7 +146,7 @@ def _build_inference_body(
         "description": description,
     }
     body: Dict[str, Any] = {k: v for k, v in values.items() if v is not None}
-    if labels is not None:
+    if labels is not _SENTINEL and labels is not None:
         body["labels"] = list(labels)
     return body
 
@@ -164,8 +155,12 @@ class ConfigClient:
     """
     Config client for Neatlogs prompt configs.
 
-    Provides full CRUD over /api/prompt-configs and the label-fetch endpoint
-    /api/v1/configs/:name/fetch.
+    Provides CRUD over /api/prompt-configs:
+      - create_config  — create a new config
+      - get_config     — fetch by name (optionally filtered by label)
+      - list_configs   — list with optional name/label filters
+      - update_config  — update fields; pass labels=[...] to replace the labels array
+      - delete_config  — delete a config
     """
 
     def __init__(
@@ -244,7 +239,7 @@ class ConfigClient:
                 top_p=top_p,
                 top_k=top_k,
                 description=description,
-                labels=labels,
+                labels=labels if labels is not None else _SENTINEL,
             ),
         }
 
@@ -262,8 +257,14 @@ class ConfigClient:
         top_p: Optional[float] = None,
         top_k: Optional[int] = None,
         description: Optional[str] = None,
+        labels=_SENTINEL,
     ) -> CachedConfig:
-        """Update fields on a config via PATCH /api/prompt-configs/:id."""
+        """Update fields on a config via PATCH /api/prompt-configs/:id.
+
+        Pass ``labels=[...]`` to replace the entire labels array.
+        Pass ``labels=[]`` to clear all labels.
+        Omit ``labels`` to leave the existing labels unchanged.
+        """
         body = _build_inference_body(
             provider=provider,
             model=model,
@@ -272,6 +273,7 @@ class ConfigClient:
             top_p=top_p,
             top_k=top_k,
             description=description,
+            labels=labels,
         )
 
         # If no fields are provided, short-circuit to avoid an empty PATCH.
@@ -283,55 +285,11 @@ class ConfigClient:
         payload = self._request_json(method="PATCH", path=path, json_body=body)
         return _normalize_config_object(payload)
 
-    def add_config_labels(
-        self,
-        name: str,
-        *,
-        new_labels: Sequence[str],
-    ) -> Dict[str, Any]:
-        """Append one or more labels to a config.
-
-        Each label is POSTed individually to /api/prompt-configs/:id/labels.
-        This method *appends*; existing labels are preserved. To replace
-        entirely, first call :meth:`remove_config_label` for the labels you
-        want to drop.
-
-        Returns a dict with ``name`` and ``added`` (the labels that were
-        requested this call). Note: this is not a guarantee that every one
-        was newly attached — if a label was already present, the backend is
-        idempotent and the response will still be 200.
-        """
-        if not new_labels:
-            raise ValueError(
-                "new_labels is required. Specify at least one label, e.g. new_labels=['production']."
-            )
-
-        config_id = self._resolve_config_id(name)
-        path = f"/api/prompt-configs/{quote(config_id, safe='')}/labels"
-        last_response: Dict[str, Any] = {}
-        requested = list(new_labels)
-        for label in requested:
-            last_response = self._request_json(method="POST", path=path, json_body={"label": label})
-
-        return {"name": name, "added": requested, "last_response": last_response}
-
-    # Backward-compatible alias. Historically this method was named
-    # ``set_config_labels`` even though it appends (does not replace). New
-    # code should prefer ``add_config_labels``; the old name is kept so
-    # existing callers do not break.
-    set_config_labels = add_config_labels
-
     def delete_config(self, name: str) -> Dict[str, Any]:
         """Delete a config via DELETE /api/prompt-configs/:id."""
         config_id = self._resolve_config_id(name)
         path = f"/api/prompt-configs/{quote(config_id, safe='')}"
         return self._request_json(method="DELETE", path=path)
-
-    def remove_config_label(self, name: str, label: str) -> Dict[str, Any]:
-        """Remove a label from a config via DELETE /api/prompt-configs/:id/labels."""
-        config_id = self._resolve_config_id(name)
-        path = f"/api/prompt-configs/{quote(config_id, safe='')}/labels"
-        return self._request_json(method="DELETE", path=path, json_body={"label": label})
 
     # ----------------
     # Internal helpers
@@ -495,6 +453,7 @@ def update_config(
     top_p: Optional[float] = None,
     top_k: Optional[int] = None,
     description: Optional[str] = None,
+    labels=_SENTINEL,
 ) -> CachedConfig:
     return _get_config_client().update_config(
         name,
@@ -505,20 +464,9 @@ def update_config(
         top_p=top_p,
         top_k=top_k,
         description=description,
+        labels=labels,
     )
-
-
-def add_config_labels(name: str, *, new_labels: Sequence[str]) -> Dict[str, Any]:
-    return _get_config_client().add_config_labels(name, new_labels=new_labels)
-
-
-# Backward-compatible alias (see ConfigClient.set_config_labels).
-set_config_labels = add_config_labels
 
 
 def delete_config(name: str) -> Dict[str, Any]:
     return _get_config_client().delete_config(name)
-
-
-def remove_config_label(name: str, label: str) -> Dict[str, Any]:
-    return _get_config_client().remove_config_label(name, label)

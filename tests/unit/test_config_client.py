@@ -235,45 +235,41 @@ def test_update_config_no_fields_returns_existing():
     assert mock_request.call_args.kwargs["method"] == "GET"
 
 
-def test_add_config_labels_appends_each_label():
-    """add_config_labels POSTs once per label and returns an informative shape."""
+def test_update_config_replaces_labels():
+    """update_config(labels=[...]) sends labels in the PATCH body."""
     client = _make_client()
     list_payload = {"items": [_sample_config_payload()]}
-    post_response = {"ok": True}
+    updated = {**_sample_config_payload(), "labels": ["staging"]}
 
     with patch("requests.Session.request") as mock_request:
         mock_request.side_effect = [
-            _mock_response(json_body=list_payload),  # get_config list
-            _mock_response(json_body=post_response),  # POST label "staging"
-            _mock_response(json_body=post_response),  # POST label "canary"
+            _mock_response(json_body=list_payload),  # _resolve_config_id
+            _mock_response(json_body=updated),  # PATCH
         ]
-        result = client.add_config_labels("foo", new_labels=["staging", "canary"])
+        result = client.update_config("foo", labels=["staging"])
 
-    # The method APPENDS — the return shape reflects that by exposing what
-    # was requested via `added`, not a misleading `labels=[...]` that might
-    # be read as the new canonical set.
-    assert result["name"] == "foo"
-    assert result["added"] == ["staging", "canary"]
-    assert result["last_response"] == {"ok": True}
-
-    # Each label posted individually.
-    assert mock_request.call_count == 3
-    for call in mock_request.call_args_list[1:]:
-        assert call.kwargs["method"] == "POST"
-        assert call.kwargs["url"] == f"{BASE_URL}/api/prompt-configs/cfg-1/labels"
-    assert mock_request.call_args_list[1].kwargs["json"] == {"label": "staging"}
-    assert mock_request.call_args_list[2].kwargs["json"] == {"label": "canary"}
+    assert result.labels == ["staging"]
+    patch_call = mock_request.call_args_list[1]
+    assert patch_call.kwargs["method"] == "PATCH"
+    assert patch_call.kwargs["json"] == {"labels": ["staging"]}
 
 
-def test_set_config_labels_is_alias_for_add_config_labels():
-    """The legacy name `set_config_labels` still works and delegates to add_config_labels."""
-    assert ConfigClient.set_config_labels is ConfigClient.add_config_labels
-
-
-def test_add_config_labels_empty_raises():
+def test_update_config_clears_labels_with_empty_list():
+    """update_config(labels=[]) sends an empty labels array to clear all labels."""
     client = _make_client()
-    with pytest.raises(ValueError):
-        client.add_config_labels("foo", new_labels=[])
+    list_payload = {"items": [_sample_config_payload()]}
+    updated = {**_sample_config_payload(), "labels": []}
+
+    with patch("requests.Session.request") as mock_request:
+        mock_request.side_effect = [
+            _mock_response(json_body=list_payload),
+            _mock_response(json_body=updated),
+        ]
+        result = client.update_config("foo", labels=[])
+
+    assert result.labels == []
+    patch_call = mock_request.call_args_list[1]
+    assert patch_call.kwargs["json"] == {"labels": []}
 
 
 def test_delete_config():
@@ -292,25 +288,6 @@ def test_delete_config():
     delete_call = mock_request.call_args_list[1]
     assert delete_call.kwargs["method"] == "DELETE"
     assert delete_call.kwargs["url"] == f"{BASE_URL}/api/prompt-configs/cfg-1"
-
-
-def test_remove_config_label():
-    client = _make_client()
-    list_payload = {"items": [_sample_config_payload()]}
-    remove_payload = {"ok": True}
-
-    with patch("requests.Session.request") as mock_request:
-        mock_request.side_effect = [
-            _mock_response(json_body=list_payload),
-            _mock_response(json_body=remove_payload),
-        ]
-        result = client.remove_config_label("foo", "staging")
-
-    assert result == {"ok": True}
-    delete_call = mock_request.call_args_list[1]
-    assert delete_call.kwargs["method"] == "DELETE"
-    assert delete_call.kwargs["url"] == f"{BASE_URL}/api/prompt-configs/cfg-1/labels"
-    assert delete_call.kwargs["json"] == {"label": "staging"}
 
 
 def test_api_error_on_500():

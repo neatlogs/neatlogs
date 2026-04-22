@@ -20,7 +20,6 @@ from neatlogs.config.client import (
 )
 import neatlogs.config.client as config_client_module
 
-
 # ---------------------------------------------------------------------------
 # Shared fixtures
 # ---------------------------------------------------------------------------
@@ -379,7 +378,9 @@ def test_reinit_with_new_api_key_creates_new_client(reset_config_client):
     init_module._session_config["_base_url"] = "https://api.example.com"
     config_client_module._shared_config_client = None  # fresh start
 
-    payload = {"items": [{"id": "c1", "name": "foo", "labels": [], "createdAt": "t", "updatedAt": "t"}]}
+    payload = {
+        "items": [{"id": "c1", "name": "foo", "labels": [], "createdAt": "t", "updatedAt": "t"}]
+    }
     with patch("requests.Session.request") as mock_request:
         mock_request.return_value = MagicMock(
             spec=requests.Response,
@@ -409,9 +410,7 @@ def test_reinit_with_new_api_key_creates_new_client(reset_config_client):
 
     # After the fix: a NEW client must be created with key-B
     assert client_b is not client_a, "must create a new client after key rotation"
-    assert client_b.api_key == "key-B", (
-        f"new client must use key-B, got {client_b.api_key!r}"
-    )
+    assert client_b.api_key == "key-B", f"new client must use key-B, got {client_b.api_key!r}"
 
 
 # ---------------------------------------------------------------------------

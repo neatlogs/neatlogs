@@ -17,7 +17,11 @@ logger = get_logger()
 # installed and requests go out as-is).
 # ---------------------------------------------------------------------------
 try:
-    from opentelemetry.context import attach as _otel_attach, detach as _otel_detach, set_value as _otel_set_value
+    from opentelemetry.context import (
+        attach as _otel_attach,
+        detach as _otel_detach,
+        set_value as _otel_set_value,
+    )
     from opentelemetry.instrumentation.utils import _SUPPRESS_INSTRUMENTATION_KEY
 except Exception:  # pragma: no cover - depends on optional dependency
     _otel_attach = None
@@ -438,8 +442,7 @@ def _get_config_client() -> ConfigClient:
     # with a different api_key). Without this check the stale client from the previous
     # init() call would be silently reused.
     if _shared_config_client is None or (
-        _shared_config_client.api_key != api_key
-        or _shared_config_client.base_url != base_url
+        _shared_config_client.api_key != api_key or _shared_config_client.base_url != base_url
     ):
         _shared_config_client = ConfigClient(base_url=base_url, api_key=api_key)
     return _shared_config_client

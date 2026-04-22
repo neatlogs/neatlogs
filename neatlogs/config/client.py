@@ -17,11 +17,9 @@ logger = get_logger()
 # installed and requests go out as-is).
 # ---------------------------------------------------------------------------
 try:
-    from opentelemetry.context import (
-        attach as _otel_attach,
-        detach as _otel_detach,
-        set_value as _otel_set_value,
-    )
+    from opentelemetry.context import attach as _otel_attach
+    from opentelemetry.context import detach as _otel_detach
+    from opentelemetry.context import set_value as _otel_set_value
     from opentelemetry.instrumentation.utils import _SUPPRESS_INSTRUMENTATION_KEY
 except Exception:  # pragma: no cover - depends on optional dependency
     _otel_attach = None

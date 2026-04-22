@@ -8,6 +8,7 @@ import pytest
 import requests
 
 import neatlogs
+import neatlogs.config.client as config_client_module
 from neatlogs.config.client import (
     CachedConfig,
     ConfigApiError,
@@ -18,7 +19,6 @@ from neatlogs.config.client import (
     _build_inference_body,
     _normalize_config_object,
 )
-import neatlogs.config.client as config_client_module
 
 # ---------------------------------------------------------------------------
 # Shared fixtures

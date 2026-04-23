@@ -201,7 +201,7 @@ See [`troubleshooting.md` §2](troubleshooting.md#2-google-genai-instantiation-o
 
 ```python
 import neatlogs
-from neatlogs import SystemPromptTemplate
+from neatlogs import SystemPromptTemplate, UserPromptTemplate
 
 neatlogs.init(
     api_key="...",  # or set NEATLOGS_API_KEY env var
@@ -210,33 +210,26 @@ neatlogs.init(
 )
 
 from langchain_openai import ChatOpenAI
-from langchain_classic.agents import create_react_agent, AgentExecutor
-from langchain_core.tools import tool
-from langchain_core.prompts import ChatPromptTemplate
 
 llm = ChatOpenAI(model="gpt-4o")
 
-@tool
-def web_search(query: str) -> str:
-    """Search the web for information."""
-    return f"Search results for: {query}"
-
-# Build a ReAct agent
-react_prompt = ChatPromptTemplate.from_messages([
-    ("system", "You are a helpful research assistant."),
-    ("human", "{input}\n\nThink step by step. {agent_scratchpad}"),
-])
-agent = create_react_agent(llm, [web_search], react_prompt)
-agent_executor = AgentExecutor(agent=agent, tools=[web_search])
-
-sys_tpl = SystemPromptTemplate("You are a helpful research assistant for {{domain}}.")
+sys_tpl = SystemPromptTemplate([{
+    "role": "system",
+    "content": "You are a helpful research assistant for {{domain}}.",
+}])
+user_tpl = UserPromptTemplate([{
+    "role": "user",
+    "content": "Research this topic: {{query}}",
+}])
 
 @neatlogs.span(kind="WORKFLOW")
 def run_agent(query: str) -> str:
-    with neatlogs.trace("agent_llm", kind="LLM", prompt_template=sys_tpl):
-        sys_tpl.compile(domain="science")
-        result = agent_executor.invoke({"input": query})
-    return result["output"]
+    with neatlogs.trace("research_llm", kind="LLM",
+                        prompt_template=sys_tpl,
+                        user_prompt_template=user_tpl):
+        msgs = sys_tpl.compile(domain="science") + user_tpl.compile(query=query)
+        response = llm.invoke(msgs)
+    return response.content
 
 result = run_agent("Explain black holes")
 neatlogs.flush()
@@ -266,20 +259,39 @@ from langchain_openai import ChatOpenAI
 
 llm = ChatOpenAI(model="gpt-4o")
 
-# Define templates per node
-supervisor_tpl = SystemPromptTemplate("You are a supervisor routing tasks to agents...")
-researcher_tpl = SystemPromptTemplate("You are a research agent for {{domain}}.")
+# Define templates per node — system template + user template with variables
+supervisor_sys = SystemPromptTemplate([{
+    "role": "system",
+    "content": "You are a supervisor routing research tasks to agents.",
+}])
+supervisor_user = UserPromptTemplate([{
+    "role": "user",
+    "content": "Research topic: {{query}}",
+}])
+
+researcher_sys = SystemPromptTemplate([{
+    "role": "system",
+    "content": "You are a research agent for {{domain}}.",
+}])
+researcher_user = UserPromptTemplate([{
+    "role": "user",
+    "content": "Research: {{query}}",
+}])
 
 def supervisor_node(state):
-    with neatlogs.trace("supervisor_llm", kind="LLM", prompt_template=supervisor_tpl):
-        msgs = supervisor_tpl.compile()
-        response = llm.invoke(msgs + [{"role": "user", "content": state["query"]}])
+    with neatlogs.trace("supervisor_llm", kind="LLM",
+                        prompt_template=supervisor_sys,
+                        user_prompt_template=supervisor_user):
+        msgs = supervisor_sys.compile() + supervisor_user.compile(query=state["query"])
+        response = llm.invoke(msgs)
     return {"next": response.content}
 
 def researcher_node(state):
-    with neatlogs.trace("researcher_llm", kind="LLM", prompt_template=researcher_tpl):
-        msgs = researcher_tpl.compile(domain="technology")
-        response = llm.invoke(msgs + [{"role": "user", "content": state["query"]}])
+    with neatlogs.trace("researcher_llm", kind="LLM",
+                        prompt_template=researcher_sys,
+                        user_prompt_template=researcher_user):
+        msgs = researcher_sys.compile(domain="technology") + researcher_user.compile(query=state["query"])
+        response = llm.invoke(msgs)
     return {"result": response.content}
 
 # Build graph
@@ -289,7 +301,12 @@ graph.add_node("researcher", researcher_node)
 # ... add edges ...
 app = graph.compile()
 
-result = app.invoke({"query": "latest AI trends"})
+@neatlogs.span(kind="WORKFLOW")
+def run_pipeline(query: str) -> str:
+    result = app.invoke({"query": query})
+    return result.get("result", "")
+
+result = run_pipeline("latest AI trends")
 neatlogs.flush()
 neatlogs.shutdown()
 ```

@@ -8,6 +8,7 @@ import functools
 import inspect
 import json
 import os
+from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple, TypeVar, Union
 
 from opentelemetry import trace as otel_trace
@@ -23,6 +24,43 @@ def _should_capture_content() -> bool:
     return v.lower() not in ("false", "0", "no")
 
 
+def _capture_code_attrs(func: Callable[..., Any]) -> Dict[str, Any]:
+    """
+    Capture static code-location attributes for a decorated function.
+
+    Uses ``inspect.unwrap(func)`` so that when ``@neatlogs.span`` is stacked on
+    top of other decorators (e.g. ``@retry``) that correctly set ``__wrapped__``
+    via ``functools.wraps``, the reported file / line / qualname point at the
+    user's source rather than at the inner decorator module.
+
+    All lookups are best-effort; built-ins and C-extension callables raise
+    ``TypeError`` / ``OSError`` and are silently skipped.
+    """
+    try:
+        target = inspect.unwrap(func)
+    except ValueError:
+        # Cycle in the __wrapped__ chain — fall back to the outer callable.
+        target = func
+
+    attrs: Dict[str, Any] = {}
+    try:
+        abs_path = inspect.getfile(target)
+        home = str(Path.home())
+        attrs["code.file.path"] = abs_path[len(home):].lstrip("/") if abs_path.startswith(home) else abs_path
+    except (TypeError, OSError):
+        pass
+    attrs["code.function.name"] = getattr(target, "__qualname__", target.__name__)
+    try:
+        _, lineno = inspect.getsourcelines(target)
+        attrs["code.line.number"] = lineno
+    except (TypeError, OSError):
+        pass
+    module = getattr(target, "__module__", None)
+    if module:
+        attrs["code.namespace"] = module
+    return attrs
+
+
 def _serialize_obj(obj: Any) -> Any:
     """
     Convert complex objects to JSON-serializable dicts.
@@ -31,41 +69,41 @@ def _serialize_obj(obj: Any) -> Any:
     # Handle None, primitives
     if obj is None or isinstance(obj, (str, int, float, bool)):
         return obj
-    
+
     # Handle lists and tuples
     if isinstance(obj, (list, tuple)):
         return [_serialize_obj(item) for item in obj]
-    
+
     # Handle dicts
     if isinstance(obj, dict):
         return {k: _serialize_obj(v) for k, v in obj.items()}
-    
+
     # Try common serialization methods (Pydantic, dataclasses, etc.)
-    for method in ['model_dump', 'dict', 'to_dict', 'to_json', 'as_dict']:
+    for method in ["model_dump", "dict", "to_dict", "to_json", "as_dict"]:
         if hasattr(obj, method):
             try:
                 result = getattr(obj, method)()
                 # to_json returns string, need to parse it
-                if method == 'to_json' and isinstance(result, str):
+                if method == "to_json" and isinstance(result, str):
                     return json.loads(result)
                 return _serialize_obj(result) if isinstance(result, dict) else result
             except Exception:
                 continue
-    
+
     # Try extracting __dict__ (works for many custom classes)
-    if hasattr(obj, '__dict__'):
+    if hasattr(obj, "__dict__"):
         try:
             # Filter out private attributes and methods
             obj_dict = {
-                k: _serialize_obj(v) 
-                for k, v in obj.__dict__.items() 
-                if not k.startswith('_') and not callable(v)
+                k: _serialize_obj(v)
+                for k, v in obj.__dict__.items()
+                if not k.startswith("_") and not callable(v)
             }
             if obj_dict:  # Only return if we got some data
                 return obj_dict
         except Exception:
             pass
-    
+
     # Last resort: convert to string
     return str(obj)
 
@@ -105,7 +143,7 @@ def _set_common_span_attrs(
     span.set_attribute("neatlogs.internal", True)
 
     span.set_attribute("openinference.span.kind", openinference_kind)
-    
+
     # Set neatlogs.span.kind for simplified view
     span.set_attribute("neatlogs.span.kind", openinference_kind.lower())
 
@@ -154,6 +192,13 @@ def _decorate_span(
         cap_in = cap if capture_input is None else capture_input
         cap_out = cap if capture_output is None else capture_output
 
+        # Capture code location once at decoration time — these are static
+        # properties of the decorated function so there is no per-call overhead.
+        # Caller-supplied ``attributes`` intentionally win on key collision so
+        # that users can override auto-captured values if needed.
+        code_attrs = _capture_code_attrs(func)
+        merged_attrs = {**code_attrs, **(attributes or {})}
+
         if inspect.iscoroutinefunction(func):
 
             @functools.wraps(func)
@@ -171,7 +216,7 @@ def _decorate_span(
                         version=version,
                         tags=tags,
                         metadata=metadata,
-                        attributes=attributes,
+                        attributes=merged_attrs,
                     )
                     if mask is not None:
                         span.set_attribute("neatlogs.mask_id", register_mask(mask))
@@ -225,7 +270,7 @@ def _decorate_span(
                     version=version,
                     tags=tags,
                     metadata=metadata,
-                    attributes=attributes,
+                    attributes=merged_attrs,
                 )
                 if mask is not None:
                     span.set_attribute("neatlogs.mask_id", register_mask(mask))

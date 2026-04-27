@@ -15,7 +15,7 @@ from typing import Any, Callable, Dict, Optional, TypeVar
 from opentelemetry import trace as otel_trace
 from opentelemetry.trace import Status, StatusCode
 
-from ._base import _decorate_span, _safe_json_dumps
+from ._base import _capture_code_attrs, _decorate_span, _safe_json_dumps
 
 logger = logging.getLogger(__name__)
 
@@ -31,16 +31,25 @@ def _create_mcp_tool_decorator(
 ) -> Callable[[F], F]:
     """
     Create MCP tool decorator with EXACT logic from original mcp_tool.py.
-    
+
     This preserves the exact behavior:
     - Checks args[0] for Pydantic models BEFORE signature binding
     - Wraps string results as {"result": "..."} for output.value
     - Sets both mcp.* and standard attributes explicitly
     """
+
     def decorator(func: F) -> F:
         span_name = name or f"{func.__name__}.tool"
         tool_name_attr = tool_name or func.__name__
         tracer = otel_trace.get_tracer(__name__)
+
+        # Capture code-location attrs once at decoration time so that MCP_TOOL
+        # spans carry the same ``code.*`` metadata as every other kind.
+        code_attrs = _capture_code_attrs(func)
+
+        def _apply_code_attrs(span):
+            for k, v in code_attrs.items():
+                span.set_attribute(k, v)
 
         if inspect.iscoroutinefunction(func):
 
@@ -53,7 +62,8 @@ def _create_mcp_tool_decorator(
                     span.set_attribute("mcp.tool.name", tool_name_attr)
                     span.set_attribute("openinference.span.kind", "MCP_TOOL")
                     span.set_attribute("tool.name", tool_name_attr)
-                    
+                    _apply_code_attrs(span)
+
                     if description:
                         span.set_attribute("tool.description", description)
                     if tool_json_schema is not None:
@@ -113,7 +123,8 @@ def _create_mcp_tool_decorator(
                     span.set_attribute("mcp.tool.name", tool_name_attr)
                     span.set_attribute("openinference.span.kind", "MCP_TOOL")
                     span.set_attribute("tool.name", tool_name_attr)
-                    
+                    _apply_code_attrs(span)
+
                     if description:
                         span.set_attribute("tool.description", description)
                     if tool_json_schema is not None:
@@ -215,48 +226,45 @@ def span(
         parameters: Tool parameter schema
 
         Note: MCP_TOOL automatically handles:
-        - Pydantic model arguments (via .model_dump())
-        - JSON serialization of results
-        - MCP-specific attributes (mcp.tool.name, mcp.response.value)
 
     Returns:
         Decorated function with span instrumentation
 
     Examples:
         Top-level workflow:
-        
+
         >>> @span(kind="WORKFLOW", name="support_workflow")
         >>> def handle_support(query: str):
         ...     docs = retrieve_docs(query)
         ...     return generate_answer(docs)
 
         Agent with role:
-        
+
         >>> @span(kind="AGENT", role="Researcher", goal="Find relevant papers")
         >>> def research_agent(topic: str):
         ...     return search_and_analyze(topic)
 
         Generic processing step:
-        
+
         >>> @span(kind="CHAIN", name="data_preprocessing")
         >>> def preprocess(data):
         ...     cleaned = clean(data)
         ...     return validate(cleaned)
 
         Tool/function call:
-        
+
         >>> @span(kind="TOOL", tool_name="web_search")
         >>> def search_web(query: str):
         ...     return requests.get(f"https://api.search.com?q={query}")
 
         Retrieval operation:
-        
+
         >>> @span(kind="RETRIEVER", name="vector_search")
         >>> def retrieve_docs(query: str):
         ...     return vector_db.search(query)
 
         MCP tool with auto Pydantic handling:
-        
+
         >>> @span(kind="MCP_TOOL", tool_name="add_numbers", description="Add two numbers")
         >>> async def add(a: int, b: int) -> str:
         ...     return f"Result: {a + b}"
@@ -267,13 +275,20 @@ def span(
         need decoration.
     """
     # Validate kind
-    valid_kinds = {"WORKFLOW", "AGENT", "CHAIN", "TOOL", "RETRIEVER", "EMBEDDING", "GUARDRAIL", "MCP_TOOL"}
+    valid_kinds = {
+        "WORKFLOW",
+        "AGENT",
+        "CHAIN",
+        "TOOL",
+        "RETRIEVER",
+        "EMBEDDING",
+        "GUARDRAIL",
+        "MCP_TOOL",
+    }
     kind_upper = kind.upper()
     if kind_upper not in valid_kinds:
-        raise ValueError(
-            f"Invalid span kind: {kind}. Must be one of {valid_kinds}"
-        )
-    
+        raise ValueError(f"Invalid span kind: {kind}. Must be one of {valid_kinds}")
+
     # MCP_TOOL requires special handling to match exact original logic
     # (needs access to raw args[0] before binding, special output wrapping)
     if kind_upper == "MCP_TOOL":
@@ -379,5 +394,3 @@ def _retriever_postprocessor(span: Any, result: Any, bound_inputs: Dict[str, Any
                     f"retrieval.documents.{i}.document.metadata",
                     _safe_json_dumps(metadata),
                 )
-
-

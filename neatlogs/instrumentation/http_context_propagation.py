@@ -204,4 +204,3 @@ def patch_http_context_propagation() -> None:
     patch_requests()
     patch_aiohttp_client()
     patch_flask_server()
-

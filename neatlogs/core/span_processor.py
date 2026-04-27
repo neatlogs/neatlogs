@@ -199,8 +199,7 @@ class NeatlogsSpanProcessor(SpanProcessor):
                     ):
                         keys_to_remove.append(key)
                     elif skip_output and (
-                        key == "neatlogs.embedding.input"
-                        or key == "neatlogs.embedding.output"
+                        key == "neatlogs.embedding.input" or key == "neatlogs.embedding.output"
                     ):
                         keys_to_remove.append(key)
 
@@ -356,9 +355,8 @@ class NeatlogsSpanProcessor(SpanProcessor):
             # 8. Log processed span dict (human-readable JSON lines, same format as before)
             if self._processed_log_file_handle and not self._processed_log_file_handle.closed:
                 try:
-                    self._processed_log_file_handle.write(
-                        json.dumps(span_data) + "\n"
-                    )
+                    span_data_for_log = apply_mask(dict(span_data), self.mask)
+                    self._processed_log_file_handle.write(json.dumps(span_data_for_log) + "\n")
                     self._processed_log_file_handle.flush()
                 except Exception as e:
                     logger.warning(f"Failed to write span to processed log file: {e}")

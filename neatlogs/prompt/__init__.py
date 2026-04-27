@@ -5,10 +5,10 @@ Prompt template utilities for Neatlogs SDK.
 from .client import (
     CachedPrompt,
     PromptApiError,
+    PromptClient,
     PromptClientError,
     PromptHandle,
     PromptNotFoundError,
-    PromptClient,
 )
 from .template import SystemPromptTemplate, PromptTemplate, UserPromptTemplate
 

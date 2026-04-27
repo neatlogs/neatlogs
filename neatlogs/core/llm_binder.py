@@ -57,11 +57,12 @@ def bind_templates(
     # Clone the LLM so different agents can each have their own binding.
     # Safe to bind in-place when each agent constructs its own LLM instance.
     import copy as _copy
+
     llm_copy = None
     for _attempt in (
         lambda: llm.model_copy(),  # Pydantic v2
-        lambda: llm.copy(),        # Pydantic v1
-        lambda: _copy.copy(llm),   # plain Python classes (e.g. crewai.LLM)
+        lambda: llm.copy(),  # Pydantic v1
+        lambda: _copy.copy(llm),  # plain Python classes (e.g. crewai.LLM)
     ):
         try:
             llm_copy = _attempt()

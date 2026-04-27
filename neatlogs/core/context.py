@@ -27,7 +27,7 @@ def trace(
     IMPORTANT: This is NOT required for basic tracing!
     - Framework code (LangChain, OpenAI, etc.) is auto-instrumented
     - Custom code should use @span(kind="...") decorator
-    
+
     Use trace() ONLY for:
     1. Prompt template tracking (captures template + variables for versioning)
     2. Multi-turn session management (groups turns within a session)
@@ -54,11 +54,11 @@ def trace(
         **attributes: Additional attributes to set on the span
 
     Examples:
-        
+
         Use Case 1: Prompt template tracking (inside your function):
-        
+
         >>> template = SystemPromptTemplate([{"role": "user", "content": "{{query}}"}])
-        >>> 
+        >>>
         >>> @span(kind="AGENT")
         >>> def my_agent(query: str):
         ...     with trace(name="prompt", prompt_template=template):
@@ -67,17 +67,17 @@ def trace(
         ...     return response
 
         Use Case 2: Multi-turn sessions:
-        
+
         >>> neatlogs.init(api_key="...", session_id="user-123")
-        >>> 
+        >>>
         >>> with trace(name="turn_1"):  # New root trace (same session)
         ...     agent.run("Hello")
-        >>> 
+        >>>
         >>> with trace(name="turn_2"):  # New root trace (same session)
         ...     agent.run("Tell me more")
 
         Use Case 3: Grouping multiple operations in main:
-        
+
         >>> def main():
         ...     with trace(name="pipeline"):  # Groups multiple steps
         ...         step1()  # @span(kind="CHAIN")
@@ -85,15 +85,15 @@ def trace(
         ...         step3()  # @span(kind="AGENT")
 
         What NOT to do:
-        
+
         >>> @span(kind="WORKFLOW")
         >>> def my_workflow():
         ...     pass
-        >>> 
+        >>>
         >>> # ❌ WRONG: Redundant wrapper!
         >>> with trace(name="main"):
         ...     my_workflow()  # Already traced by @span decorator
-        >>> 
+        >>>
         >>> # ✅ CORRECT: Just call it
         >>> my_workflow()
     """
@@ -144,7 +144,9 @@ def trace(
 
     ctx = get_current()
     variables_json = json.dumps(prompt_variables, default=str) if prompt_variables else None
-    user_variables_json = json.dumps(user_prompt_variables, default=str) if user_prompt_variables else None
+    user_variables_json = (
+        json.dumps(user_prompt_variables, default=str) if user_prompt_variables else None
+    )
 
     if variables_json:
         ctx = set_value("neatlogs.prompt_variables", variables_json, context=ctx)
@@ -154,10 +156,14 @@ def trace(
         logger.debug(f"[trace] Set neatlogs.prompt_template in context: {template_string}")
     if user_variables_json:
         ctx = set_value("neatlogs.user_prompt_variables", user_variables_json, context=ctx)
-        logger.debug(f"[trace] Set neatlogs.user_prompt_variables in context: {user_variables_json}")
+        logger.debug(
+            f"[trace] Set neatlogs.user_prompt_variables in context: {user_variables_json}"
+        )
     if user_template_string:
         ctx = set_value("neatlogs.user_prompt_template", user_template_string, context=ctx)
-        logger.debug(f"[trace] Set neatlogs.user_prompt_template in context: {user_template_string}")
+        logger.debug(
+            f"[trace] Set neatlogs.user_prompt_template in context: {user_template_string}"
+        )
     if version:
         ctx = set_value("neatlogs.prompt_version", version, context=ctx)
         logger.debug(f"[trace] Set neatlogs.prompt_version in context: {version}")
@@ -175,12 +181,15 @@ def trace(
                 )
                 if mask is not None:
                     from .mask import register_mask
+
                     span.set_attribute("neatlogs.mask_id", register_mask(mask))
                 if stdout_ctx:
                     stdout_ctx.__enter__()
                 try:
                     yield span
-                    _finalize_prompt_capture(span, is_prompt_template_obj, is_user_prompt_template_obj, logger)
+                    _finalize_prompt_capture(
+                        span, is_prompt_template_obj, is_user_prompt_template_obj, logger
+                    )
                 finally:
                     if stdout_ctx:
                         stdout_ctx.__exit__(None, None, None)
@@ -192,12 +201,15 @@ def trace(
                 )
                 if mask is not None:
                     from .mask import register_mask
+
                     span.set_attribute("neatlogs.mask_id", register_mask(mask))
                 if stdout_ctx:
                     stdout_ctx.__enter__()
                 try:
                     yield span
-                    _finalize_prompt_capture(span, is_prompt_template_obj, is_user_prompt_template_obj, logger)
+                    _finalize_prompt_capture(
+                        span, is_prompt_template_obj, is_user_prompt_template_obj, logger
+                    )
                 finally:
                     if stdout_ctx:
                         stdout_ctx.__exit__(None, None, None)

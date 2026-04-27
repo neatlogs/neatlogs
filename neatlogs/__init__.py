@@ -9,9 +9,9 @@ Primary API:
 
 Quick Start:
     >>> from neatlogs import init, span, trace, SystemPromptTemplate
-    >>> 
+    >>>
     >>> init(api_key="...", instrumentations=["openai"])
-    >>> 
+    >>>
     >>> @span(kind="WORKFLOW")
     >>> def my_workflow(query: str):
     ...     return process(query)
@@ -39,14 +39,14 @@ from .prompt.client import (
     PromptClientError,
     PromptHandle,
     PromptNotFoundError,
-    get_prompt,
-    fetch_prompt,
-    list_prompts,
     create_prompt,
-    update_prompt,
-    save_as_version,
     delete_prompt,
+    fetch_prompt,
+    get_prompt,
+    list_prompts,
     remove_tag,
+    save_as_version,
+    update_prompt,
 )
 from .prompt.template import SystemPromptTemplate, PromptTemplate, UserPromptTemplate
 from .version import __version__

@@ -55,7 +55,9 @@ class NeatlogsExporter:
         self.api_key = api_key
         self.endpoint = endpoint.rstrip("/")
         self.workflow_name = (
-            workflow_name.strip() if isinstance(workflow_name, str) and workflow_name.strip() else "neatlogs-app"
+            workflow_name.strip()
+            if isinstance(workflow_name, str) and workflow_name.strip()
+            else "neatlogs-app"
         )
         self.batch_size = batch_size
         self.flush_interval = flush_interval
@@ -339,9 +341,7 @@ class NeatlogsExporter:
                     )
                     break
                 elif response.status_code == 401:
-                    self._emit_export_error(
-                        "Authentication failed (invalid API key)"
-                    )
+                    self._emit_export_error("Authentication failed (invalid API key)")
                     break
                 elif response.status_code == 429:
                     self._emit_export_error(
@@ -373,9 +373,7 @@ class NeatlogsExporter:
                     time.sleep(2**attempt)
                     continue
                 else:
-                    self._emit_export_error(
-                        f"Export failed after {self.max_retries} attempts: {e}"
-                    )
+                    self._emit_export_error(f"Export failed after {self.max_retries} attempts: {e}")
 
     def _response_snippet(self, response: requests.Response, max_len: int = 240) -> str:
         """

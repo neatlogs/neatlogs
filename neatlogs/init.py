@@ -14,14 +14,15 @@ try:
     from opentelemetry import logs
 except ImportError:
     from opentelemetry import _logs as logs  # type: ignore[no-redef]
+
 from opentelemetry import metrics, trace
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk._logs import LoggerProvider
-from opentelemetry.sdk._logs.export import SimpleLogRecordProcessor
+from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 from opentelemetry.sdk.environment_variables import (
     OTEL_ATTRIBUTE_COUNT_LIMIT,
     OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT,
 )
-from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.resources import SERVICE_NAME, Resource
 from opentelemetry.sdk.trace import SpanLimits, TracerProvider
@@ -40,7 +41,6 @@ _initialized = False
 _tracer_provider = None
 _meter_provider = None
 _log_provider = None
-_log_span_exporter = None
 _span_processor = None
 _debug_mode = False
 _session_config = {
@@ -55,6 +55,7 @@ _session_config = {
 def is_debug_enabled() -> bool:
     """Return True if neatlogs was initialized with debug=True."""
     return _debug_mode
+
 
 _DEFAULT_MAX_SPAN_ATTRIBUTES = 10_000
 
@@ -88,10 +89,9 @@ def _span_limits_for_capture_everything() -> SpanLimits:
     return SpanLimits(max_span_attributes=_DEFAULT_MAX_SPAN_ATTRIBUTES)
 
 
-
 def init(
     api_key: Optional[str] = None,
-    endpoint: str = "https://staging-cloud.neatlogs.com/api/data/v4/batch",
+    endpoint: str = "https://staging-cloud.neatlogs.com",
     workflow_name: Optional[str] = None,
     session_id: Optional[str] = None,
     auto_session: bool = False,
@@ -201,6 +201,7 @@ def init(
             logger.debug(f"Auto-generated session_id: {final_session_id}")
 
     from urllib.parse import urlparse as _urlparse
+
     _parsed = _urlparse(endpoint)
     _base_url = f"{_parsed.scheme}://{_parsed.netloc}"
 
@@ -303,23 +304,22 @@ def init(
     # --- Logs signal (opt-in) ---
     # neatlogs.log(), capture_stdout=True, and logging.* auto-capture all require
     # capture_logs=True. When False, nothing is captured as LOG spans.
-    global _log_provider, _log_span_exporter
+    global _log_provider
     if capture_logs:
-        from .core.exporter import NeatlogsExporter
-        from .core.log_exporter import NeatlogsLogExporter
+        from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
 
-        logs_batch_endpoint = f"{_base_url}/api/data/v4/batch"
-        _log_span_exporter = NeatlogsExporter(
-            api_key=resolved_key,
-            endpoint=logs_batch_endpoint,
-            workflow_name=resolved_workflow_name,
-            batch_size=batch_size,
-            flush_interval=flush_interval,
-            disable_export=disable_export_resolved,
+        from .core.log_exporter import NeatlogsLogFilter
+
+        logs_endpoint = f"{_base_url}/v1/logs"
+        _otlp_log_exporter = OTLPLogExporter(
+            endpoint=logs_endpoint,
+            headers={"x-api-key": resolved_key},
         )
         _log_provider = LoggerProvider(resource=resource)
+        # NeatlogsLogFilter drops external-module and no-trace records before
+        # BatchLogRecordProcessor batches and sends them via OTLPLogExporter.
         _log_provider.add_log_record_processor(
-            SimpleLogRecordProcessor(NeatlogsLogExporter(_log_span_exporter))
+            NeatlogsLogFilter(BatchLogRecordProcessor(_otlp_log_exporter))
         )
         logs.set_logger_provider(_log_provider)
 
@@ -336,7 +336,7 @@ def init(
             if debug:
                 logger.debug(
                     "Neatlogs log capture enabled "
-                    f"(logging.* at {log_level.upper()}+, endpoint: {logs_batch_endpoint})"
+                    f"(logging.* at {log_level.upper()}+, endpoint: {logs_endpoint})"
                 )
         except ImportError:
             if debug:
@@ -378,8 +378,21 @@ def init(
 
 def flush(timeout_millis: int = 30000) -> bool:
     """Flush all pending spans and metrics."""
-    global _tracer_provider, _meter_provider, _log_span_exporter
+    global _tracer_provider, _meter_provider
     success = True
+
+    # Log provider must flush BEFORE tracer provider: the tracer batch includes
+    # the neatlogs.trace.complete marker which triggers server-side finalization.
+    # Flushing logs first guarantees LOG records reach ClickHouse before the
+    # completion marker fires the trace-finalizer query.
+    if _log_provider:
+        try:
+            logger.debug("Flushing log provider...")
+            _log_provider.force_flush(timeout_millis=timeout_millis)
+            logger.debug("Log provider flushed successfully")
+        except Exception as e:
+            logger.error(f"Error flushing logs: {e}", exc_info=True)
+            success = False
 
     if _tracer_provider:
         try:
@@ -401,15 +414,6 @@ def flush(timeout_millis: int = 30000) -> bool:
             logger.error(f"Error flushing metrics: {e}", exc_info=True)
             success = False
 
-    if _log_span_exporter:
-        try:
-            logger.debug("Flushing log span exporter...")
-            _log_span_exporter.flush(timeout=timeout_millis / 1000.0)
-            logger.debug("Log span exporter flushed successfully")
-        except Exception as e:
-            logger.error(f"Error flushing logs: {e}", exc_info=True)
-            success = False
-
     return success
 
 
@@ -420,7 +424,7 @@ def get_session_config():
 
 def shutdown(timeout_millis: int = 30000) -> bool:
     """Shutdown the SDK and flush pending spans/metrics."""
-    global _tracer_provider, _meter_provider, _log_provider, _log_span_exporter, _span_processor, _initialized
+    global _tracer_provider, _meter_provider, _log_provider, _span_processor, _initialized
 
     try:
         atexit.unregister(shutdown)
@@ -465,15 +469,6 @@ def shutdown(timeout_millis: int = 30000) -> bool:
             logger.error(f"Error shutting down log provider: {e}", exc_info=True)
             success = False
 
-    if _log_span_exporter:
-        try:
-            logger.debug("Shutting down log span exporter...")
-            _log_span_exporter.shutdown()
-            logger.debug("Log span exporter shut down successfully")
-        except Exception as e:
-            logger.error(f"Error shutting down log span exporter: {e}", exc_info=True)
-            success = False
-
     try:
         from opentelemetry.instrumentation.logging import LoggingInstrumentor
 
@@ -485,7 +480,6 @@ def shutdown(timeout_millis: int = 30000) -> bool:
     _tracer_provider = None
     _meter_provider = None
     _log_provider = None
-    _log_span_exporter = None
     _span_processor = None
     _debug_mode = False
     _session_config["session_id"] = None

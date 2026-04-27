@@ -103,7 +103,12 @@ def trace(
     from opentelemetry.context import attach, detach, get_current, set_value
 
     from ..init import get_session_config
-    from ..prompt.template import PromptContext, SystemPromptTemplate, UserPromptContext, UserPromptTemplate
+    from ..prompt.template import (
+        PromptContext,
+        SystemPromptTemplate,
+        UserPromptContext,
+        UserPromptTemplate,
+    )
 
     logger = logging.getLogger(__name__)
     tracer = otel_trace.get_tracer(__name__)

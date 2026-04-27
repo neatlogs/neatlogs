@@ -23,15 +23,19 @@ Expected output (no errors):
 """
 
 import os
-import neatlogs
+
 from opentelemetry import trace as otel_trace
 from opentelemetry.trace import StatusCode
+
+import neatlogs
 
 
 def main():
     neatlogs.init(
         api_key=None,  # reads NEATLOGS_API_KEY from env
-        endpoint=os.environ.get("NEATLOGS_ENDPOINT", "https://staging-cloud.neatlogs.com/api/data/v4/batch"),
+        endpoint=os.environ.get(
+            "NEATLOGS_ENDPOINT", "https://staging-cloud.neatlogs.com/api/data/v4/batch"
+        ),
         workflow_name="test-manual-llm-span",
         disable_export=False,
     )

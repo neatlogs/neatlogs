@@ -24,6 +24,7 @@ In the dashboard, the "test-pii" span should show:
 """
 
 import os
+
 import neatlogs
 
 
@@ -39,7 +40,9 @@ def redact_pii(span):
 def main():
     neatlogs.init(
         api_key=None,  # reads NEATLOGS_API_KEY from env
-        endpoint=os.environ.get("NEATLOGS_ENDPOINT", "https://staging-cloud.neatlogs.com/api/data/v4/batch"),
+        endpoint=os.environ.get(
+            "NEATLOGS_ENDPOINT", "https://staging-cloud.neatlogs.com/api/data/v4/batch"
+        ),
         workflow_name="test-pii-masking",
         mask=redact_pii,
         disable_export=False,
@@ -49,6 +52,7 @@ def main():
     def handle_request(query: str, user_email: str, password: str):
         # Simulate setting span attributes that contain PII
         from opentelemetry import trace as otel_trace
+
         span = otel_trace.get_current_span()
         span.set_attribute("input.user_email", user_email)
         span.set_attribute("input.password", password)

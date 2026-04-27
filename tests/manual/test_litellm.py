@@ -27,12 +27,15 @@ Expected output (no errors):
 """
 
 import os
+
 import neatlogs
 from neatlogs import SystemPromptTemplate, UserPromptTemplate
 
 neatlogs.init(
     api_key=None,  # reads NEATLOGS_API_KEY from env
-    endpoint=os.environ.get("NEATLOGS_ENDPOINT", "https://staging-cloud.neatlogs.com/api/data/v4/batch"),
+    endpoint=os.environ.get(
+        "NEATLOGS_ENDPOINT", "https://staging-cloud.neatlogs.com/api/data/v4/batch"
+    ),
     workflow_name="test-litellm",
     instrumentations=["litellm"],
 )
@@ -45,9 +48,9 @@ user_tpl = UserPromptTemplate("{{query}}")
 
 @neatlogs.span(kind="WORKFLOW")
 def run(query: str) -> str:
-    with neatlogs.trace("llm_call", kind="LLM",
-                        prompt_template=sys_tpl,
-                        user_prompt_template=user_tpl):
+    with neatlogs.trace(
+        "llm_call", kind="LLM", prompt_template=sys_tpl, user_prompt_template=user_tpl
+    ):
         msgs = [
             {"role": "system", "content": sys_tpl.compile()},
             {"role": "user", "content": user_tpl.compile(query=query)},

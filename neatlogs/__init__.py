@@ -48,7 +48,7 @@ from .prompt.client import (
     save_as_version,
     update_prompt,
 )
-from .prompt.template import SystemPromptTemplate, PromptTemplate, UserPromptTemplate
+from .prompt.template import PromptTemplate, SystemPromptTemplate, UserPromptTemplate
 from .version import __version__
 
 __all__ = [

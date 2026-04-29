@@ -57,7 +57,7 @@ Requires Python >= 3.10, < 3.14. Notable version pins: `crewai >= 1.9.3`.
 
 For server applications, `neatlogs.init()` is called **once at startup**. Do NOT call `flush()` or `shutdown()` on every request — spans batch automatically every `flush_interval` (default 5 seconds).
 
-`neatlogs.init()` does **not** auto-instrument inbound FastAPI/ASGI server request spans. It does always instrument outgoing HTTP clients (`requests`, `httpx`, `urllib3`, `aiohttp`) for context propagation. If a service has many non-AI routes or background HTTP calls, those outgoing HTTP-only traces can still create confusing 0-span/non-AI rows depending on backend/UI filtering. Wrapping the AI endpoint in a NeatLogs `WORKFLOW` span gives the AI path the right trace structure, but it does not suppress unrelated non-AI HTTP-only traces; robust suppression belongs in backend finalization/query logic. Use the manual repro in `tests/manual/test_http_zero_span_repro.py` to confirm behavior locally.
+`neatlogs.init()` does **not** auto-instrument inbound FastAPI/ASGI server request spans. It does always instrument outgoing HTTP clients (`requests`, `httpx`, `urllib3`, `aiohttp`) for context propagation. Wrap AI endpoints in a NeatLogs `WORKFLOW` span so they appear with proper trace structure in the dashboard.
 
 ```python
 import neatlogs

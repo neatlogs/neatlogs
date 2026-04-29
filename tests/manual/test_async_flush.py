@@ -27,11 +27,8 @@ import neatlogs
 async def main():
     neatlogs.init(
         api_key=None,  # reads NEATLOGS_API_KEY from env
-        endpoint=os.environ.get(
-            "NEATLOGS_ENDPOINT", "https://staging-cloud.neatlogs.com/api/data/v4/batch"
-        ),
+        endpoint=os.environ.get("NEATLOGS_ENDPOINT", "https://staging-cloud.neatlogs.com"),
         workflow_name="test-async-flush",
-        disable_export=False,
     )
 
     @neatlogs.span(kind="CHAIN")

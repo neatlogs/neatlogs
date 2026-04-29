@@ -89,7 +89,7 @@ import json
 @neatlogs.span(kind="TOOL", tool_name="web_search")
 def web_search(query: str) -> str:
     with neatlogs.trace("web_search_schema") as span:
-        span.set_attribute("neatlogs.tool.json_schema", json.dumps({
+        span.set_attribute("tool.json_schema", json.dumps({
             "type": "object",
             "properties": {"query": {"type": "string"}},
             "required": ["query"],
@@ -352,14 +352,14 @@ When using `@span(kind="RETRIEVER")`, the decorator auto-sets these attributes. 
 
 ### TOOL Attributes
 
-| Attribute | Type | Description |
-|-----------|------|-------------|
-| `neatlogs.tool.name` | `str` | Tool name (set via `tool_name` param in `@span`) |
-| `neatlogs.tool.description` | `str` | Tool description (set via `description` param) |
-| `neatlogs.tool.parameters` | `JSON str` | Tool parameters |
-| `neatlogs.tool.json_schema` | `JSON str` | Tool JSON schema |
+| Raw attribute for `span.set_attribute()` | Normalized in export/dashboard | Type | Description |
+|---|---|---|---|
+| `tool.name` | `neatlogs.tool.name` | `str` | Tool name (set automatically via `tool_name` param in `@span`) |
+| `tool.description` | `neatlogs.tool.description` | `str` | Tool description (set automatically via `description` param in `@span`) |
+| `tool.parameters` | `neatlogs.tool.parameters` | `JSON str` | Tool parameters |
+| `tool.json_schema` | `neatlogs.tool.json_schema` | `JSON str` | Tool JSON schema |
 
-> **IMPORTANT gotcha**: When using `trace()` for TOOL spans, the attribute key is `tool.name` (dotted, not underscored). Python kwargs can't have dots, so use `span.set_attribute("tool.name", "my_tool")`. Using `tool_name` (underscore) will NOT show the tool name in the NeatLogs dashboard.
+> **IMPORTANT gotcha**: When using `trace()` for TOOL spans, set the raw OpenInference key (for example `tool.name` or `tool.json_schema`). The SDK normalizes it to `neatlogs.tool.*` before export. Python kwargs can't have dots, so use `span.set_attribute("tool.name", "my_tool")`; using `tool_name` (underscore) will NOT show the tool name in the NeatLogs dashboard.
 
 ---
 
@@ -428,19 +428,7 @@ neatlogs.log("retrieved {count} docs in {ms}ms", count=len(docs), ms=elapsed)
 
 ---
 
-## 8. Stdlib Logging Auto-Capture
-
-```python
-neatlogs.init(capture_logs=True, log_level="INFO")
-```
-
-- Auto-captures stdlib `logging.info()`, `logging.warning()`, `logging.error()` calls as LOG spans inside `@span` or `trace()` blocks
-- `log_level` (default `"INFO"`) sets the minimum level to capture
-- Only captures logs that occur within an active span context
-
----
-
-## 9. Span Nesting Pattern
+## 8. Span Nesting Pattern
 
 Decorators and context managers create parent-child relationships. Each nested `@span` or `trace()` becomes a child of the enclosing span:
 
@@ -456,7 +444,7 @@ The nesting is automatic — OpenTelemetry's context propagation ensures that an
 
 ---
 
-## 10. Async Support
+## 9. Async Support
 
 - `@span()` works with both sync and async functions automatically. It detects `async def` functions and wraps them correctly.
 - `trace()` is a sync `@contextmanager` but works in async code — the context manager itself is sync, the code inside can be async.

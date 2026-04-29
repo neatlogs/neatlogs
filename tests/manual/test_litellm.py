@@ -33,9 +33,7 @@ from neatlogs import SystemPromptTemplate, UserPromptTemplate
 
 neatlogs.init(
     api_key=None,  # reads NEATLOGS_API_KEY from env
-    endpoint=os.environ.get(
-        "NEATLOGS_ENDPOINT", "https://staging-cloud.neatlogs.com/api/data/v4/batch"
-    ),
+    endpoint=os.environ.get("NEATLOGS_ENDPOINT", "https://staging-cloud.neatlogs.com"),
     workflow_name="test-litellm",
     instrumentations=["litellm"],
 )

@@ -92,7 +92,28 @@ for cls_path in [
 
 ---
 
-## 5. Duplicate Span Issues
+## 5. Zero-Span Rows from Non-AI HTTP Traffic
+
+`neatlogs.init()` always instruments outgoing HTTP clients (`requests`, `httpx`, `urllib3`, `aiohttp`) for trace context propagation. It does **not** auto-instrument inbound FastAPI/ASGI server spans; those appear only if the application enables FastAPI/ASGI OpenTelemetry instrumentation separately.
+
+If the dashboard shows rows with 0 spans for non-AI activity, distinguish these cases:
+
+1. **Outgoing HTTP-only traces** from background jobs, health checks, or non-AI endpoints. These can be produced by NeatLogs' always-on HTTP client instrumentation.
+2. **Inbound FastAPI/ASGI request root spans** only when the customer has separately enabled FastAPI/ASGI OTel instrumentation.
+
+Customer-side initialization changes alone do not robustly suppress these rows. The correct product fix is backend-side trace row creation/finalization: only create or display a workflow trace row when the trace contains at least one NeatLogs semantic application span (`neatlogs.span.kind` such as `workflow`, `agent`, `llm`, `tool`, etc.), or preserve a non-AI HTTP root only when it has semantic children. Frontend filtering (for example, span count > 1) is acceptable as a temporary workaround but hides the symptom rather than fixing ingestion/finalization.
+
+For local confirmation, run:
+
+```bash
+NEATLOGS_API_KEY=<your-key> python tests/manual/test_http_zero_span_repro.py
+```
+
+This creates one outgoing HTTP-only trace and one proper `@span(kind="WORKFLOW")` trace so you can compare what the UI displays.
+
+---
+
+## 6. Duplicate Span Issues
 
 When using CrewAI, adding both provider-specific and framework instrumentations creates intentional parent-child hierarchies — but the wrong combination causes duplicate spans:
 
@@ -103,7 +124,7 @@ Do NOT add both `"litellm"` and a provider-specific key (e.g. `"openai"`) when C
 
 ---
 
-## 6. Flush/Shutdown Gotcha
+## 7. Flush/Shutdown Gotcha
 
 Scripts (not long-running servers) **MUST** call `neatlogs.flush()` then `neatlogs.shutdown()` before exit — these two calls are compulsory. Without them, the last batch of spans may not be exported.
 
@@ -163,7 +184,7 @@ asyncio.run(main())
 
 ---
 
-## 7. Debug Mode
+## 8. Debug Mode
 
 ```python
 neatlogs.init(debug=True)
@@ -179,7 +200,7 @@ neatlogs.init(debug=True)
 
 ---
 
-## 8. Common Anti-Patterns Table
+## 9. Common Anti-Patterns Table
 
 | Anti-Pattern | Why It's Wrong | Fix |
 |-------------|----------------|-----|
@@ -195,7 +216,7 @@ neatlogs.init(debug=True)
 
 ---
 
-## 9. Data Masking
+## 10. Data Masking
 
 For the full client-side masking example and server-side PII redaction configuration, see the [Data Masking and PII section in SKILL.md](../SKILL.md#data-masking-and-pii).
 

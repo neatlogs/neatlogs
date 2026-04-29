@@ -16,7 +16,7 @@ NeatLogs auto-instruments LLM calls, agent frameworks, and custom code with just
 
 ## Installation
 
-Base install — includes lightweight OpenInference instrumentation adapters for all 45+ supported libraries (thin wrappers that do **not** pull in heavy LLM/framework dependencies):
+Base install — includes the SDK plus lightweight instrumentation adapters for the customer-facing integrations listed below. Optional extras install the actual LLM/framework libraries when needed:
 
 ```bash
 pip install neatlogs
@@ -31,12 +31,12 @@ pip install neatlogs[google-genai]
 pip install neatlogs[langchain]
 pip install neatlogs[langchain,langgraph]
 pip install neatlogs[crewai]
-pip install neatlogs[crewai,google-genai,litellm,azure-ai-inference]
+pip install neatlogs[crewai,google-genai,litellm]
 ```
 
 Combine multiple extras with commas: `pip install neatlogs[crewai,google-genai,litellm]`
 
-Full list of available extras: `openai`, `anthropic`, `langchain`, `langgraph`, `crewai`, `litellm`, `google-genai`, `bedrock`, `groq`, `guardrails`, `mcp`, `vertexai`, `azure-ai-inference`
+Customer-facing tested extras: `openai`, `anthropic`, `langchain`, `langgraph`, `crewai`, `litellm`, `google-genai`, `mcp`
 
 Requires Python >= 3.10, < 3.14. Notable version pins: `crewai >= 1.9.3`.
 
@@ -48,7 +48,7 @@ Requires Python >= 3.10, < 3.14. Notable version pins: `crewai >= 1.9.3`.
 2. **Scripts**: end with `neatlogs.flush()` then `neatlogs.shutdown()`. **Servers**: call `init()` once at startup; do NOT call `flush()` or `shutdown()` on every request — see [Long-Running Servers](#long-running-servers-fastapi-flask-django) below.
 3. **Use `@span` decorators** for custom code; use `trace()` context manager for prompt template tracking or span kinds not supported by `@span` (`RERANKER`, `VECTOR_STORE`, `LLM`).
 4. **Prefer auto-instrumentation** (`instrumentations=["openai"]`) over manual wrapping when possible.
-5. **Init is single-shot**: `neatlogs.init()` configures the global telemetry provider. Calling it a second time raises `ValueError`. If you need to reinitialize, call `neatlogs.shutdown()` first (rare).
+5. **Init is single-shot**: `neatlogs.init()` configures the global telemetry provider. Calling it again is a no-op (with a debug warning when `debug=True`). If you need to reinitialize, call `neatlogs.shutdown()` first (rare).
 6. **Read reference docs** before implementing — NeatLogs updates frequently.
 
 ---
@@ -56,6 +56,8 @@ Requires Python >= 3.10, < 3.14. Notable version pins: `crewai >= 1.9.3`.
 ## Long-Running Servers (FastAPI, Flask, Django)
 
 For server applications, `neatlogs.init()` is called **once at startup**. Do NOT call `flush()` or `shutdown()` on every request — spans batch automatically every `flush_interval` (default 5 seconds).
+
+`neatlogs.init()` does **not** auto-instrument inbound FastAPI/ASGI server request spans. It does always instrument outgoing HTTP clients (`requests`, `httpx`, `urllib3`, `aiohttp`) for context propagation. If a service has many non-AI routes or background HTTP calls, those outgoing HTTP-only traces can still create confusing 0-span/non-AI rows depending on backend/UI filtering. Wrapping the AI endpoint in a NeatLogs `WORKFLOW` span gives the AI path the right trace structure, but it does not suppress unrelated non-AI HTTP-only traces; robust suppression belongs in backend finalization/query logic. Use the manual repro in `tests/manual/test_http_zero_span_repro.py` to confirm behavior locally.
 
 ```python
 import neatlogs
@@ -79,8 +81,9 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 
 @app.get("/ask")
+@neatlogs.span(kind="WORKFLOW", name="ask_workflow")
 async def ask(q: str):
-    # Auto-instrumented — spans are batched and exported automatically
+    # Auto-instrumented LLM call becomes a child of this WORKFLOW span
     response = client.chat.completions.create(
         model="gpt-4o",
         messages=[{"role": "user", "content": q}],
@@ -139,7 +142,7 @@ neatlogs.shutdown()
 | Parameter | Type | Default | Description |
 |---|---|---|---|
 | `api_key` | `str` | `None` | API key (or set `NEATLOGS_API_KEY` env var). If neither is set, spans are created locally but **silently not exported** — no error is raised |
-| `endpoint` | `str` | `"https://staging-cloud.neatlogs.com/api/data/v4/batch"` | Backend endpoint URL |
+| `endpoint` | `str` | `"https://staging-cloud.neatlogs.com"` | Backend base URL. Trace export is normalized to `{base_url}/v1/traces`; legacy `/api/data/v4/batch` inputs are accepted and rewritten |
 | `workflow_name` | `str` | `None` | Name for this workflow/application |
 | `instrumentations` | `list[str]` | `None` | Libraries to auto-instrument (e.g. `["openai", "langchain"]`) |
 | `tags` | `list[str]` | `None` | Tags for filtering in dashboard |
@@ -150,9 +153,6 @@ neatlogs.shutdown()
 | `flush_interval` | `float` | `5.0` | Seconds between batch flushes |
 | `batch_size` | `int` | `100` | Max spans per batch |
 | `debug` | `bool` | `False` | Enable verbose logging to stderr |
-| `disable_export` | `bool` | `False` | Disable span export (for local testing without sending to dashboard) |
-| `capture_logs` | `bool` | `False` | Auto-capture stdlib `logging` calls as LOG spans inside active span contexts |
-| `log_level` | `str` | `"INFO"` | Minimum log level to capture when `capture_logs=True` |
 | `pii_enabled` | `Optional[bool]` | `None` | Override the team-level server-side PII redaction setting. `True` = enable, `False` = disable, `None` (default) = use the team setting in the NeatLogs dashboard |
 | `pii_span_types` | `list[str]` | `None` | Span types for PII redaction (e.g. `["LLM", "TOOL"]`) |
 | `mask` | `callable` | `None` | Client-side mask function `(span_dict) -> span_dict` |
@@ -167,25 +167,18 @@ Pass these string values in the `instrumentations=[]` list to `neatlogs.init()`.
 
 | Key | Library | Notes |
 |---|---|---|
-| `openai` | OpenAI | |
-| `anthropic` | Anthropic | |
-| `google_genai` | Google Generative AI (`google.genai`) | Client must be created **after** `init()` — see troubleshooting. Preferred key for the `google-genai` SDK |
-| `google_generativeai` | Google Generative AI (`google.generativeai`) | For the older `google-generativeai` SDK |
-| `azure_ai_inference` | Azure AI Inference | |
-| `litellm` | LiteLLM | |
-| `bedrock` | AWS Bedrock | |
-| `groq` | Groq | |
-| `vertexai` | Google Vertex AI | |
-| ⚠️ `ollama` | Ollama | No direct instrumentor — call via OpenAI-compatible endpoint with `openai` key |
+| `openai` | OpenAI | Tested |
+| `anthropic` | Anthropic | Tested |
+| `google_genai` | Google Generative AI (`google.genai`) | Tested. Client must be created **after** `init()` — see troubleshooting |
+| `litellm` | LiteLLM | Tested |
 
 ### Agent Frameworks
 
 | Key | Framework | Notes |
 |---|---|---|
-| `langchain` | LangChain | Also covers LangGraph execution — see below |
-| `crewai` | CrewAI | Auto-loads `litellm`; also add provider keys (e.g. `openai`) |
-| `llamaindex` | LlamaIndex | |
-| ⚠️ `langgraph` | LangGraph | No direct instrumentor. Use `instrumentations=["langchain"]` — LangGraph is built on LangChain and is traced via the LangChain instrumentor |
+| `langchain` | LangChain | Tested. Also covers LangGraph execution — see below |
+| `crewai` | CrewAI | Tested. Auto-loads `litellm`; also add provider keys (e.g. `openai`) |
+| ⚠️ `langgraph` | LangGraph | Tested via LangChain. No direct instrumentor; use `instrumentations=["langchain"]` |
 
 ### Retrieval / Vector Stores
 
@@ -197,9 +190,7 @@ For vector store operations, use `trace("op", kind="VECTOR_STORE")` with manual 
 
 | Key | Library | Notes |
 |---|---|---|
-| `mcp` | Model Context Protocol | |
-| `guardrails` | Guardrails AI | |
-| `google_adk` | Google ADK | |
+| `mcp` | Model Context Protocol | Tested |
 
 > **HTTP libraries** (`requests`, `httpx`, `urllib3`, `aiohttp`) are always auto-instrumented by `neatlogs.init()` for trace context propagation — you do not need to list them in `instrumentations=[]`.
 

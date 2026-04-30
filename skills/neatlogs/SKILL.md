@@ -154,7 +154,6 @@ neatlogs.shutdown()
 | `batch_size` | `int` | `100` | Max spans per batch |
 | `debug` | `bool` | `False` | Enable verbose logging to stderr |
 | `pii_enabled` | `Optional[bool]` | `None` | Override the team-level server-side PII redaction setting. `True` = enable, `False` = disable, `None` (default) = use the team setting in the NeatLogs dashboard |
-| `pii_span_types` | `list[str]` | `None` | Span types for PII redaction (e.g. `["LLM", "TOOL"]`) |
 | `mask` | `callable` | `None` | Client-side mask function `(span_dict) -> span_dict` |
 
 ---
@@ -237,12 +236,11 @@ neatlogs.init(mask=redact_pii)
 
 ### Server-Side PII Redaction
 
-Enable automatic server-side redaction by setting `pii_enabled=True` and optionally scoping to specific span types:
+Enable automatic server-side redaction by setting `pii_enabled=True`:
 
 ```python
 neatlogs.init(
-    pii_enabled=True,          # Override team default — enable redaction for this project
-    pii_span_types=["LLM", "TOOL"],  # Limit to specific span kinds; None = all kinds
+    pii_enabled=True,
 )
 ```
 

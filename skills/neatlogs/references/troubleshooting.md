@@ -96,12 +96,14 @@ for cls_path in [
 
 ## 5. Duplicate Span Issues
 
-When using CrewAI, adding both provider-specific and framework instrumentations creates intentional parent-child hierarchies — but the wrong combination causes duplicate spans:
+When using CrewAI, `"crewai"` auto-loads LiteLLM instrumentation. If the CrewAI LLM is backed by a direct provider SDK, add the matching provider key too:
 
-- **Correct** `["crewai", "openai"]` → CrewAI wraps OpenAI in a parent-child hierarchy (expected)
-- **Duplicate** `["crewai", "openai", "litellm"]` → LiteLLM and OpenAI both fire for the same internal LLM call → duplicate LLM spans
+- Azure OpenAI / Azure AI Inference → `["crewai", "azure_ai_inference"]`
+- OpenAI SDK → `["crewai", "openai"]`
+- Google GenAI → `["crewai", "google_genai"]`
+- Anthropic → `["crewai", "anthropic"]`
 
-Do NOT add both `"litellm"` and a provider-specific key (e.g. `"openai"`) when CrewAI is routing through LiteLLM internally.
+Do NOT add `"litellm"` alongside a direct provider key for the same CrewAI call path unless verified. Example duplicate combination: `["crewai", "openai", "litellm"]` can make LiteLLM and OpenAI both fire for the same internal LLM call.
 
 ---
 

@@ -177,7 +177,7 @@ Pass these string values in the `instrumentations=[]` list to `neatlogs.init()`.
 | Key | Framework | Notes |
 |---|---|---|
 | `langchain` | LangChain | Tested. Also covers LangGraph execution — see below |
-| `crewai` | CrewAI | Tested. Auto-loads `litellm`; also add provider keys (e.g. `openai`) |
+| `crewai` | CrewAI | Tested. Auto-loads `litellm`. If the CrewAI LLM is backed by a direct provider SDK, also add that provider key: Azure OpenAI / Azure AI Inference → `azure_ai_inference`, OpenAI → `openai`, Google GenAI → `google_genai`, Anthropic → `anthropic` |
 | ⚠️ `langgraph` | LangGraph | Tested via LangChain. No direct instrumentor; use `instrumentations=["langchain"]` |
 
 ### Retrieval / Vector Stores

@@ -315,7 +315,7 @@ neatlogs.shutdown()
 
 ## 7. CrewAI
 
-- **Instrumentation key**: `instrumentations=["openai", "crewai", "langchain"]` (CrewAI uses LiteLLM internally; also include provider instrumentations)
+- **Instrumentation key**: start with `instrumentations=["crewai"]`. CrewAI auto-loads LiteLLM. If the CrewAI LLM is backed by a direct provider SDK, also add that provider key: Azure OpenAI / Azure AI Inference → `"azure_ai_inference"`, OpenAI → `"openai"`, Google GenAI → `"google_genai"`, Anthropic → `"anthropic"`.
 - **Use `bind_templates()`** to attach prompt context to agent LLMs
 - **Use `register_crewai_task(task, user_tpl, **vars)`** for task-level prompt tracking
 - **Install**: `pip install neatlogs[crewai]` (pulls in `crewai >= 1.9.3` and `litellm`)
@@ -328,7 +328,7 @@ from neatlogs import SystemPromptTemplate, UserPromptTemplate
 neatlogs.init(
     api_key="...",  # or set NEATLOGS_API_KEY env var
     workflow_name="crewai-app",
-    instrumentations=["openai", "crewai", "langchain"],
+    instrumentations=["crewai", "openai"],  # Azure OpenAI / Azure AI Inference: use "azure_ai_inference" instead of "openai"
 )
 
 from crewai import Agent, Task, Crew, LLM

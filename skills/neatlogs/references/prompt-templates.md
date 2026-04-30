@@ -131,7 +131,7 @@ from neatlogs import SystemPromptTemplate
 neatlogs.init(
     api_key="...",
     workflow_name="marketing",
-    instrumentations=["openai", "crewai", "langchain"],
+    instrumentations=["crewai", "openai"],  # Azure OpenAI / Azure AI Inference: use "azure_ai_inference" instead of "openai"
 )
 
 # System template must NOT have required placeholders — bind_templates()

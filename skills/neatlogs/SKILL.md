@@ -154,6 +154,9 @@ neatlogs.shutdown()
 | `batch_size` | `int` | `100` | Max spans per batch |
 | `debug` | `bool` | `False` | Enable verbose logging to stderr |
 | `pii_enabled` | `Optional[bool]` | `None` | Override the team-level server-side PII redaction setting. `True` = enable, `False` = disable, `None` (default) = use the team setting in the NeatLogs dashboard |
+| `pii_span_types` | `Optional[list[str]]` | `None` | Override which span types have PII redaction applied. `None` = use team dashboard config |
+| `capture_logs` | `bool` | `False` | Capture `neatlogs.log()`, stdlib `logging.*()`, and `print()` (via `capture_stdout=True`) as LOG spans. Required for log capture |
+| `log_level` | `str` | `"INFO"` | Minimum Python logging level to auto-capture as LOG spans when `capture_logs=True` |
 | `mask` | `callable` | `None` | Client-side mask function `(span_dict) -> span_dict` |
 
 ---
@@ -169,6 +172,8 @@ Pass these string values in the `instrumentations=[]` list to `neatlogs.init()`.
 | `openai` | OpenAI | Tested |
 | `anthropic` | Anthropic | Tested |
 | `google_genai` | Google Generative AI (`google.genai`) | Tested. Client must be created **after** `init()` — see troubleshooting |
+| `azure_ai_inference` | Azure AI Inference | For Azure OpenAI / Azure AI models |
+| `bedrock` | AWS Bedrock | `boto3>=1.42.11` |
 | `litellm` | LiteLLM | Tested |
 
 ### Agent Frameworks
@@ -179,9 +184,19 @@ Pass these string values in the `instrumentations=[]` list to `neatlogs.init()`.
 | `crewai` | CrewAI | Tested. Auto-loads `litellm`. If the CrewAI LLM is backed by a direct provider SDK, also add that provider key: Azure OpenAI / Azure AI Inference → `azure_ai_inference`, OpenAI → `openai`, Google GenAI → `google_genai`, Anthropic → `anthropic` |
 | ⚠️ `langgraph` | LangGraph | Tested via LangChain. No direct instrumentor; use `instrumentations=["langchain"]` |
 
-### Retrieval / Vector Stores
+### Vector Databases
 
-For vector store operations, use `trace("op", kind="VECTOR_STORE")` with manual attributes. There is no `instrumentations=[]` key that auto-instruments vector DBs directly.
+| Key | Library | Notes |
+|---|---|---|
+| `chromadb` | ChromaDB | Auto-instrumented via OpenLLMetry |
+| `pinecone` | Pinecone | Auto-instrumented via OpenLLMetry |
+| `qdrant` | Qdrant | Auto-instrumented via OpenLLMetry |
+| `weaviate` | Weaviate | Auto-instrumented via OpenLLMetry/OpenInference |
+| `milvus` | Milvus | `pymilvus>=2.4.0,<2.5.0` |
+| `opensearch` | OpenSearch | Auto-instrumented |
+| `elasticsearch` | Elasticsearch | Auto-instrumented |
+| `redis` | Redis | Auto-instrumented |
+| `marqo` | Marqo | Auto-instrumented |
 
 > **Tip**: If you use LangChain retrievers, add `"langchain"` to `instrumentations=[]` — retriever spans are captured automatically via the LangChain instrumentor.
 
@@ -190,6 +205,8 @@ For vector store operations, use `trace("op", kind="VECTOR_STORE")` with manual 
 | Key | Library | Notes |
 |---|---|---|
 | `mcp` | Model Context Protocol | Tested |
+| `instructor` | Instructor | Structured output library |
+| `guardrails` | Guardrails AI | Safety/validation framework |
 
 > **HTTP libraries** (`requests`, `httpx`, `urllib3`, `aiohttp`) are always auto-instrumented by `neatlogs.init()` for trace context propagation — you do not need to list them in `instrumentations=[]`.
 

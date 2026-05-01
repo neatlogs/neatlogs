@@ -19,6 +19,7 @@ The primary manual instrumentation API for custom code. Wraps a function to crea
     tags=None,               # Optional: list of tags
     capture_input=True,      # Serialize function args to span attributes
     capture_output=True,     # Serialize return value to span attributes
+    capture_stdout=False,    # Capture print() as LOG spans (requires capture_logs=True in init)
     mask=None,               # Per-span mask function
     # Kind-specific parameters:
     role=None,               # AGENT: agent role (sets agent.name)
@@ -213,6 +214,7 @@ with neatlogs.trace(
     user_prompt_template=None,   # Optional: UserPromptTemplate instance
     prompt_variables=None,       # Optional: dict of prompt variables
     user_prompt_variables=None,  # Optional: dict of user prompt variables
+    version=None,                # Optional: version string
     capture_stdout=False,        # Capture stdout
     mask=None,                   # Per-span mask function
 ) as span:
@@ -307,7 +309,7 @@ Manual attributes:
 | `neatlogs.vectordb.vector_dimension` | `int` | Dimension of stored vectors |
 | `neatlogs.vectordb.similarity_algorithm` | `str` | Distance metric (e.g. `cosine`, `dot_product`) |
 
-> **Note**: There is no `instrumentations=[]` key that auto-instruments vector DBs directly. Use `trace("op", kind="VECTOR_STORE")` with manual attributes for all vector DB spans.
+> **Note**: For supported vector DBs (chromadb, pinecone, qdrant, weaviate, milvus, etc.), add them to `instrumentations=[]` for automatic span creation. Use `trace("op", kind="VECTOR_STORE")` with manual attributes only for custom/unsupported vector DB implementations.
 
 ```python
 import neatlogs
@@ -323,24 +325,39 @@ def index_documents(docs: list):
 
 ---
 
-## 4. Manual Attribute Tables for `@span()` Kinds
+## 4. Manual Attribute Tables
+
+> **How attributes work**: The SDK's `_apply_namespace_mapping` in `attribute_processor.py` does two things:
+> 1. Any attribute you set with `neatlogs.*` prefix **passes through unchanged** (line 905)
+> 2. Vendor-specific attributes (from auto-instrumentation) get mapped from their source names to `neatlogs.*` targets using `attribute-mapping.json`
+>
+> This means you CAN set any `neatlogs.*` attribute and it will arrive at the backend. The documented attributes below are the ones the **dashboard renders with specialized views**. Custom `neatlogs.my_app.*` attributes pass through and appear in the raw span data.
 
 ### RETRIEVER Attributes
 
-When using `@span(kind="RETRIEVER")`, the decorator auto-sets these attributes. For manual `span.set_attribute()` in `trace()` blocks, use the **raw** (OpenInference) names — the SDK normalizes them to `neatlogs.retriever.*` before export.
+When using `@span(kind="RETRIEVER")`, the decorator auto-sets retrieval metadata for supported libraries. For custom implementations inside `trace()` blocks, set these manually:
 
-| Raw attribute (for `set_attribute()`) | Normalized (in dashboard) | Type | Description |
-|---|---|---|---|
-| `retrieval.query` | `neatlogs.retriever.query` | `str` | The retrieval query |
-| `retrieval.top_k` | `neatlogs.retriever.top_k` | `int` | Number of results requested |
-| `retrieval.documents.{i}.document.id` | `neatlogs.retriever.documents.{i}.document.id` | `str` | Document ID (indexed per result) |
-| `retrieval.documents.{i}.document.content` | `neatlogs.retriever.documents.{i}.document.content` | `str` | Document content (indexed per result) |
-| `retrieval.documents.{i}.document.score` | `neatlogs.retriever.documents.{i}.document.score` | `float` | Relevance score (indexed per result) |
-| `retrieval.documents.{i}.document.metadata` | `neatlogs.retriever.documents.{i}.document.metadata` | `str` | Document metadata (indexed per result) |
+| Attribute | Type | Description |
+|---|---|---|
+| `neatlogs.retrieval.query` | `str` | The retrieval query |
+| `neatlogs.retrieval.top_k` | `int` | Number of results requested |
+| `neatlogs.retrieval.documents` | `JSON str` | Retrieved documents |
 
-> `@span(kind="RETRIEVER")` auto-extracts query from the first function argument and documents from the return value. Manual `set_attribute` is only needed for custom behavior inside `trace()` blocks. Documents are stored as indexed attributes (one per result), not as a single JSON blob.
+> **Note**: Auto-instrumented libraries set `retrieval.query` (no prefix) which the mapper normalizes to `neatlogs.retriever.query`. When setting manually, use the `neatlogs.retrieval.*` names as shown above — they pass through directly.
+
+### RERANKER Attributes
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `neatlogs.reranker.query` | `str` | The reranking query |
+| `neatlogs.reranker.top_k` | `int` | Number of results to keep |
+| `neatlogs.reranker.model_name` | `str` | Reranker model name |
+| `neatlogs.reranker.input_documents` | `JSON str` | Documents before reranking |
+| `neatlogs.reranker.output_documents` | `JSON str` | Documents after reranking |
 
 ### GUARDRAIL Attributes
+
+> **Note**: Guardrail attributes are NOT defined in `attribute-mapping.json` — they pass through as custom `neatlogs.*` attributes. The dashboard displays them when the span kind is `GUARDRAIL`.
 
 | Attribute | Type | Description |
 |-----------|------|-------------|
@@ -348,46 +365,64 @@ When using `@span(kind="RETRIEVER")`, the decorator auto-sets these attributes. 
 | `neatlogs.guardrail.passed` | `bool` | Whether the guardrail check passed |
 | `neatlogs.guardrail.output` | `str` | Output/result of the guardrail |
 
-> **Note**: These attribute names are not currently standardized in the SDK's attribute-mapping.json. They pass through as raw `neatlogs.*` attributes and appear in the span, but are not specially normalized or rendered in the dashboard. Use them as custom attributes for your own filtering and analysis.
+### VECTOR_STORE Attributes
 
-### TOOL Attributes
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `neatlogs.vectordb.index_name` | `str` | Name of the vector index/collection |
+| `neatlogs.vectordb.embedding_model` | `str` | Embedding model used |
+| `neatlogs.vectordb.vector_dimension` | `int` | Dimension of stored vectors |
+| `neatlogs.vectordb.similarity_algorithm` | `str` | Distance metric (e.g. `cosine`, `dot_product`) |
 
-| Raw attribute for `span.set_attribute()` | Normalized in export/dashboard | Type | Description |
-|---|---|---|---|
-| `tool.name` | `neatlogs.tool.name` | `str` | Tool name (set automatically via `tool_name` param in `@span`) |
-| `tool.description` | `neatlogs.tool.description` | `str` | Tool description (set automatically via `description` param in `@span`) |
-| `tool.parameters` | `neatlogs.tool.parameters` | `JSON str` | Tool parameters |
-| `tool.json_schema` | `neatlogs.tool.json_schema` | `JSON str` | Tool JSON schema |
+> Additional auto-mapped attributes from supported vector DB libraries: `neatlogs.vectordb.retrieval_query`, `neatlogs.vectordb.retrieval_time_taken`, `neatlogs.vectordb.document_attributes`, `neatlogs.vectordb.retrieval_input_params`, `neatlogs.vectordb.retrieval_documents`.
 
-> **IMPORTANT gotcha**: When using `trace()` for TOOL spans, set the raw OpenInference key (for example `tool.name` or `tool.json_schema`). The SDK normalizes it to `neatlogs.tool.*` before export. Python kwargs can't have dots, so use `span.set_attribute("tool.name", "my_tool")`; using `tool_name` (underscore) will NOT show the tool name in the NeatLogs dashboard.
+### TOOL Attributes (auto-handled)
+
+> Prefer `@span(kind="TOOL", tool_name="...", description="...")` — the decorator sets all attributes automatically. Manual `neatlogs.tool.*` attributes are rarely needed.
+
+### Custom Application Attributes
+
+Any `neatlogs.*` attribute passes through to the backend. Use a namespace like `neatlogs.my_app.*` for application-specific data:
+
+```python
+with neatlogs.trace("my_step") as span:
+    span.set_attribute("neatlogs.my_app.customer_tier", "enterprise")
+    span.set_attribute("neatlogs.my_app.request_id", request_id)
+```
+
+> **Do NOT** manually set attributes that auto-instrumentation already handles (`neatlogs.llm.model_name`, `neatlogs.llm.token_count.*`, etc.) — those are auto-mapped from vendor-specific attributes by the SDK's attribute processor.
 
 ---
 
-## 5. Manual LLM Span Attributes (OpenInference Format)
+## 5. Manual LLM Span Attributes
 
-> **Only needed when calling a model's REST endpoint directly** (no SDK). Skip this section if you are using `instrumentations=["openai"]` or other auto-instrumentation keys — those handle attribute formatting automatically.
+> Prefer provider auto-instrumentation plus prompt templates. Manual LLM spans are only needed when calling a model's REST endpoint directly (no SDK wrapper).
 
-When creating manual LLM spans via `trace(kind="LLM")`, the NeatLogs dashboard requires OpenInference flat indexed attributes to render structured message views:
+When creating manual LLM spans via `trace(kind="LLM")`, use `SystemPromptTemplate` / `UserPromptTemplate` and call `.compile()` inside the trace block so prompt text and variables are captured:
 
 ```python
-with neatlogs.trace("llm_call", kind="LLM") as span:
-    span.set_attribute("llm.input_messages.0.message.role", "system")
-    span.set_attribute("llm.input_messages.0.message.content", "You are a helpful assistant.")
-    span.set_attribute("llm.input_messages.1.message.role", "user")
-    span.set_attribute("llm.input_messages.1.message.content", user_query)
+sys_tpl = SystemPromptTemplate("You are a helpful assistant.")
+user_tpl = UserPromptTemplate("{{query}}")
 
-    response = call_llm(messages)
-
-    span.set_attribute("llm.output_messages.0.message.role", "assistant")
-    span.set_attribute("llm.output_messages.0.message.content", response_text)
-    span.set_attribute("llm.model_name", "gpt-4o")
+with neatlogs.trace(
+    "llm_call",
+    kind="LLM",
+    prompt_template=sys_tpl,
+    user_prompt_template=user_tpl,
+):
+    system_prompt = sys_tpl.compile()
+    user_prompt = user_tpl.compile(query=user_query)
+    response = call_llm(system_prompt=system_prompt, prompt=user_prompt)
 ```
+
+> **No custom attributes needed on auto-instrumented LLM spans.** The SDK's `attribute_processor.py` auto-maps vendor attributes (`llm.model_name`, `gen_ai.usage.input_tokens`, etc.) to `neatlogs.llm.*` targets via `attribute-mapping.json`. The `trace(kind="LLM")` wrapper is only for prompt template tracking.
 
 | Wrong | Right |
 |-------|-------|
-| Setting `input.value` as a JSON blob | Use flat indexed attributes: `llm.input_messages.N.message.role`, `llm.input_messages.N.message.content` |
+| Setting `input.value` as a JSON blob | Use prompt templates and compile them inside `trace(kind="LLM")` |
+| Manually setting `neatlogs.llm.model_name` on auto-instrumented calls | Let auto-instrumentation handle it (mapped from `llm.model_name` / `gen_ai.response.model`) |
 
-> Auto-instrumented LLM calls (via `instrumentations=["openai"]` etc.) handle this automatically. This is only needed for manual LLM spans.
+> Auto-instrumented LLM calls (via `instrumentations=["openai"]` etc.) handle provider-specific message formatting automatically. The manual `trace(kind="LLM")` block is only for prompt tracking.
 
 ---
 

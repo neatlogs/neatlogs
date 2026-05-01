@@ -193,8 +193,8 @@ neatlogs.init(debug=True)
 | Not listing all providers in `instrumentations` | Some LLM calls won't be traced | Add all providers your code uses |
 | Mixing `mask` on `init()` and per-span | Both can coexist — per-span mask takes precedence over the global mask for that specific span | This is expected behavior, not a bug |
 | Using `@span` on `StreamingResponse` endpoints | Decorator closes span when function returns, before async generator produces data | Use `trace()` inside the generator body instead |
-| Setting `input.value` as JSON for manual LLM spans | Dashboard won't render structured message views | Use flat indexed attributes: `llm.input_messages.0.message.role` etc. |
-| Using `tool_name` attribute with `trace()` | Dashboard expects `tool.name` (dotted) | Use `span.set_attribute("tool.name", "my_tool")` |
+| Setting `input.value` as JSON for manual LLM spans | Dashboard won't render structured prompt views | Use `SystemPromptTemplate` / `UserPromptTemplate` and call `.compile()` inside `trace(kind="LLM")` |
+| Using `tool_name` attribute with `trace()` | Dashboard expects the public NeatLogs tool metadata key | Use `span.set_attribute("neatlogs.tool.name", "my_tool")` |
 | Using `@span(kind="RERANKER")` or `@span(kind="VECTOR_STORE")` | `@span()` raises `ValueError` for these kinds | Use `trace("name", kind="RERANKER")` or `trace("name", kind="VECTOR_STORE")` instead |
 
 ---

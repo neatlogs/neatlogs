@@ -40,8 +40,8 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import requests
-from fastapi import FastAPI
 from dotenv import load_dotenv
+from fastapi import FastAPI
 
 import neatlogs
 

@@ -398,7 +398,9 @@ with neatlogs.trace("my_step") as span:
 
 > Prefer provider auto-instrumentation plus prompt templates. Manual LLM spans are only needed when calling a model's REST endpoint directly (no SDK wrapper).
 
-When creating manual LLM spans via `trace(kind="LLM")`, use `SystemPromptTemplate` / `UserPromptTemplate` and call `.compile()` inside the trace block so prompt text and variables are captured:
+### 5a. Prompt-template wrapper around an already-instrumented call
+
+This is the common case — an OpenInference instrumentor is patching the SDK and creating the canonical LLM span for you; `trace(kind="LLM")` just attaches prompt templates so they show on the span:
 
 ```python
 sys_tpl = SystemPromptTemplate("You are a helpful assistant.")
@@ -412,7 +414,11 @@ with neatlogs.trace(
 ):
     system_prompt = sys_tpl.compile()
     user_prompt = user_tpl.compile(query=user_query)
-    response = call_llm(system_prompt=system_prompt, prompt=user_prompt)
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[{"role": "system", "content": system_prompt},
+                  {"role": "user", "content": user_prompt}],
+    )
 ```
 
 > **No custom attributes needed on auto-instrumented LLM spans.** The SDK's `attribute_processor.py` auto-maps vendor attributes (`llm.model_name`, `gen_ai.usage.input_tokens`, etc.) to `neatlogs.llm.*` targets via `attribute-mapping.json`. The `trace(kind="LLM")` wrapper is only for prompt template tracking.
@@ -423,6 +429,109 @@ with neatlogs.trace(
 | Manually setting `neatlogs.llm.model_name` on auto-instrumented calls | Let auto-instrumentation handle it (mapped from `llm.model_name` / `gen_ai.response.model`) |
 
 > Auto-instrumented LLM calls (via `instrumentations=["openai"]` etc.) handle provider-specific message formatting automatically. The manual `trace(kind="LLM")` block is only for prompt tracking.
+
+### 5b. Manual LLM span when there's NO SDK to patch
+
+If your code bypasses the LLM vendor SDK and POSTs raw JSON to the model endpoint (e.g. via `httpx.AsyncClient`, `requests.post`, or a streaming REST client), the OpenInference instrumentor has nothing to patch — **no LLM span will be created automatically**. You must create the span yourself AND populate it completely, because no canonical sibling exists.
+
+Two non-obvious requirements apply in this case:
+
+#### Requirement 1: Override `neatlogs.internal=False`
+
+By default, every `neatlogs.trace()` span is stamped with `neatlogs.internal=True`. The backend trace finalizer uses this flag to drop "wrapper" spans that duplicate a canonical OI-instrumented sibling. In the no-SDK case there is no sibling — YOUR span IS the canonical record — so if you leave the flag at its default, the finalizer will delete your LLM span and the trace will appear to have only the AGENT parent in `spans_simplified` (the UI renders an empty 2s card).
+
+Override it on the first line inside the `with` block:
+
+```python
+with neatlogs.trace("raw_api_llm_call", kind="LLM") as llm_span:
+    # Opt out of the "internal wrapper" default so the finalizer keeps this span.
+    llm_span.set_attribute("neatlogs.internal", False)
+    # ... rest of the span setup ...
+```
+
+#### Requirement 2: Set OpenInference source attributes (not `neatlogs.llm.*` targets)
+
+The SDK's attribute mapper rewrites OpenInference-style source names to the canonical `neatlogs.llm.*` targets. The kafka consumer and finalizer populate `spans.input_value`, `spans.output_value`, and the token columns from the **source** names via that mapping — writing directly to the target names passes through unchanged, but the backend columns stay empty.
+
+Set these attributes on the span:
+
+| Source attribute (set by you) | Maps to |
+|---|---|
+| `input.value` (JSON string — list of `{role, content}` dicts) | `spans.input_value`, `neatlogs.llm.input` |
+| `input.mime_type` = `"application/json"` | (hint to UI renderers) |
+| `output.value` (JSON string — list of one `{role, content, tool_calls?}` dict) | `spans.output_value`, `neatlogs.llm.output` |
+| `output.mime_type` = `"application/json"` | (hint to UI renderers) |
+| `llm.model_name` | `neatlogs.llm.model_name` |
+| `llm.provider`, `llm.system` | pass-through |
+| `llm.invocation_parameters` (JSON string) | `neatlogs.llm.invocation_parameters` |
+| `llm.input_messages.{i}.message.role` / `.content` (indexed) | `neatlogs.llm.input_messages.{i}.*` |
+| `llm.output_messages.0.message.role` / `.content` | `neatlogs.llm.output_messages.0.*` |
+| `llm.output_messages.0.message.tool_calls.{i}.tool_call.function.name` / `.arguments` | tool-call nesting |
+| `llm.finish_reason` | pass-through |
+| `llm.token_count.prompt` / `.completion` / `.total` | `neatlogs.llm.token_count.*` |
+| `llm.token_count.completion_details.reasoning` | `neatlogs.llm.token_count.reasoning` |
+
+Complete minimal example for a raw HTTP call to a model endpoint:
+
+```python
+import json, neatlogs, httpx
+
+async def call_model_raw(contents: list[dict], system_prompt: str, model: str):
+    payload = {
+        "contents": contents,
+        "systemInstruction": {"parts": [{"text": system_prompt}]},
+        "generationConfig": {"temperature": 0.7, "maxOutputTokens": 4096},
+    }
+
+    with neatlogs.trace("raw_api_llm_call", kind="LLM") as llm_span:
+        # 1. Opt out of the internal-wrapper default
+        llm_span.set_attribute("neatlogs.internal", False)
+
+        # 2. Static attributes (before the call)
+        llm_span.set_attribute("llm.model_name", model)
+        llm_span.set_attribute("llm.provider", "google")
+        llm_span.set_attribute(
+            "llm.invocation_parameters", json.dumps(payload["generationConfig"])
+        )
+
+        # 3. Input — both the JSON blob and the indexed per-message view
+        input_messages = [{"role": "system", "content": system_prompt}] + [
+            {"role": c["role"], "content": "\n".join(p.get("text", "") for p in c["parts"])}
+            for c in contents
+        ]
+        llm_span.set_attribute("input.value", json.dumps(input_messages))
+        llm_span.set_attribute("input.mime_type", "application/json")
+        for i, msg in enumerate(input_messages):
+            llm_span.set_attribute(f"llm.input_messages.{i}.message.role", msg["role"])
+            llm_span.set_attribute(f"llm.input_messages.{i}.message.content", msg["content"])
+
+        # 4. Make the real HTTP call
+        async with httpx.AsyncClient() as client:
+            r = await client.post(URL, json=payload, headers=HEADERS)
+            data = r.json()
+
+        # 5. Extract output and tokens, set them on the span
+        output_text = data["candidates"][0]["content"]["parts"][0].get("text", "")
+        usage = data.get("usageMetadata", {})
+        output_msg = {"role": "assistant", "content": output_text}
+
+        llm_span.set_attribute("output.value", json.dumps([output_msg]))
+        llm_span.set_attribute("output.mime_type", "application/json")
+        llm_span.set_attribute("llm.output_messages.0.message.role", "assistant")
+        llm_span.set_attribute("llm.output_messages.0.message.content", output_text)
+        llm_span.set_attribute("llm.token_count.prompt", usage.get("promptTokenCount", 0))
+        llm_span.set_attribute("llm.token_count.completion", usage.get("candidatesTokenCount", 0))
+        llm_span.set_attribute("llm.token_count.total", usage.get("totalTokenCount", 0))
+        if usage.get("thoughtsTokenCount"):
+            llm_span.set_attribute(
+                "llm.token_count.completion_details.reasoning",
+                usage["thoughtsTokenCount"],
+            )
+
+        return output_text
+```
+
+This span will show up in the trace UI with model, input, output, token counts, and server-side cost calculation — **identical to an auto-instrumented LLM span**.
 
 ---
 
@@ -496,3 +605,52 @@ async def async_researcher(topic: str) -> str:
         )
     return response.choices[0].message.content
 ```
+
+### Streaming async generators — set span attributes BEFORE the terminal yield
+
+When a `trace()` block sits inside an `async def … yield` generator that streams chunks to a caller, and the caller `break`s out of its `async for` after a terminal chunk (e.g. your own `FINISH` / `DONE` marker), **Python closes the generator without executing any code after that `yield`**. Any `span.set_attribute(...)` calls placed after the terminal yield silently never run — even though the `with neatlogs.trace(...)` block's `__exit__` still fires and closes the span.
+
+Observable symptom: the span exists with its pre-loop attributes (model, input) populated, but post-loop attributes (output, tokens, finish_reason) are blank.
+
+```python
+# ❌ WRONG — post-yield attrs never land when the caller breaks on FINISH
+async def stream_chunks():
+    with neatlogs.trace("raw_llm_call", kind="LLM") as span:
+        span.set_attribute("neatlogs.internal", False)
+        span.set_attribute("llm.model_name", MODEL)
+        span.set_attribute("input.value", json.dumps(input_messages))
+
+        full = ""
+        async for chunk in raw_http_stream():
+            text = parse(chunk)
+            full += text
+            if done(chunk):
+                yield {"type": "FINISH"}   # ← caller breaks here, generator is closed
+
+        # These never run — generator was garbage-collected after the yield above.
+        span.set_attribute("output.value", json.dumps([{"role": "assistant", "content": full}]))
+        span.set_attribute("llm.token_count.prompt", prompt_tokens)
+
+# ✅ RIGHT — attach terminal attrs BEFORE yielding the FINISH marker
+async def stream_chunks():
+    with neatlogs.trace("raw_llm_call", kind="LLM") as span:
+        span.set_attribute("neatlogs.internal", False)
+        span.set_attribute("llm.model_name", MODEL)
+        span.set_attribute("input.value", json.dumps(input_messages))
+
+        full = ""
+        async for chunk in raw_http_stream():
+            text = parse(chunk)
+            full += text
+            if done(chunk):
+                # Attach final-state attrs here, THEN yield.
+                span.set_attribute(
+                    "output.value",
+                    json.dumps([{"role": "assistant", "content": full}]),
+                )
+                span.set_attribute("llm.token_count.prompt", prompt_tokens)
+                span.set_attribute("llm.token_count.completion", completion_tokens)
+                yield {"type": "FINISH"}
+```
+
+This is only a concern when YOU own the generator and emit a terminal chunk that causes the caller to stop pulling. If the generator exhausts naturally (runs past the last `yield` and returns), post-yield code runs fine. When in doubt, extract the attribute-writing logic into a helper and call it just before each `yield` that could be terminal.

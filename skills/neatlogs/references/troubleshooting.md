@@ -193,13 +193,41 @@ neatlogs.init(debug=True)
 | Not listing all providers in `instrumentations` | Some LLM calls won't be traced | Add all providers your code uses |
 | Mixing `mask` on `init()` and per-span | Both can coexist — per-span mask takes precedence over the global mask for that specific span | This is expected behavior, not a bug |
 | Using `@span` on `StreamingResponse` endpoints | Decorator closes span when function returns, before async generator produces data | Use `trace()` inside the generator body instead |
-| Setting `input.value` as JSON for manual LLM spans | Dashboard won't render structured prompt views | Use `SystemPromptTemplate` / `UserPromptTemplate` and call `.compile()` inside `trace(kind="LLM")` |
+| Setting `input.value` as JSON for manual LLM spans (when the SDK is patched) | Dashboard won't render structured prompt views | Use `SystemPromptTemplate` / `UserPromptTemplate` and call `.compile()` inside `trace(kind="LLM")`. Only set `input.value` / `output.value` directly on spans where NO SDK wrapper exists — see [`decorators-and-traces.md` §5b](decorators-and-traces.md#5b-manual-llm-span-when-theres-no-sdk-to-patch) |
 | Using `tool_name` attribute with `trace()` | Dashboard expects the public NeatLogs tool metadata key | Use `span.set_attribute("neatlogs.tool.name", "my_tool")` |
 | Using `@span(kind="RERANKER")` or `@span(kind="VECTOR_STORE")` | `@span()` raises `ValueError` for these kinds | Use `trace("name", kind="RERANKER")` or `trace("name", kind="VECTOR_STORE")` instead |
 
 ---
 
-## 9. Data Masking
+## 9. Manual `trace(kind="LLM")` Span Disappears From the Dashboard
+
+**Symptom**: a chat / agent step shows its parent AGENT span with no children in the UI (empty card, 2s duration, no input/output). The raw `spans` table contains the LLM span you created with full model / input / output / tokens, but `spans_simplified` (the table the UI reads) only has the AGENT row.
+
+**Root cause**: `neatlogs.trace()` stamps `neatlogs.internal=True` on every span by default. The backend trace finalizer drops every internal LLM span, assuming a canonical OpenInference-instrumented sibling already carries the same data. In the no-SDK path (raw `httpx.post`, streaming REST, anywhere the vendor SDK is bypassed) there is no sibling — YOUR span IS the canonical record — so the finalizer deletes the only LLM row in the trace.
+
+**Fix**: opt out of the internal flag on the first line inside the `with` block:
+
+```python
+with neatlogs.trace("raw_api_llm_call", kind="LLM") as llm_span:
+    llm_span.set_attribute("neatlogs.internal", False)   # ← required
+    # ... rest of span setup, http call, attribute writes ...
+```
+
+Full pattern (attributes, streaming, token extraction) is documented in [`decorators-and-traces.md` §5b "Manual LLM span when there's NO SDK to patch"](decorators-and-traces.md#5b-manual-llm-span-when-theres-no-sdk-to-patch).
+
+**Do NOT** override `neatlogs.internal=False` on a `trace()` that wraps an already-auto-instrumented call (case §5a). There the OpenInference LLM span IS the canonical record, and the default flag correctly removes your wrapper after prompt-template data has been merged across — leaving it in place would give you two overlapping LLM spans for the same call.
+
+**Diagnosis quickstart**:
+
+```bash
+# compare row counts — if raw > simplified, the finalizer is dropping something
+clickhouse-client -q "SELECT 'raw', count() FROM spans WHERE trace_id='<id>' UNION ALL \
+                      SELECT 'simp', count() FROM spans_simplified WHERE trace_id='<id>'"
+```
+
+---
+
+## 10. Data Masking
 
 For the full client-side masking example and server-side PII redaction configuration, see the [Data Masking and PII section in SKILL.md](../SKILL.md#data-masking-and-pii).
 

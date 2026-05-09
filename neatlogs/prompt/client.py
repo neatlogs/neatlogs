@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
-from typing import Any, Dict, List, Mapping, MutableMapping, Optional, Sequence, Union
+import threading
+import time as _time
+from dataclasses import dataclass, field
+from typing import Any, Callable, Dict, List, Mapping, MutableMapping, Optional, Sequence, Union
 from urllib.parse import quote
 
 import requests
@@ -10,6 +12,10 @@ import requests
 from ..core.logger import get_logger
 
 logger = get_logger()
+
+DEFAULT_CACHE_TTL_SECONDS = 60
+DEFAULT_CONNECT_TIMEOUT = 2.0
+DEFAULT_READ_TIMEOUT = 5.0
 
 _PLACEHOLDER_PATTERN = re.compile(r"\{\{\s*([A-Za-z0-9_.-]+)\s*\}\}")
 
@@ -24,6 +30,66 @@ class PromptApiError(PromptClientError):
 
 class PromptNotFoundError(PromptClientError):
     """Raised when a prompt/label/version is not found and no fallback is provided."""
+
+
+# ---------------------------------------------------------------------------
+# In-memory prompt cache with stale-while-revalidate
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _CacheEntry:
+    value: Any
+    fetched_at: float
+    ttl_seconds: float
+    refreshing: bool = field(default=False, repr=False)
+
+    def is_expired(self) -> bool:
+        return (_time.monotonic() - self.fetched_at) >= self.ttl_seconds
+
+
+class PromptCache:
+    """Thread-safe in-memory cache with stale-while-revalidate semantics."""
+
+    def __init__(self, default_ttl: float = DEFAULT_CACHE_TTL_SECONDS):
+        self._store: Dict[str, _CacheEntry] = {}
+        self._lock = threading.Lock()
+        self._default_ttl = default_ttl
+
+    @staticmethod
+    def cache_key(name: str, label: Optional[str] = None, version: Optional[int] = None) -> str:
+        if label is not None:
+            return f"{name}@label:{label}"
+        if version is not None:
+            return f"{name}@v:{version}"
+        return f"{name}@latest"
+
+    def get(self, key: str) -> Optional[_CacheEntry]:
+        with self._lock:
+            return self._store.get(key)
+
+    def set(self, key: str, value: Any, ttl: Optional[float] = None) -> None:
+        with self._lock:
+            self._store[key] = _CacheEntry(
+                value=value,
+                fetched_at=_time.monotonic(),
+                ttl_seconds=ttl if ttl is not None else self._default_ttl,
+            )
+
+    def mark_refreshing(self, key: str) -> bool:
+        """Mark entry as being refreshed. Returns False if already refreshing."""
+        with self._lock:
+            entry = self._store.get(key)
+            if entry is None or entry.refreshing:
+                return False
+            entry.refreshing = True
+            return True
+
+    def clear_refreshing(self, key: str) -> None:
+        with self._lock:
+            entry = self._store.get(key)
+            if entry:
+                entry.refreshing = False
 
 
 @dataclass(frozen=True)
@@ -122,8 +188,10 @@ class PromptClient:
     """
     Prompt client for Neatlogs managed prompts.
 
-    Fetches prompts on-demand from the backend (Redis-backed, falls back to Postgres).
-    No persistent connection or in-memory cache is maintained.
+    Fetches prompts from the backend (Redis-backed, falls back to Postgres).
+    Includes an in-memory cache with stale-while-revalidate: after the first
+    fetch, subsequent calls return from cache instantly and refresh in the
+    background when the TTL expires.
     """
 
     def __init__(
@@ -132,10 +200,12 @@ class PromptClient:
         base_url: str,
         api_key: str,
         session: Optional[requests.Session] = None,
+        cache_ttl_seconds: float = DEFAULT_CACHE_TTL_SECONDS,
     ):
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self._session = session or requests.Session()
+        self._cache = PromptCache(default_ttl=cache_ttl_seconds)
 
     def get_prompt(
         self,
@@ -144,17 +214,49 @@ class PromptClient:
         label: Optional[str] = None,
         version: Optional[int] = None,
         type: str = "text",
+        cache_ttl_seconds: Optional[float] = None,
     ) -> PromptHandle:
         """
         Fetch a prompt from the backend (Redis → Postgres fallback).
 
-        - Default (no label, no version): returns the most recently created version.
-        - label: returns the version holding that label.
-        - version: returns that specific version number.
+        Uses an in-memory cache with stale-while-revalidate:
+        - Cache hit (fresh): returns immediately, no network call.
+        - Cache hit (stale): returns immediately, refreshes in background.
+        - Cache miss: fetches from backend, caches, then returns.
+
+        Args:
+            name: Prompt name.
+            label: Return the version holding this label.
+            version: Return this specific version number.
+            type: Prompt type ("text" or "chat").
+            cache_ttl_seconds: Override the default cache TTL for this prompt.
         """
         if label is not None and version is not None:
             raise ValueError("Cannot specify both label and version.")
 
+        cache_key = PromptCache.cache_key(name, label=label, version=version)
+        entry = self._cache.get(cache_key)
+
+        if entry is not None:
+            if not entry.is_expired():
+                return entry.value
+            # Stale — return immediately, refresh in background
+            self._background_refresh(cache_key, name, label=label, version=version, ttl=cache_ttl_seconds)
+            return entry.value
+
+        # Cold miss — must fetch synchronously
+        handle = self._fetch_prompt(name, label=label, version=version)
+        self._cache.set(cache_key, handle, cache_ttl_seconds)
+        return handle
+
+    def _fetch_prompt(
+        self,
+        name: str,
+        *,
+        label: Optional[str] = None,
+        version: Optional[int] = None,
+    ) -> PromptHandle:
+        """Fetch prompt from backend (no cache involved)."""
         if label is not None:
             return PromptHandle(self.fetch_prompt(name, label=label))
 
@@ -170,9 +272,33 @@ class PromptClient:
                     return PromptHandle(_normalize_prompt_object(item))
             raise PromptNotFoundError(f"Prompt '{name}' version {version} not found")
 
-        # Default: most recently created version
         latest = max(items, key=lambda x: x.get("createdAt") or x.get("created_at") or "")
         return PromptHandle(_normalize_prompt_object(latest))
+
+    def _background_refresh(
+        self,
+        cache_key: str,
+        name: str,
+        *,
+        label: Optional[str] = None,
+        version: Optional[int] = None,
+        ttl: Optional[float] = None,
+    ) -> None:
+        """Refresh a stale cache entry in a background thread (deduped)."""
+        if not self._cache.mark_refreshing(cache_key):
+            return
+
+        def _refresh():
+            try:
+                handle = self._fetch_prompt(name, label=label, version=version)
+                self._cache.set(cache_key, handle, ttl)
+            except Exception as e:
+                logger.debug(f"Background prompt refresh failed for '{cache_key}': {e}")
+            finally:
+                self._cache.clear_refreshing(cache_key)
+
+        thread = threading.Thread(target=_refresh, daemon=True)
+        thread.start()
 
     # ----------------------------
     # API helpers
@@ -379,7 +505,7 @@ class PromptClient:
         path: str,
         params: Optional[Mapping[str, Any]] = None,
         json_body: Optional[Mapping[str, Any]] = None,
-        timeout_seconds: float = 20.0,
+        timeout_seconds: float = DEFAULT_READ_TIMEOUT,
     ) -> Dict[str, Any]:
         url = f"{self.base_url}{path}"
 
@@ -398,7 +524,7 @@ class PromptClient:
                 params=params,
                 json=json_body,
                 headers={**self._auth_headers(), "Content-Type": "application/json"},
-                timeout=timeout_seconds,
+                timeout=(DEFAULT_CONNECT_TIMEOUT, timeout_seconds),
             )
         finally:
             if _token is not None:
@@ -613,3 +739,216 @@ def delete_prompt(name: str, version: int) -> Dict[str, Any]:
 
 def remove_tag(name: str, version: int, tag: str) -> Dict[str, Any]:
     return _get_shared_client().remove_tag(name, version, tag)
+
+
+# ---------------------------------------------------------------------------
+# Async prompt client — uses httpx, runs on the event loop without threads
+# ---------------------------------------------------------------------------
+
+
+class AsyncPromptClient:
+    """
+    Async prompt client for Neatlogs managed prompts.
+
+    Uses httpx.AsyncClient — no thread pool needed, runs directly on the event loop.
+    Includes the same in-memory stale-while-revalidate cache as the sync client.
+    """
+
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        api_key: str,
+        connect_timeout: float = DEFAULT_CONNECT_TIMEOUT,
+        read_timeout: float = DEFAULT_READ_TIMEOUT,
+        cache_ttl_seconds: float = DEFAULT_CACHE_TTL_SECONDS,
+    ):
+        import httpx
+
+        self.base_url = base_url.rstrip("/")
+        self.api_key = api_key
+        self._client = httpx.AsyncClient(
+            timeout=httpx.Timeout(connect=connect_timeout, read=read_timeout, write=5.0, pool=5.0),
+            headers={
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}",
+                "x-api-key": api_key,
+            },
+        )
+        self._cache = PromptCache(default_ttl=cache_ttl_seconds)
+
+    async def get_prompt(
+        self,
+        name: str,
+        *,
+        label: Optional[str] = None,
+        version: Optional[int] = None,
+        type: str = "text",
+        cache_ttl_seconds: Optional[float] = None,
+    ) -> PromptHandle:
+        if label is not None and version is not None:
+            raise ValueError("Cannot specify both label and version.")
+
+        cache_key = PromptCache.cache_key(name, label=label, version=version)
+        entry = self._cache.get(cache_key)
+
+        if entry is not None:
+            if not entry.is_expired():
+                return entry.value
+            # Stale — return immediately, refresh in background task
+            self._background_refresh(cache_key, name, label=label, version=version, ttl=cache_ttl_seconds)
+            return entry.value
+
+        # Cold miss — must fetch
+        handle = await self._fetch_prompt(name, label=label, version=version)
+        self._cache.set(cache_key, handle, cache_ttl_seconds)
+        return handle
+
+    async def _fetch_prompt(
+        self,
+        name: str,
+        *,
+        label: Optional[str] = None,
+        version: Optional[int] = None,
+    ) -> PromptHandle:
+        if label is not None:
+            path = f"/api/v1/prompts/{quote(name, safe='')}/fetch"
+            payload = await self._request_json(method="GET", path=path, params={"label": label})
+            return PromptHandle(_normalize_prompt_object(payload))
+
+        params: Dict[str, Any] = {"limit": 100, "offset": 0, "name": name}
+        listing = await self._request_json(method="GET", path="/api/managed-prompts", params=params)
+        items = listing.get("items", [])
+
+        if not items:
+            raise PromptNotFoundError(f"No versions found for prompt '{name}'")
+
+        if version is not None:
+            for item in items:
+                if item.get("version") == version:
+                    return PromptHandle(_normalize_prompt_object(item))
+            raise PromptNotFoundError(f"Prompt '{name}' version {version} not found")
+
+        latest = max(items, key=lambda x: x.get("createdAt") or x.get("created_at") or "")
+        return PromptHandle(_normalize_prompt_object(latest))
+
+    def _background_refresh(
+        self,
+        cache_key: str,
+        name: str,
+        *,
+        label: Optional[str] = None,
+        version: Optional[int] = None,
+        ttl: Optional[float] = None,
+    ) -> None:
+        if not self._cache.mark_refreshing(cache_key):
+            return
+
+        import asyncio
+
+        async def _refresh():
+            try:
+                handle = await self._fetch_prompt(name, label=label, version=version)
+                self._cache.set(cache_key, handle, ttl)
+            except Exception as e:
+                logger.debug(f"Background async prompt refresh failed for '{cache_key}': {e}")
+            finally:
+                self._cache.clear_refreshing(cache_key)
+
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(_refresh())
+        except RuntimeError:
+            self._cache.clear_refreshing(cache_key)
+
+    async def _request_json(
+        self,
+        *,
+        method: str,
+        path: str,
+        params: Optional[Mapping[str, Any]] = None,
+        json_body: Optional[Mapping[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        url = f"{self.base_url}{path}"
+
+        try:
+            from opentelemetry.context import attach, detach, set_value
+            from opentelemetry.instrumentation.utils import _SUPPRESS_INSTRUMENTATION_KEY
+
+            _token = attach(set_value(_SUPPRESS_INSTRUMENTATION_KEY, True))
+        except Exception:
+            _token = None
+
+        try:
+            response = await self._client.request(
+                method=method,
+                url=url,
+                params=params,
+                json=json_body,
+            )
+        finally:
+            if _token is not None:
+                try:
+                    from opentelemetry.context import detach
+
+                    detach(_token)
+                except Exception:
+                    pass
+
+        if response.status_code >= 400:
+            body = response.text[:400] if response.text else "<empty>"
+            raise PromptApiError(f"{method} {path} failed ({response.status_code}): {body}")
+
+        try:
+            payload = response.json()
+        except Exception as exc:
+            raise PromptApiError(f"{method} {path} returned non-JSON response") from exc
+
+        if not isinstance(payload, MutableMapping):
+            raise PromptApiError(f"{method} {path} returned unexpected response shape")
+
+        return dict(payload)
+
+    async def close(self):
+        await self._client.aclose()
+
+
+# ---------------------------------------------------------------------------
+# Module-level async API
+# ---------------------------------------------------------------------------
+
+_shared_async_client: Optional[AsyncPromptClient] = None
+
+
+def _get_shared_async_client() -> AsyncPromptClient:
+    global _shared_async_client
+    if _shared_async_client is not None:
+        return _shared_async_client
+
+    from ..init import _session_config
+
+    api_key = _session_config.get("_api_key") or ""
+    base_url = _session_config.get("_base_url") or ""
+
+    if not api_key or api_key == "disabled":
+        raise PromptClientError(
+            "No API key available. Call neatlogs.init(api_key=...) before using prompt methods."
+        )
+
+    _shared_async_client = AsyncPromptClient(base_url=base_url, api_key=api_key)
+    return _shared_async_client
+
+
+async def aget_prompt(
+    name: str,
+    *,
+    label: Optional[str] = None,
+    version: Optional[int] = None,
+    type: str = "text",
+    cache_ttl_seconds: Optional[float] = None,
+) -> PromptHandle:
+    """Async version of get_prompt — no thread pool needed."""
+    return await _get_shared_async_client().get_prompt(
+        name, label=label, version=version, type=type, cache_ttl_seconds=cache_ttl_seconds
+    )

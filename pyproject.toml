@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [tool.poetry]
 name = "neatlogs"
-version = "1.2.8"
+version = "1.2.9"
 description = "A Python package for extracting and managing LLM logs to build a collaborative workspace"
 readme = "README.MD"
 license = "MIT"
@@ -139,7 +139,7 @@ milvus = ["pymilvus", "milvus-lite"]
 
 [project]
 name = "neatlogs"
-version = "1.2.8"
+version = "1.2.9"
 description = "A Python package for extracting and managing LLM logs to build a collaborative workspace"
 readme = "README.MD"
 license = {text = "MIT"}

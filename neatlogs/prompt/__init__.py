@@ -3,6 +3,7 @@ Prompt template utilities for Neatlogs SDK.
 """
 
 from .client import (
+    AsyncPromptClient,
     CachedPrompt,
     PromptApiError,
     PromptClient,
@@ -18,6 +19,7 @@ __all__ = [
     "CachedPrompt",
     "PromptHandle",
     "PromptClient",
+    "AsyncPromptClient",
     "PromptClientError",
     "PromptApiError",
     "PromptNotFoundError",

@@ -33,12 +33,14 @@ from .core.log import log
 from .decorators import span
 from .init import flush, init, shutdown
 from .prompt.client import (
+    AsyncPromptClient,
     CachedPrompt,
     PromptApiError,
     PromptClient,
     PromptClientError,
     PromptHandle,
     PromptNotFoundError,
+    aget_prompt,
     create_prompt,
     delete_prompt,
     fetch_prompt,
@@ -63,10 +65,12 @@ __all__ = [
     "CachedPrompt",
     "PromptHandle",
     "PromptClient",
+    "AsyncPromptClient",
     "PromptClientError",
     "PromptApiError",
     "PromptNotFoundError",
     "get_prompt",
+    "aget_prompt",
     "fetch_prompt",
     "list_prompts",
     "create_prompt",

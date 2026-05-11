@@ -486,5 +486,19 @@ def shutdown(timeout_millis: int = 30000) -> bool:
     _session_config["user_id"] = None
     _session_config["workflow_name"] = None
 
+    # Clear lazy singletons so a subsequent init() picks up fresh credentials.
+    try:
+        from .prompt import client as _prompt_client_mod
+
+        _prompt_client_mod._shared_client = None
+    except Exception:
+        pass
+    try:
+        from .config import client as _config_client_mod
+
+        _config_client_mod._shared_config_client = None
+    except Exception:
+        pass
+
     logger.info("Neatlogs SDK shutdown complete")
     return success

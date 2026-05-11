@@ -26,6 +26,19 @@ Available span kinds:
     - "MCP_TOOL" - MCP protocol tool (auto Pydantic handling)
 """
 
+from .config import (
+    CachedConfig,
+    ConfigApiError,
+    ConfigClient,
+    ConfigClientError,
+    ConfigConflictError,
+    ConfigNotFoundError,
+    create_config,
+    delete_config,
+    get_config,
+    list_configs,
+    update_config,
+)
 from .core.context import trace
 from .core.crewai_task_registry import register_crewai_task
 from .core.llm_binder import bind_templates
@@ -78,6 +91,17 @@ __all__ = [
     "save_as_version",
     "delete_prompt",
     "remove_tag",
+    "CachedConfig",
+    "ConfigClient",
+    "ConfigClientError",
+    "ConfigApiError",
+    "ConfigConflictError",
+    "ConfigNotFoundError",
+    "get_config",
+    "list_configs",
+    "create_config",
+    "update_config",
+    "delete_config",
     "bind_templates",
     "register_crewai_task",
     "__version__",

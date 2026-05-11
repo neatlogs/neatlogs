@@ -1,7 +1,31 @@
 """
-Configuration module for model defaults and SDK parameters.
+Configuration module for model defaults and the config CRUD API.
 """
 
-from .defaults_enricher import enrich_invocation_parameters
+from .client import (
+    CachedConfig,
+    ConfigApiError,
+    ConfigClient,
+    ConfigClientError,
+    ConfigConflictError,
+    ConfigNotFoundError,
+    create_config,
+    delete_config,
+    get_config,
+    list_configs,
+    update_config,
+)
 
-__all__ = ["enrich_invocation_parameters"]
+__all__ = [
+    "CachedConfig",
+    "ConfigApiError",
+    "ConfigClient",
+    "ConfigClientError",
+    "ConfigConflictError",
+    "ConfigNotFoundError",
+    "create_config",
+    "delete_config",
+    "get_config",
+    "list_configs",
+    "update_config",
+]

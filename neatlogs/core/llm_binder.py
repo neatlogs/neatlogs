@@ -6,7 +6,7 @@ Usage:
     agent = Agent(llm=bound_llm, ...)
 
 When crew.kickoff() calls bound_llm.invoke(...), this wrapper fires first:
-  1. Sets neatlogs.prompt_template + neatlogs.user_prompt_template in OTel context
+  1. Sets neatlogs.system_prompt_template + neatlogs.user_prompt_template in OTel context
   2. Calls the instrumented class-level invoke (creates the LLM span)
   3. span_processor.on_start() reads context → templates land on the LLM span
 """
@@ -97,7 +97,7 @@ def bind_templates(
         # Push template strings into OTel context so that when the instrumented
         # method starts the LLM span, on_start() picks them up.
         ctx = get_current()
-        ctx = set_value("neatlogs.prompt_template", system_str, context=ctx)
+        ctx = set_value("neatlogs.system_prompt_template", system_str, context=ctx)
         if user_str is not None:
             ctx = set_value("neatlogs.user_prompt_template", user_str, context=ctx)
         token = attach(ctx)

@@ -108,8 +108,8 @@ class NeatlogsSpanProcessor(SpanProcessor):
             from ..prompt.template import PromptContext, UserPromptContext
 
             ctx = get_current()
-            variables_json = get_value("neatlogs.prompt_variables", context=ctx)
-            template = get_value("neatlogs.prompt_template", context=ctx)
+            variables_json = get_value("neatlogs.system_prompt_variables", context=ctx)
+            template = get_value("neatlogs.system_prompt_template", context=ctx)
             version_val = get_value("neatlogs.prompt_version", context=ctx)
 
             if not variables_json:

@@ -59,7 +59,7 @@ import neatlogs
 from neatlogs import SystemPromptTemplate, UserPromptTemplate
 
 neatlogs.init(
-    api_key="your-api-key",       # or set NEATLOGS_API_KEY env var
+    api_key="your-api-key",       # Get from https://app.neatlogs.com/settings/api-keys (or set NEATLOGS_API_KEY env var)
     workflow_name="my-app",
     instrumentations=["openai"],
 )
@@ -116,7 +116,11 @@ import neatlogs
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
 
-neatlogs.init(api_key="...", workflow_name="my-api", instrumentations=["openai"])
+neatlogs.init(
+    api_key="...",  # Get from https://app.neatlogs.com/settings/api-keys (or set NEATLOGS_API_KEY env var)
+    workflow_name="my-api",
+    instrumentations=["openai"],
+)
 
 from openai import OpenAI  # Import AFTER init()
 
@@ -153,7 +157,7 @@ For non-FastAPI servers, hook `neatlogs.flush()` + `neatlogs.shutdown()` into th
 2. **Instrument**: Pick the right approach:
    - **Auto-instrumentation** for LLM providers → add the key to `instrumentations=[]`
    - **`@span` decorators** for your own orchestration functions
-   - **`trace()`** for prompt template tracking on LLM calls, or for the kinds `@span()` doesn't accept (`RERANKER`, `VECTOR_STORE`, `LLM`)
+   - **`trace()`** for prompt template tracking on LLM calls, and for direct-API spans (`RERANKER`, `VECTOR_STORE`, `LLM`) when you don't go through an instrumented SDK
 3. **Init**: Add `neatlogs.init()` **BEFORE** any LLM library imports with the correct `instrumentations=[...]` list.
 4. **Verify**: Check the NeatLogs dashboard for incoming traces. Use `debug=True` in `init()` to confirm each instrumentor loaded (prints `✅ Instrumented …` lines).
 
@@ -250,7 +254,6 @@ For deep dives, see the companion reference files:
 |---|---|
 | `NEATLOGS_API_KEY` | API key (alternative to `api_key` param) |
 | `NEATLOGS_ENDPOINT` | Backend base URL (alternative to `endpoint` param) |
-| `NEATLOGS_TRACE_CONTENT` | Set to `"false"` to globally disable input / output content capture on spans |
 
 ---
 

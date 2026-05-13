@@ -31,7 +31,7 @@ import neatlogs
 from neatlogs import SystemPromptTemplate, UserPromptTemplate
 
 neatlogs.init(
-    api_key="...",
+    api_key="...",  # Get from https://app.neatlogs.com/settings/api-keys (or set NEATLOGS_API_KEY env var)
     workflow_name="research-app",
     instrumentations=["openai"],
 )
@@ -92,7 +92,7 @@ import neatlogs
 from neatlogs import SystemPromptTemplate, UserPromptTemplate
 
 neatlogs.init(
-    api_key="...",
+    api_key="...",  # Get from https://app.neatlogs.com/settings/api-keys (or set NEATLOGS_API_KEY env var)
     workflow_name="my-app",
     instrumentations=["openai"],
 )
@@ -142,7 +142,7 @@ import neatlogs
 from neatlogs import SystemPromptTemplate, UserPromptTemplate
 
 neatlogs.init(
-    api_key="...",
+    api_key="...",  # Get from https://app.neatlogs.com/settings/api-keys (or set NEATLOGS_API_KEY env var)
     workflow_name="anthropic-app",
     instrumentations=["anthropic"],
 )
@@ -194,7 +194,7 @@ import neatlogs
 from neatlogs import SystemPromptTemplate, UserPromptTemplate
 
 neatlogs.init(
-    api_key="...",
+    api_key="...",  # Get from https://app.neatlogs.com/settings/api-keys (or set NEATLOGS_API_KEY env var)
     workflow_name="gemini-app",
     instrumentations=["google_genai"],
 )
@@ -246,7 +246,7 @@ import neatlogs
 from neatlogs import SystemPromptTemplate, UserPromptTemplate
 
 neatlogs.init(
-    api_key="...",
+    api_key="...",  # Get from https://app.neatlogs.com/settings/api-keys (or set NEATLOGS_API_KEY env var)
     workflow_name="langchain-app",
     instrumentations=["langchain"],
 )
@@ -297,7 +297,7 @@ import neatlogs
 from neatlogs import SystemPromptTemplate, UserPromptTemplate
 
 neatlogs.init(
-    api_key="...",
+    api_key="...",  # Get from https://app.neatlogs.com/settings/api-keys (or set NEATLOGS_API_KEY env var)
     workflow_name="langgraph-app",
     instrumentations=["langchain"],
 )
@@ -391,7 +391,7 @@ import neatlogs
 from neatlogs import SystemPromptTemplate, UserPromptTemplate
 
 neatlogs.init(
-    api_key="...",
+    api_key="...",  # Get from https://app.neatlogs.com/settings/api-keys (or set NEATLOGS_API_KEY env var)
     workflow_name="crewai-app",
     # Azure OpenAI backend -> azure_ai_inference. Swap for openai / google_genai /
     # anthropic depending on what crewai.LLM(model=...) points at.
@@ -461,7 +461,7 @@ from neatlogs import SystemPromptTemplate, UserPromptTemplate
 os.environ.setdefault("GEMINI_API_KEY", "...")  # or whichever provider you target
 
 neatlogs.init(
-    api_key="...",
+    api_key="...",  # Get from https://app.neatlogs.com/settings/api-keys (or set NEATLOGS_API_KEY env var)
     workflow_name="litellm-app",
     instrumentations=["litellm"],
 )
@@ -510,7 +510,7 @@ import neatlogs
 from neatlogs import SystemPromptTemplate, UserPromptTemplate
 
 neatlogs.init(
-    api_key="...",
+    api_key="...",  # Get from https://app.neatlogs.com/settings/api-keys (or set NEATLOGS_API_KEY env var)
     workflow_name="multi-provider-app",
     instrumentations=["openai", "anthropic", "google_genai"],
 )

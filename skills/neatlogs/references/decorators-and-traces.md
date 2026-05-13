@@ -23,8 +23,6 @@ The primary manual instrumentation API for custom code. Wraps a function to crea
 )
 ```
 
-> **Advanced options** (rarely needed): `version`, `tags`, `capture_input`, `capture_output`, `capture_stdout`. Content capture is enabled by default. To disable globally, set `NEATLOGS_TRACE_CONTENT=false`.
-
 ### Valid Kinds
 
 `@span()` raises `ValueError` for any kind not in this set:
@@ -118,11 +116,15 @@ See §3 for the full attribute list.
 Embedding generation. For supported providers (OpenAI, Cohere, etc.) auto-instrumentation captures model and dimensions automatically. For a **custom** embedding implementation, use a nested `trace()` block to set `neatlogs.embedding.*` attributes — the decorator alone does not auto-extract embedding metadata.
 
 ```python
+import json
+
 @neatlogs.span(kind="EMBEDDING")
 def embed_texts(texts: list[str]) -> list[list[float]]:
     with neatlogs.trace("embedding_details") as span:
         span.set_attribute("neatlogs.embedding.model_name", "text-embedding-3-small")
+        span.set_attribute("neatlogs.embedding.text", json.dumps(texts))
         vectors = embedding_model.encode(texts)
+        span.set_attribute("neatlogs.embedding.vector", json.dumps(vectors))
         span.set_attribute("neatlogs.embedding.token_count", sum(len(t.split()) for t in texts))
     return vectors
 ```
@@ -158,7 +160,11 @@ async def get_weather(location: str) -> str:
 import neatlogs
 from neatlogs import SystemPromptTemplate, UserPromptTemplate
 
-neatlogs.init(api_key="...", workflow_name="research-app", instrumentations=["openai"])
+neatlogs.init(
+    api_key="...",  # Get from https://app.neatlogs.com/settings/api-keys (or set NEATLOGS_API_KEY env var)
+    workflow_name="research-app",
+    instrumentations=["openai"],
+)
 
 from openai import OpenAI  # Import AFTER init() for auto-instrumentation
 

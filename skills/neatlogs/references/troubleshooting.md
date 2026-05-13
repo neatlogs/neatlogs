@@ -57,30 +57,21 @@ If traces are not appearing in the NeatLogs dashboard, check these in order:
 2. **Is it called BEFORE LLM library imports?** → No → Move `neatlogs.init()` before `import openai` / `import anthropic` / etc.
 3. **Is the provider listed in `instrumentations=[]`?** → No → Add it (e.g. `instrumentations=["openai"]`). See the [Supported Instrumentations table in SKILL.md](../SKILL.md#supported-instrumentations) for valid keys.
 4. **Is `NEATLOGS_API_KEY` set?** → No → Set it via env var or `api_key=` param. Without it, export is **silently disabled** with no error.
-5. **Still missing?** → Enable `debug=True` in `neatlogs.init()` and check stderr output — look for `✅ Instrumented …` lines to confirm each instrumentor loaded.
 
 ---
 
 ## 4. CrewAI Instrumentation Key Selection
 
-CrewAI dispatches LLM calls internally via LiteLLM. The right provider key depends on what `crewai.LLM(model=...)` actually points at, **not on what you think CrewAI is using**. If you pick the wrong key, the LLM call succeeds (tokens get billed) but **no `LLM`-kind span is created** — the trace UI shows only the Agent parent with no LLM child.
+When using CrewAI, pair `"crewai"` with the provider key that matches your `crewai.LLM(model=...)`:
 
-### Provider routing table
+| `crewai.LLM(model=...)` | Correct `instrumentations=[...]` |
+|---|---|
+| `"gpt-4o"` (OpenAI proper) | `["crewai", "openai"]` |
+| `"azure/..."` | `["crewai", "azure_ai_inference"]` |
+| `"gemini/..."` | `["crewai", "google_genai"]` |
+| `"claude-..."` | `["crewai", "anthropic"]` |
 
-| CrewAI LLM config | Correct instrumentations | Why |
-|---|---|---|
-| `LLM(model="gpt-4o", ...)` (OpenAI proper) | `["crewai", "openai"]` | Routes through the `openai` SDK |
-| `LLM(model="azure/gpt-5-nano", ...)` | `["crewai", "azure_ai_inference"]` | Routes through Azure AI Inference SDK |
-| `LLM(model="gemini/gemini-2.5-flash", ...)` | `["crewai", "google_genai"]` | Routes through google.genai |
-| `LLM(model="claude-sonnet-4-6", ...)` | `["crewai", "anthropic"]` | Routes through anthropic SDK |
-
-### Symptom checklist
-
-If you see an Agent card in the trace with no LLM child (but the Agent did actually call an LLM and got a response):
-
-1. Look at your `crewai.LLM(model=...)` argument — note the prefix (`gpt-...`, `azure/...`, `gemini/...`, etc.)
-2. Cross-check the table above. If your `instrumentations=[...]` doesn't include the matching key, that's the bug.
-3. Do NOT add `"litellm"` as an extra key alongside a direct provider — the two instrumentors can double-fire and produce duplicate LLM spans for the same call.
+> Don't add `"litellm"` alongside a direct provider key — the two can double-fire and produce duplicate LLM spans.
 
 ### Few-shot examples
 
@@ -160,19 +151,7 @@ asyncio.run(main())
 
 ---
 
-## 6. Debug Mode
-
-```python
-neatlogs.init(debug=True)
-```
-
-- Enables verbose logging to stderr (instrumentation status, span creation, export status)
-- Echoes `neatlogs.log()` rendered messages to the terminal
-- Shows `✅ Instrumented …` lines for each instrumentor that loaded successfully — the quickest way to confirm your `instrumentations=[...]` actually resolved
-
----
-
-## 7. Common Anti-Patterns Table
+## 6. Common Anti-Patterns Table
 
 | Anti-Pattern | Why It's Wrong | Fix |
 |---|---|---|
@@ -183,11 +162,10 @@ neatlogs.init(debug=True)
 | Mixing `mask` on `init()` and per-span | Per-span mask takes precedence over the global mask for that span | Expected behavior, not a bug |
 | Setting `input.value` as a JSON blob on an auto-instrumented LLM span | Dashboard won't render structured prompt views | Use `SystemPromptTemplate` / `UserPromptTemplate` and call `.compile()` inside `trace(kind="LLM")` |
 | Using `tool_name` as a manual span attribute with `trace()` | The decorator already wires this — `@span(kind="TOOL", tool_name=...)` sets `tool.name` on the span automatically | Use the `@span(kind="TOOL", tool_name="my_tool")` form instead of `trace()` + `set_attribute` |
-| Using `@span(kind="RERANKER")` / `@span(kind="VECTOR_STORE")` / `@span(kind="LLM")` | `@span()` only accepts `WORKFLOW`, `AGENT`, `CHAIN`, `TOOL`, `RETRIEVER`, `EMBEDDING`, `GUARDRAIL`, `MCP_TOOL` — other kinds raise `ValueError` | Use `trace("name", kind="RERANKER")` (or `VECTOR_STORE` / `LLM`) instead |
 
 ---
 
-## 8. Data Masking
+## 7. Data Masking
 
 For the full client-side masking example and server-side PII redaction configuration, see the [Data Masking and PII section in SKILL.md](../SKILL.md#data-masking-and-pii).
 

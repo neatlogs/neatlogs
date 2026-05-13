@@ -64,7 +64,11 @@ Pass `system_prompt_template=` and `user_prompt_template=` to `trace()` for auto
 import neatlogs
 from neatlogs import SystemPromptTemplate, UserPromptTemplate
 
-neatlogs.init(api_key="...", workflow_name="research", instrumentations=["openai"])
+neatlogs.init(
+    api_key="...",  # Get from https://app.neatlogs.com/settings/api-keys (or set NEATLOGS_API_KEY env var)
+    workflow_name="research",
+    instrumentations=["openai"],
+)
 
 from openai import OpenAI  # Import AFTER init() for auto-instrumentation
 
@@ -116,13 +120,6 @@ When a framework (CrewAI) owns the LLM calls, you can't wrap them in `trace()`. 
 neatlogs.bind_templates(llm, system_tpl, user_tpl=None, **variables)
 ```
 
-- Returns a **new LLM instance** (shallow copy) with template context attached — the original `llm` is not mutated.
-- The binder picks `.invoke()` first (LangChain `BaseChatModel`), falls back to `.call()` (CrewAI `crewai.LLM`). If the LLM exposes neither, templates are silently skipped.
-- When the framework calls the bound LLM, the binder:
-  1. Sets `neatlogs.system_prompt_template` and `neatlogs.user_prompt_template` in OTel context
-  2. Calls the instrumented LLM method (creates the LLM span)
-  3. The NeatLogs span processor reads the template context in `on_start()` and attaches the templates to the LLM span
-
 > Outside CrewAI (plain LangChain or direct SDK usage), prefer `trace(system_prompt_template=...)` — it's simpler and gives you explicit control over span boundaries.
 
 ### CrewAI Example
@@ -133,7 +130,7 @@ import neatlogs
 from neatlogs import SystemPromptTemplate
 
 neatlogs.init(
-    api_key="...",
+    api_key="...",  # Get from https://app.neatlogs.com/settings/api-keys (or set NEATLOGS_API_KEY env var)
     workflow_name="marketing",
     instrumentations=["crewai", "openai"],
 )
@@ -164,8 +161,7 @@ Attaches a `UserPromptTemplate` to a CrewAI `Task` so the template is stamped on
 neatlogs.register_crewai_task(task, user_tpl, **variables)
 ```
 
-- Stores `task.id -> (template_str, vars_json)` in a thread-safe module-level registry
-- The span processor pops the entry when the task's `_execute_core` AGENT span ends, stamps the template onto that span, and relabels its kind to `CREWAI_TASK`
+When the task executes, the user template (and any variables you pass) is shown in the dashboard as the **Task Prompt** on the corresponding Agent span, alongside the **Agent Prompt** that came from `bind_templates()`.
 
 ```python
 from crewai import Task
@@ -186,7 +182,7 @@ neatlogs.register_crewai_task(task, user_tpl, product="AI chips", region="North 
 
 ## 6. Prompt Management API (Server-Side)
 
-The Prompt Management API stores and retrieves prompt templates from the NeatLogs backend. Requires a valid `NEATLOGS_API_KEY`. Module-level functions share a single `PromptClient` (or `AsyncPromptClient`) instance with an in-memory stale-while-revalidate cache.
+The Prompt Management API stores and retrieves prompt templates from the NeatLogs backend. Requires a valid `NEATLOGS_API_KEY`.
 
 ### Retrieving Prompts — Sync
 
@@ -202,7 +198,7 @@ prompt = neatlogs.get_prompt(name="research-agent", version=3)
 # For chat-style prompts (with message list)
 chat_prompt = neatlogs.get_prompt(name="chatbot", label="production", type="chat")
 
-# Override cache TTL for this fetch (default 60 s)
+# Use a shorter cache TTL for hot-reload scenarios
 fresh = neatlogs.get_prompt(name="research-agent", label="production", cache_ttl_seconds=5)
 
 # Access properties
@@ -220,11 +216,9 @@ compiled_str = prompt.compile(variables={"topic": "quantum computing"})
 compiled_messages = prompt.compile_messages(variables={"topic": "quantum computing"})
 ```
 
-> Caching: the first call hits the backend and caches the result for 60 s. Subsequent calls return from cache instantly; when the TTL expires, the next call returns the stale value and refreshes in the background.
-
 ```python
-# Bypass the cache entirely — hits backend every time
-cached = neatlogs.fetch_prompt(name="research-agent", label="production")
+# fetch_prompt() always returns the latest version from the backend
+latest = neatlogs.fetch_prompt(name="research-agent", label="production")
 ```
 
 ### Retrieving Prompts — Async
@@ -244,7 +238,7 @@ async def main():
 asyncio.run(main())
 ```
 
-`aget_prompt()` is the async sibling of `get_prompt()`. It uses `httpx.AsyncClient` under the hood via `AsyncPromptClient` and shares the same cache semantics (stale-while-revalidate, 60 s default TTL). No thread-pool hop needed in async apps.
+`aget_prompt()` is the async sibling of `get_prompt()` — same arguments, same return type, no thread-pool hop needed in async apps.
 
 ### Creating and Managing Prompts
 
@@ -306,7 +300,7 @@ except PromptClientError as e:
     print(f"Client error: {e}")
 ```
 
-For advanced use cases (custom cache TTL, shared `requests.Session` / `httpx.AsyncClient`), instantiate `PromptClient` or `AsyncPromptClient` directly — both are exported from `neatlogs`.
+For advanced use cases, instantiate `PromptClient` or `AsyncPromptClient` directly — both are exported from `neatlogs`.
 
 ### When to Use
 

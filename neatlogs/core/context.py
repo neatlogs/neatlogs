@@ -12,10 +12,12 @@ from opentelemetry import trace as otel_trace
 def trace(
     name: str,
     kind: Optional[str] = None,
-    prompt_template: Optional[Union[str, "PromptTemplate"]] = None,
-    prompt_variables: Optional[Dict[str, Any]] = None,
+    system_prompt_template: Optional[Union[str, "SystemPromptTemplate"]] = None,
+    system_prompt_variables: Optional[Dict[str, Any]] = None,
     user_prompt_template: Optional[Union[str, "UserPromptTemplate"]] = None,
     user_prompt_variables: Optional[Dict[str, Any]] = None,
+    prompt_template: Optional[Union[str, "SystemPromptTemplate"]] = None,
+    prompt_variables: Optional[Dict[str, Any]] = None,
     version: Optional[str] = None,
     capture_stdout: bool = False,
     mask: Optional[Callable] = None,
@@ -46,10 +48,13 @@ def trace(
     Args:
         name: Span name
         kind: OpenInference span kind (rarely needed - auto-inferred)
-        prompt_template: PromptTemplate object for system prompt versioning
-        prompt_variables: Dict of system prompt variables (legacy string templates only)
+        system_prompt_template: SystemPromptTemplate object for system prompt versioning
+        system_prompt_variables: Dict of system prompt variables (legacy string templates only)
         user_prompt_template: UserPromptTemplate object for user/human prompt versioning
         user_prompt_variables: Dict of user prompt variables (legacy string templates only)
+        prompt_template: Deprecated alias for ``system_prompt_template``. Kept for
+            backward compat; new code should use ``system_prompt_template``.
+        prompt_variables: Deprecated alias for ``system_prompt_variables``.
         version: Optional version identifier
         **attributes: Additional attributes to set on the span
 
@@ -57,11 +62,11 @@ def trace(
 
         Use Case 1: Prompt template tracking (inside your function):
 
-        >>> template = PromptTemplate([{"role": "user", "content": "{{query}}"}])
+        >>> template = SystemPromptTemplate([{"role": "user", "content": "{{query}}"}])
         >>>
         >>> @span(kind="AGENT")
         >>> def my_agent(query: str):
-        ...     with trace(name="prompt", prompt_template=template):
+        ...     with trace(name="prompt", system_prompt_template=template):
         ...         messages = template.compile(query=query)  # Compile ONCE
         ...         response = llm.create(messages=messages)   # No duplication!
         ...     return response
@@ -105,13 +110,22 @@ def trace(
     from ..init import get_session_config
     from ..prompt.template import (
         PromptContext,
-        PromptTemplate,
+        SystemPromptTemplate,
         UserPromptContext,
         UserPromptTemplate,
     )
 
     logger = logging.getLogger(__name__)
     tracer = otel_trace.get_tracer(__name__)
+
+    # Resolve canonical kwargs. `system_prompt_template` / `system_prompt_variables`
+    # are the canonical names; `prompt_template` / `prompt_variables` are kept as
+    # deprecated aliases for backward compat. If both are supplied, the canonical
+    # (system_*) name wins.
+    if system_prompt_template is not None:
+        prompt_template = system_prompt_template
+    if system_prompt_variables is not None:
+        prompt_variables = system_prompt_variables
 
     session_config = get_session_config()
     session_id = session_config.get("session_id")
@@ -125,11 +139,11 @@ def trace(
     is_prompt_template_obj = False
 
     if prompt_template is not None:
-        if isinstance(prompt_template, PromptTemplate):
+        if isinstance(prompt_template, SystemPromptTemplate):
             is_prompt_template_obj = True
             template_string = str(prompt_template.template)
             logger.debug(
-                f"[trace] Using PromptTemplate object with variables: {prompt_template.variables}"
+                f"[trace] Using SystemPromptTemplate object with variables: {prompt_template.variables}"
             )
         else:
             template_string = prompt_template
@@ -154,11 +168,15 @@ def trace(
     )
 
     if variables_json:
-        ctx = set_value("neatlogs.prompt_variables", variables_json, context=ctx)
-        logger.debug(f"[trace] Set neatlogs.prompt_variables in context: {variables_json}")
+        ctx = set_value("neatlogs.system_prompt_variables", variables_json, context=ctx)
+        logger.debug(
+            f"[trace] Set neatlogs.system_prompt_variables in context: {variables_json}"
+        )
     if template_string:
-        ctx = set_value("neatlogs.prompt_template", template_string, context=ctx)
-        logger.debug(f"[trace] Set neatlogs.prompt_template in context: {template_string}")
+        ctx = set_value("neatlogs.system_prompt_template", template_string, context=ctx)
+        logger.debug(
+            f"[trace] Set neatlogs.system_prompt_template in context: {template_string}"
+        )
     if user_variables_json:
         ctx = set_value("neatlogs.user_prompt_variables", user_variables_json, context=ctx)
         logger.debug(

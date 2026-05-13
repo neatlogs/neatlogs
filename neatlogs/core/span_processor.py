@@ -108,8 +108,8 @@ class NeatlogsSpanProcessor(SpanProcessor):
             from ..prompt.template import PromptContext, UserPromptContext
 
             ctx = get_current()
-            variables_json = get_value("neatlogs.prompt_variables", context=ctx)
-            template = get_value("neatlogs.prompt_template", context=ctx)
+            variables_json = get_value("neatlogs.system_prompt_variables", context=ctx)
+            template = get_value("neatlogs.system_prompt_template", context=ctx)
             version_val = get_value("neatlogs.prompt_version", context=ctx)
 
             if not variables_json:
@@ -313,7 +313,12 @@ class NeatlogsSpanProcessor(SpanProcessor):
             results = self._inject_crewai_task_templates([span_data])
             span_data = results[0] if results else span_data
 
-            # 7b. Write normalized neatlogs.* attributes back to the OTel span so that
+            # 7b. Apply client-side mask before writing attributes back.
+            # This ensures masked values flow to both OTLP export and file logging.
+            if self.mask is not None:
+                span_data = apply_mask(span_data, self.mask)
+
+            # 7c. Write normalized (and masked) attributes back to the OTel span so that
             # BatchSpanProcessor → OTLPSpanExporter exports them to the backend.
             # ReadableSpan._attributes is a BoundedAttributes (MutableMapping) and is
             # mutable even after span.end(). The original OI attributes stay on the span
@@ -329,6 +334,20 @@ class NeatlogsSpanProcessor(SpanProcessor):
                             isinstance(_i, (str, int, float, bool)) for _i in _v
                         ):
                             span_attrs[_k] = list(_v)
+                    # Unmapped attributes (e.g. input.user_email) stay on the OTel
+                    # span outside the neatlogs.* namespace. Apply the mask to those
+                    # too by building a temporary dict keyed by the original attr
+                    # names, running the mask, and writing redacted values back.
+                    if self.mask is not None:
+                        raw_span = {
+                            "name": span_data.get("name"),
+                            "attributes": dict(span_attrs),
+                        }
+                        masked_raw = apply_mask(raw_span, self.mask)
+                        masked_raw_attrs = masked_raw.get("attributes") or {}
+                        for _k in list(span_attrs.keys()):
+                            if _k in masked_raw_attrs and masked_raw_attrs[_k] != span_attrs[_k]:
+                                span_attrs[_k] = masked_raw_attrs[_k]
             except Exception as _wb_exc:
                 if self.debug:
                     logger.debug(f"[SpanProcessor] Attr write-back failed: {_wb_exc}")

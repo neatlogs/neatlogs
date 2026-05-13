@@ -184,23 +184,16 @@ def span(
     description: Optional[str] = None,
     version: Optional[str] = None,
     tags: Optional[list[str]] = None,
-    metadata: Optional[Dict[str, Any]] = None,
-    attributes: Optional[Dict[str, Any]] = None,
     capture_input: Optional[bool] = None,
     capture_output: Optional[bool] = None,
     capture_stdout: bool = False,
     mask: Optional[Callable] = None,
     # Agent-specific
-    agent_name: Optional[str] = None,
     role: Optional[str] = None,
     goal: Optional[str] = None,
     # Tool-specific
     tool_name: Optional[str] = None,
     parameters: Optional[Dict[str, Any]] = None,
-    tool_json_schema: Optional[Dict[str, Any]] = None,
-    # Embedding-specific
-    model: Optional[str] = None,
-    dimension: Optional[int] = None,
 ) -> Callable[[F], F]:
     """
     Universal decorator for instrumenting custom code with observability spans.
@@ -221,29 +214,18 @@ def span(
         description: Human-readable description
         version: Version identifier for tracking changes
         tags: List of tags for filtering/grouping
-        metadata: Additional metadata dictionary
-        attributes: Custom OpenTelemetry attributes
         capture_input: Whether to capture function input (default: True)
         capture_output: Whether to capture function output (default: True)
 
         # Agent-specific parameters (when kind="AGENT"):
-        agent_name: Agent identifier
-        role: Agent role description
+        role: Agent role description (also sets agent.name)
         goal: Agent goal/objective
 
         # Tool-specific parameters (when kind="TOOL" or kind="MCP_TOOL"):
         tool_name: Tool identifier
         parameters: Tool parameter schema
-        tool_json_schema: JSON schema for the tool
 
         Note: MCP_TOOL automatically handles:
-        - Pydantic model arguments (via .model_dump())
-        - JSON serialization of results
-        - MCP-specific attributes (mcp.tool.name, mcp.response.value)
-
-        # Embedding-specific parameters (when kind="EMBEDDING"):
-        model: Embedding model name
-        dimension: Embedding vector dimension
 
     Returns:
         Decorated function with span instrumentation
@@ -314,40 +296,27 @@ def span(
             name=name,
             tool_name=tool_name,
             description=description,
-            tool_json_schema=tool_json_schema,
         )
 
     # Build attributes based on kind
-    extra = dict(attributes or {})
+    extra: Dict[str, Any] = {}
 
     # Agent-specific attributes
     if kind_upper == "AGENT":
-        if agent_name:
-            extra["agent.name"] = agent_name
-        elif role:
-            extra["agent.name"] = role
         if role:
+            extra["agent.name"] = role
             extra["neatlogs.agent.role"] = role
         if goal:
             extra["neatlogs.agent.goal"] = goal
 
-    # Tool-specific attributes (for both TOOL and MCP_TOOL)
-    elif kind_upper in ("TOOL", "MCP_TOOL"):
+    # Tool-specific attributes
+    elif kind_upper == "TOOL":
         if tool_name:
             extra["tool.name"] = tool_name
         if description:
             extra["tool.description"] = description
         if parameters is not None:
             extra["tool.parameters"] = _safe_json_dumps(parameters)
-        if tool_json_schema is not None:
-            extra["tool.json_schema"] = _safe_json_dumps(tool_json_schema)
-
-    # Embedding-specific attributes
-    elif kind_upper == "EMBEDDING":
-        if model:
-            extra["embedding.model_name"] = model
-        if dimension:
-            extra["embedding.vector.dimensions"] = dimension
 
     # Use specialized postprocessor for retriever
     postprocess_result = None
@@ -360,7 +329,6 @@ def span(
         description=description if kind_upper not in ("TOOL", "MCP_TOOL") else None,
         version=version,
         tags=tags,
-        metadata=metadata,
         attributes=extra,
         capture_input=capture_input,
         capture_output=capture_output,

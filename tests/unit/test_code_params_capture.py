@@ -8,6 +8,7 @@ these attributes.
 import asyncio
 import functools
 import inspect
+from pathlib import Path
 
 from opentelemetry import trace
 
@@ -47,7 +48,7 @@ def test_sync_decorator_sets_code_file_path(tracer_provider, in_memory_span_expo
     assert len(spans) == 1
     attrs = spans[0].attributes
     assert "code.file.path" in attrs
-    assert __file__.rstrip("c") in attrs["code.file.path"].rstrip("c")  # .py or .pyc
+    assert Path(attrs["code.file.path"]).name == Path(__file__).name
 
 
 def test_sync_decorator_sets_code_function_name(tracer_provider, in_memory_span_exporter):
@@ -216,7 +217,7 @@ def test_stacked_decorator_reports_inner_function_location(
     assert len(spans) == 1
     attrs = spans[0].attributes
     # File path should be this test file, not functools / some decorator module.
-    assert __file__.rstrip("c") in attrs["code.file.path"].rstrip("c")
+    assert Path(attrs["code.file.path"]).name == Path(__file__).name
     assert attrs["code.function.name"].endswith("inner_tool")
     assert attrs["code.namespace"] == __name__
     assert attrs["code.line.number"] == expected_lineno
@@ -241,7 +242,7 @@ def test_mcp_tool_decorator_sets_code_attributes(tracer_provider, in_memory_span
     assert len(spans) == 1
     attrs = spans[0].attributes
     assert "code.file.path" in attrs
-    assert __file__.rstrip("c") in attrs["code.file.path"].rstrip("c")
+    assert Path(attrs["code.file.path"]).name == Path(__file__).name
     assert attrs["code.function.name"].endswith("my_mcp_tool")
     assert attrs["code.namespace"] == __name__
     assert isinstance(attrs["code.line.number"], int)

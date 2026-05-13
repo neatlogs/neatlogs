@@ -66,7 +66,7 @@ class UserPromptContext:
         _user_prompt_variables.set(None)
 
 
-class PromptTemplate:
+class SystemPromptTemplate:
     """Template for the system/AI instruction prompt with {{variable}} placeholders."""
 
     def __init__(self, template: Union[str, List[Dict[str, str]]]):
@@ -132,15 +132,19 @@ class PromptTemplate:
         """String representation showing template structure"""
         if isinstance(self.template, str):
             return (
-                f"PromptTemplate('{self.template[:50]}...')"
+                f"SystemPromptTemplate('{self.template[:50]}...')"
                 if len(str(self.template)) > 50
-                else f"PromptTemplate('{self.template}')"
+                else f"SystemPromptTemplate('{self.template}')"
             )
-        return f"PromptTemplate({len(self.template)} messages, variables={self.variables})"
+        return f"SystemPromptTemplate({len(self.template)} messages, variables={self.variables})"
 
     def __repr__(self) -> str:
         """Detailed representation"""
-        return f"PromptTemplate(template={self.template!r}, variables={self.variables})"
+        return f"SystemPromptTemplate(template={self.template!r}, variables={self.variables})"
+
+
+# Backward-compatible alias
+PromptTemplate = SystemPromptTemplate
 
 
 class UserPromptTemplate:

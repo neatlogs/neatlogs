@@ -784,14 +784,14 @@ class InstrumentationManager:
                         try:
                             span.set_attribute(
                                 "input.value",
-                                _json.dumps(kwargs, default=str)[:10000],
+                                _json.dumps(kwargs, default=str),
                             )
                         except Exception:
                             pass
                         try:
                             result = fn(**kwargs)
                             try:
-                                span.set_attribute("output.value", str(result)[:10000])
+                                span.set_attribute("output.value", str(result))
                             except Exception:
                                 pass
                             span.set_status(_SC.OK)

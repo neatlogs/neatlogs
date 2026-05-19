@@ -30,7 +30,7 @@ classifiers = [
     "Topic :: System :: Monitoring",
 ]
 requires-python = ">=3.8"
-dependencies = []
+dependencies = ["requests"]
 
 [project.urls]
 Homepage = "https://github.com/NeatLogs/neatlogs"

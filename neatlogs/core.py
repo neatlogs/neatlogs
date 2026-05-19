@@ -22,6 +22,9 @@ _current_framework_ctx = contextvars.ContextVar(
 # Context variable for parent span
 current_span_id_context = contextvars.ContextVar('current_span_id', default=None)
 
+# Context variable for agent name (used by CrewAI)
+_current_agent_name_ctx = contextvars.ContextVar('current_agent_name', default=None)
+
 
 # Context variable to suppress low-level patching
 _suppress_patching_ctx = contextvars.ContextVar(
@@ -41,6 +44,16 @@ def get_current_framework() -> Optional[str]:
 def clear_current_framework():
     """Clear the current framework context."""
     _current_framework_ctx.set(None)
+
+
+def set_current_agent_name(name: str):
+    """Set the current agent name for CrewAI tracking."""
+    _current_agent_name_ctx.set(name)
+
+
+def clear_current_agent_name():
+    """Clear the current agent name."""
+    _current_agent_name_ctx.set(None)
 
 
 def suppress_patching():

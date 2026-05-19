@@ -14,6 +14,7 @@ from ..semconv import (
     LLMAttributes, MessageAttributes, LLMRequestTypeValues, LLMEvents,
     format_tools_for_attribute, extract_tool_calls_data
 )
+from ..token_counting import estimate_cost
 
 
 class AnthropicHandler(BaseEventHandler):
@@ -216,7 +217,7 @@ class AnthropicHandler(BaseEventHandler):
             span.prompt_tokens = response_data.get('prompt_tokens', 0)
             span.completion_tokens = response_data.get('completion_tokens', 0)
             span.total_tokens = response_data.get('total_tokens', 0)
-            span.cost = self.estimate_cost(
+            span.cost = estimate_cost(
                 span.model, span.prompt_tokens, span.completion_tokens)
 
         self.handle_call_end(span, final_message, success=True)

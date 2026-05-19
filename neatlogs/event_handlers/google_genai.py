@@ -9,6 +9,7 @@ Enhanced with comprehensive tracking including streaming support.
 import logging
 from typing import Dict, List, Any, Optional
 from .base import BaseEventHandler
+from ..token_counting import estimate_cost
 
 
 class GoogleGenAIHandler(BaseEventHandler):
@@ -215,7 +216,7 @@ class GoogleGenAIHandler(BaseEventHandler):
                 "completion_tokens", len(span.completion.split())
             )
             span.total_tokens = response_data.get("total_tokens", 0)
-            span.cost = self.estimate_cost(
+            span.cost = estimate_cost(
                 span.model, span.prompt_tokens, span.completion_tokens
             )
 

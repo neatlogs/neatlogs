@@ -10,6 +10,7 @@ Enhanced with comprehensive tracking including streaming support.
 import logging
 from typing import Dict, List, Any, Optional
 from .base import BaseEventHandler
+from ..token_counting import estimate_cost
 
 
 class LiteLLMHandler(BaseEventHandler):
@@ -157,7 +158,7 @@ class LiteLLMHandler(BaseEventHandler):
             span.prompt_tokens = response_data.get('prompt_tokens', 0)
             span.completion_tokens = response_data.get('completion_tokens', 0)
             span.total_tokens = response_data.get('total_tokens', 0)
-            span.cost = self.estimate_cost(
+            span.cost = estimate_cost(
                 span.model, span.prompt_tokens, span.completion_tokens)
 
         self.handle_call_end(span, final_chunk, success=True)

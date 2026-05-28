@@ -1,20 +1,19 @@
 """
 Tools for the Marketing Strategy crew.
 
-Provides a Gemini-grounded Google Search tool and a website analyser.
-These give agents access to real-time web information with source citations.
+Gemini-grounded Google Search tool + a website analyser. Both are CrewAI tools
+wrapped with @neatlogs.span(kind="TOOL") so the tool invocation appears as a
+TOOL span under the agent in the NeatLogs trace.
 """
 
 import os
+
 import neatlogs
 from crewai.tools import tool
 from google import genai
 from google.genai import types
 
 
-# ---------------------------------------------------------------------------
-# Gemini client  (lazy init — auto-instrumented via "google_genai")
-# ---------------------------------------------------------------------------
 _gemini_client = None
 _GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 _GROUNDED_CONFIG = types.GenerateContentConfig(
@@ -24,28 +23,21 @@ _GROUNDED_CONFIG = types.GenerateContentConfig(
 
 
 def _get_gemini_client() -> genai.Client:
-    """Return a shared Gemini client, created on first use."""
+    """Return a shared Gemini client, created on first use (AFTER neatlogs.init)."""
     global _gemini_client
     if _gemini_client is None:
         api_key = os.getenv("GOOGLE_API_KEY")
         if not api_key:
-            raise RuntimeError(
-                "GOOGLE_API_KEY is not set. "
-                "Add it to your .env file."
-            )
+            raise RuntimeError("GOOGLE_API_KEY is not set.")
         _gemini_client = genai.Client(api_key=api_key)
     return _gemini_client
 
 
 @tool("Web Search Google")
-@neatlogs.span(kind="TOOL", name="Web Search Google")
+@neatlogs.span(kind="TOOL", tool_name="web_search_google")
 def search_web(query: str) -> str:
     """
     Search the internet using Google Search via Gemini grounding.
-
-    Use this tool whenever you need up-to-date information about a company,
-    market trends, competitor analysis, audience data, or any real-time facts.
-    Provide a clear, specific search query.
 
     Returns a grounded answer with source citations.
     """
@@ -57,7 +49,6 @@ def search_web(query: str) -> str:
     )
     text = response.text or "No results found."
 
-    # Append grounding sources when available
     sources = []
     try:
         metadata = response.candidates[0].grounding_metadata
@@ -75,13 +66,10 @@ def search_web(query: str) -> str:
 
 
 @tool("Analyze Website Content")
-@neatlogs.span(kind="TOOL", name="Analyze Website Content")
+@neatlogs.span(kind="TOOL", tool_name="analyze_website")
 def analyze_website(url: str) -> str:
     """
     Analyze and summarise the content of a specific website URL.
-
-    Use this tool when you have a specific URL and need to understand what
-    the company/product is about, their messaging, positioning, etc.
     """
     client = _get_gemini_client()
     response = client.models.generate_content(

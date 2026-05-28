@@ -73,7 +73,13 @@ neatlogs.init(
     api_key=os.getenv("NEATLOGS_API_KEY"),
     endpoint=os.getenv("NEATLOGS_ENDPOINT", "http://staging-cloud.neatlogs.com/api/data/v4/batch"),
     workflow_name="milvus-vector-search",
-    tags=["milvus", "vector-db", "rag"],
+    tags=[
+        "sdk-examples",
+        "example-milvus-vector-search",
+        "milvus",
+        "vector-db",
+        "rag",
+    ],
     disable_export=not os.getenv("NEATLOGS_API_KEY"),
     debug=True,
 )

@@ -16,11 +16,7 @@ Agents/Chains:
 Span Types: WORKFLOW, CHAIN, AGENT, LLM, RETRIEVER, RERANKER, TOOL
 """
 
-import sys
-import os
 from typing import Dict
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from langchain_openai import AzureChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
@@ -29,9 +25,9 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnableLambda
 
 import neatlogs
-from neatlogs.examples.detection_demo.config import Settings
-from neatlogs.examples.detection_demo.shared.rag_setup import get_research_retriever, get_reranker
-from neatlogs.examples.detection_demo.shared.tools import web_search
+from config import Settings
+from shared.rag_setup import get_research_retriever, get_reranker
+from shared.tools import web_search
 
 
 # =============================================================================

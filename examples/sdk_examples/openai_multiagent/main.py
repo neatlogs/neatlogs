@@ -10,37 +10,26 @@ Usage:
 
 Required env vars:
     NEATLOGS_API_KEY
-    AZURE_OPENAI_ENDPOINT
-    AZURE_OPENAI_API_KEY
-    AZURE_LLM_DEPLOYMENT
+    AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_API_KEY, AZURE_LLM_DEPLOYMENT
 """
 
 import os
 import sys
 
-# Add local SDK to path
-_sdk_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.."))
-if _sdk_root not in sys.path:
-    sys.path.insert(0, _sdk_root)
-
 from dotenv import load_dotenv
+
 load_dotenv()
 
-os.environ.setdefault("NEATLOGS_LOG_SPANS", "true")
-os.environ.setdefault("NEATLOGS_LOG_SPANS_FILE", "openai_multiagent_spans.log")
-os.environ.setdefault("NEATLOGS_LOG_RAW_SPANS", "true")
-os.environ.setdefault("NEATLOGS_LOG_RAW_SPANS_FILE", "openai_multiagent_raw_spans.log")
-
+# neatlogs.init() MUST come before any LLM library imports.
 import neatlogs
 
 neatlogs.init(
-    api_key=os.getenv("NEATLOGS_API_KEY", ""),
-    endpoint=os.getenv("NEATLOGS_ENDPOINT", "http://localhost:4100"),
-    workflow_name="openai-investment-research",
-    tags=["openai", "investment", "research"],
+    api_key=os.getenv("NEATLOGS_API_KEY"),
+    endpoint=os.getenv("NEATLOGS_ENDPOINT"),
+    workflow_name="investment-research",
+    tags=["sdk-examples", "openai", "investment", "research", "multi-agent"],
     instrumentations=["openai"],
     capture_logs=True,
-    debug=True,
 )
 
 from agents import planner_agent, researcher_agent, analyst_agent, reporter_agent

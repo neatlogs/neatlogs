@@ -1,60 +1,84 @@
 """
-GobbleCube Agent - Shared Configuration
-========================================
-Initialises the Azure OpenAI LLM client and Neatlogs SDK.
-All agents import `llm` from here so credentials are loaded once.
+Shared settings and NeatLogs initialization for the GobbleCube demo.
 """
 
 import os
+from dataclasses import dataclass
 
 from dotenv import load_dotenv
 
-# Load .env from this directory first, then fall back to process env.
-# `override=True` ensures this example's local env is deterministic and
-# not accidentally shadowed by a parent shell export.
 _env_path = os.path.join(os.path.dirname(__file__), ".env")
 load_dotenv(_env_path if os.path.exists(_env_path) else None, override=False)
 
-# ---------------------------------------------------------------------------
-# Neatlogs – initialise ONCE before any LLM import/call
-# ---------------------------------------------------------------------------
-import neatlogs
+import neatlogs  # noqa: E402
 
-os.environ.setdefault("LANGCHAIN_TRACING_V2", "false")
-os.environ.setdefault("NEATLOGS_LOG_SPANS", "true")
-os.environ.setdefault("NEATLOGS_LOG_METRICS", "true")
-os.environ.setdefault("NEATLOGS_LOG_RAW_SPANS", "true")
-os.environ.setdefault("NEATLOGS_LOG_SPANS_FILE", "spans_gobblecube.log")
-os.environ.setdefault("NEATLOGS_LOG_RAW_SPANS_FILE", "spans_raw_gobblecube.log")
-os.environ.setdefault("NEATLOGS_LOG_METRICS_FILE", "metrics_gobblecube.log")
-
-neatlogs.init(
-    api_key=os.getenv("NEATLOGS_API_KEY"),
-    endpoint=os.getenv("NEATLOGS_ENDPOINT", "http://localhost:4100/api/data/v4/batch"),
-    tags=["gobblecube", "langgraph", "demo"],
-    instrumentations=["langchain", "azure_ai_inference"],   # auto-instruments LangChain + LangGraph
-    workflow_name="gobblecube_v7",
-    debug=True,
-)
-
-# ---------------------------------------------------------------------------
-# Azure OpenAI LLM (used by all agents)
-# ---------------------------------------------------------------------------
-from langchain_openai import AzureChatOpenAI
-
-llm = AzureChatOpenAI(
-    api_key=os.getenv("AZURE_OPENAI_API_KEY"),
-    api_version=os.getenv("AZURE_OPENAI_API_VERSION", "2024-08-01-preview"),
-    azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
-    azure_deployment=os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME"),
-)
-
-print(
-    "[gobblecube] Azure config:"
-    f" endpoint={os.getenv('AZURE_OPENAI_ENDPOINT')}"
-    f" deployment={os.getenv('AZURE_OPENAI_DEPLOYMENT_NAME')}"
-    f" api_version={os.getenv('AZURE_OPENAI_API_VERSION', '2024-08-01-preview')}"
-)
+llm = None
 
 BRAND = "Demo Brand"
 CATEGORY = "health_snacks"
+
+
+@dataclass(frozen=True)
+class Settings:
+    neatlogs_api_key: str
+    neatlogs_endpoint: str | None
+    azure_openai_api_key: str
+    azure_openai_endpoint: str
+    azure_openai_deployment: str
+    azure_openai_api_version: str
+
+
+def load_settings() -> Settings:
+    api_key = os.getenv("NEATLOGS_API_KEY")
+    if not api_key:
+        raise RuntimeError(
+            "Missing NEATLOGS_API_KEY. Copy .env.example to .env and fill in your keys."
+        )
+
+    missing = [
+        name
+        for name, val in (
+            ("AZURE_OPENAI_API_KEY", os.getenv("AZURE_OPENAI_API_KEY")),
+            ("AZURE_OPENAI_ENDPOINT", os.getenv("AZURE_OPENAI_ENDPOINT")),
+            ("AZURE_OPENAI_DEPLOYMENT_NAME", os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME")),
+        )
+        if not val
+    ]
+    if missing:
+        raise RuntimeError(f"Missing Azure OpenAI env vars: {', '.join(missing)}")
+
+    return Settings(
+        neatlogs_api_key=api_key,
+        neatlogs_endpoint=os.getenv("NEATLOGS_ENDPOINT"),
+        azure_openai_api_key=os.getenv("AZURE_OPENAI_API_KEY"),
+        azure_openai_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
+        azure_openai_deployment=os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME"),
+        azure_openai_api_version=os.getenv("AZURE_OPENAI_API_VERSION", "2025-01-01-preview"),
+    )
+
+
+def init_neatlogs(settings: Settings) -> None:
+    """Initialize NeatLogs before importing modules that pull in LangChain."""
+    os.environ.setdefault("LANGCHAIN_TRACING_V2", "false")
+
+    neatlogs.init(
+        api_key=settings.neatlogs_api_key,
+        endpoint=settings.neatlogs_endpoint,
+        workflow_name="gobblecube",
+        tags=["sdk-examples", "gobblecube", "langgraph", "multi-agent"],
+        instrumentations=["langchain", "openai", "azure_ai_inference"],
+    )
+
+
+def setup_llm(settings: Settings):
+    """Create the shared Azure OpenAI client after neatlogs.init()."""
+    global llm
+    from langchain_openai import AzureChatOpenAI
+
+    llm = AzureChatOpenAI(
+        api_key=settings.azure_openai_api_key,
+        azure_endpoint=settings.azure_openai_endpoint,
+        azure_deployment=settings.azure_openai_deployment,
+        api_version=settings.azure_openai_api_version,
+    )
+    return llm

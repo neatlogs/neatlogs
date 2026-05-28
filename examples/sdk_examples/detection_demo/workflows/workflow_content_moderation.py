@@ -15,18 +15,24 @@ Agents:
 Span Types: WORKFLOW, AGENT, LLM, RETRIEVER, RERANKER
 """
 
-import sys
-import os
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-
-from crewai import Agent, Task, Crew, Process
-from langchain_openai import AzureChatOpenAI
+from crewai import Agent, Task, Crew, Process, LLM
 from langchain_core.tools import tool
 
 import neatlogs
-from neatlogs.examples.detection_demo.config import Settings
-from neatlogs.examples.detection_demo.shared.rag_setup import get_moderation_policies_retriever, get_reranker
+from neatlogs import SystemPromptTemplate, UserPromptTemplate
+from config import Settings
+from shared.rag_setup import get_moderation_policies_retriever, get_reranker
+
+
+def _make_llm(settings: Settings) -> LLM:
+    """Fresh CrewAI LLM per agent (Azure OpenAI via LiteLLM routing)."""
+    return LLM(
+        model=f"azure/{settings.azure_openai_deployment}",
+        api_key=settings.azure_openai_api_key,
+        base_url=settings.azure_openai_endpoint,
+        api_version=settings.azure_openai_api_version,
+        temperature=0.3,
+    )
 
 
 # =============================================================================
@@ -63,15 +69,15 @@ def create_policy_search_tool():
 # =============================================================================
 
 @neatlogs.span(kind="AGENT", name="create_reviewer_agent")
-def create_reviewer_agent(content: str, llm: AzureChatOpenAI):
-    """Create reviewer agent with bound prompt templates."""
+def create_reviewer_agent(content: str, settings: Settings):
+    """Create reviewer agent with bound system prompt and registered user template."""
 
-    system_tpl = neatlogs.PromptTemplate(
+    system_tpl = SystemPromptTemplate(
         """You are an experienced content moderator who quickly identifies \
 potential policy violations including hate speech, NSFW content, spam, and harassment. \
 You provide a preliminary assessment for further review."""
     )
-    user_tpl = neatlogs.UserPromptTemplate(
+    user_tpl = UserPromptTemplate(
         """Review this user-generated content for potential policy violations:
 
 Content: "{{content}}"
@@ -87,15 +93,13 @@ Identify potential issues with:
 Provide a preliminary assessment."""
     )
 
-    bound_llm = neatlogs.bind_templates(llm, system_tpl, user_tpl, content=content)
-
     reviewer = Agent(
         role="Content Reviewer",
         goal="Perform initial safety triage of user-generated content",
         backstory=str(system_tpl.template),
         verbose=True,
         allow_delegation=False,
-        llm=bound_llm,
+        llm=neatlogs.bind_templates(_make_llm(settings), system_tpl),
     )
 
     review_task = Task(
@@ -103,20 +107,21 @@ Provide a preliminary assessment."""
         agent=reviewer,
         expected_output="Preliminary safety assessment identifying potential violations",
     )
+    neatlogs.register_crewai_task(review_task, user_tpl, content=content)
 
     return reviewer, review_task
 
 
 @neatlogs.span(kind="AGENT", name="create_policy_analyst_agent")
-def create_policy_analyst_agent(content: str, llm: AzureChatOpenAI, policy_search_tool, review_task: Task):
-    """Create policy analyst agent with bound prompt templates."""
+def create_policy_analyst_agent(content: str, settings: Settings, policy_search_tool, review_task: Task):
+    """Create policy analyst agent with bound system prompt and registered user template."""
 
-    system_tpl = neatlogs.PromptTemplate(
+    system_tpl = SystemPromptTemplate(
         """You are a policy expert who thoroughly analyzes flagged content \
 against detailed community guidelines. You search relevant policies and provide \
 in-depth analysis of potential violations."""
     )
-    user_tpl = neatlogs.UserPromptTemplate(
+    user_tpl = UserPromptTemplate(
         """Analyze the flagged content against our moderation policies:
 
 Content: "{{content}}"
@@ -129,15 +134,13 @@ Search relevant moderation policies and determine:
 Use the search_moderation_policies tool to find relevant guidelines."""
     )
 
-    bound_llm = neatlogs.bind_templates(llm, system_tpl, user_tpl, content=content)
-
     policy_analyst = Agent(
         role="Policy Analyst",
         goal="Analyze content against community guidelines using policy database",
         backstory=str(system_tpl.template),
         verbose=True,
         allow_delegation=False,
-        llm=bound_llm,
+        llm=neatlogs.bind_templates(_make_llm(settings), system_tpl),
         tools=[policy_search_tool],
     )
 
@@ -147,20 +150,21 @@ Use the search_moderation_policies tool to find relevant guidelines."""
         expected_output="Detailed policy analysis with specific guideline references",
         context=[review_task],
     )
+    neatlogs.register_crewai_task(policy_task, user_tpl, content=content)
 
     return policy_analyst, policy_task
 
 
 @neatlogs.span(kind="AGENT", name="create_decision_maker_agent")
-def create_decision_maker_agent(content: str, llm: AzureChatOpenAI, review_task: Task, policy_task: Task):
-    """Create decision maker agent with bound prompt templates."""
+def create_decision_maker_agent(content: str, settings: Settings, review_task: Task, policy_task: Task):
+    """Create decision maker agent with bound system prompt and registered user template."""
 
-    system_tpl = neatlogs.PromptTemplate(
+    system_tpl = SystemPromptTemplate(
         """You are the final decision authority for content moderation. \
 You review all analysis, consider context, and make a clear decision: \
 APPROVE, REMOVE, or FLAG_FOR_REVIEW. You provide clear reasoning."""
     )
-    user_tpl = neatlogs.UserPromptTemplate(
+    user_tpl = UserPromptTemplate(
         """Make final moderation decision:
 
 Content: "{{content}}"
@@ -173,15 +177,13 @@ Decide:
 Provide clear reasoning for your decision."""
     )
 
-    bound_llm = neatlogs.bind_templates(llm, system_tpl, user_tpl, content=content)
-
     decision_maker = Agent(
         role="Moderation Decision Maker",
         goal="Make final moderation decision based on all analysis",
         backstory=str(system_tpl.template),
         verbose=True,
         allow_delegation=False,
-        llm=bound_llm,
+        llm=neatlogs.bind_templates(_make_llm(settings), system_tpl),
     )
 
     decision_task = Task(
@@ -190,6 +192,7 @@ Provide clear reasoning for your decision."""
         expected_output="Final moderation decision (APPROVE/REMOVE/FLAG_FOR_REVIEW) with reasoning",
         context=[review_task, policy_task],
     )
+    neatlogs.register_crewai_task(decision_task, user_tpl, content=content)
 
     return decision_maker, decision_task
 
@@ -251,14 +254,6 @@ def run_content_moderation_workflow(settings: Settings):
     # Create policy search tool
     policy_search_tool = create_policy_search_tool()
 
-    # Base LLM — each agent gets its own bound copy via bind_templates
-    llm = AzureChatOpenAI(
-        api_key=settings.azure_openai_api_key,
-        azure_endpoint=settings.azure_openai_endpoint,
-        azure_deployment=settings.azure_openai_deployment,
-        api_version=settings.azure_openai_api_version,
-        temperature=0.3,
-    )
     print(f"  Using Azure OpenAI: {settings.azure_openai_deployment}")
 
     print("\n✓ Building CrewAI moderation team (simulated RAG)")
@@ -280,9 +275,13 @@ def run_content_moderation_workflow(settings: Settings):
             content = scenario["content"]
 
             # Each agent function creates an Agent+Task with its own bound LLM
-            reviewer, review_task = create_reviewer_agent(content, llm)
-            policy_analyst, policy_task = create_policy_analyst_agent(content, llm, policy_search_tool, review_task)
-            decision_maker, decision_task = create_decision_maker_agent(content, llm, review_task, policy_task)
+            reviewer, review_task = create_reviewer_agent(content, settings)
+            policy_analyst, policy_task = create_policy_analyst_agent(
+                content, settings, policy_search_tool, review_task
+            )
+            decision_maker, decision_task = create_decision_maker_agent(
+                content, settings, review_task, policy_task
+            )
 
             # Run crew with all three agents sequentially
             crew = Crew(

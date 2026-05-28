@@ -15,28 +15,21 @@ Required env vars:
 import os
 import sys
 
-# Add local SDK to path
-_sdk_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.."))
-if _sdk_root not in sys.path:
-    sys.path.insert(0, _sdk_root)
-
 from dotenv import load_dotenv
+
 load_dotenv()
 
-os.environ.setdefault("NEATLOGS_LOG_SPANS", "true")
-os.environ.setdefault("NEATLOGS_LOG_SPANS_FILE", "google_genai_multiagent_spans.log")
-os.environ.setdefault("NEATLOGS_LOG_RAW_SPANS", "true")
-os.environ.setdefault("NEATLOGS_LOG_RAW_SPANS_FILE", "google_genai_multiagent_raw_spans.log")
-
+# neatlogs.init() MUST come before creating the Google GenAI client.
+# google.genai.Client caches its transport at construction time, so the client
+# must be created after init() for auto-instrumentation to take effect.
 import neatlogs
 
 neatlogs.init(
-    api_key=os.getenv("NEATLOGS_API_KEY", ""),
-    endpoint=os.getenv("NEATLOGS_ENDPOINT", "http://localhost:4100"),
-    workflow_name="google-genai-content-creation",
-    tags=["google-genai", "content", "blog"],
+    api_key=os.getenv("NEATLOGS_API_KEY"),
+    endpoint=os.getenv("NEATLOGS_ENDPOINT"),
+    workflow_name="blog-creation",
+    tags=["sdk-examples", "google-genai", "content", "blog"],
     instrumentations=["google_genai"],
-    debug=True,
 )
 
 from agents import ideation_agent, writer_agent, editor_agent, finalizer_agent

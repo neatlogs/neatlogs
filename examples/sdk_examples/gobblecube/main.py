@@ -15,15 +15,10 @@ Prerequisites (see README.md):
 """
 
 import argparse
-import json
-import os
 import sys
 
-# Allow running from any directory
-sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
-
 import neatlogs
-from supervisor import build_gobbs_gpt_supervisor
+from config import init_neatlogs, load_settings, setup_llm
 
 # ---------------------------------------------------------------------------
 # Demo scenarios (from the architecture doc)
@@ -114,6 +109,7 @@ def run_query(
 
     with neatlogs.trace(
         name="gobbs_gpt_query",
+        kind="WORKFLOW",
         session_id=session_id,
         use_case=use_case,
         agent=agent,
@@ -175,6 +171,17 @@ def main():
         help="Run a specific demo scenario (1, 2, 3, 4, 9)",
     )
     args = parser.parse_args()
+
+    try:
+        settings = load_settings()
+    except RuntimeError as e:
+        print(f"\nConfiguration error:\n{e}\n")
+        sys.exit(1)
+
+    init_neatlogs(settings)
+    setup_llm(settings)
+
+    from supervisor import build_gobbs_gpt_supervisor
 
     print("\n🚀 GobbleCube AI Agent — Powered by LangGraph + Azure OpenAI")
     print("   Observability: Neatlogs SDK\n")

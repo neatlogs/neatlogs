@@ -1,90 +1,23 @@
 """
-Marketing Strategy Demo -- Entry point.
+Marketing Strategy Demo — CrewAI + Azure OpenAI agents with Gemini grounded search tools.
 
-Run:  python main.py
+Run:
+    python main.py
 
-Set MOCK_MODE = True to skip all API calls and return the real cached result
-from trace d021f6e44c40b01ee0d0687678594a0a instantly.
-Set MOCK_MODE = False to run the actual CrewAI + Gemini workflow.
-
-Neatlogs SDK is initialised HERE, before any CrewAI / Gemini imports,
-so that auto-instrumentation hooks are registered first.
+Required env:
+    NEATLOGS_API_KEY
+    AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_API_KEY, AZURE_OPENAI_DEPLOYMENT_NAME
+    GOOGLE_API_KEY  (for the Gemini grounded search tool)
 """
 
 import os
 import sys
-from datetime import datetime
-
-# ---------------------------------------------------------------------------
-# Add local SDK to path — must happen before neatlogs import
-# This file lives at: python_sdk_new/neatlogs/neatlogs/examples/marketing_strategy_demo/main.py
-# Three levels up is: python_sdk_new/neatlogs/ (contains the neatlogs/ package)
-# ---------------------------------------------------------------------------
-_sdk_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.."))
-if _sdk_root not in sys.path:
-    sys.path.insert(0, _sdk_root)
 
 from dotenv import load_dotenv
+
 load_dotenv()
 
-# ---------------------------------------------------------------------------
-# Timestamped run ID — each run writes to its own set of log files
-# ---------------------------------------------------------------------------
-_RUN_TS = datetime.now().strftime("%Y%m%d_%H%M%S")
-
-
-class _Tee:
-    """Write to both the original stream and a file simultaneously."""
-    def __init__(self, stream, filepath):
-        self._stream = stream
-        self._file = open(filepath, "w", buffering=1, encoding="utf-8")
-
-    def write(self, data):
-        self._stream.write(data)
-        self._file.write(data)
-
-    def flush(self):
-        self._stream.flush()
-        self._file.flush()
-
-    def fileno(self):
-        return self._stream.fileno()
-
-    def isatty(self):
-        return self._stream.isatty()
-
-
-_terminal_log = os.path.join(os.path.dirname(os.path.abspath(__file__)), f"run_{_RUN_TS}.log")
-sys.stdout = _Tee(sys.stdout, _terminal_log)
-sys.stderr = _Tee(sys.stderr, _terminal_log)
-print(f"[run] terminal output → {_terminal_log}")
-
-# ---------------------------------------------------------------------------
-# Toggle: set True for instant cached result, False to run real API calls
-# ---------------------------------------------------------------------------
-MOCK_MODE = False
-
-# Real output from trace d021f6e44c40b01ee0d0687678594a0a (2026-04-02)
-# Company: crewai.com | ~316s run | gpt-5-nano + gemini-2.5-flash
-_MOCK_RESULT = (
-    "title='FlowForge: Enterprise AI Crews, Orchestrated at Scale' "
-    "body=\"In large organizations, automation isn\u2019t single-task\u2014it\u2019s a "
-    "coordinated crew of intelligent agents. FlowForge merges Studio\u2019s no-code/low-code "
-    "crew orchestration with AMP\u2019s production-grade governance and AMP Factory\u2019s "
-    "on-prem/hybrid deployment to deliver scalable, auditable multi-agent workflows across "
-    "finance, IT, and operations. Say goodbye to fragmentation: centralize control, "
-    "observability, memory across steps, and real-time tracing with a single platform. "
-    "FlowForge is built for CTOs, VPs of Engineering, and AI leads who demand data residency, "
-    "RBAC, SOC 2 controls, and seamless integrations with Salesforce, Slack, Gmail, Teams, "
-    "and more. Start small with Studio, scale to production with AMP, and deploy where you "
-    "need\u2014cloud, on-prem, or hybrid. See faster time-to-value, reduced risk, and "
-    "measurable ROI as you deploy millions of coordinated tasks across your organization. "
-    "Ready to see it in action? Book a personalized executive demo today.\""
-)
-
-# ---------------------------------------------------------------------------
-# Validate required environment variables upfront
-# ---------------------------------------------------------------------------
+# Validate required env vars up-front.
 _REQUIRED_VARS = [
     "NEATLOGS_API_KEY",
     "AZURE_OPENAI_API_KEY",
@@ -93,50 +26,27 @@ _REQUIRED_VARS = [
 ]
 _missing = [v for v in _REQUIRED_VARS if not os.getenv(v)]
 if _missing:
-    print(f"ERROR: Missing required environment variables: {', '.join(_missing)}")
-    print("       Fill in your .env file before running.")
-    sys.exit(1)
+    sys.exit(f"Missing required env vars: {', '.join(_missing)}")
 
-# ---------------------------------------------------------------------------
-# Span file logging
-# ---------------------------------------------------------------------------
-os.environ.setdefault("NEATLOGS_LOG_SPANS", "true")
-os.environ.setdefault("NEATLOGS_LOG_SPANS_FILE", f"spans_{_RUN_TS}.log")
-os.environ.setdefault("NEATLOGS_LOG_RAW_SPANS", "true")
-os.environ.setdefault("NEATLOGS_LOG_RAW_SPANS_FILE", f"raw_spans_{_RUN_TS}.log")
-
-# ---------------------------------------------------------------------------
-# Neatlogs init -- MUST come before any LLM / CrewAI imports
-# ---------------------------------------------------------------------------
+# neatlogs.init() MUST come before any CrewAI / Gemini imports.
+#
+# CrewAI auto-loads LiteLLM internally. When the underlying LLM is backed by a
+# direct provider SDK, add that provider key too — here we use Azure OpenAI via
+# `azure_ai_inference`. `google_genai` is added because tools.py uses the
+# direct google.genai SDK for Google Search grounding.
 import neatlogs  # noqa: E402
 
 neatlogs.init(
     api_key=os.getenv("NEATLOGS_API_KEY"),
-    endpoint=os.getenv("NEATLOGS_ENDPOINT", "http://localhost:4100"),
-    instrumentations=[
-        "openai",
-        "crewai",
-        "langchain",
-        "azure_ai_inference",
-        "google_genai",
-        "litellm",
-        # google_genai intentionally included: captures Gemini calls in tools
-        # as LLM spans in addition to the TOOL spans from @neatlogs.span.
-    ],
-    workflow_name="Marketing Strategy Demo",
-    tags=["demo", "crewai", "marketing-strategy"],
-    debug=True,
+    endpoint=os.getenv("NEATLOGS_ENDPOINT"),
+    workflow_name="marketing-strategy",
+    tags=["sdk-examples", "crewai", "marketing-strategy", "demo"],
+    instrumentations=["crewai", "azure_ai_inference", "google_genai"],
 )
 
-# -- Now safe to import the rest ------------------------------------------------
-import sys as _sys
-_sys.path.insert(0, os.path.dirname(__file__))
 from crew import run_marketing_crew  # noqa: E402
 
 
-# ---------------------------------------------------------------------------
-# Demo inputs -- customise these for each customer demo
-# ---------------------------------------------------------------------------
 DEMO_INPUTS = {
     "customer_domain": "crewai.com",
     "project_description": (
@@ -151,20 +61,14 @@ DEMO_INPUTS = {
 
 def main():
     print("\n" + "=" * 70)
-    print("  MARKETING STRATEGY DEMO  --  Neatlogs + CrewAI")
-    if MOCK_MODE:
-        print("  MODE: MOCK (cached result from trace d021f6e44c40b01ee0d0687678594a0a)")
+    print("  MARKETING STRATEGY DEMO — NeatLogs + CrewAI")
     print("=" * 70)
     print(f"  Company : {DEMO_INPUTS['customer_domain']}")
     print(f"  Project : {DEMO_INPUTS['project_description'][:80]}...")
     print("=" * 70 + "\n")
 
     try:
-        if MOCK_MODE:
-            result = _MOCK_RESULT
-        else:
-            result = run_marketing_crew(DEMO_INPUTS)
-
+        result = run_marketing_crew(DEMO_INPUTS)
         print("\n" + "=" * 70)
         print("  FINAL RESULT")
         print("=" * 70)

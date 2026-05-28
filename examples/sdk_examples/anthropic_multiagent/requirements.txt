@@ -1,4 +1,2 @@
--e ../../../[anthropic]
-anthropic>=0.40
-boto3>=1.34
+neatlogs[anthropic,bedrock]>=1.3.1
 python-dotenv>=1.0.0

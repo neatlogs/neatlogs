@@ -119,7 +119,7 @@ def execute_query(state: AnalyticsState) -> dict:
     Step 3: Simulated query execution against GobbleCube's Antman engine.
     Returns realistic dummy results keyed by intent.
     """
-    force_error = True
+    force_error = False
     query_text = str(state.get("user_query", "")).lower()
     if force_error or "[force_tool_error]" in query_text:
         raise ConnectionResetError(

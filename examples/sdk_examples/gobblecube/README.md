@@ -27,15 +27,15 @@ Each sub-agent generates **3–6 LLM calls** → a single end-to-end query produ
 ## File Structure
 
 ```
-examples/gobblecube/
+examples/sdk_examples/gobblecube/
 ├── main.py                  # ← Entry point (run this)
-├── config.py                # Azure OpenAI + Neatlogs initialisation
+├── config.py                # Settings, NeatLogs init, Azure OpenAI client
 ├── supervisor.py            # GobbsGPT supervisor graph
 ├── agent_analytics.py       # Gobbs Edge  — NLQ-to-SQL pipeline
 ├── agent_ads.py             # Gobbs Boost — ad optimisation
 ├── agent_inventory.py       # Gobbs Flow  — inventory + PO planning
 ├── agent_market_intel.py    # Gobbs Discover — market intelligence
-├── requirements.txt         # Python dependencies
+├── requirements.txt         # Python dependencies (PyPI neatlogs)
 ├── .env.example             # Environment variable template
 └── README.md                # This file
 ```
@@ -47,7 +47,7 @@ examples/gobblecube/
 ### 1. Install dependencies
 
 ```bash
-cd examples/gobblecube
+cd examples/sdk_examples/gobblecube
 pip install -r requirements.txt
 ```
 
@@ -106,20 +106,22 @@ python main.py --query "What is our share of search on Zepto for protein bars?"
 
 ## Neatlogs Integration
 
-The SDK is configured in `config.py`:
+The SDK is configured in `config.py` (called from `main.py` before any LangChain imports):
 
 ```python
 neatlogs.init(
-    api_key=os.getenv("NEATLOGS_API_KEY"),
-    tags=["gobblecube", "langgraph", "demo"],
-    instrumentations=["langchain"],  # auto-instruments LangChain + LangGraph
+    api_key=settings.neatlogs_api_key,
+    endpoint=settings.neatlogs_endpoint,
+    workflow_name="gobblecube",
+    tags=["sdk-examples", "gobblecube", "langgraph", "multi-agent"],
+    instrumentations=["langchain", "openai", "azure_ai_inference"],
 )
 ```
 
-Each query runs inside a `neatlogs.trace()` session:
+Each query runs inside a `neatlogs.trace()` workflow session:
 
 ```python
-with neatlogs.trace(session_id="demo-scenario-1", name="gobbs_gpt_query"):
+with neatlogs.trace(name="gobbs_gpt_query", kind="WORKFLOW", session_id="demo-scenario-1"):
     result = supervisor.invoke(initial_state)
 ```
 

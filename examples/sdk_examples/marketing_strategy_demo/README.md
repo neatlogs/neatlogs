@@ -79,7 +79,7 @@ python main.py
 ### 4. View traces
 
 Open [app.neatlogs.com](https://app.neatlogs.com) and find the
-**marketing-strategy-demo** workflow. Click into any trace to see the
+**marketing-strategy** workflow. Click into any trace to see the
 full agent execution timeline, tool calls, thoughts, and structured outputs.
 
 ## Customising for a Demo

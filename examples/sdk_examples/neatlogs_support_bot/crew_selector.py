@@ -1,16 +1,14 @@
 """
 Crew selector — routes each ticket to the L1 or OG (L2) crew.
 
-Mirrors the original support_bot crews/crew_selector.py logic.
-
 Routing rules:
   L1 (simple):  billing, account management, password reset, plan changes,
                 feature questions with clear KB answers
   OG (complex): technical debugging, API/webhook/SDK issues, data export problems,
                 SSO configuration, multi-issue tickets
 
-The selector uses a lightweight OpenAI classification call — auto-instrumented
-by OpenInference → LLM span.
+The selector uses a lightweight Azure OpenAI classification call —
+auto-instrumented (LLM span) because `openai` is in the instrumentations list.
 """
 
 import json
@@ -18,8 +16,13 @@ import json
 from openai import AzureOpenAI
 
 import neatlogs
-from neatlogs.examples.neatlogs_support_bot.config import AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_API_KEY, OPENAI_API_VERSION, AZURE_LLM_DEPLOYMENT
-from neatlogs.examples.neatlogs_support_bot.tools import set_ticket_context
+from config import (
+    AZURE_OPENAI_ENDPOINT,
+    AZURE_OPENAI_API_KEY,
+    OPENAI_API_VERSION,
+    AZURE_LLM_DEPLOYMENT,
+)
+from tools import set_ticket_context
 
 _client = AzureOpenAI(
     azure_endpoint=AZURE_OPENAI_ENDPOINT,
@@ -53,27 +56,18 @@ Route to "og" if the issue is:
 
 @neatlogs.span(kind="CHAIN", name="process_ticket")
 def get_ticket_information(ticket: dict) -> dict:
-    """
-    Route a ticket to the correct crew and run it.
-
-    Returns a dict with:
-      crew:     "l1" or "og"
-      response: final email reply from the crew
-      reason:   why this crew was selected
-    """
-    # Register ticket context so tools can access it during crew execution
+    """Route a ticket to the correct crew and run it."""
     set_ticket_context(ticket)
 
-    # Lightweight routing call — produces an LLM span
     routing = _classify_ticket(ticket)
     crew_name = routing.get("crew", "og")
     reason = routing.get("reason", "")
 
     if crew_name == "l1":
-        from neatlogs.examples.neatlogs_support_bot.crews.l1_crew.crew import l1_crew_kickoff
+        from crews.l1_crew.crew import l1_crew_kickoff
         response = l1_crew_kickoff(ticket)
     else:
-        from neatlogs.examples.neatlogs_support_bot.crews.og_crew.crew import og_crew_kickoff
+        from crews.og_crew.crew import og_crew_kickoff
         response = og_crew_kickoff(ticket)
 
     return {

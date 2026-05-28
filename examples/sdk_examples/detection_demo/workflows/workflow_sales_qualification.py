@@ -21,12 +21,8 @@ Detection Coverage:
 Span Types: WORKFLOW, AGENT, LLM, RETRIEVER, RERANKER, TOOL
 """
 
-import sys
-import os
 from typing import Annotated, Sequence, TypedDict, Literal
 import re
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from langchain_openai import ChatOpenAI, AzureChatOpenAI
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage
@@ -37,8 +33,8 @@ from langgraph.prebuilt import ToolNode, tools_condition
 import json
 
 import neatlogs
-from neatlogs.examples.detection_demo.config import Settings
-from neatlogs.examples.detection_demo.shared.rag_setup import get_reranker, SimulatedRetriever
+from config import Settings
+from shared.rag_setup import get_reranker, SimulatedRetriever
 
 
 # =============================================================================

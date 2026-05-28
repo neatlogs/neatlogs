@@ -1,23 +1,31 @@
-# Neatlogs Python SDK
+<div align="center">
 
-A comprehensive LLM tracking system that automatically captures and logs all LLM API calls with detailed metrics.
+<h1>neatlogs</h1>
 
-Auto-instruments LLM calls, frameworks, and custom code with just 6 exports.
+<p>LLM observability for AI agents.<br/>Instrument once. Inspect everything.</p>
 
-[![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![PyPI version](https://badge.fury.io/py/neatlogs.svg)](https://badge.fury.io/py/neatlogs)
+<p>
+  <a href="https://badge.fury.io/py/neatlogs"><img src="https://badge.fury.io/py/neatlogs.svg" alt="PyPI version" /></a>
+  <img src="https://img.shields.io/badge/python-3.10+-blue.svg" alt="Python 3.10+" />
+  <img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="MIT License" />
+</p>
 
-## Features
+<p>
+  <a href="https://neatlogs.com">Website</a> &nbsp;·&nbsp;
+  <a href="https://docs.neatlogs.com">Docs</a> &nbsp;·&nbsp;
+  <a href="https://app.neatlogs.com">Get API key</a> &nbsp;·&nbsp;
+  <a href="https://github.com/neatlogs/skills">AI Skill</a>
+</p>
 
-- **Auto-Instrumentation**: Automatically tracks OpenAI, Anthropic, LangChain, LlamaIndex, CrewAI, Haystack, and more
-- **Rich Metrics**: Token usage, costs, latency, streaming metrics, and custom attributes
-- **Multi-Provider**: OpenAI, Anthropic, Google Gemini, Azure OpenAI, Cohere, Groq, Together and 20+ more
-- **Simple API**: Just 6 exports - `init()`, `flush()`, `shutdown()`, `@span()`, `trace()`, `PromptTemplate`
-- **Zero Config**: Works out-of-the-box with frameworks (LangChain, CrewAI, LlamaIndex, Haystack)
-- **OpenTelemetry Native**: Built on OpenTelemetry + OpenInference standards
-- **Session-Aware**: Track multi-turn conversations with automatic session grouping
-- **Prompt Versioning**: Track prompt templates, variables, and versions
+<br/>
+
+<p><i>Agent failures don't throw exceptions — they produce wrong outputs, miss tool calls, or hallucinate.<br/>Neatlogs captures every trace so you can see exactly what the model was given, what it decided, and what each step returned.</i></p>
+
+</div>
+
+---
+
+![neatlogs](assets/hero.png)
 
 ## Installation
 
@@ -25,348 +33,202 @@ Auto-instruments LLM calls, frameworks, and custom code with just 6 exports.
 pip install neatlogs
 ```
 
-## Quick Start
+Optional extras install the underlying LLM / framework libraries:
 
-### 1. Framework Code (Auto-Instrumented)
+```bash
+pip install "neatlogs[openai]"
+pip install "neatlogs[crewai]"
+pip install "neatlogs[langchain,langgraph]"
+pip install "neatlogs[google-genai]"
+```
 
-Just `init()` and your framework code is automatically tracked:
+Requires **Python >= 3.10, < 3.14**.
+
+---
+
+## Quickstart
 
 ```python
-from neatlogs import init, flush, shutdown
-from langchain.chains import LLMChain
+import neatlogs
+from neatlogs import span
+
+neatlogs.init(
+    api_key="your-api-key",       # or NEATLOGS_API_KEY env var
+    endpoint="https://staging-cloud.neatlogs.com",  # or NEATLOGS_ENDPOINT env var
+    workflow_name="my-agent",
+    instrumentations=["openai"],
+)
+
+# Import instrumented libraries AFTER init()
 from openai import OpenAI
 
-# Initialize (that's all you need!)
-init(
-    api_key="your-api-key",
-    endpoint="https://api.neatlogs.com/v4/batch",
-    instrumentations=["langchain", "openai"],
-)
 
-# Your code works normally - fully auto-instrumented!
-client = OpenAI()
-response = client.chat.completions.create(
-    model="gpt-4o-mini",
-    messages=[{"role": "user", "content": "What is AI?"}]
-)
-
-flush()
-shutdown()
-```
-
-### 2. Custom Code with `@span()`
-
-Instrument your custom orchestration functions:
-
-```python
-from neatlogs import init, span, trace, PromptTemplate
-
-init(api_key="...", instrumentations=["openai"])
-
-# Define prompt template for versioning
-template = PromptTemplate([
-    {"role": "user", "content": "{{question}}"}
-])
-
-@span(kind="RETRIEVER", name="vector_search")
-def retrieve_docs(query: str):
-    """Your custom retrieval logic."""
-    return vector_db.search(query)
-
-@span(kind="AGENT", role="Assistant", goal="Answer questions")
-def answer_agent(question: str):
-    """Agent with prompt tracking."""
-    # Track prompt template inside the function that uses it
-    with trace(prompt_template=template):
-        messages = template.compile(question=question)
-        response = llm.create(messages=messages)
-        return response.choices[0].message.content
-
-@span(kind="WORKFLOW", name="qa_workflow")
-def qa_workflow(question: str):
-    """Top-level workflow orchestration."""
-    docs = retrieve_docs(question)
-    answer = answer_agent(question)
-    return answer
-
-# Just call your workflow - no extra wrapper needed!
-result = qa_workflow("What is quantum computing?")
-
-flush()
-shutdown()
-```
-
-## API Reference
-
-### Core Functions
-
-#### `init()`
-Initialize the SDK (call once at startup).
-
-```python
-init(
-    api_key="your-api-key",                    # Required: your Neatlogs API key
-    endpoint="https://api.neatlogs.com/v4/batch",  # Optional: custom endpoint
-    instrumentations=["openai", "langchain"],  # Auto-instrument frameworks
-    metadata={"env": "production"}             # Optional: global metadata
-)
-```
-
-**Supported instrumentations**: `openai`, `anthropic`, `langchain`, `llama-index`, `crewai`, `haystack`, `google-genai`, `mcp`
-
-#### `flush()`
-Send all pending spans to the server.
-
-```python
-flush()
-```
-
-#### `shutdown()`
-Gracefully shutdown the SDK (call at app exit).
-
-```python
-shutdown()
-```
-
----
-
-### Custom Instrumentation
-
-#### `@span(kind=...)`
-The **only decorator** you need.
-
-```python
-@span(
-    kind="WORKFLOW",           # Required: WORKFLOW, AGENT, CHAIN, TOOL, RETRIEVER, EMBEDDING, MCP_TOOL
-    name="custom_function",    # Optional: span name (defaults to function name)
-    
-    # Optional: add custom attributes
-    role="Assistant",          # For AGENT: agent role
-    goal="Answer questions",   # For AGENT: agent goal
-    model="gpt-4o",            # For LLM/EMBEDDING: model name
-    tool_name="search_api",    # For TOOL/MCP_TOOL: tool name
-)
-def my_function():
-    pass
-```
-
-**Supported span kinds**:
-- `WORKFLOW`: Top-level orchestration workflows
-- `AGENT`: AI agents (agentic behavior)
-- `CHAIN`: Sequential or conditional chains
-- `TOOL`: Tool/function calls
-- `RETRIEVER`: Vector search, document retrieval
-- `EMBEDDING`: Embedding generation
-- `MCP_TOOL`: Model Context Protocol tools
-
-#### `trace()`
-Context manager for:
-1. **Prompt tracking** - Track prompt templates inside LLM calls
-2. **Session management** - Group multi-turn conversations
-3. **Grouping top-level operations** - If you have multiple workflows in `main()`
-
-```python
-# Use case 1: Track prompts
-@span(kind="AGENT")
-def answer_question(q: str):
-    template = PromptTemplate([{"role": "user", "content": "{{q}}"}])
-    with trace(prompt_template=template):
-        messages = template.compile(q=q)
-        response = llm.create(messages=messages)
-        return response
-
-# Use case 2: Group operations in main()
+@span(kind="WORKFLOW", name="quickstart")
 def main():
-    with trace(name="batch_processor", session_id="batch-123"):
-        workflow_1()
-        workflow_2()
+    client = OpenAI()
+    return client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "What is AI?"}],
+    )
 
-# Use case 3: Multi-turn session tracking
-with trace(session_id="user-456", thread_id="conversation-1"):
-    for message in conversation:
-        agent_workflow(message)
+
+main()
+neatlogs.flush()
+neatlogs.shutdown()
 ```
 
-#### `PromptTemplate`
-Tracks prompt templates, variables and versions.
+Auto-instrumentation captures LLM calls, tools, and retrievals as child spans. Use `@span(kind="WORKFLOW")` on your main function or request handler so each run shows up as a top-level trace in the dashboard.
 
-```python
-template = PromptTemplate([
-    {"role": "system", "content": "You are a {{role}}."},
-    {"role": "user", "content": "{{question}}"}
-])
+Call `neatlogs.init()` **before** importing any instrumented library.
 
-# Compile with variables
-messages = template.compile(role="assistant", question="What is AI?")
+For long-running servers (FastAPI, Celery workers), call `init()` once at startup and decorate each request handler with `@span(kind="WORKFLOW")`. Do **not** call `flush()` / `shutdown()` per request.
 
-# Use with trace() to log prompt
-with trace(prompt_template=template):
-    response = llm.create(messages=messages)
-```
+Full walkthrough: [Your First Trace](https://docs.neatlogs.com/quickstart/your-first-trace).
 
 ---
 
-## Supported Frameworks
+## Integrate into your codebase (recommended)
 
-### Auto-Instrumented
+The fastest way to add NeatLogs to an existing project is the official **Agent Skill** — it encodes import order, `@span` kinds, CrewAI prompt binding, and troubleshooting so your coding agent gets it right.
 
-- **LangChain** - Chains, agents, tools, retrievers, LLMs
-- **LlamaIndex** - Queries, retrievals, agents, tools
-- **CrewAI** - Agents, tasks, crews, tools
-- **Haystack** - Pipelines, components, retrievers
-- **OpenAI** - Chat, completions, embeddings, streaming
-- **Anthropic** - Claude chat, streaming
-- **Google GenAI** - Gemini models
-- **Cohere** - Chat, embeddings
-- **Model Context Protocol (MCP)** - MCP tools and servers
+**Repo:** [github.com/neatlogs/skills](https://github.com/neatlogs/skills)
 
-### Supported LLM Providers
+```bash
+npx skills add neatlogs/skills --skill "neatlogs-py"
+```
 
-OpenAI • Anthropic • Google Gemini • Azure OpenAI • Cohere • Groq • Together • Anyscale • Perplexity • Mistral • AWS Bedrock • Replicate • HuggingFace • Ollama • LiteLLM • and 20+ more
+For **Cursor**:
+
+```bash
+npx skills add neatlogs/skills --skill "neatlogs-py" --agent "cursor"
+```
+
+No Node.js? Ask in chat: *"Install the NeatLogs AI skill from github.com/neatlogs/skills"*
+
+Example prompts once installed:
+
+- *"Add neatlogs tracing to my OpenAI calls"*
+- *"Instrument my CrewAI agents with neatlogs"*
+- *"Wrap my FastAPI handler so each request is a top-level trace"*
+
+Full install options: [skills README](https://github.com/neatlogs/skills/blob/main/README.md)
+
+API reference: [docs.neatlogs.com](https://docs.neatlogs.com)
 
 ---
 
-## Common Patterns
+## Platform features
 
-### Pattern 1: Pure Framework Code
-```python
-from neatlogs import init, flush, shutdown
-from langchain.chains import LLMChain
+- **[Traces](https://docs.neatlogs.com/features/traces)**: Full span trees — LLM calls, tools, retrievals, reranking, guardrails — with inputs, outputs, tokens, cost, and latency.
 
-init(api_key="...", instrumentations=["langchain", "openai"])
+- **[Timeline view](https://docs.neatlogs.com/features/traces#timeline)**: See which steps ran in parallel, where latency concentrated, and where the process was idle.
 
-# Your existing code - zero changes!
-chain = LLMChain(...)
-result = chain.run("query")
+- **[AI assistant](https://docs.neatlogs.com/features/traces#ai-assistant)**: Ask questions grounded in the actual span data for a trace.
 
-flush()
-shutdown()
-```
+- **[AI Search](https://docs.neatlogs.com/features/ai-search)**: Query traces in plain English without writing SQL.
 
-### Pattern 2: Custom Workflow with Prompt Tracking
-```python
-from neatlogs import init, span, trace, PromptTemplate
+- **[Detections](https://docs.neatlogs.com/features/detections)**: Rules that flag matching spans — regex, numeric conditions, PII, or model classifiers.
 
-init(api_key="...", instrumentations=["openai"])
+- **[Prompt management](https://docs.neatlogs.com/features/experiments)**: Version prompts, promote labels, test in the Playground.
 
-template = PromptTemplate([{"role": "user", "content": "{{q}}"}])
+- **[Evals](https://app.neatlogs.com/evals)**: Human review campaigns — select traces or spans (or auto-collect future ones via filters), send custom rating forms to assigned reviewers, and track batch progress and scores.
 
-@span(kind="AGENT", role="QA Agent")
-def answer_question(q: str):
-    with trace(prompt_template=template):
-        messages = template.compile(q=q)
-        response = llm.create(messages=messages)
-        return response
+- **[Comments & voting](https://docs.neatlogs.com/features/comments)**: Pin notes to spans, @mention teammates, and thumbs-up/down vote outputs while debugging a trace.
 
-@span(kind="WORKFLOW")
-def qa_workflow(q: str):
-    return answer_question(q)
+---
 
-result = qa_workflow("What is AI?")
-flush()
-shutdown()
-```
+## Supported libraries
 
-### Pattern 3: RAG Pipeline
-```python
-from neatlogs import init, span, trace, PromptTemplate
+Pass keys to `instrumentations` in `neatlogs.init()`. Install extras when noted.
 
-init(api_key="...", instrumentations=["openai"])
+### LLM providers
 
-@span(kind="RETRIEVER", name="vector_search")
-def retrieve_docs(query: str):
-    return vector_db.search(query, top_k=5)
+| Provider | Key | Install |
+|---|---|---|
+| OpenAI | `openai` | `pip install "neatlogs[openai]"` |
+| Anthropic | `anthropic` | `pip install "neatlogs[anthropic]"` |
+| Google Gemini | `google_genai` | `pip install "neatlogs[google-genai]"` |
+| Azure OpenAI | `azure_ai_inference` | `pip install "neatlogs[azure-ai-inference]"` |
+| AWS Bedrock | `bedrock` | `pip install "neatlogs[bedrock]"` |
+| LiteLLM | `litellm` | `pip install "neatlogs[litellm]"` |
+| Groq | `groq` | `pip install "neatlogs[groq]"` |
+| Vertex AI | `vertexai` | `pip install "neatlogs[vertexai]"` |
+| Mistral | `mistralai` | `pip install "neatlogs[mistralai]"` |
 
-@span(kind="TOOL", tool_name="rerank")
-def rerank_docs(docs, query: str):
-    return reranker.rerank(docs, query)
+### Agent frameworks
 
-@span(kind="AGENT", role="RAG Agent")
-def generate_answer(query: str, docs):
-    template = PromptTemplate([
-        {"role": "user", "content": "Context: {{context}}\nQuestion: {{query}}"}
-    ])
-    with trace(prompt_template=template):
-        context = "\n".join([d.content for d in docs])
-        messages = template.compile(context=context, query=query)
-        return llm.create(messages=messages)
+| Framework | Key | Install |
+|---|---|---|
+| LangChain | `langchain` | `pip install "neatlogs[langchain]"` |
+| LangGraph | `langgraph` | `pip install "neatlogs[langgraph]"` |
+| CrewAI | `crewai` | `pip install "neatlogs[crewai]"` |
+| LlamaIndex | `llamaindex` | `pip install "neatlogs[llama-index]"` |
+| Haystack | `haystack` | `pip install "neatlogs[haystack]"` |
+| AutoGen | `autogen` | `pip install "neatlogs[autogen-agentchat]"` |
+| DSPy | `dspy` | `pip install "neatlogs[dspy]"` |
+| MCP | `mcp` | `pip install "neatlogs[mcp]"` |
 
-@span(kind="WORKFLOW", name="rag_pipeline")
-def rag_pipeline(query: str):
-    docs = retrieve_docs(query)
-    ranked = rerank_docs(docs, query)
-    answer = generate_answer(query, ranked)
-    return answer
+### Vector stores & HTTP
 
-result = rag_pipeline("What is quantum computing?")
-flush()
-shutdown()
-```
+| Library | Key | Notes |
+|---|---|---|
+| ChromaDB | `chromadb` | Auto-instrumented when installed |
+| Pinecone | `pinecone` | Auto-instrumented when installed |
+| Qdrant | `qdrant` | Auto-instrumented when installed |
+| Weaviate | `weaviate` | Auto-instrumented when installed |
+| Milvus | `milvus` | `pip install "neatlogs[milvus]"` |
+| Redis | `redis` | Auto-instrumented when installed |
+| OpenSearch | `opensearch` | Auto-instrumented when installed |
+| Elasticsearch | `elasticsearch` | Auto-instrumented when installed |
+| Marqo | `marqo` | Auto-instrumented when installed |
+| HTTP clients | `requests`, `httpx`, `urllib3`, `aiohttp` | Auto-instrumented when installed |
 
-### Pattern 4: Multi-Turn Conversation
-```python
-from neatlogs import init, span, trace
-
-# Enable auto_session for automatic session management
-init(api_key="...", instrumentations=["openai"], auto_session=True)
-
-@span(kind="AGENT", role="Chat Assistant")
-def chat(message: str, history: list):
-    messages = history + [{"role": "user", "content": message}]
-    return llm.create(messages=messages)
-
-# Group entire conversation with session tracking
-with trace(session_id="user-123", thread_id="chat-456"):
-    history = []
-    for user_message in conversation:
-        response = chat(user_message, history)
-        history.append({"role": "assistant", "content": response})
-
-flush()
-shutdown()
-```
-
+---
 
 ## Configuration
 
-### Environment Variables
 ```bash
 NEATLOGS_API_KEY=your-api-key
-NEATLOGS_ENDPOINT=https://api.neatlogs.com/v4/batch
+NEATLOGS_ENDPOINT=https://staging-cloud.neatlogs.com   # optional — this is the default
 ```
 
-### Initialization Options
-```python
-init(
-    api_key="...",                                  # Required: API key
-    endpoint="https://api.neatlogs.com/v4/batch",  # Optional: endpoint
-    instrumentations=["openai", "langchain"],       #  Optional: project ID
-    workflow_name="my-workflow",                    # Optional: workflow name
-)
-```
-
----
-
-## Best Practices
-
-1. **Use auto-instrumentation when possible** - Just `init()` and you're done
-2. **`@span()` for custom orchestration** - Wrap your custom workflow, agent, and tool functions
-3. **`trace()` for prompts** - Track prompt templates inside functions that use LLMs
-4. **`trace()` for sessions** - Group multi-turn conversations with `session_id` and `thread_id`
-5. **Always `flush()` and `shutdown()`** - Ensure all spans are sent before exit
+Get your API key from the [NeatLogs dashboard](https://app.neatlogs.com). Full `init()` options: [reference](https://docs.neatlogs.com/reference/init-reference).
 
 ---
 
 ## Examples
 
-See the `/examples` directory for 60+ comprehensive examples:
-- Framework examples (LangChain, CrewAI, LlamaIndex, Haystack)
-- Provider examples (OpenAI, Anthropic, Google, Cohere)
-- Pattern examples (RAG, agents, tools, streaming, async)
-- Guardrail integration examples
+Runnable reference apps live in [`examples/sdk_examples/`](examples/sdk_examples/). Each folder has a `requirements.txt` (PyPI install) and `.env.example`.
+
+| Example | Framework | Run |
+|---------|-----------|-----|
+| `anthropic_multiagent/` | Anthropic + Bedrock | `python main.py` |
+| `openai_multiagent/` | OpenAI via Azure | `python main.py` |
+| `google_genai_multiagent/` | Google GenAI | `python main.py` |
+| `langchain_react/` | LangChain ReAct | `python react_agent.py` |
+| `langgraph_multiagent/` | LangGraph | `python main.py` |
+| `langgraph_research_assistant/` | LangGraph | `python main.py` |
+| `marketing_strategy_demo/` | CrewAI + Gemini search | `python main.py` |
+| `neatlogs_support_bot/` | CrewAI RAG bot | `python main.py` |
+| `reasoning_model_workflow/` | Multi-provider reasoning | `python main.py` |
+| `support_copilot_demo/` | Support agent demo traces | `RUN=A python support_copilot.py` |
+| `support_copilot_demo_triaged/` | Post-Triage support demo | `SENDGRID_FAKE_SUCCESS=1 RUN=B python support_copilot.py` |
+
+**Adding NeatLogs to your own code?** Use the [AI skill](#integrate-into-your-codebase-recommended) above — not copy-paste from this README.
+
+---
+
+## Best practices
+
+1. **`init()` before LLM imports** — auto-instrumentation patches libraries at import time.
+2. **Wrap script/server entry points in `@span(kind="WORKFLOW")`** — each run gets a clear top-level trace in the dashboard.
+3. **Use auto-instrumentation first** — only add more `@span` decorators for custom orchestration.
+4. **`trace()` for prompts and sessions** — not as a wrapper around `@span(kind="WORKFLOW")`.
+5. **`workflow_name` = feature name** — put env/version/tech stack in `tags=`.
+6. **Scripts:** `flush()` then `shutdown()` at exit. **Servers:** `init()` once, no per-request shutdown.
 
 ---
 
 ## License
 
-MIT License - see LICENSE file for details
+MIT — see [LICENSE](LICENSE).

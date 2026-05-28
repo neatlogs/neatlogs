@@ -14,33 +14,24 @@ Required env vars:
 import os
 import sys
 
-# Add local SDK to path
-_sdk_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.."))
-if _sdk_root not in sys.path:
-    sys.path.insert(0, _sdk_root)
-
 from dotenv import load_dotenv
+
 load_dotenv()
 
-os.environ.setdefault("NEATLOGS_LOG_SPANS", "true")
-os.environ.setdefault("NEATLOGS_LOG_SPANS_FILE", "anthropic_multiagent_spans.log")
-os.environ.setdefault("NEATLOGS_LOG_RAW_SPANS", "true")
-os.environ.setdefault("NEATLOGS_LOG_RAW_SPANS_FILE", "anthropic_multiagent_raw_spans.log")
-
+# neatlogs.init() MUST come before any LLM library imports so that
+# auto-instrumentation can patch the modules at import time.
 import neatlogs
 
 neatlogs.init(
-    api_key=os.getenv("NEATLOGS_API_KEY", ""),
-    endpoint=os.getenv("NEATLOGS_ENDPOINT", "http://localhost:4100"),
-    workflow_name="anthropic-code-review",
-    tags=["anthropic", "code-review", "python"],
+    api_key=os.getenv("NEATLOGS_API_KEY"),
+    endpoint=os.getenv("NEATLOGS_ENDPOINT"),
+    workflow_name="code-review",
+    tags=["sdk-examples", "anthropic", "multi-agent", "code-review"],
     instrumentations=["anthropic"],
-    debug=True,
 )
 
 from agents import reviewer_agent, fixer_agent, tester_agent, documenter_agent
 
-# Sample Python code with intentional issues for demonstration
 SAMPLE_CODE = '''
 def calculate_average(numbers):
     total = 0
@@ -72,9 +63,7 @@ def run_code_review(code: str) -> dict:
 
     print("--- Reviewer: identifying issues ---")
     issues = reviewer_agent(code)
-    print(f"  Found {len(issues)} issue(s):")
-    for issue in issues:
-        print(f"  [{issue.get('severity', '?').upper()}] {issue.get('description', '')}")
+    print(f"  Found {len(issues)} issue(s)")
 
     print("\n--- Fixer: applying fixes ---")
     fixed_code = fixer_agent(code, issues)

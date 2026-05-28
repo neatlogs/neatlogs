@@ -39,6 +39,9 @@ Thumbs.db
 
 # Project specific
 *.log
+full_run.txt
+run_*.log
+*_spans*.log
 .env
 .venv
 docs
@@ -46,8 +49,10 @@ neatlogs.jsonl
 logs/
 .python-version
 
+# Local comparison workspace (competitor integration tests — do not commit)
+examples/sdk_examples_transformed/
+
 # Internal — not published to remote
-neatlogs/examples/
 e2e_test/
 DEPENDENCIES.md
 examples/sdk_examples/support_bot/

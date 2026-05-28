@@ -91,7 +91,14 @@ class NeatlogsLogFilter(LogRecordProcessor):
         else:
             print(f"[neatlogs:log] {line}", file=sys.stderr)
 
-    def on_emit(self, log_data: "LogData") -> None:
+    def _forward_emit(self, log_data: "LogData") -> None:
+        """Forward to downstream processor (emit vs on_emit varies by OTel SDK version)."""
+        if hasattr(self._downstream, "emit"):
+            self._downstream.emit(log_data)
+        elif hasattr(self._downstream, "on_emit"):
+            self._downstream.on_emit(log_data)
+
+    def emit(self, log_data: "LogData") -> None:
         lr = log_data.log_record
 
         # Drop records with no active trace (logged outside a span)
@@ -114,7 +121,10 @@ class NeatlogsLogFilter(LogRecordProcessor):
             return
 
         self._debug_log("PASS", log_data)
-        self._downstream.on_emit(log_data)
+        self._forward_emit(log_data)
+
+    # Newer OTel SDKs may call on_emit instead of emit on LogRecordProcessor.
+    on_emit = emit
 
     def shutdown(self) -> None:
         self._downstream.shutdown()

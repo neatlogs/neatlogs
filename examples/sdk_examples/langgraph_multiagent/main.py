@@ -7,43 +7,29 @@ Usage:
 
 Required env vars:
     NEATLOGS_API_KEY
-    AZURE_OPENAI_ENDPOINT
-    AZURE_OPENAI_API_KEY
-    AZURE_LLM_DEPLOYMENT
-    ANTHROPIC_API_KEY
-    GOOGLE_API_KEY
+    AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_API_KEY, AZURE_LLM_DEPLOYMENT
+    GOOGLE_API_KEY  (for Gemini nodes)
 """
 
 import os
 import sys
-from datetime import datetime
-
-# Add local SDK to path
-_sdk_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.."))
-if _sdk_root not in sys.path:
-    sys.path.insert(0, _sdk_root)
+import uuid
 
 from dotenv import load_dotenv
+
 load_dotenv()
 
-_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-os.environ.setdefault("NEATLOGS_LOG_SPANS", "true")
-os.environ.setdefault("NEATLOGS_LOG_SPANS_FILE", f"langgraph_multiagent_spans_{_ts}.log")
-os.environ.setdefault("NEATLOGS_LOG_RAW_SPANS", "true")
-os.environ.setdefault("NEATLOGS_LOG_RAW_SPANS_FILE", f"langgraph_multiagent_raw_spans_{_ts}.log")
-
+# neatlogs.init() MUST come before importing LangChain / LangGraph.
 import neatlogs
 
 neatlogs.init(
-    api_key=os.getenv("NEATLOGS_API_KEY", ""),
-    endpoint=os.getenv("NEATLOGS_ENDPOINT", "http://localhost:4100"),
-    workflow_name="langgraph-multiagent",
-    tags=["langgraph", "multi-provider", "research"],
+    api_key=os.getenv("NEATLOGS_API_KEY"),
+    endpoint=os.getenv("NEATLOGS_ENDPOINT"),
+    workflow_name="multi-provider-research",
+    tags=["sdk-examples", "langgraph", "multi-provider", "research"],
     instrumentations=["langchain"],
-    debug=True,
 )
 
-import sys, os; sys.path.insert(0, os.path.dirname(__file__))
 from graph import graph  # noqa: E402 — must import after neatlogs.init()
 
 
@@ -63,23 +49,29 @@ def run_workflow(query: str, stream: bool = False) -> str:
         "messages": [],
     }
 
+    run_config = {
+        "configurable": {"thread_id": str(uuid.uuid4())},
+        "recursion_limit": 25,
+    }
+
     if stream:
         print(f"\nResearching: {query}\n")
-        for event in graph.stream(initial_state):
+        for event in graph.stream(initial_state, config=run_config):
             for node_name in event:
                 print(f"[{node_name}] completed")
         return ""
-    else:
-        result = graph.invoke(initial_state)
-        return result.get("final_report", "")
+    result = graph.invoke(initial_state, config=run_config)
+    return result.get("final_report", "")
 
 
 if __name__ == "__main__":
     stream_mode = "--stream" in sys.argv
     topic = "CRISPR gene editing in cancer treatment"
-    report = run_workflow(topic, stream=stream_mode)
-    if not stream_mode and report:
-        print("\n--- Final Report ---")
-        print(report)
-    neatlogs.flush()
-    neatlogs.shutdown()
+    try:
+        report = run_workflow(topic, stream=stream_mode)
+        if not stream_mode and report:
+            print("\n--- Final Report ---")
+            print(report)
+    finally:
+        neatlogs.flush()
+        neatlogs.shutdown()

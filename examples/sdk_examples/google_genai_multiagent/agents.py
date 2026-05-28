@@ -2,17 +2,16 @@
 Agent functions for the Google GenAI blog post creation workflow.
 
 Agents:
-  - Ideation   (gemini-2.5-flash, non-streaming)           — returns 5 content ideas as JSON
-  - Writer     (gemini-2.5-flash, tool-calling + streaming) — researches facts via web_search,
-                                                               then drafts the full post
-  - Editor     (gemini-2.5-flash, streaming)               — rewrites weak sections, adds examples
-  - Finalizer  (gemini-2.5-flash, non-streaming)           — SEO polish and final formatting
+  - Ideation   (gemini-2.5-flash, non-streaming)            — returns 5 content ideas as JSON
+  - Writer     (gemini-2.5-flash, tool-calling + streaming) — researches via web_search, drafts post
+  - Editor     (gemini-2.5-flash, streaming)                — rewrites weak sections, adds examples
+  - Finalizer  (gemini-2.5-flash, non-streaming)            — SEO polish and final formatting
 """
 
 import json
 
 import neatlogs
-from neatlogs import PromptTemplate, UserPromptTemplate
+from neatlogs import SystemPromptTemplate, UserPromptTemplate
 from google import genai
 from google.genai import types
 from duckduckgo_search import DDGS
@@ -21,10 +20,10 @@ client = genai.Client()
 MODEL = "gemini-2.5-flash"
 
 # ---------------------------------------------------------------------------
-# Tool implementation — called only when the LLM requests it
+# Tool
 # ---------------------------------------------------------------------------
 
-@neatlogs.span(kind="TOOL", name="web_search", description="DuckDuckGo web search for supporting facts")
+@neatlogs.span(kind="TOOL", tool_name="web_search", description="DuckDuckGo web search for supporting facts")
 def web_search(query: str) -> str:
     results = []
     with DDGS() as ddgs:
@@ -33,7 +32,6 @@ def web_search(query: str) -> str:
     return "\n".join(results) if results else "No results found."
 
 
-# Google GenAI function declaration (passed to the LLM)
 _SEARCH_TOOL_DEF = types.Tool(
     function_declarations=[
         types.FunctionDeclaration(
@@ -54,47 +52,44 @@ _SEARCH_TOOL_DEF = types.Tool(
 # Prompt templates
 # ---------------------------------------------------------------------------
 
-_ideation_sys = PromptTemplate([{
-    "role": "system",
-    "content": "You are a creative content strategist. Return exactly 5 blog post ideas as a JSON array of objects with 'title' and 'hook' fields. No other text.",
-}])
-_ideation_user = UserPromptTemplate([{"role": "user", "content": "Topic: {{topic}}"}])
+_ideation_sys = SystemPromptTemplate(
+    "You are a creative content strategist. Return exactly 5 blog post ideas as a "
+    "JSON array of objects with 'title' and 'hook' fields. No other text."
+)
+_ideation_user = UserPromptTemplate("Topic: {{topic}}")
 
-_research_sys = PromptTemplate([{
-    "role": "system",
-    "content": "You are a research assistant. Use the web_search tool to find 2-3 relevant facts or statistics for the blog post topic. Call the tool, then summarize the findings.",
-}])
-_research_user = UserPromptTemplate([{
-    "role": "user",
-    "content": "Find supporting facts for a blog post titled '{{title}}' about {{topic}}.",
-}])
+_research_sys = SystemPromptTemplate(
+    "You are a research assistant. Use the web_search tool to find 2-3 relevant facts "
+    "or statistics for the blog post topic. Call the tool, then summarize the findings."
+)
+_research_user = UserPromptTemplate(
+    "Find supporting facts for a blog post titled '{{title}}' about {{topic}}."
+)
 
-_writer_sys = PromptTemplate([{
-    "role": "system",
-    "content": "You are an expert blog writer. Write an engaging, well-structured blog post with an introduction, 3-4 main sections, and a conclusion. Use markdown.",
-}])
-_writer_user = UserPromptTemplate([{
-    "role": "user",
-    "content": "Topic: {{topic}}\nTitle: {{title}}\nHook: {{hook}}\n\nSupporting facts:\n{{facts}}\n\nWrite a complete blog post.",
-}])
+_writer_sys = SystemPromptTemplate(
+    "You are an expert blog writer. Write an engaging, well-structured blog post with "
+    "an introduction, 3-4 main sections, and a conclusion. Use markdown."
+)
+_writer_user = UserPromptTemplate(
+    "Topic: {{topic}}\nTitle: {{title}}\nHook: {{hook}}\n\n"
+    "Supporting facts:\n{{facts}}\n\nWrite a complete blog post."
+)
 
-_editor_sys = PromptTemplate([{
-    "role": "system",
-    "content": "You are a sharp content editor. Improve the draft by strengthening weak sections, adding concrete examples, and improving clarity. Return the full revised post in markdown.",
-}])
-_editor_user = UserPromptTemplate([{
-    "role": "user",
-    "content": "Topic: {{topic}}\n\nDraft:\n{{draft}}\n\nRevise and improve this post.",
-}])
+_editor_sys = SystemPromptTemplate(
+    "You are a sharp content editor. Improve the draft by strengthening weak sections, "
+    "adding concrete examples, and improving clarity. Return the full revised post in markdown."
+)
+_editor_user = UserPromptTemplate(
+    "Topic: {{topic}}\n\nDraft:\n{{draft}}\n\nRevise and improve this post."
+)
 
-_finalizer_sys = PromptTemplate([{
-    "role": "system",
-    "content": "You are an SEO and content specialist. Polish the post: add a meta description, improve headings for SEO, ensure consistent tone, and format cleanly in markdown.",
-}])
-_finalizer_user = UserPromptTemplate([{
-    "role": "user",
-    "content": "Topic: {{topic}}\n\nEdited post:\n{{edited}}\n\nProduce the final polished version.",
-}])
+_finalizer_sys = SystemPromptTemplate(
+    "You are an SEO and content specialist. Polish the post: add a meta description, "
+    "improve headings for SEO, ensure consistent tone, and format cleanly in markdown."
+)
+_finalizer_user = UserPromptTemplate(
+    "Topic: {{topic}}\n\nEdited post:\n{{edited}}\n\nProduce the final polished version."
+)
 
 # ---------------------------------------------------------------------------
 # Agents
@@ -102,10 +97,11 @@ _finalizer_user = UserPromptTemplate([{
 
 @neatlogs.span(kind="AGENT", name="ideation", role="Content Strategist", goal="Generate blog post ideas")
 def ideation_agent(topic: str) -> dict:
-    with neatlogs.trace("generate_ideas", kind="LLM", prompt_template=_ideation_sys,
+    with neatlogs.trace("generate_ideas", kind="LLM",
+                        prompt_template=_ideation_sys,
                         user_prompt_template=_ideation_user):
-        system_prompt = _ideation_sys.compile()[0]["content"]
-        user_prompt = _ideation_user.compile(topic=topic)[0]["content"]
+        system_prompt = _ideation_sys.compile()
+        user_prompt = _ideation_user.compile(topic=topic)
         response = client.models.generate_content(
             model=MODEL,
             contents=user_prompt,
@@ -127,12 +123,12 @@ def writer_agent(topic: str, idea: dict) -> str:
     title = idea.get("title", topic)
     hook = idea.get("hook", "")
 
-    # Step 1: Research step — LLM calls web_search via function calling
     facts = ""
-    with neatlogs.trace("research_facts", kind="LLM", prompt_template=_research_sys,
+    with neatlogs.trace("research_facts", kind="LLM",
+                        prompt_template=_research_sys,
                         user_prompt_template=_research_user):
-        system_prompt = _research_sys.compile()[0]["content"]
-        user_prompt = _research_user.compile(title=title, topic=topic)[0]["content"]
+        system_prompt = _research_sys.compile()
+        user_prompt = _research_user.compile(title=title, topic=topic)
         response = client.models.generate_content(
             model=MODEL,
             contents=user_prompt,
@@ -142,7 +138,6 @@ def writer_agent(topic: str, idea: dict) -> str:
                 temperature=0,
             ),
         )
-        # Execute any tool calls the model requested
         contents = [user_prompt]
         for part in response.candidates[0].content.parts:
             if part.function_call:
@@ -160,7 +155,6 @@ def writer_agent(topic: str, idea: dict) -> str:
                         )],
                     ),
                 ]
-                # Second call — model summarizes tool results
                 summary_resp = client.models.generate_content(
                     model=MODEL,
                     contents=contents,
@@ -174,14 +168,13 @@ def writer_agent(topic: str, idea: dict) -> str:
         else:
             facts = response.text or ""
 
-    # Step 2: Write the draft using the researched facts (streaming)
-    with neatlogs.trace("write_draft", kind="LLM", prompt_template=_writer_sys,
+    with neatlogs.trace("write_draft", kind="LLM",
+                        prompt_template=_writer_sys,
                         user_prompt_template=_writer_user):
-        system_prompt = _writer_sys.compile()[0]["content"]
+        system_prompt = _writer_sys.compile()
         user_prompt = _writer_user.compile(
             topic=topic, title=title, hook=hook, facts=facts
-        )[0]["content"]
-        print("\n--- Writer (streaming) ---")
+        )
         full = ""
         for chunk in client.models.generate_content_stream(
             model=MODEL,
@@ -194,17 +187,17 @@ def writer_agent(topic: str, idea: dict) -> str:
             if chunk.text:
                 print(chunk.text, end="", flush=True)
                 full += chunk.text
-        print("\n-------------------------\n")
+        print("\n")
     return full
 
 
 @neatlogs.span(kind="AGENT", name="editor", role="Content Editor", goal="Improve and enrich the draft")
 def editor_agent(topic: str, draft: str) -> str:
-    with neatlogs.trace("edit_draft", kind="LLM", prompt_template=_editor_sys,
+    with neatlogs.trace("edit_draft", kind="LLM",
+                        prompt_template=_editor_sys,
                         user_prompt_template=_editor_user):
-        system_prompt = _editor_sys.compile()[0]["content"]
-        user_prompt = _editor_user.compile(topic=topic, draft=draft)[0]["content"]
-        print("\n--- Editor (streaming) ---")
+        system_prompt = _editor_sys.compile()
+        user_prompt = _editor_user.compile(topic=topic, draft=draft)
         full = ""
         for chunk in client.models.generate_content_stream(
             model=MODEL,
@@ -217,16 +210,17 @@ def editor_agent(topic: str, draft: str) -> str:
             if chunk.text:
                 print(chunk.text, end="", flush=True)
                 full += chunk.text
-        print("\n--------------------------\n")
+        print("\n")
     return full
 
 
 @neatlogs.span(kind="AGENT", name="finalizer", role="SEO Specialist", goal="Polish and format the final post")
 def finalizer_agent(topic: str, edited: str) -> str:
-    with neatlogs.trace("finalize_post", kind="LLM", prompt_template=_finalizer_sys,
+    with neatlogs.trace("finalize_post", kind="LLM",
+                        prompt_template=_finalizer_sys,
                         user_prompt_template=_finalizer_user):
-        system_prompt = _finalizer_sys.compile()[0]["content"]
-        user_prompt = _finalizer_user.compile(topic=topic, edited=edited)[0]["content"]
+        system_prompt = _finalizer_sys.compile()
+        user_prompt = _finalizer_user.compile(topic=topic, edited=edited)
         response = client.models.generate_content(
             model=MODEL,
             contents=user_prompt,

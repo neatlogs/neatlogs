@@ -1,5 +1,5 @@
 """
-Workflow 7: Gemini Async Streaming (google-genai)
+Workflow 5: Gemini Async Streaming (google-genai)
 =================================================
 Tests the async Gemini streaming path to verify spans are properly closed.
 
@@ -28,15 +28,12 @@ Requirements:
 
 import asyncio
 import os
-import sys
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from google import genai
 from google.genai import types
 
 import neatlogs
-from examples.sdk_examples.detection_demo.config import Settings
+from config import Settings
 
 
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
@@ -138,7 +135,7 @@ def run_gemini_async_streaming_workflow(settings: Settings) -> None:
     """Entry point called by main.py. Wraps async runner in asyncio.run()."""
 
     print("\n" + "=" * 80)
-    print("WORKFLOW 7: Gemini Async Streaming — Span Lifecycle Verification")
+    print("WORKFLOW 5: Gemini Async Streaming — Span Lifecycle Verification")
     print("=" * 80)
     print(f"\nModel: {GEMINI_MODEL}")
     print(f"Scenarios: {len(TEST_SCENARIOS)}")

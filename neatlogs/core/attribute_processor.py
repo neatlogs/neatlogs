@@ -312,7 +312,6 @@ class UnifiedAttributeProcessor:
                 "marqo",
                 "weaviate",
                 "lancedb",
-                "astra",
                 "pgvector",
                 "elasticsearch",
             }:

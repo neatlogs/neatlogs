@@ -198,9 +198,11 @@ class NeatlogsSpanProcessor(SpanProcessor):
                         or ".content" in key
                     ):
                         keys_to_remove.append(key)
-                    elif skip_output and (
-                        key == "neatlogs.embedding.input" or key == "neatlogs.embedding.output"
-                    ):
+                    elif skip_output and key == "neatlogs.embedding.output":
+                        # Drop only the large output vector. Keep
+                        # neatlogs.embedding.input — it's the (human-readable) text
+                        # being embedded, not a large payload, and downstream
+                        # simplification needs it to avoid treating the span as empty.
                         keys_to_remove.append(key)
 
                 for key in keys_to_remove:

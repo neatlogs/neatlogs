@@ -16,6 +16,17 @@ from .registry import INSTRUMENTATION_REGISTRY, get_libraries_by_tag
 
 logger = logging.getLogger(__name__)
 
+# Holds the raw, pre-tokenization text passed to LangChain embedding wrappers
+# (OpenAIEmbeddings.embed_documents/embed_query). LangChain tokenizes text into
+# integer token-ID arrays before calling the OpenAI SDK, so the OI embedding
+# extractor — which only records string input — captures nothing. We stash the
+# original strings here so the extractor can emit them as embedding text.
+import contextvars
+
+_EMBEDDING_INPUT_TEXTS: "contextvars.ContextVar[Optional[List[str]]]" = contextvars.ContextVar(
+    "neatlogs_embedding_input_texts", default=None
+)
+
 
 class InstrumentationManager:
 
@@ -177,6 +188,8 @@ class InstrumentationManager:
                     self._patch_openinference_openai_response_extras()
                     self._patch_openinference_openai_streaming_timing()
                     self._patch_openai_streaming_usage()
+                    self._patch_openinference_openai_embedding_text()
+                    self._patch_langchain_openai_embeddings_text()
                 elif library == "anthropic":
                     self._patch_openinference_anthropic_response_extras()
                     self._patch_openinference_anthropic_streaming_timing()
@@ -194,6 +207,9 @@ class InstrumentationManager:
                 elif library == "crewai":
                     self._patch_openinference_crewai_crew_outputs()
                     self._patch_crewai_tool_spans()
+                elif library == "openai_agents":
+                    self._patch_openai_agents_guardrail_input()
+                    self._patch_openinference_openai_agents_guardrail_output()
 
         except Exception as e:
             raise Exception(f"Failed to instrument {library} with {convention}: {e}")
@@ -251,6 +267,96 @@ class InstrumentationManager:
             if self.debug:
                 logger.warning(f"⚠️  Failed to patch OI OpenAI request extras: {e}")
 
+    def _patch_langchain_openai_embeddings_text(self) -> None:
+        """
+        Capture the raw, human-readable text passed to LangChain's OpenAIEmbeddings.
+
+        LangChain's `OpenAIEmbeddings.embed_documents` / `embed_query` tokenize text
+        into integer token-ID arrays (via tiktoken) BEFORE calling the OpenAI SDK.
+        By the time the OI embedding extractor sees the request, `input` is
+        `[[token_ids...]]`, not strings — so no readable text is captured. We wrap
+        the public embedding methods, which still receive the original strings, and
+        stash them in a contextvar that the (patched) extractor reads.
+        """
+        try:
+            from langchain_openai import OpenAIEmbeddings
+        except Exception:
+            return
+
+        if getattr(OpenAIEmbeddings, "_NEATLOGS_PATCHED_EMBED_TEXT", False):
+            return
+
+        def _wrap(method_name, normalize):
+            original = getattr(OpenAIEmbeddings, method_name, None)
+            if original is None:
+                return
+
+            @wraps(original)
+            def _wrapped(self_emb, *args, **kwargs):
+                texts = None
+                try:
+                    raw = args[0] if args else kwargs.get("texts", kwargs.get("text"))
+                    texts = normalize(raw)
+                except Exception:
+                    texts = None
+                token = _EMBEDDING_INPUT_TEXTS.set(texts) if texts else None
+                try:
+                    return original(self_emb, *args, **kwargs)
+                finally:
+                    if token is not None:
+                        _EMBEDDING_INPUT_TEXTS.reset(token)
+
+            setattr(OpenAIEmbeddings, method_name, _wrapped)
+
+        _wrap("embed_documents", lambda v: list(v) if isinstance(v, (list, tuple)) else None)
+        _wrap("embed_query", lambda v: [v] if isinstance(v, str) else None)
+        _wrap("aembed_documents", lambda v: list(v) if isinstance(v, (list, tuple)) else None)
+        _wrap("aembed_query", lambda v: [v] if isinstance(v, str) else None)
+
+        OpenAIEmbeddings._NEATLOGS_PATCHED_EMBED_TEXT = True
+        if self.debug:
+            logger.debug("Patched langchain_openai.OpenAIEmbeddings to capture raw embedding text")
+
+    def _patch_openinference_openai_embedding_text(self) -> None:
+        """
+        Patch the OI OpenAI embedding extractor so that when `input` is token-ID
+        arrays (LangChain pre-tokenizes), it emits the original text from the
+        contextvar populated by `_patch_langchain_openai_embeddings_text`.
+        """
+        try:
+            from openinference.instrumentation.openai import _request_attributes_extractor as _rae
+            from openinference.semconv.trace import EmbeddingAttributes, SpanAttributes
+        except Exception:
+            return
+
+        if getattr(_rae, "_NEATLOGS_PATCHED_EMBEDDING_TEXT", False):
+            return
+
+        original = _rae._get_attributes_from_embedding_create_param
+
+        def _patched(params):
+            emitted_text = False
+            for key, value in original(params):
+                if key.endswith(EmbeddingAttributes.EMBEDDING_TEXT):
+                    emitted_text = True
+                yield key, value
+
+            if not emitted_text:
+                texts = _EMBEDDING_INPUT_TEXTS.get()
+                if texts:
+                    for index, text in enumerate(texts):
+                        if isinstance(text, str) and text:
+                            yield (
+                                f"{SpanAttributes.EMBEDDING_EMBEDDINGS}.{index}."
+                                f"{EmbeddingAttributes.EMBEDDING_TEXT}",
+                                text,
+                            )
+
+        _rae._get_attributes_from_embedding_create_param = _patched
+        _rae._NEATLOGS_PATCHED_EMBEDDING_TEXT = True
+        if self.debug:
+            logger.debug("Patched OI OpenAI embedding extractor: token-input text fallback")
+
     def _patch_openinference_openai_response_extras(self) -> None:
         """
         Patch OI OpenAI response extractor to capture attributes OI omits:
@@ -290,6 +396,143 @@ class InstrumentationManager:
         except Exception as e:
             if self.debug:
                 logger.warning(f"⚠️  Failed to patch OI OpenAI response extras: {e}")
+
+    # ---------------------------------------------------------------------------
+    # OpenAI Agents SDK — guardrail input capture
+    # ---------------------------------------------------------------------------
+
+    def _patch_openai_agents_guardrail_input(self) -> None:
+        """
+        Capture the text a guardrail checked.
+
+        The OpenAI Agents SDK's GuardrailSpanData only carries {name, triggered} — the
+        input being checked (the user message / agent output) is in scope inside
+        run_single_input_guardrail / run_single_output_guardrail but never written to the
+        span. We wrap those two functions to stash the checked text on the active span's
+        span_data, which the (patched) OI processor then reads into neatlogs.guardrail.input.
+        """
+        try:
+            from agents.run_internal import guardrails as _gr
+        except Exception:
+            return
+
+        if getattr(_gr, "_NEATLOGS_PATCHED_GUARDRAIL_INPUT", False):
+            return
+
+        def _to_text(value):
+            try:
+                if isinstance(value, str):
+                    return value
+                import json as _json
+                return _json.dumps(value, default=str)[:4000]
+            except Exception:
+                return str(value)[:4000]
+
+        # The wrapper runs in the same async task as the guardrail span's open/close,
+        # so a contextvar set here is visible to the OI processor's on_span_end (which
+        # reads GUARDRAIL_INPUT_VAR and writes neatlogs.guardrail.input).
+        from neatlogs.instrumentation import _guardrail_ctx as _gc
+
+        orig_input = getattr(_gr, "run_single_input_guardrail", None)
+        orig_output = getattr(_gr, "run_single_output_guardrail", None)
+
+        if orig_input is not None:
+            @wraps(orig_input)
+            async def _wrapped_input(agent, guardrail, input, context, *a, **k):
+                token = _gc.GUARDRAIL_INPUT_VAR.set(_to_text(input))
+                try:
+                    return await orig_input(agent, guardrail, input, context, *a, **k)
+                finally:
+                    _gc.GUARDRAIL_INPUT_VAR.reset(token)
+            _gr.run_single_input_guardrail = _wrapped_input
+
+        if orig_output is not None:
+            @wraps(orig_output)
+            async def _wrapped_output(guardrail, agent, agent_output, context, *a, **k):
+                token = _gc.GUARDRAIL_INPUT_VAR.set(_to_text(agent_output))
+                try:
+                    return await orig_output(guardrail, agent, agent_output, context, *a, **k)
+                finally:
+                    _gc.GUARDRAIL_INPUT_VAR.reset(token)
+            _gr.run_single_output_guardrail = _wrapped_output
+
+        _gr._NEATLOGS_PATCHED_GUARDRAIL_INPUT = True
+        if self.debug:
+            logger.debug("Patched OpenAI Agents guardrail runners to capture checked input")
+
+    def _patch_openinference_openai_agents_guardrail_output(self) -> None:
+        """
+        Patch the OI OpenAI-Agents processor to surface guardrail spans.
+
+        OI's `OpenInferenceTracingProcessor.on_span_end` does not handle
+        `GuardrailSpanData`, so guardrail spans land empty. We attach the guardrail's
+        name/triggered outcome plus the checked input text (stashed in a contextvar by
+        `_patch_openai_agents_guardrail_input`).
+
+        OI ends the span inside on_span_end, so attributes must be written while the
+        span is still live. Rather than depend on OI's private `_otel_spans` field, we
+        wrap on_span_start to keep our OWN map of span_id → otel span; on_span_end then
+        reads from our map and writes the guardrail attributes before delegating to OI.
+        This stays correct even if OI renames its internal span bookkeeping.
+        """
+        try:
+            from openinference.instrumentation.openai_agents._processor import (
+                OpenInferenceTracingProcessor,
+            )
+            from agents.tracing.span_data import GuardrailSpanData
+        except Exception:
+            return
+
+        if getattr(OpenInferenceTracingProcessor, "_NEATLOGS_PATCHED_GUARDRAIL_OUTPUT", False):
+            return
+
+        import weakref
+
+        # span_id -> otel span, populated by our on_span_start wrapper. WeakValueDict so
+        # entries vanish if OI drops the span without an end (no leak).
+        guardrail_spans: "weakref.WeakValueDictionary[str, Any]" = weakref.WeakValueDictionary()
+
+        orig_start = OpenInferenceTracingProcessor.on_span_start
+        orig_end = OpenInferenceTracingProcessor.on_span_end
+
+        def _patched_start(self_proc, span):
+            orig_start(self_proc, span)
+            try:
+                if isinstance(getattr(span, "span_data", None), GuardrailSpanData):
+                    # OI created its otel span during orig_start; grab the active one.
+                    from opentelemetry import trace as _trace
+                    current = _trace.get_current_span()
+                    if current is not None:
+                        guardrail_spans[span.span_id] = current
+            except Exception:
+                pass
+
+        def _patched_end(self_proc, span):
+            try:
+                data = getattr(span, "span_data", None)
+                if isinstance(data, GuardrailSpanData):
+                    otel_span = guardrail_spans.pop(span.span_id, None)
+                    if otel_span is not None:
+                        otel_span.set_attribute("guardrail.name", data.name)
+                        otel_span.set_attribute("guardrail.triggered", bool(data.triggered))
+                        otel_span.set_attribute("neatlogs.guardrail.passed", not bool(data.triggered))
+                        otel_span.set_attribute(
+                            "neatlogs.guardrail.output",
+                            "tripwire triggered (blocked)" if data.triggered else "passed",
+                        )
+                        from neatlogs.instrumentation._guardrail_ctx import GUARDRAIL_INPUT_VAR
+                        _gr_input = GUARDRAIL_INPUT_VAR.get()
+                        if _gr_input:
+                            otel_span.set_attribute("neatlogs.guardrail.input", _gr_input)
+            except Exception:
+                pass
+            orig_end(self_proc, span)
+
+        OpenInferenceTracingProcessor.on_span_start = _patched_start
+        OpenInferenceTracingProcessor.on_span_end = _patched_end
+        OpenInferenceTracingProcessor._NEATLOGS_PATCHED_GUARDRAIL_OUTPUT = True
+        if self.debug:
+            logger.debug("Patched OI OpenAI-Agents processor to surface guardrail spans")
 
     # ---------------------------------------------------------------------------
     # OpenInference — Anthropic patches
@@ -1172,6 +1415,10 @@ class InstrumentationManager:
                 "bedrock": "boto3",
                 "milvus": "pymilvus",
                 "qdrant": "qdrant_client",
+                # The OpenAI Agents SDK (pip package "openai-agents") imports as `agents`,
+                # not `openai_agents`. Without this, the instrumentor is skipped as
+                # "not installed" and agent/tool/guardrail/handoff spans are never produced.
+                "openai_agents": "agents",
             }
             import_name = special_imports.get(library) or library.replace("-", "_")
             importlib.import_module(import_name)

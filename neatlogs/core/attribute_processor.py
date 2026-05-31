@@ -452,6 +452,19 @@ class UnifiedAttributeProcessor:
                 embeddings.sort(key=lambda x: x["index"])
                 attrs["embeddings_data"] = json.dumps(embeddings)
 
+                # Surface the embedded text as the span's human-readable input.
+                # OpenInference does not set input.value for embeddings, and when
+                # LangChain pre-tokenizes the raw input is opaque token IDs. Without a
+                # meaningful input.value the span is later treated as empty/low-value
+                # and dropped from the trace view, so populate it from the text.
+                texts = [
+                    e["text"]
+                    for e in embeddings
+                    if isinstance(e.get("text"), str) and e["text"].strip()
+                ]
+                if texts:
+                    attrs["input.value"] = texts[0] if len(texts) == 1 else json.dumps(texts)
+
             # Only skip output if it's a REAL embedding operation from OpenLLMetry
             # (has actual embedding attributes, not just user's @span(kind="EMBEDDING"))
             has_embedding_attrs = any(

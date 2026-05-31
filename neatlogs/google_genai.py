@@ -43,12 +43,18 @@ class GoogleGenAIInstrumentor:
 
 def wrap_google_genai_client(client: Any) -> Any:
     """
-    Wrap a google.genai.Client instance. Returns the same client with
-    models.generate_content and models.generate_content_stream patched.
+    Wrap a google.genai.Client instance. Patches models (generate_content,
+    generate_content_stream, embed_content, count_tokens) on sync + async, and
+    chat sessions (Chat/AsyncChat send_message + send_message_stream).
     """
     _patch_models(client.models)
+    _patch_models_extra(client.models, is_async=False)
     if hasattr(client, "aio") and hasattr(client.aio, "models"):
         _patch_async_models(client.aio.models)
+        _patch_models_extra(client.aio.models, is_async=True)
+    # Chat sessions are created lazily; patch the classes once so every session
+    # (sync + async) is traced.
+    _patch_chat_classes()
     return client
 
 
@@ -424,6 +430,212 @@ def _finalize_stream(span: Any, chunks: List[Any], duration_ms: float, ttft_ms: 
             )
 
     span.set_status(StatusCode.OK)
+    span.end()
+
+
+# ---------------------------------------------------------------------------
+# embed_content + count_tokens (sync + async)
+# ---------------------------------------------------------------------------
+
+
+def _patch_models_extra(models: Any, is_async: bool) -> None:
+    # embed_content
+    if hasattr(models, "embed_content") and not getattr(models, "_neatlogs_embed_patched", False):
+        orig = models.embed_content
+
+        def _embed_attrs(kwargs):
+            attrs = {"neatlogs.span.kind": "EMBEDDING", "neatlogs.embedding.model_name": str(kwargs.get("model", ""))}
+            contents = kwargs.get("contents")
+            if contents is not None:
+                attrs["neatlogs.embedding.text"] = (contents if isinstance(contents, str) else serialize(contents))[:10000]
+            return attrs
+
+        def _embed_finalize(span, resp):
+            embeddings = getattr(resp, "embeddings", None)
+            if embeddings is not None:
+                try:
+                    span.set_attribute("neatlogs.embedding.count", len(embeddings))
+                    vals = getattr(embeddings[0], "values", None)
+                    if vals is not None:
+                        span.set_attribute("neatlogs.embedding.dimensions", len(vals))
+                except (TypeError, AttributeError, IndexError):
+                    pass
+            span.set_status(StatusCode.OK)
+            span.end()
+
+        if is_async:
+            async def patched_embed(*args, **kwargs):
+                if is_suppressed():
+                    return await orig(*args, **kwargs)
+                span = get_tracer().start_span(name="google_genai.models.embed_content", attributes=_embed_attrs(kwargs))
+                try:
+                    resp = await orig(*args, **kwargs)
+                except Exception as e:
+                    _err(span, e); raise
+                _embed_finalize(span, resp); return resp
+        else:
+            def patched_embed(*args, **kwargs):
+                if is_suppressed():
+                    return orig(*args, **kwargs)
+                span = get_tracer().start_span(name="google_genai.models.embed_content", attributes=_embed_attrs(kwargs))
+                try:
+                    resp = orig(*args, **kwargs)
+                except Exception as e:
+                    _err(span, e); raise
+                _embed_finalize(span, resp); return resp
+        models.embed_content = patched_embed
+        models._neatlogs_embed_patched = True
+
+    # count_tokens
+    if hasattr(models, "count_tokens") and not getattr(models, "_neatlogs_count_patched", False):
+        orig_ct = models.count_tokens
+
+        def _ct_attrs(kwargs):
+            return {"neatlogs.span.kind": "LLM", "neatlogs.llm.provider": "google_genai",
+                    "neatlogs.llm.task": "count_tokens", "neatlogs.llm.model_name": str(kwargs.get("model", ""))}
+
+        def _ct_finalize(span, resp):
+            total = getattr(resp, "total_tokens", None)
+            if total is not None:
+                span.set_attribute("neatlogs.llm.token_count.prompt", total)
+            span.set_status(StatusCode.OK)
+            span.end()
+
+        if is_async:
+            async def patched_ct(*args, **kwargs):
+                if is_suppressed():
+                    return await orig_ct(*args, **kwargs)
+                span = get_tracer().start_span(name="google_genai.models.count_tokens", attributes=_ct_attrs(kwargs))
+                try:
+                    resp = await orig_ct(*args, **kwargs)
+                except Exception as e:
+                    _err(span, e); raise
+                _ct_finalize(span, resp); return resp
+        else:
+            def patched_ct(*args, **kwargs):
+                if is_suppressed():
+                    return orig_ct(*args, **kwargs)
+                span = get_tracer().start_span(name="google_genai.models.count_tokens", attributes=_ct_attrs(kwargs))
+                try:
+                    resp = orig_ct(*args, **kwargs)
+                except Exception as e:
+                    _err(span, e); raise
+                _ct_finalize(span, resp); return resp
+        models.count_tokens = patched_ct
+        models._neatlogs_count_patched = True
+
+
+# ---------------------------------------------------------------------------
+# Chat sessions (Chat / AsyncChat send_message + send_message_stream)
+# ---------------------------------------------------------------------------
+
+
+def _patch_chat_classes() -> None:
+    try:
+        from google.genai.chats import Chat, AsyncChat
+    except Exception:
+        return
+
+    # Sync Chat.send_message
+    if hasattr(Chat, "send_message") and "send_message" in Chat.__dict__ and not Chat.__dict__.get("_neatlogs_patched", False):
+        orig_send = Chat.send_message
+
+        def patched_send(self, message, *args, **kwargs):
+            if is_suppressed():
+                return orig_send(self, message, *args, **kwargs)
+            span = _start_chat_span(self, message, stream=False)
+            start = time.perf_counter()
+            try:
+                resp = orig_send(self, message, *args, **kwargs)
+            except Exception as e:
+                _err(span, e); raise
+            _finalize_response(span, resp, (time.perf_counter() - start) * 1000)
+            return resp
+
+        Chat.send_message = patched_send
+
+        if hasattr(Chat, "send_message_stream"):
+            orig_send_stream = Chat.send_message_stream
+
+            def patched_send_stream(self, message, *args, **kwargs):
+                if is_suppressed():
+                    return orig_send_stream(self, message, *args, **kwargs)
+                span = _start_chat_span(self, message, stream=True)
+                stream = orig_send_stream(self, message, *args, **kwargs)
+                return SyncStreamWrapper(stream, span, _finalize_stream)
+
+            Chat.send_message_stream = patched_send_stream
+
+        Chat._neatlogs_patched = True
+
+    # Async Chat
+    if hasattr(AsyncChat, "send_message") and "send_message" in AsyncChat.__dict__ and not AsyncChat.__dict__.get("_neatlogs_patched", False):
+        orig_asend = AsyncChat.send_message
+
+        async def patched_asend(self, message, *args, **kwargs):
+            if is_suppressed():
+                return await orig_asend(self, message, *args, **kwargs)
+            span = _start_chat_span(self, message, stream=False)
+            start = time.perf_counter()
+            try:
+                resp = await orig_asend(self, message, *args, **kwargs)
+            except Exception as e:
+                _err(span, e); raise
+            _finalize_response(span, resp, (time.perf_counter() - start) * 1000)
+            return resp
+
+        AsyncChat.send_message = patched_asend
+
+        if hasattr(AsyncChat, "send_message_stream"):
+            orig_asend_stream = AsyncChat.send_message_stream
+
+            async def patched_asend_stream(self, message, *args, **kwargs):
+                if is_suppressed():
+                    async for ch in orig_asend_stream(self, message, *args, **kwargs):
+                        yield ch
+                    return
+                span = _start_chat_span(self, message, stream=True)
+                start = time.perf_counter()
+                first = None
+                chunks = []
+                try:
+                    async for ch in orig_asend_stream(self, message, *args, **kwargs):
+                        if first is None:
+                            first = time.perf_counter()
+                        chunks.append(ch)
+                        yield ch
+                except Exception as e:
+                    _err(span, e); raise
+                elapsed = (time.perf_counter() - start) * 1000
+                ttft = (first - start) * 1000 if first else None
+                _finalize_stream(span, chunks, elapsed, ttft)
+
+            AsyncChat.send_message_stream = patched_asend_stream
+
+        AsyncChat._neatlogs_patched = True
+
+
+def _start_chat_span(chat: Any, message: Any, stream: bool) -> Any:
+    model = getattr(chat, "_model", None) or getattr(chat, "model", None) or ""
+    span = get_tracer().start_span(
+        name="google_genai.chat.send_message",
+        attributes={
+            "neatlogs.span.kind": "LLM",
+            "neatlogs.llm.provider": "google_genai",
+            "neatlogs.llm.system": "google_genai",
+            "neatlogs.llm.model_name": str(model),
+            "neatlogs.llm.is_streaming": bool(stream),
+        },
+    )
+    if message is not None:
+        span.set_attribute("neatlogs.llm.input_messages.0.role", "user")
+        span.set_attribute("neatlogs.llm.input_messages.0.content", (message if isinstance(message, str) else serialize(message))[:10000])
+    return span
+
+
+def _err(span: Any, e: Exception) -> None:
+    span.set_status(StatusCode.ERROR, str(e))
+    span.record_exception(e)
     span.end()
 
 

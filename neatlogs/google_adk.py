@@ -14,7 +14,7 @@ from typing import Any
 from opentelemetry import context as otel_context
 from opentelemetry.trace import StatusCode
 
-from ._wrap_utils import get_tracer, serialize
+from ._wrap_utils import attach_as_current, detach, get_tracer, serialize
 
 
 def wrap_google_adk(runner: Any) -> Any:
@@ -230,6 +230,7 @@ def _patch_run(runner: Any) -> None:
                 attrs["input.value"] = str(new_message)[:10000]
 
         span = tracer.start_span(name="google_adk.runner.run", attributes=attrs)
+        token = attach_as_current(span)
         start = time.perf_counter()
 
         try:
@@ -240,6 +241,8 @@ def _patch_run(runner: Any) -> None:
             span.record_exception(e)
             span.end()
             raise
+        finally:
+            detach(token)
 
         duration_ms = (time.perf_counter() - start) * 1000
         for attr_name, value in event_attrs.items():
@@ -282,6 +285,7 @@ def _patch_run_async(runner: Any) -> None:
                 attrs["input.value"] = str(new_message)[:10000]
 
         span = tracer.start_span(name="google_adk.runner.run_async", attributes=attrs)
+        token = attach_as_current(span)
         start = time.perf_counter()
 
         try:
@@ -292,6 +296,8 @@ def _patch_run_async(runner: Any) -> None:
             span.record_exception(e)
             span.end()
             raise
+        finally:
+            detach(token)
 
         duration_ms = (time.perf_counter() - start) * 1000
         for attr_name, value in event_attrs.items():

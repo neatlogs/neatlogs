@@ -14,9 +14,20 @@ from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 from opentelemetry import context as otel_context
+from opentelemetry import trace as otel_trace
 from opentelemetry.trace import StatusCode
 
 from ._wrap_utils import get_tracer, serialize
+
+
+def _span_in_ctx(span: Any, base_ctx: Any):
+    """
+    Return a context with ``span`` as the active OTel span, derived from
+    ``base_ctx``. Children created with this context nest under ``span``, and
+    user @span / trace() / log() inside the run nest correctly too.
+    """
+    return otel_trace.set_span_in_context(span, base_ctx)
+
 
 try:
     from langchain_core.callbacks import BaseCallbackHandler
@@ -107,6 +118,7 @@ class NeatlogsCallbackHandler(BaseCallbackHandler):
             model = invocation_params.get(key, "")
             if model:
                 break
+        serialized = serialized or {}
         if not model:
             model = serialized.get("kwargs", {}).get("model_name", "")
         if not model:
@@ -145,8 +157,7 @@ class NeatlogsCallbackHandler(BaseCallbackHandler):
                 idx += 1
 
         self._spans[run_id] = span
-        new_ctx = otel_context.set_value("current_span", span, ctx)
-        self._contexts[run_id] = new_ctx
+        self._contexts[run_id] = _span_in_ctx(span, ctx)
         self._tokens[run_id] = []
 
     def on_llm_start(
@@ -168,6 +179,7 @@ class NeatlogsCallbackHandler(BaseCallbackHandler):
             model = invocation_params.get(key, "")
             if model:
                 break
+        serialized = serialized or {}
         if not model:
             model = serialized.get("id", [""])[-1] if serialized.get("id") else ""
 
@@ -192,8 +204,7 @@ class NeatlogsCallbackHandler(BaseCallbackHandler):
                 span.set_attribute(f"neatlogs.llm.input_messages.{i}.content", prompt)
 
         self._spans[run_id] = span
-        new_ctx = otel_context.set_value("current_span", span, ctx)
-        self._contexts[run_id] = new_ctx
+        self._contexts[run_id] = _span_in_ctx(span, ctx)
         self._tokens[run_id] = []
 
     def on_llm_new_token(
@@ -311,6 +322,7 @@ class NeatlogsCallbackHandler(BaseCallbackHandler):
         **kwargs: Any,
     ) -> None:
         tracer = get_tracer()
+        serialized = serialized or {}
         name = serialized.get("id", [""])[-1] if serialized.get("id") else "chain"
 
         parent_ctx = self._contexts.get(parent_run_id) if parent_run_id else None
@@ -328,8 +340,7 @@ class NeatlogsCallbackHandler(BaseCallbackHandler):
             span.set_attribute("input.value", serialize(inputs))
 
         self._spans[run_id] = span
-        new_ctx = otel_context.set_value("current_span", span, ctx)
-        self._contexts[run_id] = new_ctx
+        self._contexts[run_id] = _span_in_ctx(span, ctx)
 
     def on_chain_end(
         self,
@@ -366,6 +377,114 @@ class NeatlogsCallbackHandler(BaseCallbackHandler):
         span.record_exception(error)
         span.end()
 
+    # -- Retriever callbacks ---------------------------------------------------
+
+    def on_retriever_start(
+        self,
+        serialized: Dict[str, Any],
+        query: str,
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        tags: Optional[List[str]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        **kwargs: Any,
+    ) -> None:
+        tracer = get_tracer()
+        name = (serialized or {}).get("name") or ((serialized or {}).get("id", [""])[-1] if (serialized or {}).get("id") else "retriever")
+        parent_ctx = self._contexts.get(parent_run_id) if parent_run_id else None
+        ctx = parent_ctx if parent_ctx else otel_context.get_current()
+
+        span = tracer.start_span(
+            name=f"langchain.retriever.{name}",
+            context=ctx,
+            attributes={"neatlogs.span.kind": "RETRIEVER", "neatlogs.retriever.name": str(name)},
+        )
+        if query:
+            span.set_attribute("neatlogs.retrieval.query", str(query)[:10000])
+        if tags:
+            span.set_attribute("neatlogs.tags", ",".join(tags))
+        self._spans[run_id] = span
+        self._contexts[run_id] = _span_in_ctx(span, ctx)
+
+    def on_retriever_end(
+        self,
+        documents: Any,
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        **kwargs: Any,
+    ) -> None:
+        span = self._spans.pop(run_id, None)
+        self._contexts.pop(run_id, None)
+        if not span:
+            return
+        try:
+            span.set_attribute("neatlogs.retrieval.document_count", len(documents))
+        except TypeError:
+            pass
+        if documents:
+            for i, doc in enumerate(documents[:10]):
+                content = getattr(doc, "page_content", None)
+                if content:
+                    span.set_attribute(f"neatlogs.retrieval.documents.{i}.content", str(content)[:2000])
+        span.set_status(StatusCode.OK)
+        span.end()
+
+    def on_retriever_error(
+        self,
+        error: BaseException,
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        **kwargs: Any,
+    ) -> None:
+        span = self._spans.pop(run_id, None)
+        self._contexts.pop(run_id, None)
+        if not span:
+            return
+        span.set_status(StatusCode.ERROR, str(error))
+        span.record_exception(error)
+        span.end()
+
+    # -- Agent action / finish (annotate the active chain span) ----------------
+
+    def on_agent_action(
+        self,
+        action: Any,
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        **kwargs: Any,
+    ) -> None:
+        span = self._spans.get(run_id) or (self._spans.get(parent_run_id) if parent_run_id else None)
+        if not span:
+            return
+        tool = getattr(action, "tool", None)
+        tool_input = getattr(action, "tool_input", None)
+        if tool:
+            span.set_attribute("neatlogs.agent.action.tool", str(tool))
+        if tool_input is not None:
+            span.set_attribute("neatlogs.agent.action.tool_input", serialize(tool_input)[:5000])
+        log = getattr(action, "log", None)
+        if log:
+            span.set_attribute("neatlogs.agent.action.log", str(log)[:5000])
+
+    def on_agent_finish(
+        self,
+        finish: Any,
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        **kwargs: Any,
+    ) -> None:
+        span = self._spans.get(run_id) or (self._spans.get(parent_run_id) if parent_run_id else None)
+        if not span:
+            return
+        return_values = getattr(finish, "return_values", None)
+        if return_values:
+            span.set_attribute("neatlogs.agent.finish.output", serialize(return_values)[:10000])
+
     def on_tool_start(
         self,
         serialized: Dict[str, Any],
@@ -378,6 +497,7 @@ class NeatlogsCallbackHandler(BaseCallbackHandler):
         **kwargs: Any,
     ) -> None:
         tracer = get_tracer()
+        serialized = serialized or {}
         name = serialized.get("name", "") or (serialized.get("id", [""])[-1] if serialized.get("id") else "tool")
 
         parent_ctx = self._contexts.get(parent_run_id) if parent_run_id else None
@@ -396,8 +516,7 @@ class NeatlogsCallbackHandler(BaseCallbackHandler):
             span.set_attribute("input.value", input_str)
 
         self._spans[run_id] = span
-        new_ctx = otel_context.set_value("current_span", span, ctx)
-        self._contexts[run_id] = new_ctx
+        self._contexts[run_id] = _span_in_ctx(span, ctx)
 
     def on_tool_end(
         self,

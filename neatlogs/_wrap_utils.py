@@ -113,6 +113,35 @@ def _bootstrap_from_env(api_key: str) -> None:
     logger.debug(f"neatlogs wrapper: auto-bootstrapped TracerProvider → {endpoint}")
 
 
+def attach_as_current(span: otel_trace.Span):
+    """
+    Make ``span`` the OpenTelemetry *active* span and return the context token.
+
+    This is what makes child operations nest correctly: provider
+    auto-instrumentation spans, user ``@span`` decorators, ``trace()`` blocks,
+    and ``log()`` LogRecords all resolve their parent via the standard OTel
+    active-span context (``trace.get_current_span()`` / ``set_span_in_context``).
+
+    Detach the returned token (in a ``finally``) when the span completes.
+
+        token = attach_as_current(span)
+        try:
+            ...
+        finally:
+            context_api.detach(token)
+    """
+    ctx = otel_trace.set_span_in_context(span)
+    return context_api.attach(ctx)
+
+
+def detach(token: Any) -> None:
+    """Detach a context token returned by :func:`attach_as_current`."""
+    try:
+        context_api.detach(token)
+    except Exception:
+        pass
+
+
 def is_suppressed() -> bool:
     """Check if a framework instrumentor already covers this call."""
     try:

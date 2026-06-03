@@ -65,11 +65,13 @@ INSTRUMENTATION_REGISTRY = {
             "default_span_kind": "LLM",
         },
         "openai": {
+            "neatlogs": "neatlogs.openai",
             "openinference": "openinference.instrumentation.openai",
             "openllmetry": "opentelemetry.instrumentation.openai",
             "default_span_kind": "LLM",
         },
         "anthropic": {
+            "neatlogs": "neatlogs.anthropic",
             "openllmetry": "opentelemetry.instrumentation.anthropic",
             "openinference": "openinference.instrumentation.anthropic",
             "default_span_kind": "LLM",
@@ -256,6 +258,7 @@ INSTRUMENTATION_REGISTRY = {
             "default_span_kind": "GUARDRAIL",
         },
         "google_genai": {
+            "neatlogs": "neatlogs.google_genai",
             "openllmetry": None,
             "openinference": "openinference.instrumentation.google_genai",
             "default_span_kind": "LLM",

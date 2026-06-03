@@ -38,7 +38,6 @@ def infer_span_kind_from_name(span_name: str) -> str:
             "milvus",
             "lancedb",
             "marqo",
-            "astra",
         ]
     ):
         # Check if it's a READ operation (retrieval)

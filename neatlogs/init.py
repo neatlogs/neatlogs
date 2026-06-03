@@ -280,8 +280,32 @@ def init(
             endpoint=traces_endpoint,
             headers=otlp_headers,
         )
+        # Wrap the exporter so rootless infra-HTTP auto-spans (boot pings, dependency
+        # warmups, outbound fetches outside any traced request) are never sent — on
+        # their own they're junk rootless traces the backend can't simplify. Nested
+        # HTTP spans (with a parent) still export normally.
+        from .core.span_processor import is_rootless_infra_http
+
+        class _FilteredOTLPExporter:
+            def __init__(self, inner):
+                self._inner = inner
+
+            def export(self, spans):
+                from opentelemetry.sdk.trace.export import SpanExportResult
+
+                kept = [s for s in spans if not is_rootless_infra_http(s)]
+                if not kept:
+                    return SpanExportResult.SUCCESS
+                return self._inner.export(kept)
+
+            def shutdown(self):
+                return self._inner.shutdown()
+
+            def force_flush(self, timeout_millis: int = 30000):
+                return self._inner.force_flush(timeout_millis)
+
         batch_processor = BatchSpanProcessor(
-            otlp_exporter,
+            _FilteredOTLPExporter(otlp_exporter),
             max_export_batch_size=batch_size,
             schedule_delay_millis=int(flush_interval * 1000),
         )

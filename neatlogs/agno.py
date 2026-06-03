@@ -63,9 +63,9 @@ def _looks_like_workflow(entity: Any) -> bool:
 
 
 def _get_agent_attributes(agent: Any) -> dict:
-    kind = "TEAM" if type(agent).__name__ == "Team" else "AGENT"
-    attrs = {"neatlogs.span.kind": kind if kind != "TEAM" else "AGENT"}
-    if kind == "TEAM":
+    is_team = type(agent).__name__ == "Team"
+    attrs = {"neatlogs.span.kind": "agent"}  # Team is rendered as an AGENT span
+    if is_team:
         attrs["neatlogs.agent.type"] = "team"
 
     name = getattr(agent, "name", None)
@@ -147,7 +147,7 @@ def _finalize_agent_span(span: Any, response: Any, duration_ms: float) -> None:
 
     content = getattr(response, "content", None)
     if content:
-        span.set_attribute("output.value", str(content)[:10000])
+        span.set_attribute("output.value", str(content))
 
     for attr_name, value in _extract_usage(response).items():
         span.set_attribute(attr_name, value)
@@ -202,6 +202,15 @@ def _input_value(args, kwargs) -> str:
 def _patch_agent(agent: Any) -> None:
     span_kind_name = type(agent).__name__.lower()
 
+    # Concrete model classes (OpenAIChat, Claude, …) override invoke/ainvoke, so the
+    # base-Model patch is shadowed. Patch the agent's actual model class too.
+    model = getattr(agent, "model", None)
+    if model is not None:
+        try:
+            _patch_model_class(type(model))
+        except Exception:
+            pass
+
     if hasattr(agent, "run"):
         orig_run = agent.run
 
@@ -210,7 +219,7 @@ def _patch_agent(agent: Any) -> None:
             attrs = _get_agent_attributes(agent)
             iv = _input_value(args, kwargs)
             if iv:
-                attrs["input.value"] = iv[:10000]
+                attrs["input.value"] = iv
             is_stream = bool(kwargs.get("stream"))
             if is_stream:
                 attrs["neatlogs.llm.is_streaming"] = True
@@ -250,7 +259,7 @@ def _patch_agent(agent: Any) -> None:
             attrs = _get_agent_attributes(agent)
             iv = _input_value(args, kwargs)
             if iv:
-                attrs["input.value"] = iv[:10000]
+                attrs["input.value"] = iv
             is_stream = bool(kwargs.get("stream"))
             if is_stream:
                 attrs["neatlogs.llm.is_streaming"] = True
@@ -288,7 +297,7 @@ def _patch_agent(agent: Any) -> None:
 
 def _patch_workflow(workflow: Any) -> None:
     def _attrs():
-        attrs = {"neatlogs.span.kind": "WORKFLOW"}
+        attrs = {"neatlogs.span.kind": "workflow"}
         name = getattr(workflow, "name", None)
         if name:
             attrs["neatlogs.workflow.name"] = name
@@ -302,7 +311,7 @@ def _patch_workflow(workflow: Any) -> None:
             attrs = _attrs()
             iv = _input_value(args, kwargs)
             if iv:
-                attrs["input.value"] = iv[:10000]
+                attrs["input.value"] = iv
             is_stream = bool(kwargs.get("stream"))
             span = tracer.start_span(name="agno.workflow.run", attributes=attrs)
             token = attach_as_current(span)
@@ -332,7 +341,7 @@ def _patch_workflow(workflow: Any) -> None:
             attrs = _attrs()
             iv = _input_value(args, kwargs)
             if iv:
-                attrs["input.value"] = iv[:10000]
+                attrs["input.value"] = iv
             is_stream = bool(kwargs.get("stream"))
             span = tracer.start_span(name="agno.workflow.arun", attributes=attrs)
             token = attach_as_current(span)
@@ -358,7 +367,7 @@ def _patch_workflow(workflow: Any) -> None:
 def _finalize_workflow_span(span: Any, result: Any, duration_ms: float) -> None:
     if result is not None:
         content = getattr(result, "content", None)
-        span.set_attribute("output.value", str(content if content is not None else result)[:10000])
+        span.set_attribute("output.value", str(content if content is not None else result))
         for attr_name, value in _extract_usage(result).items():
             span.set_attribute(attr_name, value)
     span.set_attribute("neatlogs.llm.metrics.duration_ms", round(duration_ms, 3))
@@ -490,7 +499,7 @@ def _patch_function_call_class() -> None:
         return
 
     def _tool_attrs(self):
-        attrs = {"neatlogs.span.kind": "TOOL"}
+        attrs = {"neatlogs.span.kind": "tool"}
         fn = getattr(self, "function", None)
         name = getattr(fn, "name", None) if fn else None
         if name:
@@ -550,7 +559,7 @@ def _finalize_tool(span: Any, fcall: Any, result: Any) -> None:
     if out is None:
         out = getattr(fcall, "result", None)
     if out is not None:
-        span.set_attribute("output.value", str(out)[:10000])
+        span.set_attribute("output.value", str(out))
     error = getattr(result, "error", None) if result is not None else None
     if error:
         span.set_status(StatusCode.ERROR, str(error))
@@ -559,54 +568,101 @@ def _finalize_tool(span: Any, fcall: Any, result: Any) -> None:
     span.end()
 
 
-def _patch_model_class() -> None:
+def _patch_model_class(target=None) -> None:
+    """
+    Install LLM-span hooks on an Agno model class.
+
+    Concrete model classes (e.g. OpenAIChat, Claude) OVERRIDE invoke/ainvoke, so
+    patching only the base `Model` is shadowed by the subclass method. We therefore
+    patch the methods on whichever class actually DEFINES them — by default the base
+    `Model`, and additionally the concrete class passed as `target` (the agent's model
+    class), patching only methods present in that class's own __dict__.
+    """
     try:
         from agno.models.base import Model
     except Exception:
         return
-    if getattr(Model, "_neatlogs_patched", False):
+
+    cls = target if target is not None else Model
+    if getattr(cls, "_neatlogs_patched", False):
         return
 
-    def _model_attrs(self):
-        attrs = {"neatlogs.span.kind": "LLM"}
+    def _model_attrs(self, call_kwargs=None):
+        attrs = {"neatlogs.span.kind": "llm"}
         model_id = getattr(self, "id", None) or getattr(self, "model", None)
         if model_id:
             attrs["neatlogs.llm.model_name"] = str(model_id)
         provider = getattr(self, "provider", None)
         if provider:
             attrs["neatlogs.llm.provider"] = str(provider)
+        # Input messages: agno passes them as the `messages` kwarg (list[Message]).
+        msgs = (call_kwargs or {}).get("messages")
+        if isinstance(msgs, list) and msgs:
+            collected = []
+            for i, m in enumerate(msgs):
+                role = getattr(m, "role", None) or (m.get("role") if isinstance(m, dict) else None) or ""
+                content = getattr(m, "content", None)
+                if content is None and isinstance(m, dict):
+                    content = m.get("content")
+                content_str = content if isinstance(content, str) else serialize(content)
+                if role:
+                    attrs[f"neatlogs.llm.input_messages.{i}.role"] = role
+                if content:
+                    attrs[f"neatlogs.llm.input_messages.{i}.content"] = content_str
+                collected.append({"role": role or "user", "content": content_str})
+            if collected:
+                # Flat input blob the UI renders. Backend enforces the 1 MB cap.
+                attrs["neatlogs.llm.input"] = serialize({"messages": collected})
         return attrs
 
-    for method in ("invoke", "ainvoke", "invoke_stream", "ainvoke_stream"):
-        if not hasattr(Model, method):
+    # agno's high-level response()/aresponse() call the *_with_retry wrappers, which
+    # are defined on the base Model and internally call invoke/ainvoke. Concrete model
+    # classes (OpenAIChat, …) override the bare invoke/ainvoke but NOT the retry
+    # wrappers, so patching the retry methods on base Model reliably captures every
+    # model call regardless of provider. Fall back to bare invoke if retry absent.
+    candidates = [
+        "_invoke_with_retry",
+        "_ainvoke_with_retry",
+        "_invoke_stream_with_retry",
+        "_ainvoke_stream_with_retry",
+    ]
+    if not any(m in cls.__dict__ for m in candidates):
+        candidates = ["invoke", "ainvoke", "invoke_stream", "ainvoke_stream"]
+
+    for method in candidates:
+        # Only patch methods this class DEFINES itself (so we hit the real override,
+        # and don't double-wrap an inherited-then-already-patched base method).
+        if method not in cls.__dict__:
             continue
-        orig = getattr(Model, method)
-        is_async = method.startswith("a")
+        orig = getattr(cls, method)
+        is_async = method.startswith("a") or method.startswith("_a")
         is_stream = "stream" in method
 
         if is_async and is_stream:
             def make(orig=orig):
                 async def wrapper(self, *a, **k):
                     tracer = get_tracer()
-                    span = tracer.start_span(name="agno.model.invoke", attributes=_model_attrs(self))
+                    span = tracer.start_span(name="agno.model.invoke", attributes=_model_attrs(self, k))
                     token = attach_as_current(span)
+                    chunks = []
                     try:
                         agen = orig(self, *a, **k)
                         async for chunk in agen:
+                            chunks.append(chunk)
                             yield chunk
                     except Exception as e:
                         _err(span, e); raise
                     finally:
                         detach(token)
                         if span.is_recording():
-                            span.set_status(StatusCode.OK); span.end()
+                            _finalize_model_stream(span, chunks)
                 return wrapper
-            setattr(Model, method, make())
+            setattr(cls, method, make())
         elif is_async:
             def make(orig=orig):
                 async def wrapper(self, *a, **k):
                     tracer = get_tracer()
-                    span = tracer.start_span(name="agno.model.invoke", attributes=_model_attrs(self))
+                    span = tracer.start_span(name="agno.model.invoke", attributes=_model_attrs(self, k))
                     token = attach_as_current(span)
                     try:
                         result = await orig(self, *a, **k)
@@ -617,30 +673,32 @@ def _patch_model_class() -> None:
                     _finalize_model(span, result)
                     return result
                 return wrapper
-            setattr(Model, method, make())
+            setattr(cls, method, make())
         elif is_stream:
             def make(orig=orig):
                 def wrapper(self, *a, **k):
                     tracer = get_tracer()
-                    span = tracer.start_span(name="agno.model.invoke", attributes=_model_attrs(self))
+                    span = tracer.start_span(name="agno.model.invoke", attributes=_model_attrs(self, k))
                     token = attach_as_current(span)
+                    chunks = []
                     try:
                         gen = orig(self, *a, **k)
                         for chunk in gen:
+                            chunks.append(chunk)
                             yield chunk
                     except Exception as e:
                         _err(span, e); raise
                     finally:
                         detach(token)
                         if span.is_recording():
-                            span.set_status(StatusCode.OK); span.end()
+                            _finalize_model_stream(span, chunks)
                 return wrapper
-            setattr(Model, method, make())
+            setattr(cls, method, make())
         else:
             def make(orig=orig):
                 def wrapper(self, *a, **k):
                     tracer = get_tracer()
-                    span = tracer.start_span(name="agno.model.invoke", attributes=_model_attrs(self))
+                    span = tracer.start_span(name="agno.model.invoke", attributes=_model_attrs(self, k))
                     token = attach_as_current(span)
                     try:
                         result = orig(self, *a, **k)
@@ -651,32 +709,75 @@ def _patch_model_class() -> None:
                     _finalize_model(span, result)
                     return result
                 return wrapper
-            setattr(Model, method, make())
+            setattr(cls, method, make())
 
-    Model._neatlogs_patched = True
+    cls._neatlogs_patched = True
+
+
+def _finalize_model_stream(span: Any, chunks: list) -> None:
+    """
+    Finalize a streamed model call. Agno yields ModelResponse deltas: accumulate
+    text content across chunks and take token usage from whichever chunk carries
+    `response_usage` (usually the last). Mirrors _finalize_model's output so
+    streaming LLM spans get the same I/O + tokens as non-streaming.
+    """
+    text_parts = []
+    tool_calls = []
+    usage = None
+    for ch in chunks or []:
+        c = getattr(ch, "content", None)
+        if c:
+            text_parts.append(c if isinstance(c, str) else str(c))
+        ru = getattr(ch, "response_usage", None)
+        if ru is not None:
+            usage = ru
+        tcs = getattr(ch, "tool_calls", None)
+        if tcs:
+            for tc in tcs:
+                fn = tc.get("function", {}) if isinstance(tc, dict) else {}
+                name = fn.get("name") if fn else getattr(tc, "name", None)
+                args = fn.get("arguments") if fn else getattr(tc, "arguments", None)
+                if name and not any(x["name"] == name for x in tool_calls):
+                    tool_calls.append({"name": name, "arguments": args})
+
+    out_text = "".join(text_parts)
+    if not out_text and tool_calls:
+        out_text = "\n".join(
+            f"{c['name']}({c['arguments'] if isinstance(c['arguments'], str) else serialize(c['arguments'])})"
+            for c in tool_calls
+        )
+    if out_text or tool_calls:
+        span.set_attribute("neatlogs.llm.output_messages.0.role", "assistant")
+        span.set_attribute("neatlogs.llm.output_messages.0.content", out_text)
+        out_blob = {"role": "assistant", "content": out_text}
+        if tool_calls:
+            out_blob["tool_calls"] = tool_calls
+        span.set_attribute("neatlogs.llm.output", serialize(out_blob))
+    if usage is not None:
+        for src, dst in (
+            ("input_tokens", "prompt"),
+            ("output_tokens", "completion"),
+            ("total_tokens", "total"),
+            ("cache_read_tokens", "cache_read"),
+            ("reasoning_tokens", "reasoning"),
+        ):
+            v = getattr(usage, src, None)
+            if v is None and isinstance(usage, dict):
+                v = usage.get(src)
+            if v:
+                span.set_attribute(f"neatlogs.llm.token_count.{dst}", v)
+    span.set_status(StatusCode.OK)
+    span.end()
 
 
 def _finalize_model(span: Any, result: Any) -> None:
     """result is a ModelResponse (non-streaming)."""
     if result is not None:
         content = getattr(result, "content", None)
-        if content:
-            span.set_attribute("neatlogs.llm.output_messages.0.role", "assistant")
-            span.set_attribute("neatlogs.llm.output_messages.0.content", str(content)[:10000])
 
-        for src, dst in (
-            ("input_tokens", "prompt"),
-            ("output_tokens", "completion"),
-            ("total_tokens", "total"),
-            ("cache_read_tokens", "cache_read"),
-            ("cache_write_tokens", "cache_write"),
-            ("reasoning_tokens", "reasoning"),
-        ):
-            v = getattr(result, src, None)
-            if v:
-                span.set_attribute(f"neatlogs.llm.token_count.{dst}", v)
-
+        # Collect tool calls first so we can include them in the output blob.
         tool_calls = getattr(result, "tool_calls", None)
+        collected_calls = []
         if tool_calls:
             for j, tc in enumerate(tool_calls):
                 fn = tc.get("function", {}) if isinstance(tc, dict) else {}
@@ -689,6 +790,45 @@ def _finalize_model(span: Any, result: Any) -> None:
                     span.set_attribute(f"neatlogs.llm.tool_calls.{j}.arguments", args if isinstance(args, str) else serialize(args))
                 if tc_id:
                     span.set_attribute(f"neatlogs.llm.tool_calls.{j}.id", str(tc_id))
+                collected_calls.append({"name": name, "arguments": args})
+
+        # Output message + flat blob the UI renders. When the model returns a
+        # tool-call (no text content), summarise the call into content so the
+        # span output isn't blank.
+        if content:
+            out_text = str(content)
+        elif collected_calls:
+            out_text = "\n".join(
+                f"{c['name']}({c['arguments'] if isinstance(c['arguments'], str) else serialize(c['arguments'])})"
+                for c in collected_calls
+            )
+        else:
+            out_text = ""
+        if out_text or collected_calls:
+            span.set_attribute("neatlogs.llm.output_messages.0.role", "assistant")
+            span.set_attribute("neatlogs.llm.output_messages.0.content", out_text)
+            out_blob = {"role": "assistant", "content": out_text}
+            if collected_calls:
+                out_blob["tool_calls"] = collected_calls
+            span.set_attribute("neatlogs.llm.output", serialize(out_blob))
+
+        # Token usage. Agno's ModelResponse exposes the live usage on
+        # `response_usage` (a MessageMetrics); the top-level input_tokens/
+        # output_tokens attributes are typically None. Read response_usage first.
+        usage = getattr(result, "response_usage", None) or result
+        for src, dst in (
+            ("input_tokens", "prompt"),
+            ("output_tokens", "completion"),
+            ("total_tokens", "total"),
+            ("cache_read_tokens", "cache_read"),
+            ("cache_write_tokens", "cache_write"),
+            ("reasoning_tokens", "reasoning"),
+        ):
+            v = getattr(usage, src, None)
+            if v is None and isinstance(usage, dict):
+                v = usage.get(src)
+            if v:
+                span.set_attribute(f"neatlogs.llm.token_count.{dst}", v)
     span.set_status(StatusCode.OK)
     span.end()
 

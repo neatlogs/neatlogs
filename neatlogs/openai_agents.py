@@ -56,7 +56,7 @@ class _NeatlogsTraceProcessor:
 
     def on_trace_start(self, trace: Any) -> None:
         tracer = get_tracer()
-        attrs = {"neatlogs.span.kind": "WORKFLOW"}
+        attrs = {"neatlogs.span.kind": "workflow"}
         workflow_name = getattr(trace, "name", None) or getattr(trace, "workflow_name", None)
         if workflow_name:
             attrs["neatlogs.workflow.name"] = workflow_name
@@ -160,7 +160,7 @@ class _NeatlogsTraceProcessor:
 def _build_start_attrs(span_type: str, data: Any):
     if span_type == "agent":
         name = getattr(data, "name", None) or "agent"
-        attrs = {"neatlogs.span.kind": "AGENT", "neatlogs.agent.name": str(name)}
+        attrs = {"neatlogs.span.kind": "agent", "neatlogs.agent.name": str(name)}
         tools = getattr(data, "tools", None)
         if tools:
             for i, t in enumerate(tools):
@@ -171,7 +171,7 @@ def _build_start_attrs(span_type: str, data: Any):
         return attrs, f"openai_agents.agent.{name}"
 
     if span_type in ("generation", "llm"):
-        attrs = {"neatlogs.span.kind": "LLM", "neatlogs.llm.provider": "openai"}
+        attrs = {"neatlogs.span.kind": "llm", "neatlogs.llm.provider": "openai"}
         model = getattr(data, "model", None)
         if model:
             attrs["neatlogs.llm.model_name"] = str(model)
@@ -179,20 +179,20 @@ def _build_start_attrs(span_type: str, data: Any):
         return attrs, "openai_agents.generation"
 
     if span_type == "response":
-        attrs = {"neatlogs.span.kind": "LLM", "neatlogs.llm.provider": "openai"}
+        attrs = {"neatlogs.span.kind": "llm", "neatlogs.llm.provider": "openai"}
         _set_input_messages(attrs, getattr(data, "input", None))
         return attrs, "openai_agents.response"
 
     if span_type == "function":
         name = getattr(data, "name", None) or "tool"
-        attrs = {"neatlogs.span.kind": "TOOL", "neatlogs.tool.name": str(name)}
+        attrs = {"neatlogs.span.kind": "tool", "neatlogs.tool.name": str(name)}
         tool_input = getattr(data, "input", None)
         if tool_input is not None:
             attrs["input.value"] = tool_input if isinstance(tool_input, str) else serialize(tool_input)
         return attrs, f"openai_agents.tool.{name}"
 
     if span_type == "handoff":
-        attrs = {"neatlogs.span.kind": "AGENT"}
+        attrs = {"neatlogs.span.kind": "agent"}
         if getattr(data, "from_agent", None):
             attrs["neatlogs.agent.handoff_from"] = str(data.from_agent)
         if getattr(data, "to_agent", None):
@@ -200,21 +200,21 @@ def _build_start_attrs(span_type: str, data: Any):
         return attrs, "openai_agents.handoff"
 
     if span_type == "guardrail":
-        attrs = {"neatlogs.span.kind": "GUARDRAIL"}
+        attrs = {"neatlogs.span.kind": "guardrail"}
         name = getattr(data, "name", None)
         if name:
             attrs["neatlogs.guardrail.name"] = str(name)
         return attrs, f"openai_agents.guardrail.{name or 'guardrail'}"
 
     if span_type == "mcp_tools":
-        attrs = {"neatlogs.span.kind": "TOOL", "neatlogs.tool.type": "mcp_list_tools"}
+        attrs = {"neatlogs.span.kind": "tool", "neatlogs.tool.type": "mcp_list_tools"}
         server = getattr(data, "server", None)
         if server:
             attrs["neatlogs.tool.mcp_server"] = str(server)
         return attrs, "openai_agents.mcp_list_tools"
 
     if span_type == "speech":
-        attrs = {"neatlogs.span.kind": "LLM", "neatlogs.llm.task": "speech"}
+        attrs = {"neatlogs.span.kind": "llm", "neatlogs.llm.task": "speech"}
         model = getattr(data, "model", None)
         if model:
             attrs["neatlogs.llm.model_name"] = str(model)
@@ -224,21 +224,21 @@ def _build_start_attrs(span_type: str, data: Any):
         return attrs, "openai_agents.speech"
 
     if span_type == "transcription":
-        attrs = {"neatlogs.span.kind": "LLM", "neatlogs.llm.task": "transcription"}
+        attrs = {"neatlogs.span.kind": "llm", "neatlogs.llm.task": "transcription"}
         model = getattr(data, "model", None)
         if model:
             attrs["neatlogs.llm.model_name"] = str(model)
         return attrs, "openai_agents.transcription"
 
     if span_type == "custom":
-        attrs = {"neatlogs.span.kind": "CHAIN"}
+        attrs = {"neatlogs.span.kind": "chain"}
         name = getattr(data, "name", None)
         custom = getattr(data, "data", None)
         if custom:
             attrs["neatlogs.custom.data"] = serialize(custom)[:10000]
         return attrs, f"openai_agents.custom.{name or 'custom'}"
 
-    attrs = {"neatlogs.span.kind": "CHAIN"}
+    attrs = {"neatlogs.span.kind": "chain"}
     return attrs, f"openai_agents.{span_type or 'span'}"
 
 

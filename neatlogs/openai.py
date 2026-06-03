@@ -126,7 +126,7 @@ def _patch_completions(completions: Any) -> None:
         span = tracer.start_span(
             name="openai.chat.completions.create",
             attributes={
-                "neatlogs.span.kind": "LLM",
+                "neatlogs.span.kind": "llm",
                 "neatlogs.llm.provider": "openai",
                 "neatlogs.llm.system": "openai",
                 "neatlogs.llm.model_name": model,
@@ -207,7 +207,7 @@ def _patch_async_completions(completions: Any) -> None:
         span = tracer.start_span(
             name="openai.chat.completions.create",
             attributes={
-                "neatlogs.span.kind": "LLM",
+                "neatlogs.span.kind": "llm",
                 "neatlogs.llm.provider": "openai",
                 "neatlogs.llm.system": "openai",
                 "neatlogs.llm.model_name": model,
@@ -275,7 +275,7 @@ def _patch_responses(responses: Any) -> None:
         span = tracer.start_span(
             name="openai.responses.create",
             attributes={
-                "neatlogs.span.kind": "LLM",
+                "neatlogs.span.kind": "llm",
                 "neatlogs.llm.provider": "openai",
                 "neatlogs.llm.system": "openai",
                 "neatlogs.llm.model_name": model,
@@ -532,7 +532,7 @@ def _patch_async_responses(responses: Any) -> None:
         span = tracer.start_span(
             name="openai.responses.create",
             attributes={
-                "neatlogs.span.kind": "LLM",
+                "neatlogs.span.kind": "llm",
                 "neatlogs.llm.provider": "openai",
                 "neatlogs.llm.system": "openai",
                 "neatlogs.llm.model_name": model,
@@ -604,7 +604,7 @@ def _patch_responses_streaming_aware(responses: Any) -> None:
 def _patch_chat_parse(completions: Any, sync: bool = True) -> None:
     def start_attrs(kwargs):
         return {
-            "neatlogs.span.kind": "LLM",
+            "neatlogs.span.kind": "llm",
             "neatlogs.llm.provider": "openai",
             "neatlogs.llm.system": "openai",
             "neatlogs.llm.model_name": kwargs.get("model", ""),
@@ -621,7 +621,7 @@ def _patch_chat_parse(completions: Any, sync: bool = True) -> None:
 def _patch_responses_parse(responses: Any, sync: bool = True) -> None:
     def start_attrs(kwargs):
         return {
-            "neatlogs.span.kind": "LLM",
+            "neatlogs.span.kind": "llm",
             "neatlogs.llm.provider": "openai",
             "neatlogs.llm.model_name": kwargs.get("model", ""),
             "neatlogs.llm.structured_output": True,
@@ -645,7 +645,7 @@ def _patch_embeddings(embeddings: Any, sync: bool = True) -> None:
     def start_attrs(kwargs):
         inp = kwargs.get("input", "")
         attrs = {
-            "neatlogs.span.kind": "EMBEDDING",
+            "neatlogs.span.kind": "embedding",
             "neatlogs.embedding.model_name": kwargs.get("model", ""),
         }
         if isinstance(inp, str):
@@ -687,7 +687,7 @@ def _patch_legacy_completions(completions: Any, sync: bool = True) -> None:
     def start_attrs(kwargs):
         prompt = kwargs.get("prompt", "")
         return {
-            "neatlogs.span.kind": "LLM",
+            "neatlogs.span.kind": "llm",
             "neatlogs.llm.provider": "openai",
             "neatlogs.llm.system": "openai",
             "neatlogs.llm.model_name": kwargs.get("model", ""),
@@ -730,7 +730,7 @@ def _patch_images(images: Any, sync: bool = True) -> None:
                               ("create_variation", "openai.images.create_variation")):
         def make(method=method, span_name=span_name):
             def start_attrs(kwargs):
-                attrs = {"neatlogs.span.kind": "LLM", "neatlogs.llm.provider": "openai", "neatlogs.llm.task": "image"}
+                attrs = {"neatlogs.span.kind": "llm", "neatlogs.llm.provider": "openai", "neatlogs.llm.task": "image"}
                 if kwargs.get("model"):
                     attrs["neatlogs.llm.model_name"] = kwargs["model"]
                 if kwargs.get("prompt"):
@@ -763,7 +763,7 @@ def _patch_audio(audio: Any, sync: bool = True) -> None:
     speech = getattr(audio, "speech", None)
     if speech is not None:
         def start_attrs(kwargs):
-            attrs = {"neatlogs.span.kind": "LLM", "neatlogs.llm.provider": "openai", "neatlogs.llm.task": "tts"}
+            attrs = {"neatlogs.span.kind": "llm", "neatlogs.llm.provider": "openai", "neatlogs.llm.task": "tts"}
             if kwargs.get("model"):
                 attrs["neatlogs.llm.model_name"] = kwargs["model"]
             if kwargs.get("input"):
@@ -780,7 +780,7 @@ def _patch_audio(audio: Any, sync: bool = True) -> None:
             continue
         def make(task=task, sub=sub):
             def start_attrs(kwargs):
-                attrs = {"neatlogs.span.kind": "LLM", "neatlogs.llm.provider": "openai", "neatlogs.llm.task": task}
+                attrs = {"neatlogs.span.kind": "llm", "neatlogs.llm.provider": "openai", "neatlogs.llm.task": task}
                 if kwargs.get("model"):
                     attrs["neatlogs.llm.model_name"] = kwargs["model"]
                 return attrs
@@ -804,7 +804,7 @@ def _patch_audio(audio: Any, sync: bool = True) -> None:
 
 def _patch_moderations(moderations: Any, sync: bool = True) -> None:
     def start_attrs(kwargs):
-        attrs = {"neatlogs.span.kind": "LLM", "neatlogs.llm.provider": "openai", "neatlogs.llm.task": "moderation"}
+        attrs = {"neatlogs.span.kind": "llm", "neatlogs.llm.provider": "openai", "neatlogs.llm.task": "moderation"}
         if kwargs.get("model"):
             attrs["neatlogs.llm.model_name"] = kwargs["model"]
         inp = kwargs.get("input")
@@ -832,7 +832,7 @@ def _patch_moderations(moderations: Any, sync: bool = True) -> None:
 
 def _patch_batches(batches: Any, sync: bool = True) -> None:
     def start_attrs(kwargs):
-        attrs = {"neatlogs.span.kind": "TASK", "neatlogs.batch.endpoint": kwargs.get("endpoint", "")}
+        attrs = {"neatlogs.span.kind": "task", "neatlogs.batch.endpoint": kwargs.get("endpoint", "")}
         return attrs
     start_attrs.__name__ = "openai.batches.create"
 

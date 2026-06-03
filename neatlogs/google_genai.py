@@ -21,6 +21,7 @@ from typing import Any, List, Optional
 from opentelemetry.trace import StatusCode
 
 from ._wrap_utils import (
+    AsyncStreamWrapper,
     SyncStreamWrapper,
     get_tracer,
     is_suppressed,
@@ -76,7 +77,7 @@ def _patch_models(models: Any) -> None:
         span = tracer.start_span(
             name="google_genai.models.generate_content",
             attributes={
-                "neatlogs.span.kind": "LLM",
+                "neatlogs.span.kind": "llm",
                 "neatlogs.llm.provider": "google_genai",
                 "neatlogs.llm.system": "google_genai",
                 "neatlogs.llm.model_name": str(model),
@@ -114,7 +115,7 @@ def _patch_models(models: Any) -> None:
             span = tracer.start_span(
                 name="google_genai.models.generate_content",
                 attributes={
-                    "neatlogs.span.kind": "LLM",
+                    "neatlogs.span.kind": "llm",
                     "neatlogs.llm.provider": "google_genai",
                     "neatlogs.llm.system": "google_genai",
                     "neatlogs.llm.model_name": str(model),
@@ -150,7 +151,7 @@ def _patch_async_models(models: Any) -> None:
         span = tracer.start_span(
             name="google_genai.models.generate_content",
             attributes={
-                "neatlogs.span.kind": "LLM",
+                "neatlogs.span.kind": "llm",
                 "neatlogs.llm.provider": "google_genai",
                 "neatlogs.llm.system": "google_genai",
                 "neatlogs.llm.model_name": str(model),
@@ -177,11 +178,16 @@ def _patch_async_models(models: Any) -> None:
     models.generate_content = patched_generate_content
 
     if orig_stream:
+        # NOTE: the async google-genai `generate_content_stream` is a COROUTINE that
+        # returns an async iterator — callers do `stream = await models.generate_content_stream(...)`
+        # then `async for chunk in stream`. The patch MUST preserve that contract: it has to be
+        # an `async def` that RETURNS an async-iterable (AsyncStreamWrapper), NOT an async
+        # generator (`async def` + top-level `yield`). An async generator is not awaitable, so
+        # `await ...generate_content_stream(...)` would raise
+        # "object async_generator can't be used in 'await' expression".
         async def patched_generate_content_stream(*args, **kwargs):
             if is_suppressed():
-                async for chunk in orig_stream(*args, **kwargs):
-                    yield chunk
-                return
+                return await orig_stream(*args, **kwargs)
 
             model = kwargs.get("model", args[0] if args else "")
             contents = kwargs.get("contents", args[1] if len(args) > 1 else "")
@@ -190,7 +196,7 @@ def _patch_async_models(models: Any) -> None:
             span = tracer.start_span(
                 name="google_genai.models.generate_content",
                 attributes={
-                    "neatlogs.span.kind": "LLM",
+                    "neatlogs.span.kind": "llm",
                     "neatlogs.llm.provider": "google_genai",
                     "neatlogs.llm.system": "google_genai",
                     "neatlogs.llm.model_name": str(model),
@@ -200,27 +206,15 @@ def _patch_async_models(models: Any) -> None:
 
             _set_input_attributes(span, contents, kwargs)
 
-            start_time = time.perf_counter()
-            first_chunk_time: Optional[float] = None
-            chunks: List[Any] = []
-
             try:
-                async for chunk in orig_stream(*args, **kwargs):
-                    if first_chunk_time is None:
-                        first_chunk_time = time.perf_counter()
-                    chunks.append(chunk)
-                    yield chunk
+                stream = await orig_stream(*args, **kwargs)
             except Exception as e:
                 span.set_status(StatusCode.ERROR, str(e))
                 span.record_exception(e)
                 span.end()
                 raise
 
-            elapsed_ms = (time.perf_counter() - start_time) * 1000
-            ttft_ms = None
-            if first_chunk_time is not None:
-                ttft_ms = (first_chunk_time - start_time) * 1000
-            _finalize_stream(span, chunks, elapsed_ms, ttft_ms)
+            return AsyncStreamWrapper(stream, span, _finalize_stream)
 
         models.generate_content_stream = patched_generate_content_stream
 
@@ -444,7 +438,7 @@ def _patch_models_extra(models: Any, is_async: bool) -> None:
         orig = models.embed_content
 
         def _embed_attrs(kwargs):
-            attrs = {"neatlogs.span.kind": "EMBEDDING", "neatlogs.embedding.model_name": str(kwargs.get("model", ""))}
+            attrs = {"neatlogs.span.kind": "embedding", "neatlogs.embedding.model_name": str(kwargs.get("model", ""))}
             contents = kwargs.get("contents")
             if contents is not None:
                 attrs["neatlogs.embedding.text"] = (contents if isinstance(contents, str) else serialize(contents))[:10000]
@@ -491,7 +485,7 @@ def _patch_models_extra(models: Any, is_async: bool) -> None:
         orig_ct = models.count_tokens
 
         def _ct_attrs(kwargs):
-            return {"neatlogs.span.kind": "LLM", "neatlogs.llm.provider": "google_genai",
+            return {"neatlogs.span.kind": "llm", "neatlogs.llm.provider": "google_genai",
                     "neatlogs.llm.task": "count_tokens", "neatlogs.llm.model_name": str(kwargs.get("model", ""))}
 
         def _ct_finalize(span, resp):
@@ -589,26 +583,19 @@ def _patch_chat_classes() -> None:
         if hasattr(AsyncChat, "send_message_stream"):
             orig_asend_stream = AsyncChat.send_message_stream
 
+            # Like generate_content_stream, the async send_message_stream is a COROUTINE
+            # returning an async iterator (callers `await` it then iterate). Patch as an
+            # `async def` that RETURNS an AsyncStreamWrapper — NOT an async generator,
+            # which would break `await chat.send_message_stream(...)`.
             async def patched_asend_stream(self, message, *args, **kwargs):
                 if is_suppressed():
-                    async for ch in orig_asend_stream(self, message, *args, **kwargs):
-                        yield ch
-                    return
+                    return await orig_asend_stream(self, message, *args, **kwargs)
                 span = _start_chat_span(self, message, stream=True)
-                start = time.perf_counter()
-                first = None
-                chunks = []
                 try:
-                    async for ch in orig_asend_stream(self, message, *args, **kwargs):
-                        if first is None:
-                            first = time.perf_counter()
-                        chunks.append(ch)
-                        yield ch
+                    stream = await orig_asend_stream(self, message, *args, **kwargs)
                 except Exception as e:
                     _err(span, e); raise
-                elapsed = (time.perf_counter() - start) * 1000
-                ttft = (first - start) * 1000 if first else None
-                _finalize_stream(span, chunks, elapsed, ttft)
+                return AsyncStreamWrapper(stream, span, _finalize_stream)
 
             AsyncChat.send_message_stream = patched_asend_stream
 
@@ -620,7 +607,7 @@ def _start_chat_span(chat: Any, message: Any, stream: bool) -> Any:
     span = get_tracer().start_span(
         name="google_genai.chat.send_message",
         attributes={
-            "neatlogs.span.kind": "LLM",
+            "neatlogs.span.kind": "llm",
             "neatlogs.llm.provider": "google_genai",
             "neatlogs.llm.system": "google_genai",
             "neatlogs.llm.model_name": str(model),

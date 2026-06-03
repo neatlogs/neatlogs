@@ -112,6 +112,14 @@ def wrap(client):
     cls_name = type(client).__name__
     module = type(client).__module__ or ""
 
+    # Also fingerprint the full MRO so subclasses defined in user code are
+    # detected — e.g. `class QAPipeline(dspy.Module)` has __module__ "src.pipeline"
+    # but `dspy.module` appears in a base class. Used as a fallback when the leaf
+    # class's own module doesn't reveal the framework.
+    mro_modules = " ".join(
+        (getattr(base, "__module__", "") or "") for base in type(client).__mro__
+    )
+
     if "openai" in module or cls_name in ("OpenAI", "AsyncOpenAI"):
         from .openai import wrap_async_openai_client, wrap_openai_client
 
@@ -131,22 +139,22 @@ def wrap(client):
 
         return wrap_google_genai_client(client)
 
-    if "crewai" in module and cls_name == "Crew":
+    if cls_name in ("Crew", "Flow") or "crewai" in mro_modules:
         from .crewai import wrap_crewai
 
         return wrap_crewai(client)
 
-    if "pydantic_ai" in module and cls_name == "Agent":
+    if cls_name == "Agent" and ("pydantic_ai" in module or "pydantic_ai" in mro_modules):
         from .pydantic_ai import wrap_pydantic_ai
 
         return wrap_pydantic_ai(client)
 
-    if "dspy" in module:
+    if "dspy" in module or "dspy" in mro_modules:
         from .dspy import wrap_dspy
 
         return wrap_dspy(client)
 
-    if "agno" in module:
+    if "agno" in module or "agno" in mro_modules:
         from .agno import wrap_agno
 
         return wrap_agno(client)

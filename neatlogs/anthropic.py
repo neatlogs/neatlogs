@@ -89,7 +89,7 @@ def _patch_messages(messages: Any) -> None:
         span = tracer.start_span(
             name="anthropic.messages.create",
             attributes={
-                "neatlogs.span.kind": "LLM",
+                "neatlogs.span.kind": "llm",
                 "neatlogs.llm.provider": "anthropic",
                 "neatlogs.llm.system": "anthropic",
                 "neatlogs.llm.model_name": model,
@@ -131,7 +131,7 @@ def _patch_messages(messages: Any) -> None:
             span = tracer.start_span(
                 name="anthropic.messages.create",
                 attributes={
-                    "neatlogs.span.kind": "LLM",
+                    "neatlogs.span.kind": "llm",
                     "neatlogs.llm.provider": "anthropic",
                     "neatlogs.llm.system": "anthropic",
                     "neatlogs.llm.model_name": model,
@@ -169,7 +169,7 @@ def _patch_async_messages(messages: Any) -> None:
         span = tracer.start_span(
             name="anthropic.messages.create",
             attributes={
-                "neatlogs.span.kind": "LLM",
+                "neatlogs.span.kind": "llm",
                 "neatlogs.llm.provider": "anthropic",
                 "neatlogs.llm.system": "anthropic",
                 "neatlogs.llm.model_name": model,
@@ -211,7 +211,7 @@ def _patch_async_messages(messages: Any) -> None:
             span = tracer.start_span(
                 name="anthropic.messages.create",
                 attributes={
-                    "neatlogs.span.kind": "LLM",
+                    "neatlogs.span.kind": "llm",
                     "neatlogs.llm.provider": "anthropic",
                     "neatlogs.llm.system": "anthropic",
                     "neatlogs.llm.model_name": model,
@@ -591,7 +591,7 @@ def _extra_message_methods(messages: Any, is_async: bool) -> None:
                     return await orig_count(*args, **kwargs)
                 span = get_tracer().start_span(
                     name="anthropic.messages.count_tokens",
-                    attributes={"neatlogs.span.kind": "LLM", "neatlogs.llm.provider": "anthropic",
+                    attributes={"neatlogs.span.kind": "llm", "neatlogs.llm.provider": "anthropic",
                                 "neatlogs.llm.task": "count_tokens", "neatlogs.llm.model_name": kwargs.get("model", "")},
                 )
                 try:
@@ -606,7 +606,7 @@ def _extra_message_methods(messages: Any, is_async: bool) -> None:
                     return orig_count(*args, **kwargs)
                 span = get_tracer().start_span(
                     name="anthropic.messages.count_tokens",
-                    attributes={"neatlogs.span.kind": "LLM", "neatlogs.llm.provider": "anthropic",
+                    attributes={"neatlogs.span.kind": "llm", "neatlogs.llm.provider": "anthropic",
                                 "neatlogs.llm.task": "count_tokens", "neatlogs.llm.model_name": kwargs.get("model", "")},
                 )
                 try:
@@ -623,7 +623,7 @@ def _start_message_span(kwargs: dict, name: str, structured: bool = False) -> An
     span = get_tracer().start_span(
         name=name,
         attributes={
-            "neatlogs.span.kind": "LLM",
+            "neatlogs.span.kind": "llm",
             "neatlogs.llm.provider": "anthropic",
             "neatlogs.llm.system": "anthropic",
             "neatlogs.llm.model_name": kwargs.get("model", ""),
@@ -654,7 +654,7 @@ def _patch_legacy_completions(completions: Any, is_async: bool) -> None:
     def _attrs(kwargs):
         prompt = kwargs.get("prompt", "")
         return {
-            "neatlogs.span.kind": "LLM",
+            "neatlogs.span.kind": "llm",
             "neatlogs.llm.provider": "anthropic",
             "neatlogs.llm.system": "anthropic",
             "neatlogs.llm.model_name": kwargs.get("model", ""),

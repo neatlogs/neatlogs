@@ -131,7 +131,7 @@ class NeatlogsCallbackHandler(BaseCallbackHandler):
             name="langchain.chat_model",
             context=ctx,
             attributes={
-                "neatlogs.span.kind": "LLM",
+                "neatlogs.span.kind": "llm",
                 "neatlogs.llm.provider": "langchain",
                 "neatlogs.llm.model_name": model,
             },
@@ -190,7 +190,7 @@ class NeatlogsCallbackHandler(BaseCallbackHandler):
             name="langchain.llm",
             context=ctx,
             attributes={
-                "neatlogs.span.kind": "LLM",
+                "neatlogs.span.kind": "llm",
                 "neatlogs.llm.provider": "langchain",
                 "neatlogs.llm.model_name": model,
             },
@@ -332,7 +332,7 @@ class NeatlogsCallbackHandler(BaseCallbackHandler):
             name=f"langchain.chain.{name}",
             context=ctx,
             attributes={
-                "neatlogs.span.kind": "CHAIN",
+                "neatlogs.span.kind": "chain",
             },
         )
 
@@ -398,7 +398,7 @@ class NeatlogsCallbackHandler(BaseCallbackHandler):
         span = tracer.start_span(
             name=f"langchain.retriever.{name}",
             context=ctx,
-            attributes={"neatlogs.span.kind": "RETRIEVER", "neatlogs.retriever.name": str(name)},
+            attributes={"neatlogs.span.kind": "retriever", "neatlogs.retriever.name": str(name)},
         )
         if query:
             span.set_attribute("neatlogs.retrieval.query", str(query)[:10000])
@@ -507,7 +507,7 @@ class NeatlogsCallbackHandler(BaseCallbackHandler):
             name=f"langchain.tool.{name}",
             context=ctx,
             attributes={
-                "neatlogs.span.kind": "TOOL",
+                "neatlogs.span.kind": "tool",
                 "neatlogs.tool.name": name,
             },
         )

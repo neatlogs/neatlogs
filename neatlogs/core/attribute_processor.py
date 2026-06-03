@@ -958,16 +958,22 @@ class UnifiedAttributeProcessor:
                     inferred_kind = infer_span_kind_from_name(span_name)
                     unified["neatlogs.span.kind"] = inferred_kind.lower()
 
-        # Detect RERANKER operations from llm.request.type or gen_ai.operation.name
+        # Detect RERANKER operations. STRONG signals from the actual model call
+        # (llm.request.type / gen_ai.operation.name == "rerank") override, since they
+        # describe what the call DID. The WEAK signal — "rerank" merely appearing in the
+        # span NAME — must NOT override a kind the user explicitly set: a route handler
+        # named `rerank_documents` decorated @span(kind="WORKFLOW") is the feature's
+        # trace root, and forcing it to RERANKER makes the whole trace unrootable
+        # (the backend only roots WORKFLOW/CHAIN/AGENT/MCP_TOOL). Apply the name-only
+        # heuristic exactly like the inference block above: only when no explicit kind exists.
         llm_request_type = attrs.get("llm.request.type", "").lower()
         gen_ai_operation = attrs.get("gen_ai.operation.name", "").lower()
         span_name_lower = attrs.get("_span_name", "").lower()
+        explicit_kind = attrs.get("openinference.span.kind") or attrs.get("neatlogs.span.kind")
 
-        if (
-            llm_request_type == "rerank"
-            or gen_ai_operation == "rerank"
-            or "rerank" in span_name_lower
-        ):
+        if llm_request_type == "rerank" or gen_ai_operation == "rerank":
+            unified["neatlogs.span.kind"] = "reranker"
+        elif "rerank" in span_name_lower and not explicit_kind:
             unified["neatlogs.span.kind"] = "reranker"
 
         span_kind = (

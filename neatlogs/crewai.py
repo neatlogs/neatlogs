@@ -78,7 +78,7 @@ def wrap_crewai(obj: Any) -> Any:
 
 
 def _get_crew_attributes(crew: Any) -> dict:
-    attrs = {"neatlogs.span.kind": "WORKFLOW"}
+    attrs = {"neatlogs.span.kind": "workflow"}
 
     name = getattr(crew, "name", None) or getattr(crew, "_name", None)
     if name:
@@ -292,7 +292,7 @@ def _patch_task_execute(task: Any) -> None:
         return
 
     def _attrs():
-        attrs = {"neatlogs.span.kind": "TASK"}
+        attrs = {"neatlogs.span.kind": "task"}
         task_id = getattr(task, "id", None)
         if task_id:
             attrs["neatlogs.task.id"] = str(task_id)
@@ -381,7 +381,7 @@ def _patch_agent_execute(agent: Any) -> None:
 
     def patched_execute_task(*args, **kwargs):
         tracer = get_tracer()
-        attrs = {"neatlogs.span.kind": "AGENT"}
+        attrs = {"neatlogs.span.kind": "agent"}
         role = getattr(agent, "role", "")
         if role:
             attrs["neatlogs.agent.role"] = role
@@ -428,7 +428,7 @@ def _patch_flow(flow: Any) -> None:
         return
 
     def _attrs():
-        attrs = {"neatlogs.span.kind": "WORKFLOW", "neatlogs.workflow.type": "flow"}
+        attrs = {"neatlogs.span.kind": "workflow", "neatlogs.workflow.type": "flow"}
         name = type(flow).__name__
         attrs["neatlogs.workflow.name"] = name
         return attrs
@@ -521,7 +521,7 @@ def _patch_tool_run(ToolCls) -> None:
 
     def patched_run(self, *args, **kwargs):
         tracer = get_tracer()
-        attrs = {"neatlogs.span.kind": "TOOL"}
+        attrs = {"neatlogs.span.kind": "tool"}
         name = getattr(self, "name", None) or type(self).__name__
         attrs["neatlogs.tool.name"] = str(name)
         desc = getattr(self, "description", None)
@@ -567,7 +567,7 @@ def _patch_structured_tool() -> None:
     def patched(self, *args, **kwargs):
         tracer = get_tracer()
         name = getattr(self, "name", None) or type(self).__name__
-        attrs = {"neatlogs.span.kind": "TOOL", "neatlogs.tool.name": str(name)}
+        attrs = {"neatlogs.span.kind": "tool", "neatlogs.tool.name": str(name)}
         desc = getattr(self, "description", None)
         if desc:
             attrs["neatlogs.tool.description"] = str(desc)[:500]
@@ -630,12 +630,29 @@ def _all_subclasses(cls):
     return out
 
 
+def _crewai_usage_snapshot(llm: Any) -> dict:
+    """Cumulative token usage from a crewai LLM via get_token_usage_summary()."""
+    try:
+        summary = llm.get_token_usage_summary()
+    except Exception:
+        return {}
+    out = {}
+    for key in ("prompt_tokens", "completion_tokens", "total_tokens",
+                "cached_prompt_tokens", "reasoning_tokens"):
+        v = getattr(summary, key, None)
+        if v is None and isinstance(summary, dict):
+            v = summary.get(key)
+        if isinstance(v, (int, float)):
+            out[key] = v
+    return out
+
+
 def _patch_llm_call(LLM) -> None:
     orig_call = LLM.call
 
     def patched_call(self, messages, *args, **kwargs):
         tracer = get_tracer()
-        attrs = {"neatlogs.span.kind": "LLM", "neatlogs.llm.provider": "crewai"}
+        attrs = {"neatlogs.span.kind": "llm", "neatlogs.llm.provider": "crewai"}
         model = getattr(self, "model", None)
         if model:
             attrs["neatlogs.llm.model_name"] = str(model)
@@ -657,6 +674,13 @@ def _patch_llm_call(LLM) -> None:
             if v is not None:
                 attrs[f"neatlogs.llm.{p}"] = v
 
+        # crewai's LLM.call returns only a string (no per-call usage). The LLM
+        # object tracks CUMULATIVE usage via get_token_usage_summary(); snapshot it
+        # before/after and emit the DELTA so each LLM span carries its own tokens
+        # (otherwise tokens only exist as an aggregate on the kickoff span, which the
+        # backend doesn't surface for non-LLM kinds).
+        before = _crewai_usage_snapshot(self)
+
         span = tracer.start_span(name="crewai.llm.call", attributes=attrs)
         token = attach_as_current(span)
         start = time.perf_counter()
@@ -669,6 +693,13 @@ def _patch_llm_call(LLM) -> None:
         if result is not None:
             span.set_attribute("neatlogs.llm.output_messages.0.role", "assistant")
             span.set_attribute("neatlogs.llm.output_messages.0.content", str(result)[:10000])
+        after = _crewai_usage_snapshot(self)
+        for dst, key in (("prompt", "prompt_tokens"), ("completion", "completion_tokens"),
+                         ("total", "total_tokens"), ("cache_read", "cached_prompt_tokens"),
+                         ("reasoning", "reasoning_tokens")):
+            delta = after.get(key, 0) - before.get(key, 0)
+            if delta > 0:
+                span.set_attribute(f"neatlogs.llm.token_count.{dst}", delta)
         span.set_attribute("neatlogs.llm.metrics.duration_ms", round((time.perf_counter() - start) * 1000, 3))
         span.set_status(StatusCode.OK)
         span.end()

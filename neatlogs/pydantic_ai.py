@@ -50,7 +50,7 @@ def wrap_pydantic_ai(agent: Any) -> Any:
 
 
 def _get_agent_attributes(agent: Any) -> dict:
-    attrs = {"neatlogs.span.kind": "AGENT"}
+    attrs = {"neatlogs.span.kind": "agent"}
 
     model = getattr(agent, "model", None)
     if model is not None:
@@ -67,7 +67,7 @@ def _get_agent_attributes(agent: Any) -> dict:
             system_prompt = "\n".join(str(s) for s in system_prompt)
         if isinstance(system_prompt, str) and system_prompt:
             attrs["neatlogs.llm.input_messages.0.role"] = "system"
-            attrs["neatlogs.llm.input_messages.0.content"] = system_prompt[:10000]
+            attrs["neatlogs.llm.input_messages.0.content"] = system_prompt
 
     return attrs
 
@@ -129,7 +129,7 @@ def _finalize_run_span(span: Any, result: Any, duration_ms: float) -> None:
 
     output = _result_output(result)
     if output is not None:
-        span.set_attribute("output.value", (output if isinstance(output, str) else serialize(output))[:10000])
+        span.set_attribute("output.value", (output if isinstance(output, str) else serialize(output)))
 
     for attr_name, value in _extract_usage(result).items():
         span.set_attribute(attr_name, value)
@@ -163,7 +163,7 @@ def _patch_run(agent: Any) -> None:
         attrs = _get_agent_attributes(agent)
         up = _user_prompt(args, kwargs)
         if up:
-            attrs["input.value"] = up[:10000]
+            attrs["input.value"] = up
 
         span = tracer.start_span(name="pydantic_ai.agent.run", attributes=attrs)
         token = attach_as_current(span)
@@ -200,7 +200,7 @@ def _patch_run_sync(agent: Any) -> None:
         attrs = _get_agent_attributes(agent)
         up = _user_prompt(args, kwargs)
         if up:
-            attrs["input.value"] = up[:10000]
+            attrs["input.value"] = up
 
         span = tracer.start_span(name="pydantic_ai.agent.run_sync", attributes=attrs)
         token = attach_as_current(span)
@@ -237,7 +237,7 @@ def _patch_run_stream(agent: Any) -> None:
         attrs = _get_agent_attributes(agent)
         up = _user_prompt(args, kwargs)
         if up:
-            attrs["input.value"] = up[:10000]
+            attrs["input.value"] = up
         cm = orig_run_stream(*args, **kwargs)
         return _StreamCtxWrapper(cm, attrs)
 
@@ -305,7 +305,7 @@ def _patch_iter(agent: Any) -> None:
         attrs = _get_agent_attributes(agent)
         up = _user_prompt(args, kwargs)
         if up:
-            attrs["input.value"] = up[:10000]
+            attrs["input.value"] = up
         cm = orig_iter(*args, **kwargs)
         return _IterCtxWrapper(cm, attrs)
 
@@ -404,6 +404,7 @@ def _patch_model_class(model_cls=None) -> None:
         if not messages:
             return
         idx = 0
+        collected = []
         for msg in messages:
             parts = getattr(msg, "parts", None) or []
             for part in parts:
@@ -411,17 +412,37 @@ def _patch_model_class(model_cls=None) -> None:
                 if kind in ("system-prompt", "user-prompt"):
                     role = "system" if kind == "system-prompt" else "user"
                     content = getattr(part, "content", "")
+                    content_str = content if isinstance(content, str) else serialize(content)
                     span.set_attribute(f"neatlogs.llm.input_messages.{idx}.role", role)
                     span.set_attribute(
                         f"neatlogs.llm.input_messages.{idx}.content",
-                        (content if isinstance(content, str) else serialize(content))[:10000],
+                        content_str,
                     )
+                    collected.append({"role": role, "content": content_str})
                     idx += 1
+                elif kind in ("tool-return", "tool-call"):
+                    # tool results / prior tool calls fed back into the model
+                    content = getattr(part, "content", None)
+                    if content is None:
+                        content = getattr(part, "args", None)
+                    role = "tool" if kind == "tool-return" else "assistant"
+                    content_str = content if isinstance(content, str) else serialize(content)
+                    span.set_attribute(f"neatlogs.llm.input_messages.{idx}.role", role)
+                    span.set_attribute(
+                        f"neatlogs.llm.input_messages.{idx}.content",
+                        content_str,
+                    )
+                    collected.append({"role": role, "content": content_str})
+                    idx += 1
+        # Flat input blob the UI renders for LLM spans (mirrors the OpenInference path).
+        if collected:
+            span.set_attribute("neatlogs.llm.input", serialize({"messages": collected}))
 
     def _finalize_request(span, response):
         if response is not None:
             parts = getattr(response, "parts", None) or []
             text_parts = []
+            tool_calls = []
             j = 0
             for part in parts:
                 kind = getattr(part, "part_kind", "")
@@ -437,14 +458,36 @@ def _patch_model_class(model_cls=None) -> None:
                         span.set_attribute(f"neatlogs.llm.tool_calls.{j}.arguments", args if isinstance(args, str) else serialize(args))
                     if tc_id:
                         span.set_attribute(f"neatlogs.llm.tool_calls.{j}.id", str(tc_id))
+                    tool_calls.append({"name": name, "arguments": args})
                     j += 1
                 elif kind == "thinking":
                     thinking = getattr(part, "content", "")
                     if thinking:
                         span.set_attribute("neatlogs.llm.output_messages.0.thinking", thinking)
-            if text_parts:
+            # Populate the assistant output message + flat output blob the UI renders.
+            # The UI displays the `content` field, so when the model responds with a
+            # tool-call (no text), put a readable tool-call summary INTO content — an
+            # empty content renders as just "Role: assistant".
+            text_content = "".join(text_parts)
+            if text_content:
+                msg_content = text_content
+            elif tool_calls:
+                # e.g. 'lookup({"topic":"observability"})'
+                msg_content = "\n".join(
+                    f"{tc['name']}({tc['arguments'] if isinstance(tc['arguments'], str) else serialize(tc['arguments'])})"
+                    for tc in tool_calls
+                )
+            else:
+                msg_content = ""
+            if msg_content or tool_calls:
                 span.set_attribute("neatlogs.llm.output_messages.0.role", "assistant")
-                span.set_attribute("neatlogs.llm.output_messages.0.content", "".join(text_parts)[:10000])
+                span.set_attribute("neatlogs.llm.output_messages.0.content", msg_content)
+                # Flat output blob the UI renders: content carries the readable text/tool
+                # summary; tool_calls keep the structured form for richer renderers.
+                out_blob = {"role": "assistant", "content": msg_content}
+                if tool_calls:
+                    out_blob["tool_calls"] = tool_calls
+                span.set_attribute("neatlogs.llm.output", serialize(out_blob))
 
             model_name = getattr(response, "model_name", None)
             if model_name:
@@ -469,7 +512,7 @@ def _patch_model_class(model_cls=None) -> None:
 
         async def patched_request(self, messages, *a, **k):
             tracer = get_tracer()
-            attrs = {"neatlogs.span.kind": "LLM", "neatlogs.llm.model_name": str(_model_name(self))}
+            attrs = {"neatlogs.span.kind": "llm", "neatlogs.llm.model_name": str(_model_name(self))}
             span = tracer.start_span(name="pydantic_ai.model.request", attributes=attrs)
             _set_request_inputs(span, messages)
             token = attach_as_current(span)
@@ -491,7 +534,7 @@ def _patch_model_class(model_cls=None) -> None:
             # request_stream returns an async context manager yielding a streamed response.
             tracer = get_tracer()
             attrs = {
-                "neatlogs.span.kind": "LLM",
+                "neatlogs.span.kind": "llm",
                 "neatlogs.llm.model_name": str(_model_name(self)),
                 "neatlogs.llm.is_streaming": True,
             }
@@ -536,7 +579,7 @@ class _ModelStreamCtx:
                     text = self._streamed.get() if hasattr(self._streamed, "get") else None
                     if text:
                         self._span.set_attribute("neatlogs.llm.output_messages.0.role", "assistant")
-                        self._span.set_attribute("neatlogs.llm.output_messages.0.content", str(text)[:10000])
+                        self._span.set_attribute("neatlogs.llm.output_messages.0.content", str(text))
                 except Exception:
                     pass
                 usage = getattr(self._streamed, "usage", None)
@@ -572,7 +615,7 @@ def _patch_toolset_class() -> None:
 
     async def patched_call_tool(self, name, tool_args, ctx, tool, *a, **k):
         tracer = get_tracer()
-        attrs = {"neatlogs.span.kind": "TOOL", "neatlogs.tool.name": str(name)}
+        attrs = {"neatlogs.span.kind": "tool", "neatlogs.tool.name": str(name)}
         if tool_args is not None:
             attrs["input.value"] = tool_args if isinstance(tool_args, str) else serialize(tool_args)
         span = tracer.start_span(name=f"pydantic_ai.tool.{name}", attributes=attrs)
@@ -584,7 +627,7 @@ def _patch_toolset_class() -> None:
         finally:
             detach(token)
         if result is not None:
-            span.set_attribute("output.value", str(result)[:10000])
+            span.set_attribute("output.value", str(result))
         span.set_status(StatusCode.OK)
         span.end()
         return result

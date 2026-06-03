@@ -69,7 +69,7 @@ def _patch_module_class() -> None:
         # Skip the abstract base itself being called directly (shouldn't happen).
         tracer = get_tracer()
         cls_name = type(self).__name__
-        attrs = {"neatlogs.span.kind": "CHAIN", "neatlogs.entity.name": cls_name}
+        attrs = {"neatlogs.span.kind": "chain", "neatlogs.entity.name": cls_name}
 
         signature = getattr(self, "signature", None)
         if signature is not None:
@@ -135,24 +135,32 @@ def _patch_lm_class() -> None:
 
     def patched_call(self, prompt=None, messages=None, **kwargs):
         tracer = get_tracer()
-        attrs = {"neatlogs.span.kind": "LLM", "neatlogs.llm.provider": "dspy"}
+        attrs = {"neatlogs.span.kind": "llm", "neatlogs.llm.provider": "dspy"}
 
         model = getattr(self, "model", None)
         if model:
             attrs["neatlogs.llm.model_name"] = str(model)
 
-        # Input messages
+        # Input messages. Not truncated here — the backend enforces the 1 MB
+        # payload cap (S3 offload + preview) on ingest.
+        collected = []
         if messages and isinstance(messages, list):
             for i, msg in enumerate(messages):
                 role = msg.get("role", "") if isinstance(msg, dict) else getattr(msg, "role", "")
                 content = msg.get("content", "") if isinstance(msg, dict) else getattr(msg, "content", "")
+                content_str = content if isinstance(content, str) else serialize(content)
                 if role:
                     attrs[f"neatlogs.llm.input_messages.{i}.role"] = role
                 if content:
-                    attrs[f"neatlogs.llm.input_messages.{i}.content"] = (content if isinstance(content, str) else serialize(content))[:10000]
+                    attrs[f"neatlogs.llm.input_messages.{i}.content"] = content_str
+                collected.append({"role": role or "user", "content": content_str})
         elif prompt:
             attrs["neatlogs.llm.input_messages.0.role"] = "user"
-            attrs["neatlogs.llm.input_messages.0.content"] = str(prompt)[:10000]
+            attrs["neatlogs.llm.input_messages.0.content"] = str(prompt)
+            collected.append({"role": "user", "content": str(prompt)})
+        # Flat input blob the UI renders for LLM spans.
+        if collected:
+            attrs["neatlogs.llm.input"] = serialize({"messages": collected})
 
         for param in ("temperature", "max_tokens", "top_p"):
             val = kwargs.get(param) or (getattr(self, "kwargs", {}) or {}).get(param)
@@ -180,28 +188,63 @@ def _finalize_lm(span: Any, lm: Any, result: Any, duration_ms: float) -> None:
     # result is typically a list[str] of completions; usage lives on lm.history[-1]
     if result is not None:
         if isinstance(result, list) and result:
-            first = result[0]
-            span.set_attribute("neatlogs.llm.output_messages.0.role", "assistant")
-            span.set_attribute("neatlogs.llm.output_messages.0.content", str(first)[:10000])
+            content = str(result[0])
         else:
-            span.set_attribute("neatlogs.llm.output_messages.0.content", str(result)[:10000])
+            content = str(result)
+        span.set_attribute("neatlogs.llm.output_messages.0.role", "assistant")
+        span.set_attribute("neatlogs.llm.output_messages.0.content", content)
+        # Flat output blob the UI renders for LLM spans. Not truncated here — the
+        # backend enforces the 1 MB payload cap (S3 offload + preview) on ingest.
+        span.set_attribute(
+            "neatlogs.llm.output",
+            serialize({"role": "assistant", "content": content}),
+        )
 
     try:
         history = getattr(lm, "history", None)
         if history:
             last = history[-1]
-            usage = last.get("usage") if isinstance(last, dict) else None
-            if usage:
-                prompt_t = usage.get("prompt_tokens")
-                completion_t = usage.get("completion_tokens")
-                total_t = usage.get("total_tokens")
-                if prompt_t:
-                    span.set_attribute("neatlogs.llm.token_count.prompt", prompt_t)
-                if completion_t:
-                    span.set_attribute("neatlogs.llm.token_count.completion", completion_t)
-                if total_t:
-                    span.set_attribute("neatlogs.llm.token_count.total", total_t)
             resp = last.get("response") if isinstance(last, dict) else None
+
+            # Token usage: read from the response object's `usage`, NOT from
+            # history[-1]["usage"]. DSPy appends the history entry and only fills
+            # in the "usage"/"cost" keys AFTER LM.__call__ returns — so at finalize
+            # time history[-1]["usage"] is still {}. The ModelResponse returned by
+            # the call already carries usage (litellm attaches it synchronously).
+            usage = getattr(resp, "usage", None)
+            # Fallback to the history dict's usage in case the response shape differs.
+            if not usage and isinstance(last, dict):
+                usage = last.get("usage") or None
+
+            def _u(key):
+                if usage is None:
+                    return None
+                if isinstance(usage, dict):
+                    return usage.get(key)
+                return getattr(usage, key, None)
+
+            prompt_t = _u("prompt_tokens")
+            completion_t = _u("completion_tokens")
+            total_t = _u("total_tokens")
+            if prompt_t:
+                span.set_attribute("neatlogs.llm.token_count.prompt", prompt_t)
+            if completion_t:
+                span.set_attribute("neatlogs.llm.token_count.completion", completion_t)
+            if total_t:
+                span.set_attribute("neatlogs.llm.token_count.total", total_t)
+
+            # Cached prompt tokens / reasoning tokens, when present (parity with the
+            # OpenAI wrapper). Cost itself is computed by the backend from tokens +
+            # model — the SDK does not emit a cost attribute.
+            pd = _u("prompt_tokens_details")
+            cached = getattr(pd, "cached_tokens", None) if pd is not None else None
+            if cached:
+                span.set_attribute("neatlogs.llm.token_count.cache_read", cached)
+            cd = _u("completion_tokens_details")
+            reasoning = getattr(cd, "reasoning_tokens", None) if cd is not None else None
+            if reasoning:
+                span.set_attribute("neatlogs.llm.token_count.reasoning", reasoning)
+
             model = getattr(resp, "model", None) if resp is not None else None
             if model:
                 span.set_attribute("neatlogs.llm.model_name", str(model))
@@ -233,7 +276,7 @@ def _patch_retrieve_class() -> None:
 
     def patched_forward(self, query_or_queries, k=None, *args, **kwargs):
         tracer = get_tracer()
-        attrs = {"neatlogs.span.kind": "RETRIEVER"}
+        attrs = {"neatlogs.span.kind": "retriever"}
         if query_or_queries is not None:
             attrs["neatlogs.retrieval.query"] = (
                 query_or_queries if isinstance(query_or_queries, str) else serialize(query_or_queries)

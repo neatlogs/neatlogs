@@ -18,6 +18,47 @@ from .mask import apply_mask
 
 logger = get_logger()
 
+# Instrumentation scopes that produce HTTP-client auto-spans for context
+# propagation. An HTTP span fired INSIDE a workflow nests under it (has a parent);
+# an HTTP call at boot / in infra plumbing (health pings, dependency warmups,
+# outbound fetches outside any traced request) has NO parent → it would become a
+# rootless single-span trace. Those are pure noise: they carry no agentic content
+# and the backend can't build a simplified view from them, so it requeues them
+# forever. We treat HTTP auto-instrumentation as propagation-only and DROP a span
+# that is BOTH rootless AND an HTTP-scope span (keeping nested HTTP spans intact).
+_HTTP_INSTRUMENTATION_SCOPES = (
+    "opentelemetry.instrumentation.urllib",       # covers urllib and urllib3
+    "opentelemetry.instrumentation.requests",
+    "opentelemetry.instrumentation.httpx",
+    "opentelemetry.instrumentation.aiohttp_client",
+    "opentelemetry.instrumentation.aiohttp_server",
+)
+
+_AGENTIC_KINDS = {
+    "WORKFLOW", "AGENT", "CHAIN", "TOOL", "RETRIEVER",
+    "EMBEDDING", "GUARDRAIL", "LLM", "MCP_TOOL",
+}
+
+
+def is_rootless_infra_http(span) -> bool:
+    """True if `span` is a root (no parent) HTTP-client auto-span with no agentic
+    kind — i.e. a boot/infra HTTP ping that would otherwise create a junk rootless
+    trace. Nested HTTP spans (parent set) and any agentic span are NEVER dropped."""
+    try:
+        if span.parent is not None:
+            return False  # nested under something — keep (propagation child)
+        scope = getattr(span, "instrumentation_scope", None)
+        scope_name = getattr(scope, "name", "") or ""
+        if not scope_name.startswith(_HTTP_INSTRUMENTATION_SCOPES):
+            return False
+        attrs = span.attributes or {}
+        kind = (attrs.get("openinference.span.kind") or attrs.get("neatlogs.span.kind") or "")
+        if str(kind).upper() in _AGENTIC_KINDS:
+            return False  # explicitly an agentic root — keep
+        return True
+    except Exception:
+        return False
+
 
 class NeatlogsSpanProcessor(SpanProcessor):
     def __init__(
@@ -160,6 +201,20 @@ class NeatlogsSpanProcessor(SpanProcessor):
         # Skip processing for internal completion markers — they only need to
         # be exported as-is by the downstream BatchSpanProcessor.
         if span.name == "neatlogs.trace.complete":
+            return
+
+        # Drop rootless infra-HTTP auto-spans (boot pings, dependency warmups,
+        # outbound fetches outside any traced request). They have no parent and no
+        # agentic content, so on their own they're a junk rootless trace the backend
+        # can't simplify (and would requeue forever). Nested HTTP spans keep their
+        # parent and are untouched. We do NOT emit a completion marker for these, so
+        # the backend never tries to finalize a root-less HTTP-only trace.
+        if is_rootless_infra_http(span):
+            if self.debug:
+                logger.debug(
+                    f"[SpanProcessor] Dropping rootless infra-HTTP span '{span.name}' "
+                    f"(scope={getattr(getattr(span, 'instrumentation_scope', None), 'name', '')})"
+                )
             return
 
         start_time = time.perf_counter()

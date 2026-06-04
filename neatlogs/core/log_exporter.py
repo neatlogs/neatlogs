@@ -33,6 +33,9 @@ def _is_external_module(logger_name: str) -> bool:
         return False
     parts = logger_name.split(".")
     top_pkg = parts[0]
+
+    if top_pkg == "neatlogs":
+        return False
     # stdlib check (Python 3.10+)
     if top_pkg in _STDLIB_MODULE_NAMES:
         return True

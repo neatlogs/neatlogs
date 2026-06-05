@@ -54,7 +54,6 @@ from neatlogs import span
 
 neatlogs.init(
     api_key="your-api-key",       # or NEATLOGS_API_KEY env var
-    endpoint="https://staging-cloud.neatlogs.com",  # or NEATLOGS_ENDPOINT env var
     workflow_name="my-agent",
     instrumentations=["openai"],
 )

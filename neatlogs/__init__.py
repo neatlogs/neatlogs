@@ -101,9 +101,11 @@ def wrap(client):
     """
     Wrap an LLM client or agent instance to auto-trace all calls.
 
-    Supports: OpenAI, AsyncOpenAI, Anthropic, AsyncAnthropic, google.genai.Client,
-    CrewAI Crew, Pydantic AI Agent, DSPy modules, Agno Agent/Team/Workflow,
-    Google ADK Runner, Strands Agent.
+    Supports: OpenAI, AsyncOpenAI, AzureOpenAI, AsyncAzureOpenAI, Anthropic,
+    AsyncAnthropic, google.genai.Client (Gemini + Vertex AI), boto3
+    bedrock-runtime, CrewAI Crew, Pydantic AI Agent, DSPy modules, Agno
+    Agent/Team/Workflow, Google ADK Runner, Strands Agent, Hermes AIAgent,
+    OpenRouter.
 
         >>> import neatlogs, openai
         >>> client = neatlogs.wrap(openai.OpenAI())
@@ -120,6 +122,15 @@ def wrap(client):
         (getattr(base, "__module__", "") or "") for base in type(client).__mro__
     )
 
+    # Azure OpenAI must be checked before plain OpenAI: AzureOpenAI subclasses
+    # OpenAI and its module ("openai.lib.azure") contains "openai".
+    if cls_name in ("AzureOpenAI", "AsyncAzureOpenAI"):
+        from .azure_openai import wrap_async_azure_openai_client, wrap_azure_openai_client
+
+        if "Async" in cls_name:
+            return wrap_async_azure_openai_client(client)
+        return wrap_azure_openai_client(client)
+
     if "openai" in module or cls_name in ("OpenAI", "AsyncOpenAI"):
         from .openai import wrap_async_openai_client, wrap_openai_client
 
@@ -134,7 +145,24 @@ def wrap(client):
             return wrap_async_anthropic_client(client)
         return wrap_anthropic_client(client)
 
+    # boto3 bedrock-runtime client — detect by the botocore service model.
+    if "botocore" in module or "boto3" in module:
+        service = getattr(getattr(client, "meta", None), "service_model", None)
+        if getattr(service, "service_name", None) == "bedrock-runtime":
+            from .bedrock import wrap_bedrock_client
+
+            return wrap_bedrock_client(client)
+
     if ("google" in module and "genai" in module) or cls_name == "Client":
+        # A google-genai Client in Vertex mode is traced as vertex_ai; otherwise
+        # as google_genai (Gemini / AI Studio).
+        from .vertex_ai import _is_vertex_client
+
+        if _is_vertex_client(client):
+            from .vertex_ai import wrap_vertex_ai_client
+
+            return wrap_vertex_ai_client(client)
+
         from .google_genai import wrap_google_genai_client
 
         return wrap_google_genai_client(client)
@@ -169,10 +197,25 @@ def wrap(client):
 
         return strands_hooks(client)
 
+    # Hermes (NousResearch/hermes-agent): AIAgent lives in the top-level
+    # `run_agent` module.
+    if cls_name == "AIAgent" or "run_agent" in module:
+        from .hermes import wrap_hermes
+
+        return wrap_hermes(client)
+
+    # OpenRouter official Python SDK — OpenRouter client from `openrouter.sdk`.
+    if cls_name == "OpenRouter" or module.startswith("openrouter"):
+        from .openrouter import wrap_openrouter_client
+
+        return wrap_openrouter_client(client)
+
     raise TypeError(
         f"neatlogs.wrap() does not support {cls_name} from {module}. "
-        "Supported: OpenAI, AsyncOpenAI, Anthropic, AsyncAnthropic, google.genai.Client, "
-        "CrewAI Crew, Pydantic AI Agent, DSPy modules, Agno agents, Google ADK Runner, Strands Agent"
+        "Supported: OpenAI, AsyncOpenAI, AzureOpenAI, AsyncAzureOpenAI, Anthropic, "
+        "AsyncAnthropic, google.genai.Client (Gemini + Vertex AI), boto3 bedrock-runtime, "
+        "CrewAI Crew, Pydantic AI Agent, DSPy modules, Agno agents, Google ADK Runner, Strands Agent, "
+        "Hermes AIAgent, OpenRouter"
     )
 
 

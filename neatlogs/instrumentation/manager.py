@@ -1361,12 +1361,16 @@ class InstrumentationManager:
             neatlogs_cases = {
                 "openai": "OpenAIInstrumentor",
                 "anthropic": "AnthropicInstrumentor",
+                "azure_openai": "AzureOpenAIInstrumentor",
                 "langchain": "LangChainInstrumentor",
                 "langgraph": "LangGraphInstrumentor",
                 "crewai": "CrewAIInstrumentor",
                 "bedrock": "BedrockInstrumentor",
                 "groq": "GroqInstrumentor",
                 "google_genai": "GoogleGenAIInstrumentor",
+                "vertex_ai": "VertexAIInstrumentor",
+                "hermes": "HermesInstrumentor",
+                "openrouter": "OpenRouterInstrumentor",
             }
             if library in neatlogs_cases:
                 return neatlogs_cases[library]
@@ -1410,6 +1414,14 @@ class InstrumentationManager:
             special_imports = {
                 "google_genai": "google.genai",
                 "google_generativeai": "google.generativeai",
+                # Vertex AI (neatlogs custom) runs through the google-genai SDK in
+                # Vertex mode, not the legacy `vertexai` / google-cloud-aiplatform pkg.
+                "vertex_ai": "google.genai",
+                # Azure OpenAI uses the standard `openai` SDK (AzureOpenAI client).
+                "azure_openai": "openai",
+                # Hermes (NousResearch/hermes-agent) exposes its agent via the
+                # top-level `run_agent` module (class AIAgent).
+                "hermes": "run_agent",
                 "llamaindex": "llama_index",
                 "azure_ai_inference": "azure.ai.inference",
                 "bedrock": "boto3",

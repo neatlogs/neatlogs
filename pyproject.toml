@@ -217,6 +217,9 @@ azure-ai-inference = [
 openai = [
     "openai>=1.0.0",
 ]
+azure-openai = [
+    "openai>=1.0.0",
+]
 anthropic = [
     "anthropic>=0.75.0",
 ]
@@ -292,8 +295,15 @@ pydantic-ai = [
 smolagents = [
     "smolagents>=1.0.0",
 ]
+hermes = [
+    "hermes-agent>=0.15.1",
+]
 vertexai = [
     "google-cloud-aiplatform>=1.38.0",
+]
+# Vertex AI via the google-genai SDK in Vertex mode (neatlogs custom wrapper).
+vertex-ai = [
+    "google-genai>=1.55.0",
 ]
 autogen-agentchat = [
     "autogen-agentchat>=0.4.0",

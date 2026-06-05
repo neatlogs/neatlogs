@@ -6,6 +6,7 @@ INSTRUMENTATION_REGISTRY = {
     "tags": {
         "llm": [
             "azure_ai_inference",
+            "azure_openai",
             "openai",
             "anthropic",
             "cohere",
@@ -13,6 +14,7 @@ INSTRUMENTATION_REGISTRY = {
             "groq",
             "together",
             "vertexai",
+            "vertex_ai",
             "google_generativeai",
             "mistralai",
             "ollama",
@@ -24,6 +26,7 @@ INSTRUMENTATION_REGISTRY = {
             "litellm",
             "google_genai",
             "portkey",
+            "openrouter",
         ],
         "embedding": ["openai", "cohere", "huggingface", "vertexai", "mistralai", "ollama"],
         "retrieval": [
@@ -52,6 +55,7 @@ INSTRUMENTATION_REGISTRY = {
             "smolagents",
             "strands",
             "pipecat",
+            "hermes",
         ],
         "tool": ["langchain", "llamaindex", "haystack", "mcp"],
         "http": ["requests", "httpx", "urllib3", "aiohttp"],
@@ -82,8 +86,21 @@ INSTRUMENTATION_REGISTRY = {
             "default_span_kind": "LLM",
         },
         "bedrock": {
+            "neatlogs": "neatlogs.bedrock",
             "openllmetry": "opentelemetry.instrumentation.bedrock",
             "openinference": "openinference.instrumentation.bedrock",
+            "default_span_kind": "LLM",
+        },
+        "azure_openai": {
+            "neatlogs": "neatlogs.azure_openai",
+            "openllmetry": None,
+            "openinference": None,
+            "default_span_kind": "LLM",
+        },
+        "vertex_ai": {
+            "neatlogs": "neatlogs.vertex_ai",
+            "openllmetry": None,
+            "openinference": None,
             "default_span_kind": "LLM",
         },
         "groq": {
@@ -317,6 +334,21 @@ INSTRUMENTATION_REGISTRY = {
             "openllmetry": "opentelemetry.instrumentation.mcp",
             "openinference": "openinference.instrumentation.mcp",
             "default_span_kind": "TOOL",
+        },
+        "hermes": {
+            "neatlogs": "neatlogs.hermes",
+            "openllmetry": None,
+            "openinference": None,
+            "default_span_kind": "AGENT",
+            # Hermes' LLM calls go through the openai SDK — auto-load it so LLM
+            # spans are captured alongside the AGENT/TOOL spans we emit.
+            "auto_load": ["openai"],
+        },
+        "openrouter": {
+            "neatlogs": "neatlogs.openrouter",
+            "openllmetry": None,
+            "openinference": None,
+            "default_span_kind": "LLM",
         },
     },
 }

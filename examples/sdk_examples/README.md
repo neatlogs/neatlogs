@@ -29,7 +29,6 @@ Get `NEATLOGS_API_KEY` from the [NeatLogs dashboard](https://app.neatlogs.com).
 | [`neatlogs_support_bot/`](neatlogs_support_bot/) | CrewAI RAG support bot | `python main.py` |
 | [`reasoning_model_workflow/`](reasoning_model_workflow/) | Multi-provider reasoning params | `python main.py` |
 | [`detection_demo/`](detection_demo/) | Multi-framework detection scenarios | `python main.py` |
-| [`gobblecube/`](gobblecube/) | LangGraph multi-agent CXO copilot | `python main.py` |
 | [`support_copilot_demo/`](support_copilot_demo/) | Support agent demo (3 trace stories) | `RUN=A python support_copilot.py` |
 | [`support_copilot_demo_triaged/`](support_copilot_demo_triaged/) | Same demo after Triage fixes | `SENDGRID_FAKE_SUCCESS=1 RUN=B python support_copilot.py` |
 

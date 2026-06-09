@@ -32,7 +32,11 @@ def main() -> None:
 
     client = neatlogs.wrap(boto3.client("bedrock-runtime", region_name=region))
 
-    # WORKFLOW root so the trace has a root span (LLM spans nest under it).
+    # This run is ONE logical turn made of several calls (Converse +
+    # ConverseStream), so a WORKFLOW root groups them into a single trace; the
+    # LLM spans nest under it. (A lone wrapped call auto-roots on its own — this
+    # explicit root is purely for grouping multiple calls. The wrapper detects
+    # the active WORKFLOW and does NOT add a second root.)
     with neatlogs.trace("bedrock-demo", kind="WORKFLOW"):
         _run(client, model_id)
 

@@ -32,9 +32,10 @@ def main() -> None:
     model = os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini")
     client = neatlogs.wrap(OpenRouter(api_key=os.getenv("OPENROUTER_API_KEY", "")))
 
-    # WORKFLOW root so the trace has a root span (LLM spans nest under it).
-    with neatlogs.trace("openrouter-demo", kind="WORKFLOW"):
-        _run(client, model)
+    # wrap() auto-creates a WORKFLOW root, so each call renders on its own — no
+    # manual trace() wrapper needed. (To group several calls into ONE trace,
+    # decorate an entry function with @neatlogs.span(kind="WORKFLOW").)
+    _run(client, model)
 
     neatlogs.flush()
     neatlogs.shutdown()

@@ -103,13 +103,15 @@ if __name__ == "__main__":
 
 This produces a trace with `WORKFLOW → AGENT → LLM` nesting, system + user prompt templates captured on the LLM span, and variable bindings visible in the UI.
 
+> **On the `@span(kind="WORKFLOW")` root:** auto-instrumentation and `wrap()` now open a `WORKFLOW` root automatically, so a single instrumented LLM call renders on its own — the decorator is **not** required just to make a trace appear. Add `@span(kind="WORKFLOW")` (or `AGENT`/`CHAIN`) when you want to **group** several calls and your own functions under one named root, as in this multi-step example. If a root is already active, the automatic one steps aside (no double root).
+
 ---
 
 ## Long-Running Servers
 
 For server applications, call `neatlogs.init()` **once at startup** and flush/shutdown **once at shutdown**. Spans batch automatically every `flush_interval` (default 5 s) — do not call `flush()` / `shutdown()` per request.
 
-Wrap AI endpoints in a `@span(kind="WORKFLOW")` so each request appears as a root in the trace tree.
+Decorate each AI endpoint handler with `@span(kind="WORKFLOW")` so the whole request (its LLM calls, tools, and your own steps) groups under one root per request. A lone instrumented LLM call auto-roots on its own, but decorating the handler gives the request a single, meaningfully-named root that everything nests under.
 
 ```python
 import neatlogs

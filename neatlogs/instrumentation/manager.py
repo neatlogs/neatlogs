@@ -818,6 +818,63 @@ class InstrumentationManager:
                     name.startswith(p) for p in _SUPPRESS_PREFIXES
                 )
 
+            # Self-root: a top-level run of a non-root type (llm/tool/retriever/
+            # embedding) with no active parent produces a parentless non-root
+            # span -> the backend can't anchor the trace and it never renders
+            # (e.g. a bare `llm.invoke()` with no surrounding chain). Open a
+            # WORKFLOW root transparently so the handler alone yields a complete
+            # trace, matching the direct-provider wrappers. A top-level CHAIN/
+            # AGENT run is already root-eligible and needs nothing.
+            from .._wrap_utils import (
+                _ROOT_KINDS,
+                _auto_root_enabled,
+                _resolve_root_workflow_name,
+                get_tracer,
+            )
+
+            def _run_type_kind(run):
+                rt = str(getattr(run, "run_type", "") or "").lower()
+                # OpenInference run_type -> neatlogs kind (only the mapping we gate on)
+                return {"llm": "llm", "tool": "tool", "retriever": "retriever",
+                        "embedding": "embedding", "chain": "chain", "agent": "agent"}.get(rt, rt)
+
+            def _maybe_open_auto_root(self, run):
+                if getattr(run, "parent_run_id", None):
+                    return
+                kind = _run_type_kind(run)
+                if not _auto_root_enabled() or kind in _ROOT_KINDS:
+                    return
+                current = trace_api.get_current_span()
+                if current is not None and current.is_recording():
+                    return
+                root = get_tracer().start_span(
+                    name=_resolve_root_workflow_name(),
+                    attributes={"neatlogs.span.kind": "workflow", "neatlogs.auto_root": True},
+                )
+                ctx = trace_api.set_span_in_context(root)
+                token = context_api.attach(ctx)
+                if not hasattr(self, "_nl_auto_roots"):
+                    self._nl_auto_roots = {}
+                self._nl_auto_roots[run.id] = (root, token)
+
+            def _maybe_close_auto_root(self, run):
+                roots = getattr(self, "_nl_auto_roots", None)
+                if not roots:
+                    return
+                entry = roots.pop(run.id, None)
+                if entry is None:
+                    return
+                root, token = entry
+                # End the child first (already done by caller), then detach + end root.
+                try:
+                    context_api.detach(token)
+                except Exception:
+                    pass
+                try:
+                    root.end()
+                except Exception:
+                    pass
+
             _orig_start_trace = OpenInferenceTracer._start_trace
 
             def _patched_start_trace(self, run):
@@ -841,6 +898,7 @@ class InstrumentationManager:
                     if parent_span is not None:
                         self._spans_by_run[run.id] = parent_span
                     return
+                _maybe_open_auto_root(self, run)
                 _orig_start_trace(self, run)
                 # Attach the created span to thread-local OTel context so that
                 # neatlogs.trace(), HTTP instrumentation, and other OTel spans
@@ -869,6 +927,9 @@ class InstrumentationManager:
                 if token is not None:
                     context_api.detach(token)
                 _prev_end_trace(self, run)
+                # Close the auto-root (if this top-level run opened one) AFTER the
+                # child span has ended, so the root encloses it.
+                _maybe_close_auto_root(self, run)
 
             OpenInferenceTracer._start_trace = _patched_start_trace
             OpenInferenceTracer._end_trace = _patched_end_trace

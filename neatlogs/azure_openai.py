@@ -31,7 +31,7 @@ from opentelemetry.trace import StatusCode
 from ._wrap_utils import (
     AsyncStreamWrapper,
     SyncStreamWrapper,
-    get_tracer,
+    get_provider_tracer,
     is_suppressed,
     serialize,
 )
@@ -112,7 +112,7 @@ def _safe(fn, resource, **kw):
 
 
 def _chat_start_span(model: Any, is_stream: bool) -> Any:
-    return get_tracer().start_span(
+    return get_provider_tracer().start_span(
         name="azure_openai.chat.completions.create",
         attributes={
             "neatlogs.span.kind": "llm",
@@ -279,7 +279,7 @@ def _patch_async_responses(responses: Any) -> None:
 
 
 def _responses_start_span(kwargs: dict) -> Any:
-    return get_tracer().start_span(
+    return get_provider_tracer().start_span(
         name="azure_openai.responses.create",
         attributes={
             "neatlogs.span.kind": "llm",
@@ -332,7 +332,7 @@ def _patch_embeddings(embeddings: Any, sync: bool = True) -> None:
         def patched(*args, **kwargs):
             if is_suppressed():
                 return orig(*args, **kwargs)
-            span = get_tracer().start_span(name="azure_openai.embeddings.create", attributes=_start(kwargs))
+            span = get_provider_tracer().start_span(name="azure_openai.embeddings.create", attributes=_start(kwargs))
             start = time.perf_counter()
             try:
                 response = orig(*args, **kwargs)
@@ -345,7 +345,7 @@ def _patch_embeddings(embeddings: Any, sync: bool = True) -> None:
         async def patched(*args, **kwargs):
             if is_suppressed():
                 return await orig(*args, **kwargs)
-            span = get_tracer().start_span(name="azure_openai.embeddings.create", attributes=_start(kwargs))
+            span = get_provider_tracer().start_span(name="azure_openai.embeddings.create", attributes=_start(kwargs))
             start = time.perf_counter()
             try:
                 response = await orig(*args, **kwargs)
@@ -564,7 +564,7 @@ def _patch_method(resource: Any, method_name: str, flag: str, start_attrs, final
         async def patched(*args, **kwargs):
             if is_suppressed():
                 return await orig(*args, **kwargs)
-            span = get_tracer().start_span(name=start_attrs.__name__, attributes=start_attrs(kwargs))
+            span = get_provider_tracer().start_span(name=start_attrs.__name__, attributes=start_attrs(kwargs))
             start = time.perf_counter()
             try:
                 response = await orig(*args, **kwargs)
@@ -580,7 +580,7 @@ def _patch_method(resource: Any, method_name: str, flag: str, start_attrs, final
         def patched(*args, **kwargs):
             if is_suppressed():
                 return orig(*args, **kwargs)
-            span = get_tracer().start_span(name=start_attrs.__name__, attributes=start_attrs(kwargs))
+            span = get_provider_tracer().start_span(name=start_attrs.__name__, attributes=start_attrs(kwargs))
             start = time.perf_counter()
             try:
                 response = orig(*args, **kwargs)

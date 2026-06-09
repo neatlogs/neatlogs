@@ -10,11 +10,11 @@ Pick the approach that matches your code. The four approaches below are cumulati
 
 ### 1a. Pure Auto-Instrumentation
 
-For applications that call LLM providers directly. Just add the provider to `instrumentations=[]`. Every SDK call is traced automatically.
+For applications that call LLM providers directly. Just add the provider to `instrumentations=[]` (or `neatlogs.wrap(client)`). Every SDK call is traced automatically, and a single call **self-roots** — auto-instrumentation opens a `WORKFLOW` root for it, so the trace renders with no decorator. This alone is sufficient for simple request→LLM→response apps.
 
 ### 1b. Auto-Instrumentation + `@span` Decorators
 
-For custom multi-agent orchestration. Add providers to `instrumentations=[]` for LLM call tracing, then use `@span` decorators on your orchestration functions to capture the full call graph.
+For custom multi-agent orchestration, or any run that makes **several** calls that should share one trace. Add providers to `instrumentations=[]` for LLM call tracing, then use `@span` decorators on your orchestration functions to group everything under one named root and capture the full call graph. The decorator is for **grouping/structure**, not a render requirement — when you provide your own root, the automatic one steps aside (no double root).
 
 ### 1c. Auto-Instrumentation + `trace()` + `SystemPromptTemplate` / `UserPromptTemplate`
 
@@ -240,6 +240,7 @@ See [`troubleshooting.md` §2](troubleshooting.md#2-google-genai-instantiation-o
 - **Auto-instruments**: LLM calls, chains, agents, tools, retrievers
 - **Works with**: AgentExecutor, ReAct agents, LCEL chains
 - **Install**: `pip install neatlogs[langchain]`
+- **Self-roots**: a bare `llm.invoke()` opens a `WORKFLOW` root automatically and renders on its own. The `@span(kind="WORKFLOW")` below is for **grouping** the multi-step run + capturing prompt templates — not required just to make the trace appear.
 
 ```python
 import neatlogs
@@ -498,6 +499,48 @@ if __name__ == "__main__":
 ```
 
 > **Provider routing**: the `model=` argument uses LiteLLM's `<provider>/<model>` convention (`openai/gpt-4o`, `gemini/gemini-2.5-flash`, `anthropic/claude-sonnet-4-6`, etc.). The matching provider API key must be in the environment.
+
+---
+
+## 8b. DSPy
+
+- **Recommended path**: `neatlogs.wrap(module)` — works on **any** DSPy version, no version requirement.
+- **Alternative**: `instrumentations=["dspy"]` — uses the OpenInference DSPy instrumentor, which **requires DSPy ≥ 2.6.0**. On older DSPy it silently emits no spans. Prefer `wrap()` if you can't upgrade.
+- **Auto-instruments**: module runs (`CHAIN`), LM calls (`LLM`), retrieval (`RETRIEVER`)
+- **Self-roots**: wrapping a `dspy.Module` makes the module run the trace root; a bare predictor's LM call self-roots on its own.
+
+```python
+import os
+import neatlogs
+import dspy
+
+neatlogs.init(
+    api_key="...",  # or set NEATLOGS_API_KEY
+    workflow_name="dspy-app",
+)
+
+dspy.configure(lm=dspy.LM("openai/gpt-4o"))
+
+
+class QA(dspy.Module):
+    def __init__(self):
+        super().__init__()
+        self.answer = dspy.Predict("question -> answer")
+
+    def forward(self, question: str):
+        return self.answer(question=question)
+
+
+# wrap() installs DSPy tracing hooks (any DSPy version) and self-roots.
+program = neatlogs.wrap(QA())
+
+if __name__ == "__main__":
+    print(program(question="Explain DSPy in one sentence.").answer)
+    neatlogs.flush()
+    neatlogs.shutdown()
+```
+
+> **Why `wrap()` over `instrumentations=["dspy"]`?** The `instrumentations` path depends on the OpenInference DSPy instrumentor, which hard-requires DSPy ≥ 2.6.0 and no-ops on older versions. `neatlogs.wrap()` patches DSPy's `Module` / `LM` / `Retrieve` classes directly, so it works regardless of DSPy version — use it as the default, especially when you can't control the installed DSPy version.
 
 ---
 

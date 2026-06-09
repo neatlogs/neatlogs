@@ -150,6 +150,149 @@ def is_suppressed() -> bool:
         return False
 
 
+# ---------------------------------------------------------------------------
+# Auto-root
+#
+# The backend only renders a trace once it contains a *parentless* span of a
+# root-eligible kind (WORKFLOW / CHAIN / AGENT / MCP_TOOL). Direct-provider
+# wrappers (openai, anthropic, bedrock, ...) only ever emit non-root spans
+# (llm / embedding / reranker / tool). So a bare ``client = neatlogs.wrap(...)``
+# call with no surrounding ``@span`` / ``trace()`` produces an orphan span and
+# the trace never renders.
+#
+# ``get_provider_tracer()`` returns a tracer facade used *only* by those
+# direct-provider wrappers: when a span would otherwise be parentless and is a
+# non-root kind, it transparently opens a WORKFLOW root (named after the
+# configured ``workflow_name``) and closes it when the provider span ends.
+# Framework wrappers (langchain, crewai, agno, ...) keep using ``get_tracer()``
+# unchanged — they already emit their own root and thread context explicitly,
+# so auto-root must never fire for them.
+# ---------------------------------------------------------------------------
+
+# A parentless span of one of these kinds already satisfies the backend's
+# root requirement, so it must NOT be wrapped in another root.
+_ROOT_KINDS = frozenset({"workflow", "chain", "agent", "mcp_tool"})
+
+
+def _auto_root_enabled() -> bool:
+    """Auto-root is on unless explicitly disabled via NEATLOGS_AUTO_ROOT."""
+    val = os.environ.get("NEATLOGS_AUTO_ROOT", "").strip().lower()
+    return val not in ("false", "0", "no", "off")
+
+
+def _resolve_root_workflow_name() -> str:
+    """The name for an auto-created root: init()'s workflow_name, else the
+    wrapper-mode workflow_name, else a neutral default."""
+    try:
+        from .init import get_session_config
+
+        name = (get_session_config() or {}).get("workflow_name")
+        if name:
+            return name
+    except Exception:
+        pass
+    return _wrapper_config.get("workflow_name") or "workflow"
+
+
+def _has_active_recording_parent() -> bool:
+    """True when there is already an active, recording span to nest under."""
+    current = otel_trace.get_current_span()
+    return bool(current and current.is_recording())
+
+
+class _RootEndingSpan:
+    """Transparent proxy around a provider span that also ends an auto-created
+    WORKFLOW root when the provider span ends.
+
+    Wrappers and stream finalizers only touch the span through duck-typed
+    methods (set_attribute / set_status / record_exception / end / ...), so a
+    delegating proxy is sufficient and avoids mutating OTel's Span instance.
+    """
+
+    __slots__ = ("_child", "_root", "_ended")
+
+    def __init__(self, child: otel_trace.Span, root: otel_trace.Span):
+        object.__setattr__(self, "_child", child)
+        object.__setattr__(self, "_root", root)
+        object.__setattr__(self, "_ended", False)
+
+    def end(self, *args: Any, **kwargs: Any) -> None:
+        if object.__getattribute__(self, "_ended"):
+            return
+        object.__setattr__(self, "_ended", True)
+        child = object.__getattribute__(self, "_child")
+        root = object.__getattribute__(self, "_root")
+        try:
+            child.end(*args, **kwargs)
+        finally:
+            try:
+                root.end()
+            except Exception:
+                pass
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(object.__getattribute__(self, "_child"), name)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        setattr(object.__getattribute__(self, "_child"), name, value)
+
+
+class _AutoRootTracer:
+    """Tracer facade for direct-provider wrappers. ``start_span`` behaves like
+    the underlying tracer, except it transparently opens a WORKFLOW root when
+    the span would otherwise be parentless and is a non-root kind."""
+
+    __slots__ = ("_tracer",)
+
+    def __init__(self, tracer: otel_trace.Tracer):
+        self._tracer = tracer
+
+    def start_span(self, name: str, attributes: Optional[Dict[str, Any]] = None, **kwargs: Any):
+        tracer = object.__getattribute__(self, "_tracer")
+        attributes = attributes or {}
+        kind = str(attributes.get("neatlogs.span.kind", "")).lower()
+
+        needs_root = (
+            _auto_root_enabled()
+            and kind not in _ROOT_KINDS
+            and "context" not in kwargs          # explicit-context callers opt out
+            and not _has_active_recording_parent()
+        )
+        if not needs_root:
+            return tracer.start_span(name=name, attributes=attributes, **kwargs)
+
+        root = tracer.start_span(
+            name=_resolve_root_workflow_name(),
+            attributes={"neatlogs.span.kind": "workflow", "neatlogs.auto_root": True},
+        )
+        token = attach_as_current(root)
+        try:
+            child = tracer.start_span(name=name, attributes=attributes, **kwargs)
+        except Exception:
+            detach(token)
+            try:
+                root.end()
+            except Exception:
+                pass
+            raise
+        # Restore context immediately — the child already captured root as its
+        # parent, and provider spans never nest user code under themselves.
+        detach(token)
+        return _RootEndingSpan(child, root)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(object.__getattribute__(self, "_tracer"), name)
+
+
+def get_provider_tracer() -> "_AutoRootTracer":
+    """Tracer for direct-provider wrappers (openai, anthropic, bedrock, ...).
+
+    Identical to :func:`get_tracer` but adds transparent auto-root so a bare
+    ``neatlogs.wrap(client)`` renders a trace without a manual ``@span`` /
+    ``trace()`` wrapper. Do NOT use for framework wrappers."""
+    return _AutoRootTracer(get_tracer())
+
+
 def serialize(obj: Any, max_length: int = 100_000) -> str:
     """Safe JSON serialization with truncation."""
     try:

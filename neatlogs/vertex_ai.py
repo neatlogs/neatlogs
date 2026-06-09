@@ -32,7 +32,7 @@ from opentelemetry.trace import StatusCode
 from ._wrap_utils import (
     AsyncStreamWrapper,
     SyncStreamWrapper,
-    get_tracer,
+    get_provider_tracer,
     is_suppressed,
     serialize,
 )
@@ -78,7 +78,7 @@ def wrap_vertex_ai_client(client: Any) -> Any:
 
 
 def _start_span(model: Any, stream: bool, name: str = "vertex_ai.models.generate_content") -> Any:
-    return get_tracer().start_span(
+    return get_provider_tracer().start_span(
         name=name,
         attributes={
             "neatlogs.span.kind": "llm",
@@ -444,7 +444,7 @@ def _patch_models_extra(models: Any, is_async: bool) -> None:
             async def patched_embed(*args, **kwargs):
                 if is_suppressed():
                     return await orig(*args, **kwargs)
-                span = get_tracer().start_span(name="vertex_ai.models.embed_content", attributes=_embed_attrs(kwargs))
+                span = get_provider_tracer().start_span(name="vertex_ai.models.embed_content", attributes=_embed_attrs(kwargs))
                 try:
                     resp = await orig(*args, **kwargs)
                 except Exception as e:
@@ -454,7 +454,7 @@ def _patch_models_extra(models: Any, is_async: bool) -> None:
             def patched_embed(*args, **kwargs):
                 if is_suppressed():
                     return orig(*args, **kwargs)
-                span = get_tracer().start_span(name="vertex_ai.models.embed_content", attributes=_embed_attrs(kwargs))
+                span = get_provider_tracer().start_span(name="vertex_ai.models.embed_content", attributes=_embed_attrs(kwargs))
                 try:
                     resp = orig(*args, **kwargs)
                 except Exception as e:
@@ -482,7 +482,7 @@ def _patch_models_extra(models: Any, is_async: bool) -> None:
             async def patched_ct(*args, **kwargs):
                 if is_suppressed():
                     return await orig_ct(*args, **kwargs)
-                span = get_tracer().start_span(name="vertex_ai.models.count_tokens", attributes=_ct_attrs(kwargs))
+                span = get_provider_tracer().start_span(name="vertex_ai.models.count_tokens", attributes=_ct_attrs(kwargs))
                 try:
                     resp = await orig_ct(*args, **kwargs)
                 except Exception as e:
@@ -492,7 +492,7 @@ def _patch_models_extra(models: Any, is_async: bool) -> None:
             def patched_ct(*args, **kwargs):
                 if is_suppressed():
                     return orig_ct(*args, **kwargs)
-                span = get_tracer().start_span(name="vertex_ai.models.count_tokens", attributes=_ct_attrs(kwargs))
+                span = get_provider_tracer().start_span(name="vertex_ai.models.count_tokens", attributes=_ct_attrs(kwargs))
                 try:
                     resp = orig_ct(*args, **kwargs)
                 except Exception as e:

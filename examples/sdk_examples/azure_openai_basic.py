@@ -41,9 +41,11 @@ def main() -> None:
     temp = os.getenv("AZURE_TEMPERATURE")
     extra = {"temperature": float(temp)} if temp else {}
 
-    # A WORKFLOW root groups the run so the trace has a root span (the LLM/TOOL
-    # spans nest under it). Without a WORKFLOW/CHAIN/AGENT root the finalizer
-    # skips simplification ("no root found") and the trace never renders.
+    # This run is ONE logical turn made of several calls (LLM -> tool -> LLM ->
+    # stream), so a WORKFLOW root groups them into a single trace; the LLM/TOOL
+    # spans nest under it. (A lone wrapped call auto-roots on its own — this
+    # explicit root is purely for grouping multiple calls. The wrapper detects
+    # the active WORKFLOW and does NOT add a second root.)
     with neatlogs.trace("azure-weather-chat", kind="WORKFLOW"):
         _run(client, deployment, extra)
 

@@ -57,6 +57,9 @@ If traces are not appearing in the NeatLogs dashboard, check these in order:
 2. **Is it called BEFORE LLM library imports?** → No → Move `neatlogs.init()` before `import openai` / `import anthropic` / etc.
 3. **Is the provider listed in `instrumentations=[]`?** → No → Add it (e.g. `instrumentations=["openai"]`). See the [Supported Instrumentations table in SKILL.md](../SKILL.md#supported-instrumentations) for valid keys.
 4. **Is `NEATLOGS_API_KEY` set?** → No → Set it via env var or `api_key=` param. Without it, export is **silently disabled** with no error.
+5. **Library version too old for its instrumentor?** → Some OpenInference-based instrumentors require a minimum library version and **silently emit no spans** below it. Notably `instrumentations=["dspy"]` requires **DSPy ≥ 2.6.0**. Fix: upgrade the library, or use `neatlogs.wrap(client_or_module)` instead (the `wrap()` path has no version requirement).
+
+> **You do NOT need a manual `@span(kind="WORKFLOW")` for a trace to render.** Auto-instrumentation and `neatlogs.wrap()` open a `WORKFLOW` root automatically for an otherwise-parentless call. A manual root is only for **grouping** multiple calls under one trace — its absence is never the reason a trace is missing.
 
 ---
 

@@ -22,7 +22,7 @@ from opentelemetry.trace import StatusCode
 from ._wrap_utils import (
     AsyncStreamWrapper,
     SyncStreamWrapper,
-    get_tracer,
+    get_provider_tracer,
     is_suppressed,
     serialize,
 )
@@ -122,7 +122,7 @@ def _patch_completions(completions: Any) -> None:
                 opts["include_usage"] = True
                 kwargs["stream_options"] = opts
 
-        tracer = get_tracer()
+        tracer = get_provider_tracer()
         span = tracer.start_span(
             name="openai.chat.completions.create",
             attributes={
@@ -206,7 +206,7 @@ def _patch_async_completions(completions: Any) -> None:
                 opts["include_usage"] = True
                 kwargs["stream_options"] = opts
 
-        tracer = get_tracer()
+        tracer = get_provider_tracer()
         span = tracer.start_span(
             name="openai.chat.completions.create",
             attributes={
@@ -277,7 +277,7 @@ def _patch_responses(responses: Any) -> None:
 
         model = kwargs.get("model", "")
         is_stream = kwargs.get("stream", False)
-        tracer = get_tracer()
+        tracer = get_provider_tracer()
         span = tracer.start_span(
             name="openai.responses.create",
             attributes={
@@ -507,7 +507,7 @@ def _patch_method(resource: Any, method_name: str, flag: str, start_attrs, final
         async def patched(*args, **kwargs):
             if is_suppressed():
                 return await orig(*args, **kwargs)
-            tracer = get_tracer()
+            tracer = get_provider_tracer()
             span = tracer.start_span(name=start_attrs.__name__, attributes=start_attrs(kwargs))
             start = time.perf_counter()
             try:
@@ -523,7 +523,7 @@ def _patch_method(resource: Any, method_name: str, flag: str, start_attrs, final
         def patched(*args, **kwargs):
             if is_suppressed():
                 return orig(*args, **kwargs)
-            tracer = get_tracer()
+            tracer = get_provider_tracer()
             span = tracer.start_span(name=start_attrs.__name__, attributes=start_attrs(kwargs))
             start = time.perf_counter()
             try:
@@ -561,7 +561,7 @@ def _patch_async_responses(responses: Any) -> None:
             return await orig_create(*args, **kwargs)
         model = kwargs.get("model", "")
         is_stream = kwargs.get("stream", False)
-        tracer = get_tracer()
+        tracer = get_provider_tracer()
         span = tracer.start_span(
             name="openai.responses.create",
             attributes={

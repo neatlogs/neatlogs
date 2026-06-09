@@ -25,7 +25,7 @@ from typing import Any
 
 from opentelemetry.trace import StatusCode
 
-from ._wrap_utils import attach_as_current, detach, get_tracer, serialize
+from ._wrap_utils import attach_as_current, detach, get_provider_tracer, serialize
 
 _CLASS_HOOKS_INSTALLED = False
 
@@ -67,7 +67,7 @@ def _patch_module_class() -> None:
 
     def patched_call(self, *args, **kwargs):
         # Skip the abstract base itself being called directly (shouldn't happen).
-        tracer = get_tracer()
+        tracer = get_provider_tracer()
         cls_name = type(self).__name__
         attrs = {"neatlogs.span.kind": "chain", "neatlogs.entity.name": cls_name}
 
@@ -134,7 +134,7 @@ def _patch_lm_class() -> None:
     orig_call = LM.__call__
 
     def patched_call(self, prompt=None, messages=None, **kwargs):
-        tracer = get_tracer()
+        tracer = get_provider_tracer()
         attrs = {"neatlogs.span.kind": "llm", "neatlogs.llm.provider": "dspy"}
 
         model = getattr(self, "model", None)
@@ -275,7 +275,7 @@ def _patch_retrieve_class() -> None:
     orig_forward = Retrieve.forward
 
     def patched_forward(self, query_or_queries, k=None, *args, **kwargs):
-        tracer = get_tracer()
+        tracer = get_provider_tracer()
         attrs = {"neatlogs.span.kind": "retriever"}
         if query_or_queries is not None:
             attrs["neatlogs.retrieval.query"] = (

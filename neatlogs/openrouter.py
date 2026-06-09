@@ -30,7 +30,7 @@ from opentelemetry.trace import StatusCode
 from ._wrap_utils import (
     AsyncStreamWrapper,
     SyncStreamWrapper,
-    get_tracer,
+    get_provider_tracer,
     is_suppressed,
     serialize,
 )
@@ -208,7 +208,7 @@ def _patch_chat(chat: Any) -> None:
 
     def _start(kwargs: dict, is_stream: bool) -> Any:
         model = kwargs.get("model", "")
-        span = get_tracer().start_span(
+        span = get_provider_tracer().start_span(
             name="openrouter.chat.send",
             attributes={
                 "neatlogs.span.kind": "llm",
@@ -398,7 +398,7 @@ def _patch_responses(responses: Any) -> None:
 
     def _start(kwargs: dict, is_stream: bool) -> Any:
         model = kwargs.get("model", "")
-        span = get_tracer().start_span(
+        span = get_provider_tracer().start_span(
             name="openrouter.responses.send",
             attributes={
                 "neatlogs.span.kind": "llm",
@@ -558,7 +558,7 @@ def _patch_embeddings(embeddings: Any) -> None:
         if is_suppressed():
             return orig(*args, **kwargs)
         inp = kwargs.get("input", "")
-        span = get_tracer().start_span(
+        span = get_provider_tracer().start_span(
             name="openrouter.embeddings.generate",
             attributes={
                 "neatlogs.span.kind": "embedding",
@@ -634,7 +634,7 @@ def _patch_rerank(rerank: Any) -> None:
         if is_suppressed():
             return orig(*args, **kwargs)
         documents = kwargs.get("documents", []) or []
-        span = get_tracer().start_span(
+        span = get_provider_tracer().start_span(
             name="openrouter.rerank.rerank",
             attributes={
                 "neatlogs.span.kind": "reranker",

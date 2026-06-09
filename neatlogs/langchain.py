@@ -17,7 +17,13 @@ from opentelemetry import context as otel_context
 from opentelemetry import trace as otel_trace
 from opentelemetry.trace import StatusCode
 
-from ._wrap_utils import get_tracer, serialize
+from ._wrap_utils import (
+    _ROOT_KINDS,
+    _auto_root_enabled,
+    _resolve_root_workflow_name,
+    get_tracer,
+    serialize,
+)
 
 
 def _span_in_ctx(span: Any, base_ctx: Any):
@@ -27,6 +33,15 @@ def _span_in_ctx(span: Any, base_ctx: Any):
     user @span / trace() / log() inside the run nest correctly too.
     """
     return otel_trace.set_span_in_context(span, base_ctx)
+
+
+def _is_recording(ctx: Any) -> bool:
+    """True if ``ctx`` already carries an active, recording span to nest under."""
+    span = otel_trace.get_current_span(ctx)
+    try:
+        return bool(span and span.is_recording())
+    except Exception:
+        return False
 
 
 try:
@@ -97,7 +112,50 @@ class NeatlogsCallbackHandler(BaseCallbackHandler):
         self._spans: Dict[UUID, Any] = {}
         self._tokens: Dict[UUID, List[str]] = {}
         self._contexts: Dict[UUID, Any] = {}
+        # Auto-root spans keyed by the run_id of the child that triggered them.
+        self._auto_roots: Dict[UUID, Any] = {}
         self._workflow_name = workflow_name
+
+    # -- Self-rooting -----------------------------------------------------------
+    #
+    # A LangChain run can begin with ANY callback. When it begins with a
+    # non-root kind (a bare `llm.invoke()` fires on_chat_model_start / on_llm_start
+    # with no chain above it; a standalone tool/retriever similarly), the span we
+    # create is parentless and of a non-root kind -> the backend can't anchor the
+    # trace and it never renders. To match the "just add the handler and it
+    # traces" contract, open a WORKFLOW root transparently in that case. A
+    # top-level CHAIN is already root-eligible, so it never needs this.
+
+    def _start_ctx(self, parent_run_id: Optional[UUID], run_id: UUID, kind: str):
+        """Resolve the context a new span should be created in, opening a
+        WORKFLOW auto-root first when this is a parentless non-root span."""
+        parent_ctx = self._contexts.get(parent_run_id) if parent_run_id else None
+        if parent_ctx is not None:
+            return parent_ctx
+
+        current = otel_context.get_current()
+        if (
+            _auto_root_enabled()
+            and kind not in _ROOT_KINDS
+            and not _is_recording(current)
+        ):
+            root = get_tracer().start_span(
+                name=_resolve_root_workflow_name(),
+                context=current,
+                attributes={"neatlogs.span.kind": "workflow", "neatlogs.auto_root": True},
+            )
+            self._auto_roots[run_id] = root
+            return _span_in_ctx(root, current)
+        return current
+
+    def _end_auto_root(self, run_id: UUID) -> None:
+        """End the auto-root (if any) opened for ``run_id``'s span."""
+        root = self._auto_roots.pop(run_id, None)
+        if root is not None:
+            try:
+                root.end()
+            except Exception:
+                pass
 
     def on_chat_model_start(
         self,
@@ -124,8 +182,7 @@ class NeatlogsCallbackHandler(BaseCallbackHandler):
         if not model:
             model = serialized.get("id", [""])[-1] if serialized.get("id") else ""
 
-        parent_ctx = self._contexts.get(parent_run_id) if parent_run_id else None
-        ctx = parent_ctx if parent_ctx else otel_context.get_current()
+        ctx = self._start_ctx(parent_run_id, run_id, "llm")
 
         span = tracer.start_span(
             name="langchain.chat_model",
@@ -183,8 +240,7 @@ class NeatlogsCallbackHandler(BaseCallbackHandler):
         if not model:
             model = serialized.get("id", [""])[-1] if serialized.get("id") else ""
 
-        parent_ctx = self._contexts.get(parent_run_id) if parent_run_id else None
-        ctx = parent_ctx if parent_ctx else otel_context.get_current()
+        ctx = self._start_ctx(parent_run_id, run_id, "llm")
 
         span = tracer.start_span(
             name="langchain.llm",
@@ -292,6 +348,7 @@ class NeatlogsCallbackHandler(BaseCallbackHandler):
 
         span.set_status(StatusCode.OK)
         span.end()
+        self._end_auto_root(run_id)
 
     def on_llm_error(
         self,
@@ -309,6 +366,7 @@ class NeatlogsCallbackHandler(BaseCallbackHandler):
         span.set_status(StatusCode.ERROR, str(error))
         span.record_exception(error)
         span.end()
+        self._end_auto_root(run_id)
 
     def on_chain_start(
         self,
@@ -325,8 +383,7 @@ class NeatlogsCallbackHandler(BaseCallbackHandler):
         serialized = serialized or {}
         name = serialized.get("id", [""])[-1] if serialized.get("id") else "chain"
 
-        parent_ctx = self._contexts.get(parent_run_id) if parent_run_id else None
-        ctx = parent_ctx if parent_ctx else otel_context.get_current()
+        ctx = self._start_ctx(parent_run_id, run_id, "chain")
 
         span = tracer.start_span(
             name=f"langchain.chain.{name}",
@@ -360,6 +417,7 @@ class NeatlogsCallbackHandler(BaseCallbackHandler):
 
         span.set_status(StatusCode.OK)
         span.end()
+        self._end_auto_root(run_id)
 
     def on_chain_error(
         self,
@@ -376,6 +434,7 @@ class NeatlogsCallbackHandler(BaseCallbackHandler):
         span.set_status(StatusCode.ERROR, str(error))
         span.record_exception(error)
         span.end()
+        self._end_auto_root(run_id)
 
     # -- Retriever callbacks ---------------------------------------------------
 
@@ -392,8 +451,7 @@ class NeatlogsCallbackHandler(BaseCallbackHandler):
     ) -> None:
         tracer = get_tracer()
         name = (serialized or {}).get("name") or ((serialized or {}).get("id", [""])[-1] if (serialized or {}).get("id") else "retriever")
-        parent_ctx = self._contexts.get(parent_run_id) if parent_run_id else None
-        ctx = parent_ctx if parent_ctx else otel_context.get_current()
+        ctx = self._start_ctx(parent_run_id, run_id, "retriever")
 
         span = tracer.start_span(
             name=f"langchain.retriever.{name}",
@@ -430,6 +488,7 @@ class NeatlogsCallbackHandler(BaseCallbackHandler):
                     span.set_attribute(f"neatlogs.retrieval.documents.{i}.content", str(content)[:2000])
         span.set_status(StatusCode.OK)
         span.end()
+        self._end_auto_root(run_id)
 
     def on_retriever_error(
         self,
@@ -446,6 +505,7 @@ class NeatlogsCallbackHandler(BaseCallbackHandler):
         span.set_status(StatusCode.ERROR, str(error))
         span.record_exception(error)
         span.end()
+        self._end_auto_root(run_id)
 
     # -- Agent action / finish (annotate the active chain span) ----------------
 
@@ -500,8 +560,7 @@ class NeatlogsCallbackHandler(BaseCallbackHandler):
         serialized = serialized or {}
         name = serialized.get("name", "") or (serialized.get("id", [""])[-1] if serialized.get("id") else "tool")
 
-        parent_ctx = self._contexts.get(parent_run_id) if parent_run_id else None
-        ctx = parent_ctx if parent_ctx else otel_context.get_current()
+        ctx = self._start_ctx(parent_run_id, run_id, "tool")
 
         span = tracer.start_span(
             name=f"langchain.tool.{name}",
@@ -537,6 +596,7 @@ class NeatlogsCallbackHandler(BaseCallbackHandler):
 
         span.set_status(StatusCode.OK)
         span.end()
+        self._end_auto_root(run_id)
 
     def on_tool_error(
         self,
@@ -553,3 +613,4 @@ class NeatlogsCallbackHandler(BaseCallbackHandler):
         span.set_status(StatusCode.ERROR, str(error))
         span.record_exception(error)
         span.end()
+        self._end_auto_root(run_id)

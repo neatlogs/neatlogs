@@ -53,9 +53,10 @@ def main() -> None:
     model = os.getenv("VERTEX_MODEL", "gemini-2.5-flash")
     client = neatlogs.wrap(_make_client())
 
-    # WORKFLOW root so the trace has a root span (LLM spans nest under it).
-    with neatlogs.trace("vertex-demo", kind="WORKFLOW"):
-        _run(client, model)
+    # wrap() auto-creates a WORKFLOW root, so each call renders on its own — no
+    # manual trace() wrapper needed. (To group several calls into ONE trace,
+    # decorate an entry function with @neatlogs.span(kind="WORKFLOW").)
+    _run(client, model)
 
     neatlogs.flush()
     neatlogs.shutdown()

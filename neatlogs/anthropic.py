@@ -22,7 +22,7 @@ from opentelemetry.trace import StatusCode
 from ._wrap_utils import (
     AsyncStreamWrapper,
     SyncStreamWrapper,
-    get_tracer,
+    get_provider_tracer,
     is_suppressed,
     serialize,
 )
@@ -85,7 +85,7 @@ def _patch_messages(messages: Any) -> None:
         system = kwargs.get("system")
         is_stream = kwargs.get("stream", False)
 
-        tracer = get_tracer()
+        tracer = get_provider_tracer()
         span = tracer.start_span(
             name="anthropic.messages.create",
             attributes={
@@ -127,7 +127,7 @@ def _patch_messages(messages: Any) -> None:
             input_messages = kwargs.get("messages", [])
             system = kwargs.get("system")
 
-            tracer = get_tracer()
+            tracer = get_provider_tracer()
             span = tracer.start_span(
                 name="anthropic.messages.create",
                 attributes={
@@ -165,7 +165,7 @@ def _patch_async_messages(messages: Any) -> None:
         system = kwargs.get("system")
         is_stream = kwargs.get("stream", False)
 
-        tracer = get_tracer()
+        tracer = get_provider_tracer()
         span = tracer.start_span(
             name="anthropic.messages.create",
             attributes={
@@ -207,7 +207,7 @@ def _patch_async_messages(messages: Any) -> None:
             input_messages = kwargs.get("messages", [])
             system = kwargs.get("system")
 
-            tracer = get_tracer()
+            tracer = get_provider_tracer()
             span = tracer.start_span(
                 name="anthropic.messages.create",
                 attributes={
@@ -589,7 +589,7 @@ def _extra_message_methods(messages: Any, is_async: bool) -> None:
             async def patched_count(*args, **kwargs):
                 if is_suppressed():
                     return await orig_count(*args, **kwargs)
-                span = get_tracer().start_span(
+                span = get_provider_tracer().start_span(
                     name="anthropic.messages.count_tokens",
                     attributes={"neatlogs.span.kind": "llm", "neatlogs.llm.provider": "anthropic",
                                 "neatlogs.llm.task": "count_tokens", "neatlogs.llm.model_name": kwargs.get("model", "")},
@@ -604,7 +604,7 @@ def _extra_message_methods(messages: Any, is_async: bool) -> None:
             def patched_count(*args, **kwargs):
                 if is_suppressed():
                     return orig_count(*args, **kwargs)
-                span = get_tracer().start_span(
+                span = get_provider_tracer().start_span(
                     name="anthropic.messages.count_tokens",
                     attributes={"neatlogs.span.kind": "llm", "neatlogs.llm.provider": "anthropic",
                                 "neatlogs.llm.task": "count_tokens", "neatlogs.llm.model_name": kwargs.get("model", "")},
@@ -620,7 +620,7 @@ def _extra_message_methods(messages: Any, is_async: bool) -> None:
 
 
 def _start_message_span(kwargs: dict, name: str, structured: bool = False) -> Any:
-    span = get_tracer().start_span(
+    span = get_provider_tracer().start_span(
         name=name,
         attributes={
             "neatlogs.span.kind": "llm",
@@ -678,7 +678,7 @@ def _patch_legacy_completions(completions: Any, is_async: bool) -> None:
         async def patched(*args, **kwargs):
             if is_suppressed():
                 return await orig(*args, **kwargs)
-            span = get_tracer().start_span(name="anthropic.completions.create", attributes=_attrs(kwargs))
+            span = get_provider_tracer().start_span(name="anthropic.completions.create", attributes=_attrs(kwargs))
             start = time.perf_counter()
             try:
                 resp = await orig(*args, **kwargs)
@@ -690,7 +690,7 @@ def _patch_legacy_completions(completions: Any, is_async: bool) -> None:
         def patched(*args, **kwargs):
             if is_suppressed():
                 return orig(*args, **kwargs)
-            span = get_tracer().start_span(name="anthropic.completions.create", attributes=_attrs(kwargs))
+            span = get_provider_tracer().start_span(name="anthropic.completions.create", attributes=_attrs(kwargs))
             start = time.perf_counter()
             try:
                 resp = orig(*args, **kwargs)

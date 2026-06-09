@@ -23,7 +23,7 @@ from typing import Any, List, Optional
 
 from opentelemetry.trace import StatusCode
 
-from ._wrap_utils import get_tracer, is_suppressed, serialize
+from ._wrap_utils import get_provider_tracer, is_suppressed, serialize
 
 _PROVIDER = "bedrock"
 
@@ -64,7 +64,7 @@ def _vendor_from_model(model_id: Any) -> str:
 
 
 def _start_span(name: str, model_id: Any, is_stream: bool) -> Any:
-    return get_tracer().start_span(
+    return get_provider_tracer().start_span(
         name=name,
         attributes={
             "neatlogs.span.kind": "llm",
@@ -476,7 +476,7 @@ def _patch_invoke_model(client: Any) -> None:
         body_in = _decode_body(kwargs.get("body"))
 
         if is_embedding:
-            span = get_tracer().start_span(
+            span = get_provider_tracer().start_span(
                 name="bedrock.invoke_model",
                 attributes={
                     "neatlogs.span.kind": "embedding",

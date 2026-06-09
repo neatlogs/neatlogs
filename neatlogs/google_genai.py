@@ -23,7 +23,7 @@ from opentelemetry.trace import StatusCode
 from ._wrap_utils import (
     AsyncStreamWrapper,
     SyncStreamWrapper,
-    get_tracer,
+    get_provider_tracer,
     is_suppressed,
     serialize,
 )
@@ -73,7 +73,7 @@ def _patch_models(models: Any) -> None:
         model = kwargs.get("model", args[0] if args else "")
         contents = kwargs.get("contents", args[1] if len(args) > 1 else "")
 
-        tracer = get_tracer()
+        tracer = get_provider_tracer()
         span = tracer.start_span(
             name="google_genai.models.generate_content",
             attributes={
@@ -111,7 +111,7 @@ def _patch_models(models: Any) -> None:
             model = kwargs.get("model", args[0] if args else "")
             contents = kwargs.get("contents", args[1] if len(args) > 1 else "")
 
-            tracer = get_tracer()
+            tracer = get_provider_tracer()
             span = tracer.start_span(
                 name="google_genai.models.generate_content",
                 attributes={
@@ -147,7 +147,7 @@ def _patch_async_models(models: Any) -> None:
         model = kwargs.get("model", args[0] if args else "")
         contents = kwargs.get("contents", args[1] if len(args) > 1 else "")
 
-        tracer = get_tracer()
+        tracer = get_provider_tracer()
         span = tracer.start_span(
             name="google_genai.models.generate_content",
             attributes={
@@ -192,7 +192,7 @@ def _patch_async_models(models: Any) -> None:
             model = kwargs.get("model", args[0] if args else "")
             contents = kwargs.get("contents", args[1] if len(args) > 1 else "")
 
-            tracer = get_tracer()
+            tracer = get_provider_tracer()
             span = tracer.start_span(
                 name="google_genai.models.generate_content",
                 attributes={
@@ -461,7 +461,7 @@ def _patch_models_extra(models: Any, is_async: bool) -> None:
             async def patched_embed(*args, **kwargs):
                 if is_suppressed():
                     return await orig(*args, **kwargs)
-                span = get_tracer().start_span(name="google_genai.models.embed_content", attributes=_embed_attrs(kwargs))
+                span = get_provider_tracer().start_span(name="google_genai.models.embed_content", attributes=_embed_attrs(kwargs))
                 try:
                     resp = await orig(*args, **kwargs)
                 except Exception as e:
@@ -471,7 +471,7 @@ def _patch_models_extra(models: Any, is_async: bool) -> None:
             def patched_embed(*args, **kwargs):
                 if is_suppressed():
                     return orig(*args, **kwargs)
-                span = get_tracer().start_span(name="google_genai.models.embed_content", attributes=_embed_attrs(kwargs))
+                span = get_provider_tracer().start_span(name="google_genai.models.embed_content", attributes=_embed_attrs(kwargs))
                 try:
                     resp = orig(*args, **kwargs)
                 except Exception as e:
@@ -499,7 +499,7 @@ def _patch_models_extra(models: Any, is_async: bool) -> None:
             async def patched_ct(*args, **kwargs):
                 if is_suppressed():
                     return await orig_ct(*args, **kwargs)
-                span = get_tracer().start_span(name="google_genai.models.count_tokens", attributes=_ct_attrs(kwargs))
+                span = get_provider_tracer().start_span(name="google_genai.models.count_tokens", attributes=_ct_attrs(kwargs))
                 try:
                     resp = await orig_ct(*args, **kwargs)
                 except Exception as e:
@@ -509,7 +509,7 @@ def _patch_models_extra(models: Any, is_async: bool) -> None:
             def patched_ct(*args, **kwargs):
                 if is_suppressed():
                     return orig_ct(*args, **kwargs)
-                span = get_tracer().start_span(name="google_genai.models.count_tokens", attributes=_ct_attrs(kwargs))
+                span = get_provider_tracer().start_span(name="google_genai.models.count_tokens", attributes=_ct_attrs(kwargs))
                 try:
                     resp = orig_ct(*args, **kwargs)
                 except Exception as e:
@@ -604,7 +604,7 @@ def _patch_chat_classes() -> None:
 
 def _start_chat_span(chat: Any, message: Any, stream: bool) -> Any:
     model = getattr(chat, "_model", None) or getattr(chat, "model", None) or ""
-    span = get_tracer().start_span(
+    span = get_provider_tracer().start_span(
         name="google_genai.chat.send_message",
         attributes={
             "neatlogs.span.kind": "llm",

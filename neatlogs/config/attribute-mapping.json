@@ -780,6 +780,21 @@
           "target": "neatlogs.user.id"
         }
       },
+      "end_user": {
+        "description": "End-user identity — the user of the customer's application (one end-user per trace; rolled up to trace/session by the backend). Distinct from operator user.id.",
+        "id": {
+          "sources": [
+            "neatlogs.end_user.id"
+          ],
+          "target": "neatlogs.end_user.id"
+        },
+        "metadata": {
+          "sources": [
+            "neatlogs.end_user.metadata"
+          ],
+          "target": "neatlogs.end_user.metadata"
+        }
+      },
       "workflow": {
         "description": "Workflow/Chain metadata",
         "name": {

@@ -194,6 +194,9 @@ def span(
     # Tool-specific
     tool_name: Optional[str] = None,
     parameters: Optional[Dict[str, Any]] = None,
+    # End-user identity (one end-user per trace; usually set on the WORKFLOW root)
+    end_user_id: Optional[str] = None,
+    end_user_metadata: Optional[Dict[str, Any]] = None,
 ) -> Callable[[F], F]:
     """
     Universal decorator for instrumenting custom code with observability spans.
@@ -224,6 +227,14 @@ def span(
         # Tool-specific parameters (when kind="TOOL" or kind="MCP_TOOL"):
         tool_name: Tool identifier
         parameters: Tool parameter schema
+
+        # End-user identity (typically only on the WORKFLOW root):
+        end_user_id: Identifier of the END-USER this trace belongs to — the user
+              of your application, not the operator running the SDK. One end-user
+              per trace; the backend rolls it up to the trace + session for
+              filtering/analytics. Distinct from init(user_id=...).
+        end_user_metadata: Optional dict of arbitrary end-user fields, stored as
+              JSON on the trace (e.g. {"plan": "pro"}).
 
         Note: MCP_TOOL automatically handles:
 
@@ -335,6 +346,11 @@ def span(
         capture_stdout=capture_stdout,
         postprocess_result=postprocess_result,
         mask=mask,
+        # End-user belongs to the trace root only. _decorate_span stamps these
+        # at call time, and only when the decorated span is a root (no active
+        # parent). The backend rolls the value up to the trace and session.
+        end_user_id=end_user_id,
+        end_user_metadata=end_user_metadata,
     )
 
 

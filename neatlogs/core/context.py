@@ -21,6 +21,8 @@ def trace(
     version: Optional[str] = None,
     capture_stdout: bool = False,
     mask: Optional[Callable] = None,
+    end_user_id: Optional[str] = None,
+    end_user_metadata: Optional[Dict[str, Any]] = None,
     **attributes,
 ):
     """
@@ -56,6 +58,12 @@ def trace(
             backward compat; new code should use ``system_prompt_template``.
         prompt_variables: Deprecated alias for ``system_prompt_variables``.
         version: Optional version identifier
+        end_user_id: Identifier of the END-USER this trace belongs to — i.e. the
+            user of your application, not the operator running the SDK. One
+            end-user per trace; the backend rolls this up to the trace and its
+            session for filtering/analytics. Distinct from init(user_id=...).
+        end_user_metadata: Optional dict of arbitrary end-user fields
+            (e.g. {"plan": "pro", "email": "a@b.com"}), stored as JSON on the trace.
         **attributes: Additional attributes to set on the span
 
     Examples:
@@ -114,6 +122,7 @@ def trace(
         UserPromptContext,
         UserPromptTemplate,
     )
+    from .end_user import apply_end_user_attributes
 
     logger = logging.getLogger(__name__)
     tracer = otel_trace.get_tracer(__name__)
@@ -202,6 +211,8 @@ def trace(
                 _set_span_attributes(
                     span, kind, template_string, prompt_variables, version, attributes
                 )
+                # This branch always creates a root span (new root trace).
+                apply_end_user_attributes(span, end_user_id, end_user_metadata, is_root=True)
                 if mask is not None:
                     from .mask import register_mask
 
@@ -221,6 +232,11 @@ def trace(
             with tracer.start_as_current_span(name, context=ctx) as span:
                 _set_span_attributes(
                     span, kind, template_string, prompt_variables, version, attributes
+                )
+                # End-user belongs to the trace root only. This span is a root
+                # when it is not nested inside an already-active trace.
+                apply_end_user_attributes(
+                    span, end_user_id, end_user_metadata, is_root=not is_in_active_trace
                 )
                 if mask is not None:
                     from .mask import register_mask

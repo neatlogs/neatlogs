@@ -96,6 +96,8 @@ def init(
     session_id: Optional[str] = None,
     auto_session: bool = False,
     user_id: Optional[str] = None,
+    end_user_id: Optional[str] = None,
+    end_user_metadata: Optional[Dict[str, Any]] = None,
     tags: Optional[List[str]] = None,
     instrumentations: Optional[List[str]] = None,
     sample_rate: float = 1.0,
@@ -118,7 +120,16 @@ def init(
         workflow_name: Logical grouping for traces
         session_id: Custom session ID (for multi-turn conversations)
         auto_session: Auto-generate session_id (useful for chatbots)
-        user_id: User identifier (propagates to all spans)
+        user_id: Operator identifier — whoever is RUNNING the SDK (a developer, a
+                 service account, the OS user). Propagates to all spans as a
+                 resource attribute. NOT the end-user of your app.
+        end_user_id: Process-global default for the END-USER — the user of your
+                 application. Use this only for single-user processes (CLI, a
+                 per-user worker). On a multi-tenant server set the end-user per
+                 request via trace(end_user_id=...) instead. One end-user per trace;
+                 the backend rolls it up to the trace and its session.
+        end_user_metadata: Optional dict of arbitrary end-user fields stored as JSON
+                 (e.g. {"plan": "pro"}). Pairs with end_user_id.
         tags: Global tags for all traces (list of strings only, e.g., ['production', 'api-v2'])
         instrumentations: Specific libraries to instrument
         sample_rate: Trace sampling rate (0.0-1.0)
@@ -221,6 +232,19 @@ def init(
         resource_attrs["session.id"] = final_session_id
     if user_id:
         resource_attrs["user.id"] = user_id
+    # End-user identity: process-global default (single-user processes). On a
+    # server this is normally set per-request via trace(end_user_id=...), which
+    # takes precedence since span attributes override resource attributes.
+    if end_user_id:
+        from .core.end_user import END_USER_ID_KEY
+
+        resource_attrs[END_USER_ID_KEY] = str(end_user_id)
+    if end_user_metadata:
+        from .core.end_user import END_USER_METADATA_KEY, normalize_metadata
+
+        _eu_meta = normalize_metadata(end_user_metadata)
+        if _eu_meta:
+            resource_attrs[END_USER_METADATA_KEY] = _eu_meta
     if tags:
         # Tags must be a list of strings
         if not isinstance(tags, list):

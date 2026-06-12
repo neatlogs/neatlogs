@@ -181,10 +181,18 @@ def _decorate_span(
     capture_stdout: bool = False,
     postprocess_result: Optional[Callable[[Any, Any, Dict[str, Any]], None]] = None,
     mask: Optional[Callable] = None,
+    end_user_id: Optional[str] = None,
+    end_user_metadata: Optional[Dict[str, Any]] = None,
 ) -> Callable[[F], F]:
     """
     Generic decorator factory for a single span boundary.
     """
+
+    def _is_root_span() -> bool:
+        """True when no recording span is currently active — i.e. the span this
+        decorator is about to create will be the trace root."""
+        current = otel_trace.get_current_span()
+        return not (current and current.is_recording())
 
     def decorator(func: F) -> F:
         span_name = name or func.__name__
@@ -205,9 +213,11 @@ def _decorate_span(
 
             @functools.wraps(func)
             async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
+                from ..core.end_user import apply_end_user_attributes
                 from ..core.log import _CaptureStdoutContext
                 from ..core.mask import register_mask
 
+                is_root = _is_root_span()
                 with tracer.start_as_current_span(
                     span_name, kind=otel_trace.SpanKind.INTERNAL
                 ) as span:
@@ -219,6 +229,10 @@ def _decorate_span(
                         tags=tags,
                         metadata=metadata,
                         attributes=merged_attrs,
+                    )
+                    # End-user belongs to the trace root only.
+                    apply_end_user_attributes(
+                        span, end_user_id, end_user_metadata, is_root=is_root
                     )
                     if mask is not None:
                         span.set_attribute("neatlogs.mask_id", register_mask(mask))
@@ -261,9 +275,11 @@ def _decorate_span(
 
         @functools.wraps(func)
         def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
+            from ..core.end_user import apply_end_user_attributes
             from ..core.log import _CaptureStdoutContext
             from ..core.mask import register_mask
 
+            is_root = _is_root_span()
             with tracer.start_as_current_span(span_name, kind=otel_trace.SpanKind.INTERNAL) as span:
                 _set_common_span_attrs(
                     span,
@@ -274,6 +290,8 @@ def _decorate_span(
                     metadata=metadata,
                     attributes=merged_attrs,
                 )
+                # End-user belongs to the trace root only.
+                apply_end_user_attributes(span, end_user_id, end_user_metadata, is_root=is_root)
                 if mask is not None:
                     span.set_attribute("neatlogs.mask_id", register_mask(mask))
                 if description:

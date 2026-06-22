@@ -71,7 +71,7 @@ DOCUMENTS = [
 # ---------------------------------------------------------------------------
 neatlogs.init(
     api_key=os.getenv("NEATLOGS_API_KEY"),
-    endpoint=os.getenv("NEATLOGS_ENDPOINT", "http://staging-cloud.neatlogs.com/api/data/v4/batch"),
+    endpoint=os.getenv("NEATLOGS_ENDPOINT", "https://ingest.neatlogs.com/api/data/v4/batch"),
     workflow_name="milvus-vector-search",
     tags=[
         "sdk-examples",

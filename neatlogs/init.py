@@ -91,7 +91,7 @@ def _span_limits_for_capture_everything() -> SpanLimits:
 
 def init(
     api_key: Optional[str] = None,
-    endpoint: str = "https://staging-cloud.neatlogs.com",
+    endpoint: str = "https://ingest.neatlogs.com",
     workflow_name: Optional[str] = None,
     session_id: Optional[str] = None,
     auto_session: bool = False,

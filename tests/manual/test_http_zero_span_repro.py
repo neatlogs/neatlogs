@@ -23,7 +23,7 @@ Run:
     NEATLOGS_API_KEY=<your-key> python tests/manual/test_http_zero_span_repro.py
 
 Optional:
-    NEATLOGS_ENDPOINT=https://staging-cloud.neatlogs.com python tests/manual/test_http_zero_span_repro.py
+    NEATLOGS_ENDPOINT=https://ingest.neatlogs.com python tests/manual/test_http_zero_span_repro.py
 
 Dashboard checks:
     - If a row appears for the standalone outgoing HTTP request, the backend/UI is
@@ -47,7 +47,7 @@ def non_ai_outgoing_http_only() -> int:
 def main() -> None:
     neatlogs.init(
         api_key=None,  # reads NEATLOGS_API_KEY from env
-        endpoint=os.environ.get("NEATLOGS_ENDPOINT", "https://staging-cloud.neatlogs.com"),
+        endpoint=os.environ.get("NEATLOGS_ENDPOINT", "https://ingest.neatlogs.com"),
         workflow_name="zero-span-non-ai-http-repro",
         instrumentations=[],
     )

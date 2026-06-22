@@ -188,7 +188,7 @@ Pass keys to `instrumentations` in `neatlogs.init()`. Install extras when noted.
 
 ```bash
 NEATLOGS_API_KEY=your-api-key
-NEATLOGS_ENDPOINT=https://staging-cloud.neatlogs.com   # optional — this is the default
+NEATLOGS_ENDPOINT=https://ingest.neatlogs.com   # optional — this is the default
 ```
 
 Get your API key from the [NeatLogs dashboard](https://app.neatlogs.com). Full `init()` options: [reference](https://docs.neatlogs.com/reference/init-reference).

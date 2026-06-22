@@ -29,7 +29,7 @@ from neatlogs import SystemPromptTemplate, UserPromptTemplate
 async def main():
     neatlogs.init(
         api_key=None,  # reads NEATLOGS_API_KEY from env
-        endpoint=os.environ.get("NEATLOGS_ENDPOINT", "https://staging-cloud.neatlogs.com"),
+        endpoint=os.environ.get("NEATLOGS_ENDPOINT", "https://ingest.neatlogs.com"),
         workflow_name="test-async-trace",
     )
 

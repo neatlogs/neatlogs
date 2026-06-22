@@ -314,6 +314,14 @@ milvus = [
     "milvus-lite>=2.4.0,<2.5.0",
 ]
 
+# Hermes (NousResearch/hermes-agent) discovers pip-installed observer plugins via
+# this entry-point group. The value is the MODULE (Hermes calls `ep.load()` then
+# `getattr(module, "register")`); the key "neatlogs" is the name users enable with
+# `hermes plugins enable neatlogs`. Dormant unless Hermes is installed AND the
+# plugin is enabled — costs non-Hermes users nothing.
+[project.entry-points."hermes_agent.plugins"]
+neatlogs = "neatlogs.hermes_plugin"
+
 [project.urls]
 Homepage = "https://github.com/NeatLogs/neatlogs"
 Repository = "https://github.com/NeatLogs/neatlogs.git"

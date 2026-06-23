@@ -210,6 +210,16 @@ def wrap(client):
 
         return wrap_openrouter_client(client)
 
+    # Claude Agent SDK (Anthropic): the agentic loop runs in a CLI SUBPROCESS and is consumed as an
+    # async iterator of typed messages (query() / ClaudeSDKClient). There's no in-process LLM client
+    # to wrap — we patch the streaming entry points and build spans from the message stream. Accept
+    # either the module itself (`neatlogs.wrap(claude_agent_sdk)`) or a ClaudeSDKClient instance.
+    if (cls_name == "module" and getattr(client, "__name__", "") == "claude_agent_sdk") \
+            or cls_name == "ClaudeSDKClient" or "claude_agent_sdk" in module:
+        from .claude_agent_sdk import wrap_claude_agent_sdk
+
+        return wrap_claude_agent_sdk(client)
+
     raise TypeError(
         f"neatlogs.wrap() does not support {cls_name} from {module}. "
         "Supported: OpenAI, AsyncOpenAI, AzureOpenAI, AsyncAzureOpenAI, Anthropic, "

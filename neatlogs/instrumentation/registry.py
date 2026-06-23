@@ -56,6 +56,7 @@ INSTRUMENTATION_REGISTRY = {
             "strands",
             "pipecat",
             "hermes",
+            "claude_agent_sdk",
         ],
         "tool": ["langchain", "llamaindex", "haystack", "mcp"],
         "http": ["requests", "httpx", "urllib3", "aiohttp"],
@@ -343,6 +344,14 @@ INSTRUMENTATION_REGISTRY = {
             # Hermes' LLM calls go through the openai SDK — auto-load it so LLM
             # spans are captured alongside the AGENT/TOOL spans we emit.
             "auto_load": ["openai"],
+        },
+        "claude_agent_sdk": {
+            "neatlogs": "neatlogs.claude_agent_sdk",
+            "openllmetry": None,
+            "openinference": None,
+            "default_span_kind": "AGENT",
+            # No auto_load: the LLM calls run in the SDK's CLI subprocess (not an in-process client
+            # we could instrument) — we build the LLM/TOOL spans from the streamed messages instead.
         },
         "openrouter": {
             "neatlogs": "neatlogs.openrouter",

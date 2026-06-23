@@ -1431,6 +1431,7 @@ class InstrumentationManager:
                 "google_genai": "GoogleGenAIInstrumentor",
                 "vertex_ai": "VertexAIInstrumentor",
                 "hermes": "HermesInstrumentor",
+                "claude_agent_sdk": "ClaudeAgentSDKInstrumentor",
                 "openrouter": "OpenRouterInstrumentor",
             }
             if library in neatlogs_cases:

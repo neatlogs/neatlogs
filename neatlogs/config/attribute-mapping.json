@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "Neatlogs Semantic Conventions - Attribute Mapping Configuration",
   "description": "Maps vendor-specific attributes (OpenInference, OpenLLMetry) to unified neatlogs.* namespace",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "mappings": {
     "span_kind": {
       "description": "Span classification/type",
@@ -482,31 +482,45 @@
       "crewai": {
         "description": "CrewAI framework attributes (from OpenInference instrumentation)",
         "crew_id": {
-          "sources": ["crew_id"],
+          "sources": [
+            "crew_id"
+          ],
           "target": "neatlogs.crewai.crew_id"
         },
         "crew_key": {
-          "sources": ["crew_key"],
+          "sources": [
+            "crew_key"
+          ],
           "target": "neatlogs.crewai.crew_key"
         },
         "crew_number_of_agents": {
-          "sources": ["crew_number_of_agents"],
+          "sources": [
+            "crew_number_of_agents"
+          ],
           "target": "neatlogs.crewai.crew_number_of_agents"
         },
         "crew_number_of_tasks": {
-          "sources": ["crew_number_of_tasks"],
+          "sources": [
+            "crew_number_of_tasks"
+          ],
           "target": "neatlogs.crewai.crew_number_of_tasks"
         },
         "version": {
-          "sources": ["crewai_version"],
+          "sources": [
+            "crewai_version"
+          ],
           "target": "neatlogs.crewai.version"
         },
         "task_id": {
-          "sources": ["task_id"],
+          "sources": [
+            "task_id"
+          ],
           "target": "neatlogs.task.id"
         },
         "task_key": {
-          "sources": ["task_key"],
+          "sources": [
+            "task_key"
+          ],
           "target": "neatlogs.task.key"
         }
       },
@@ -722,6 +736,21 @@
           "indexed": true
         }
       },
+      "guardrail": {
+        "description": "Guardrail / safety-check attributes",
+        "passed": {
+          "sources": [
+            "guardrail.passed"
+          ],
+          "target": "neatlogs.guardrail.passed"
+        },
+        "score": {
+          "sources": [
+            "guardrail.score"
+          ],
+          "target": "neatlogs.guardrail.score"
+        }
+      },
       "embedding": {
         "description": "Embedding model attributes",
         "model_name": {
@@ -781,7 +810,7 @@
         }
       },
       "end_user": {
-        "description": "End-user identity — the user of the customer's application (one end-user per trace; rolled up to trace/session by the backend). Distinct from operator user.id.",
+        "description": "End-user identity \u2014 the user of the customer's application (one end-user per trace; rolled up to trace/session by the backend). Distinct from operator user.id.",
         "id": {
           "sources": [
             "neatlogs.end_user.id"
@@ -1051,19 +1080,27 @@
       "description": "OTel code source location attributes (set by @neatlogs.span decorator)",
       "mappings": {
         "file_path": {
-          "sources": ["code.file.path"],
+          "sources": [
+            "code.file.path"
+          ],
           "target": "neatlogs.code.file.path"
         },
         "function_name": {
-          "sources": ["code.function.name"],
+          "sources": [
+            "code.function.name"
+          ],
           "target": "neatlogs.code.function.name"
         },
         "line_number": {
-          "sources": ["code.line.number"],
+          "sources": [
+            "code.line.number"
+          ],
           "target": "neatlogs.code.line.number"
         },
         "namespace": {
-          "sources": ["code.namespace"],
+          "sources": [
+            "code.namespace"
+          ],
           "target": "neatlogs.code.namespace"
         }
       }

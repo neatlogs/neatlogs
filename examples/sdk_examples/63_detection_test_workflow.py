@@ -47,7 +47,7 @@ from neatlogs import init, flush, shutdown, PromptTemplate, trace, span
 
 init(
     api_key=os.getenv("NEATLOGS_API_KEY", "test-key"),
-    endpoint=os.getenv("NEATLOGS_ENDPOINT", "http://localhost:3000/api/data/v4/batch"),
+    endpoint=os.getenv("NEATLOGS_ENDPOINT", "http://localhost:4100"),
     workflow_name="detection-test-workflow",
     instrumentations=["langchain", "openai", "cohere"],
     debug=True,

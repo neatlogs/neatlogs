@@ -115,7 +115,7 @@ def load_settings() -> Settings:
 
     return Settings(
         neatlogs_api_key=neatlogs_api_key,
-        neatlogs_endpoint="http://localhost:3000/api/data/v4/batch",
+        neatlogs_endpoint=os.getenv("NEATLOGS_ENDPOINT", "http://localhost:4100"),
         workflow_name="langgraph-gemini-qdrant-cohere-rerank",
         gemini_api_key=gemini_api_key,
         gemini_model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip(),

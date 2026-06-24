@@ -45,7 +45,7 @@ logger = logging.getLogger("neatlogs.mcp_server")
 # Initialize Neatlogs
 init(
     api_key=os.getenv("NEATLOGS_API_KEY", "test-key"),
-    endpoint="http://localhost:3000/api/data/v4/batch",
+    endpoint=os.getenv("NEATLOGS_ENDPOINT", "http://localhost:4100"),
     instrumentations=["mcp"],
     debug=True,
 )

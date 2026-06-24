@@ -4,8 +4,8 @@ NeatlogsLogFilter — a LogRecordProcessor that drops unwanted log records
 the downstream exporter (OTLPLogExporter → /v1/logs).
 
 Replaces the old NeatlogsLogExporter which converted LogRecords into
-span-shaped JSON payloads for /api/data/v4/batch. The conversion is now
-done server-side by the /v1/logs OTLP receiver.
+span-shaped JSON payloads for the legacy JSON batch route. The conversion is
+now done server-side by the /v1/logs OTLP receiver.
 """
 
 from __future__ import annotations

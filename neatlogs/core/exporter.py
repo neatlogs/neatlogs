@@ -10,12 +10,27 @@ import threading
 import time
 from queue import Empty, Queue
 from typing import Any, Dict, List
+from urllib.parse import urlparse
 
 import requests
 
 from .logger import get_logger
 
 logger = get_logger()
+
+LEGACY_BATCH_PATH = "/api/data/v4/batch"
+
+
+def _normalize_legacy_batch_endpoint(endpoint: str) -> str:
+    raw = (endpoint or "http://localhost:4100").strip().rstrip("/")
+    if raw.endswith(LEGACY_BATCH_PATH):
+        return raw
+
+    parsed = urlparse(raw)
+    if parsed.scheme and parsed.netloc:
+        return f"{parsed.scheme}://{parsed.netloc}{LEGACY_BATCH_PATH}"
+
+    return f"{raw}{LEGACY_BATCH_PATH}"
 
 
 class NeatlogsExporter:
@@ -32,7 +47,7 @@ class NeatlogsExporter:
     def __init__(
         self,
         api_key: str,
-        endpoint: str = "http://localhost:3000/api/data/v4/batch",
+        endpoint: str = "http://localhost:4100",
         workflow_name: str = "neatlogs-app",
         batch_size: int = 100,
         flush_interval: float = 5.0,
@@ -53,7 +68,7 @@ class NeatlogsExporter:
             max_retries: Maximum retry attempts on failure
         """
         self.api_key = api_key
-        self.endpoint = endpoint.rstrip("/")
+        self.endpoint = _normalize_legacy_batch_endpoint(endpoint)
         self.workflow_name = (
             workflow_name.strip()
             if isinstance(workflow_name, str) and workflow_name.strip()

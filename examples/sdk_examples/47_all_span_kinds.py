@@ -250,7 +250,7 @@ async def run_support_workflow(query: str, collection) -> str:
 async def main() -> None:
     init(
         api_key=os.getenv("NEATLOGS_API_KEY", "test-key"),
-        endpoint=os.getenv("NEATLOGS_ENDPOINT", "http://localhost:3000/api/data/v4/batch"),
+        endpoint=os.getenv("NEATLOGS_ENDPOINT", "http://localhost:4100"),
         workflow_name="production-support-all-span-kinds",
         instrumentations=["openai", "chromadb", "mcp", "haystack"],
         debug=True,
@@ -286,7 +286,7 @@ def run_api_server():
     # Initialize Neatlogs
     init(
         api_key=os.getenv("NEATLOGS_API_KEY", "test-key"),
-        endpoint=os.getenv("NEATLOGS_ENDPOINT", "http://localhost:3000/api/data/v4/batch"),
+        endpoint=os.getenv("NEATLOGS_ENDPOINT", "http://localhost:4100"),
         workflow_name="support-workflow-api-server",
         instrumentations=["openai", "chromadb", "mcp", "haystack"],
         debug=True,

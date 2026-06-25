@@ -29,6 +29,7 @@ from opentelemetry.sdk.trace import SpanLimits, TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.sdk.trace.sampling import TraceIdRatioBased
 
+from ._wrap_utils import _normalize_traces_endpoint
 from .core.logger import get_logger
 from .core.span_processor import NeatlogsSpanProcessor
 from .instrumentation.manager import InstrumentationManager
@@ -213,7 +214,8 @@ def init(
 
     from urllib.parse import urlparse as _urlparse
 
-    _parsed = _urlparse(endpoint)
+    traces_endpoint = _normalize_traces_endpoint(endpoint)
+    _parsed = _urlparse(traces_endpoint)
     _base_url = f"{_parsed.scheme}://{_parsed.netloc}"
 
     global _session_config
@@ -297,9 +299,7 @@ def init(
     # BatchSpanProcessor + OTLPSpanExporter: standard transport
     if not disable_export_resolved:
         otlp_headers = {"x-api-key": resolved_key}
-        # Always send to {base_url}/v1/traces regardless of what endpoint string was passed.
-        # Users may pass the legacy /api/data/v4/batch path; we normalise to the OTLP path here.
-        traces_endpoint = endpoint if endpoint.endswith("/v1/traces") else f"{_base_url}/v1/traces"
+        # Always send traces to the OTLP traces endpoint for the configured base URL.
         otlp_exporter = OTLPSpanExporter(
             endpoint=traces_endpoint,
             headers=otlp_headers,

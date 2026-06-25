@@ -12,6 +12,7 @@ import json
 import os
 import time
 from typing import Any, Callable, Dict, List, Optional
+from urllib.parse import urlparse
 
 from opentelemetry import context as context_api
 from opentelemetry import trace as otel_trace
@@ -28,6 +29,28 @@ _bootstrap_warned = False
 _wrapper_config: Dict[str, Any] = {}
 
 
+def _normalize_traces_endpoint(endpoint: str) -> str:
+    """Convert a Neatlogs base endpoint into the OTLP traces endpoint."""
+    raw = (endpoint or "").strip().rstrip("/")
+    if not raw:
+        raw = "https://ingest.neatlogs.com"
+
+    if raw.endswith("/v1/traces"):
+        return raw
+
+    parsed = urlparse(raw)
+    if parsed.scheme and parsed.netloc:
+        if parsed.path not in ("", "/"):
+            raise ValueError(
+                "NEATLOGS_ENDPOINT must be a base URL or an OTLP traces URL ending in /v1/traces."
+            )
+        return f"{parsed.scheme}://{parsed.netloc}/v1/traces"
+
+    raise ValueError(
+        "NEATLOGS_ENDPOINT must be a base URL or an OTLP traces URL ending in /v1/traces."
+    )
+
+
 def configure(**kwargs: Any) -> None:
     """
     Optional configuration for wrapper-only mode (no neatlogs.init() needed).
@@ -35,7 +58,7 @@ def configure(**kwargs: Any) -> None:
     Args:
         workflow_name: Logical grouping for traces
         session_id: Session identifier
-        endpoint: Backend URL (default: https://cloud.neatlogs.com)
+        endpoint: Backend URL (default: https://ingest.neatlogs.com)
         api_key: Project write key (or set NEATLOGS_API_KEY env var)
     """
     _wrapper_config.update(kwargs)
@@ -84,10 +107,9 @@ def _bootstrap_from_env(api_key: str) -> None:
 
     endpoint = (
         _wrapper_config.get("endpoint")
-        or os.environ.get("NEATLOGS_ENDPOINT", "https://cloud.neatlogs.com")
+        or os.environ.get("NEATLOGS_ENDPOINT", "https://ingest.neatlogs.com")
     )
-    if not endpoint.endswith("/v1/traces"):
-        endpoint = f"{endpoint.rstrip('/')}/v1/traces"
+    endpoint = _normalize_traces_endpoint(endpoint)
 
     workflow_name = _wrapper_config.get("workflow_name") or "neatlogs-app"
 

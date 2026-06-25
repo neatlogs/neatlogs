@@ -297,8 +297,7 @@ def init(
     # BatchSpanProcessor + OTLPSpanExporter: standard transport
     if not disable_export_resolved:
         otlp_headers = {"x-api-key": resolved_key}
-        # Always send to {base_url}/v1/traces regardless of what endpoint string was passed.
-        # Users may pass the legacy /api/data/v4/batch path; we normalise to the OTLP path here.
+        # Always send traces to the OTLP traces endpoint for the configured base URL.
         traces_endpoint = endpoint if endpoint.endswith("/v1/traces") else f"{_base_url}/v1/traces"
         otlp_exporter = OTLPSpanExporter(
             endpoint=traces_endpoint,

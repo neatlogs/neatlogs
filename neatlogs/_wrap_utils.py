@@ -30,22 +30,25 @@ _wrapper_config: Dict[str, Any] = {}
 
 
 def _normalize_traces_endpoint(endpoint: str) -> str:
-    """
-    Convert a user-provided Neatlogs endpoint into the OTLP traces endpoint.
+    """Convert a Neatlogs base endpoint into the OTLP traces endpoint."""
+    raw = (endpoint or "").strip().rstrip("/")
+    if not raw:
+        raw = "https://ingest.neatlogs.com"
 
-    Users should pass a base URL such as https://ingest.neatlogs.com. Older
-    examples sometimes passed legacy ingest paths; wrapper auto-bootstrap must
-    strip those paths before appending /v1/traces.
-    """
-    raw = (endpoint or "https://cloud.neatlogs.com").strip().rstrip("/")
     if raw.endswith("/v1/traces"):
         return raw
 
     parsed = urlparse(raw)
     if parsed.scheme and parsed.netloc:
+        if parsed.path not in ("", "/"):
+            raise ValueError(
+                "NEATLOGS_ENDPOINT must be a base URL or an OTLP traces URL ending in /v1/traces."
+            )
         return f"{parsed.scheme}://{parsed.netloc}/v1/traces"
 
-    return f"{raw}/v1/traces"
+    raise ValueError(
+        "NEATLOGS_ENDPOINT must be a base URL or an OTLP traces URL ending in /v1/traces."
+    )
 
 
 def configure(**kwargs: Any) -> None:
@@ -55,7 +58,7 @@ def configure(**kwargs: Any) -> None:
     Args:
         workflow_name: Logical grouping for traces
         session_id: Session identifier
-        endpoint: Backend URL (default: https://cloud.neatlogs.com)
+        endpoint: Backend URL (default: https://ingest.neatlogs.com)
         api_key: Project write key (or set NEATLOGS_API_KEY env var)
     """
     _wrapper_config.update(kwargs)
@@ -104,7 +107,7 @@ def _bootstrap_from_env(api_key: str) -> None:
 
     endpoint = (
         _wrapper_config.get("endpoint")
-        or os.environ.get("NEATLOGS_ENDPOINT", "https://cloud.neatlogs.com")
+        or os.environ.get("NEATLOGS_ENDPOINT", "https://ingest.neatlogs.com")
     )
     endpoint = _normalize_traces_endpoint(endpoint)
 

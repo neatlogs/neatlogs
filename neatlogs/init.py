@@ -33,6 +33,7 @@ from ._wrap_utils import _normalize_traces_endpoint
 from .core.logger import get_logger
 from .core.span_processor import NeatlogsSpanProcessor
 from .instrumentation.manager import InstrumentationManager
+from .instrumentation.registry import INSTRUMENTATION_REGISTRY
 from .version import __version__
 
 logger = get_logger()
@@ -90,6 +91,20 @@ def _span_limits_for_capture_everything() -> SpanLimits:
     return SpanLimits(max_span_attributes=_DEFAULT_MAX_SPAN_ATTRIBUTES)
 
 
+def _resolve_instrumentations(instrumentations: List[str]) -> tuple[List[str], List[str]]:
+    instrumentation_tags = []
+    libraries = []
+    known_tags = INSTRUMENTATION_REGISTRY["tags"]
+
+    for entry in instrumentations:
+        if entry in known_tags:
+            instrumentation_tags.append(entry)
+        else:
+            libraries.append(entry)
+
+    return instrumentation_tags, libraries
+
+
 def init(
     api_key: Optional[str] = None,
     endpoint: str = "https://ingest.neatlogs.com",
@@ -132,7 +147,7 @@ def init(
         end_user_metadata: Optional dict of arbitrary end-user fields stored as JSON
                  (e.g. {"plan": "pro"}). Pairs with end_user_id.
         tags: Global tags for all traces (list of strings only, e.g., ['production', 'api-v2'])
-        instrumentations: Specific libraries to instrument
+        instrumentations: Specific libraries or preset tags to instrument
         sample_rate: Trace sampling rate (0.0-1.0)
         batch_size: Max spans per batch
         flush_interval: Seconds between batch flushes
@@ -405,7 +420,8 @@ def init(
     manager.instrument_http()
 
     if instrumentations:
-        manager.instrument(libraries=instrumentations)
+        instrumentation_tags, libraries = _resolve_instrumentations(instrumentations)
+        manager.instrument(tags=instrumentation_tags, libraries=libraries)
         if debug:
             logger.debug(f"Instrumented libraries: {manager.instrumented}")
 

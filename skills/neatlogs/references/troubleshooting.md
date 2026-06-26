@@ -61,6 +61,17 @@ If traces are not appearing in the NeatLogs dashboard, check these in order:
 
 > **You do NOT need a manual `@span(kind="WORKFLOW")` for a trace to render.** Auto-instrumentation and `neatlogs.wrap()` open a `WORKFLOW` root automatically for an otherwise-parentless call. A manual root is only for **grouping** multiple calls under one trace — its absence is never the reason a trace is missing.
 
+### Local Trace Doctor
+
+If you can reproduce the run locally, turn on processed span logging and run Trace Doctor before debugging by hand:
+
+```bash
+NEATLOGS_LOG_SPANS=true python app.py
+neatlogs-doctor spans_optimized.log
+```
+
+Trace Doctor checks for empty logs, rootless HTTP-only traces, missing root spans, agent traces without LLM children, and LLM/tool/retriever spans missing input or output.
+
 ---
 
 ## 4. CrewAI Instrumentation Key Selection

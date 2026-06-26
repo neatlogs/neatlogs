@@ -44,6 +44,7 @@ class TestOpenAIInstrumentation:
         # The neatlogs wrapper caches its Tracer process-globally; clear it so it
         # rebinds to THIS test's provider (parity with the other wrapper tests).
         import neatlogs._wrap_utils as _wu
+
         _wu._wrapper_tracer = None
 
         # 2. Initialize neatlogs (mocking preventing real network calls)
@@ -115,6 +116,71 @@ class TestOpenAIInstrumentation:
             == "Hello! How can I help you today?"
         )
         assert llm_span.attributes.get("neatlogs.llm.token_count.total") == 30
+
+    @respx.mock
+    def test_openai_call_runs_when_tracing_setup_fails(self):
+        route = respx.post("https://api.openai.com/v1/chat/completions").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "choices": [{"message": {"role": "assistant", "content": "fallback ok"}}],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+                },
+            )
+        )
+
+        from openai import OpenAI
+
+        client = OpenAI(api_key="fake-key")
+
+        with patch("neatlogs.openai.get_provider_tracer", side_effect=RuntimeError("trace failed")):
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": "hi"}],
+            )
+
+        assert route.called
+        assert response.choices[0].message.content == "fallback ok"
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_async_openai_call_runs_when_tracing_setup_fails(self):
+        route = respx.post("https://api.openai.com/v1/chat/completions").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "choices": [{"message": {"role": "assistant", "content": "async fallback ok"}}],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+                },
+            )
+        )
+
+        from openai import AsyncOpenAI
+
+        client = AsyncOpenAI(api_key="fake-key")
+
+        with patch("neatlogs.openai.get_provider_tracer", side_effect=RuntimeError("trace failed")):
+            response = await client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": "hi"}],
+            )
+
+        assert route.called
+        assert response.choices[0].message.content == "async fallback ok"
+
+    def test_original_openai_exception_propagates_when_tracing_setup_fails(self):
+        from neatlogs.openai import _patch_completions
+
+        class FakeCompletions:
+            def create(self, *args, **kwargs):
+                raise ValueError("sdk failure")
+
+        completions = FakeCompletions()
+        _patch_completions(completions)
+
+        with patch("neatlogs.openai.get_provider_tracer", side_effect=RuntimeError("trace failed")):
+            with pytest.raises(ValueError, match="sdk failure"):
+                completions.create(model="gpt-4o-mini", messages=[])
 
     # ==========================================
     # ADVANCED WORKFLOW TESTS (BUG HUNTING)

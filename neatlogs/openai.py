@@ -102,6 +102,26 @@ def _safe(fn, resource, **kw):
         pass
 
 
+def _record_error(span: Any, error: Exception) -> None:
+    try:
+        span.set_status(StatusCode.ERROR, str(error))
+        span.record_exception(error)
+        span.end()
+    except Exception:
+        pass
+
+
+def _finish_ok(span: Any, finalize) -> None:
+    try:
+        finalize()
+    except Exception:
+        try:
+            span.set_status(StatusCode.OK)
+            span.end()
+        except Exception:
+            pass
+
+
 def _patch_completions(completions: Any) -> None:
     if getattr(completions, "_neatlogs_patched", False):
         return
@@ -112,84 +132,83 @@ def _patch_completions(completions: Any) -> None:
         if is_suppressed():
             return orig_create(*args, **kwargs)
 
-        model = kwargs.get("model", "")
-        messages = kwargs.get("messages", [])
-        is_stream = kwargs.get("stream", False)
+        try:
+            model = kwargs.get("model", "")
+            messages = kwargs.get("messages", [])
+            is_stream = kwargs.get("stream", False)
 
-        if is_stream:
-            opts = kwargs.get("stream_options") or {}
-            if not opts.get("include_usage"):
-                opts["include_usage"] = True
-                kwargs["stream_options"] = opts
+            if is_stream:
+                opts = kwargs.get("stream_options") or {}
+                if not opts.get("include_usage"):
+                    opts["include_usage"] = True
+                    kwargs["stream_options"] = opts
 
-        tracer = get_provider_tracer()
-        span = tracer.start_span(
-            name="openai.chat.completions.create",
-            attributes={
-                "neatlogs.span.kind": "llm",
-                "neatlogs.llm.provider": "openai",
-                "neatlogs.llm.system": "openai",
-                "neatlogs.llm.model_name": model,
-                "neatlogs.llm.is_streaming": is_stream,
-            },
-        )
+            tracer = get_provider_tracer()
+            span = tracer.start_span(
+                name="openai.chat.completions.create",
+                attributes={
+                    "neatlogs.span.kind": "llm",
+                    "neatlogs.llm.provider": "openai",
+                    "neatlogs.llm.system": "openai",
+                    "neatlogs.llm.model_name": model,
+                    "neatlogs.llm.is_streaming": is_stream,
+                },
+            )
 
-        # Input messages
-        for i, msg in enumerate(messages):
-            role = msg.get("role", "")
-            content = msg.get("content", "")
-            span.set_attribute(f"neatlogs.llm.input_messages.{i}.role", role)
-            if isinstance(content, str):
-                span.set_attribute(f"neatlogs.llm.input_messages.{i}.content", content)
-            else:
-                span.set_attribute(f"neatlogs.llm.input_messages.{i}.content", serialize(content))
-            if msg.get("tool_call_id"):
-                span.set_attribute(
-                    f"neatlogs.llm.input_messages.{i}.tool_call_id", msg["tool_call_id"]
-                )
-
-        # Tools
-        tools = kwargs.get("tools")
-        if tools:
-            for i, tool in enumerate(tools):
-                fn = tool.get("function", {})
-                span.set_attribute(f"neatlogs.llm.tools.{i}.name", fn.get("name", ""))
-                if fn.get("description"):
-                    span.set_attribute(f"neatlogs.llm.tools.{i}.description", fn["description"])
-                if fn.get("parameters"):
+            for i, msg in enumerate(messages):
+                role = msg.get("role", "")
+                content = msg.get("content", "")
+                span.set_attribute(f"neatlogs.llm.input_messages.{i}.role", role)
+                if isinstance(content, str):
+                    span.set_attribute(f"neatlogs.llm.input_messages.{i}.content", content)
+                else:
                     span.set_attribute(
-                        f"neatlogs.llm.tools.{i}.input_schema", serialize(fn["parameters"])
+                        f"neatlogs.llm.input_messages.{i}.content", serialize(content)
+                    )
+                if msg.get("tool_call_id"):
+                    span.set_attribute(
+                        f"neatlogs.llm.input_messages.{i}.tool_call_id", msg["tool_call_id"]
                     )
 
-        # Invocation parameters
-        for param in (
-            "temperature",
-            "top_p",
-            "max_tokens",
-            "frequency_penalty",
-            "presence_penalty",
-        ):
-            if param in kwargs and kwargs[param] is not None:
-                span.set_attribute(f"neatlogs.llm.{param}", kwargs[param])
+            tools = kwargs.get("tools")
+            if tools:
+                for i, tool in enumerate(tools):
+                    fn = tool.get("function", {})
+                    span.set_attribute(f"neatlogs.llm.tools.{i}.name", fn.get("name", ""))
+                    if fn.get("description"):
+                        span.set_attribute(f"neatlogs.llm.tools.{i}.description", fn["description"])
+                    if fn.get("parameters"):
+                        span.set_attribute(
+                            f"neatlogs.llm.tools.{i}.input_schema", serialize(fn["parameters"])
+                        )
 
-        # User-supplied metadata (top-level `metadata=` or `extra_body={"metadata": ...}`).
-        _set_request_metadata(span, kwargs)
+            for param in (
+                "temperature",
+                "top_p",
+                "max_tokens",
+                "frequency_penalty",
+                "presence_penalty",
+            ):
+                if param in kwargs and kwargs[param] is not None:
+                    span.set_attribute(f"neatlogs.llm.{param}", kwargs[param])
 
-        start = time.perf_counter()
+            _set_request_metadata(span, kwargs)
+
+            start = time.perf_counter()
+        except Exception:
+            return orig_create(*args, **kwargs)
 
         try:
             response = orig_create(*args, **kwargs)
         except Exception as e:
-            span.set_status(StatusCode.ERROR, str(e))
-            span.record_exception(e)
-            span.end()
+            _record_error(span, e)
             raise
 
         if is_stream:
             return SyncStreamWrapper(response, span, _finalize_stream)
 
         duration_ms = (time.perf_counter() - start) * 1000
-        _finalize_response(span, response, duration_ms)
+        _finish_ok(span, lambda: _finalize_response(span, response, duration_ms))
         return response
 
     completions.create = patched_create
@@ -206,77 +225,79 @@ def _patch_async_completions(completions: Any) -> None:
         if is_suppressed():
             return await orig_create(*args, **kwargs)
 
-        model = kwargs.get("model", "")
-        messages = kwargs.get("messages", [])
-        is_stream = kwargs.get("stream", False)
+        try:
+            model = kwargs.get("model", "")
+            messages = kwargs.get("messages", [])
+            is_stream = kwargs.get("stream", False)
 
-        if is_stream:
-            opts = kwargs.get("stream_options") or {}
-            if not opts.get("include_usage"):
-                opts["include_usage"] = True
-                kwargs["stream_options"] = opts
+            if is_stream:
+                opts = kwargs.get("stream_options") or {}
+                if not opts.get("include_usage"):
+                    opts["include_usage"] = True
+                    kwargs["stream_options"] = opts
 
-        tracer = get_provider_tracer()
-        span = tracer.start_span(
-            name="openai.chat.completions.create",
-            attributes={
-                "neatlogs.span.kind": "llm",
-                "neatlogs.llm.provider": "openai",
-                "neatlogs.llm.system": "openai",
-                "neatlogs.llm.model_name": model,
-                "neatlogs.llm.is_streaming": is_stream,
-            },
-        )
+            tracer = get_provider_tracer()
+            span = tracer.start_span(
+                name="openai.chat.completions.create",
+                attributes={
+                    "neatlogs.span.kind": "llm",
+                    "neatlogs.llm.provider": "openai",
+                    "neatlogs.llm.system": "openai",
+                    "neatlogs.llm.model_name": model,
+                    "neatlogs.llm.is_streaming": is_stream,
+                },
+            )
 
-        for i, msg in enumerate(messages):
-            role = msg.get("role", "")
-            content = msg.get("content", "")
-            span.set_attribute(f"neatlogs.llm.input_messages.{i}.role", role)
-            if isinstance(content, str):
-                span.set_attribute(f"neatlogs.llm.input_messages.{i}.content", content)
-            else:
-                span.set_attribute(f"neatlogs.llm.input_messages.{i}.content", serialize(content))
-
-        tools = kwargs.get("tools")
-        if tools:
-            for i, tool in enumerate(tools):
-                fn = tool.get("function", {})
-                span.set_attribute(f"neatlogs.llm.tools.{i}.name", fn.get("name", ""))
-                if fn.get("description"):
-                    span.set_attribute(f"neatlogs.llm.tools.{i}.description", fn["description"])
-                if fn.get("parameters"):
+            for i, msg in enumerate(messages):
+                role = msg.get("role", "")
+                content = msg.get("content", "")
+                span.set_attribute(f"neatlogs.llm.input_messages.{i}.role", role)
+                if isinstance(content, str):
+                    span.set_attribute(f"neatlogs.llm.input_messages.{i}.content", content)
+                else:
                     span.set_attribute(
-                        f"neatlogs.llm.tools.{i}.input_schema", serialize(fn["parameters"])
+                        f"neatlogs.llm.input_messages.{i}.content", serialize(content)
                     )
 
-        for param in (
-            "temperature",
-            "top_p",
-            "max_tokens",
-            "frequency_penalty",
-            "presence_penalty",
-        ):
-            if param in kwargs and kwargs[param] is not None:
-                span.set_attribute(f"neatlogs.llm.{param}", kwargs[param])
+            tools = kwargs.get("tools")
+            if tools:
+                for i, tool in enumerate(tools):
+                    fn = tool.get("function", {})
+                    span.set_attribute(f"neatlogs.llm.tools.{i}.name", fn.get("name", ""))
+                    if fn.get("description"):
+                        span.set_attribute(f"neatlogs.llm.tools.{i}.description", fn["description"])
+                    if fn.get("parameters"):
+                        span.set_attribute(
+                            f"neatlogs.llm.tools.{i}.input_schema", serialize(fn["parameters"])
+                        )
 
-        # User-supplied metadata (top-level `metadata=` or `extra_body={"metadata": ...}`).
-        _set_request_metadata(span, kwargs)
+            for param in (
+                "temperature",
+                "top_p",
+                "max_tokens",
+                "frequency_penalty",
+                "presence_penalty",
+            ):
+                if param in kwargs and kwargs[param] is not None:
+                    span.set_attribute(f"neatlogs.llm.{param}", kwargs[param])
 
-        start = time.perf_counter()
+            _set_request_metadata(span, kwargs)
+
+            start = time.perf_counter()
+        except Exception:
+            return await orig_create(*args, **kwargs)
 
         try:
             response = await orig_create(*args, **kwargs)
         except Exception as e:
-            span.set_status(StatusCode.ERROR, str(e))
-            span.record_exception(e)
-            span.end()
+            _record_error(span, e)
             raise
 
         if is_stream:
             return AsyncStreamWrapper(response, span, _finalize_stream)
 
         duration_ms = (time.perf_counter() - start) * 1000
-        _finalize_response(span, response, duration_ms)
+        _finish_ok(span, lambda: _finalize_response(span, response, duration_ms))
         return response
 
     completions.create = patched_create
@@ -293,36 +314,37 @@ def _patch_responses(responses: Any) -> None:
         if is_suppressed():
             return orig_create(*args, **kwargs)
 
-        model = kwargs.get("model", "")
-        is_stream = kwargs.get("stream", False)
-        tracer = get_provider_tracer()
-        span = tracer.start_span(
-            name="openai.responses.create",
-            attributes={
-                "neatlogs.span.kind": "llm",
-                "neatlogs.llm.provider": "openai",
-                "neatlogs.llm.system": "openai",
-                "neatlogs.llm.model_name": model,
-                "neatlogs.llm.is_streaming": bool(is_stream),
-                "neatlogs.llm.input_messages.0.role": "user",
-                "neatlogs.llm.input_messages.0.content": serialize(kwargs.get("input", "")),
-            },
-        )
+        try:
+            model = kwargs.get("model", "")
+            is_stream = kwargs.get("stream", False)
+            tracer = get_provider_tracer()
+            span = tracer.start_span(
+                name="openai.responses.create",
+                attributes={
+                    "neatlogs.span.kind": "llm",
+                    "neatlogs.llm.provider": "openai",
+                    "neatlogs.llm.system": "openai",
+                    "neatlogs.llm.model_name": model,
+                    "neatlogs.llm.is_streaming": bool(is_stream),
+                    "neatlogs.llm.input_messages.0.role": "user",
+                    "neatlogs.llm.input_messages.0.content": serialize(kwargs.get("input", "")),
+                },
+            )
 
-        start = time.perf_counter()
+            start = time.perf_counter()
+        except Exception:
+            return orig_create(*args, **kwargs)
         try:
             response = orig_create(*args, **kwargs)
         except Exception as e:
-            span.set_status(StatusCode.ERROR, str(e))
-            span.record_exception(e)
-            span.end()
+            _record_error(span, e)
             raise
 
         if is_stream:
             return SyncStreamWrapper(response, span, _finalize_responses_stream)
 
         duration_ms = (time.perf_counter() - start) * 1000
-        _finalize_responses_response(span, response, duration_ms)
+        _finish_ok(span, lambda: _finalize_responses_response(span, response, duration_ms))
         return response
 
     responses.create = patched_create
@@ -530,21 +552,18 @@ def _patch_method(
         async def patched(*args, **kwargs):
             if is_suppressed():
                 return await orig(*args, **kwargs)
-            tracer = get_provider_tracer()
-            span = tracer.start_span(name=start_attrs.__name__, attributes=start_attrs(kwargs))
-            start = time.perf_counter()
+            try:
+                tracer = get_provider_tracer()
+                span = tracer.start_span(name=start_attrs.__name__, attributes=start_attrs(kwargs))
+                start = time.perf_counter()
+            except Exception:
+                return await orig(*args, **kwargs)
             try:
                 response = await orig(*args, **kwargs)
             except Exception as e:
-                span.set_status(StatusCode.ERROR, str(e))
-                span.record_exception(e)
-                span.end()
+                _record_error(span, e)
                 raise
-            try:
-                finalize(span, response, (time.perf_counter() - start) * 1000)
-            except Exception:
-                span.set_status(StatusCode.OK)
-                span.end()
+            _finish_ok(span, lambda: finalize(span, response, (time.perf_counter() - start) * 1000))
             return response
 
     else:
@@ -552,21 +571,18 @@ def _patch_method(
         def patched(*args, **kwargs):
             if is_suppressed():
                 return orig(*args, **kwargs)
-            tracer = get_provider_tracer()
-            span = tracer.start_span(name=start_attrs.__name__, attributes=start_attrs(kwargs))
-            start = time.perf_counter()
+            try:
+                tracer = get_provider_tracer()
+                span = tracer.start_span(name=start_attrs.__name__, attributes=start_attrs(kwargs))
+                start = time.perf_counter()
+            except Exception:
+                return orig(*args, **kwargs)
             try:
                 response = orig(*args, **kwargs)
             except Exception as e:
-                span.set_status(StatusCode.ERROR, str(e))
-                span.record_exception(e)
-                span.end()
+                _record_error(span, e)
                 raise
-            try:
-                finalize(span, response, (time.perf_counter() - start) * 1000)
-            except Exception:
-                span.set_status(StatusCode.OK)
-                span.end()
+            _finish_ok(span, lambda: finalize(span, response, (time.perf_counter() - start) * 1000))
             return response
 
     setattr(resource, method_name, patched)
@@ -592,32 +608,38 @@ def _patch_async_responses(responses: Any) -> None:
     async def patched_create(*args, **kwargs):
         if is_suppressed():
             return await orig_create(*args, **kwargs)
-        model = kwargs.get("model", "")
-        is_stream = kwargs.get("stream", False)
-        tracer = get_provider_tracer()
-        span = tracer.start_span(
-            name="openai.responses.create",
-            attributes={
-                "neatlogs.span.kind": "llm",
-                "neatlogs.llm.provider": "openai",
-                "neatlogs.llm.system": "openai",
-                "neatlogs.llm.model_name": model,
-                "neatlogs.llm.is_streaming": bool(is_stream),
-                "neatlogs.llm.input_messages.0.role": "user",
-                "neatlogs.llm.input_messages.0.content": serialize(kwargs.get("input", "")),
-            },
-        )
-        start = time.perf_counter()
+        try:
+            model = kwargs.get("model", "")
+            is_stream = kwargs.get("stream", False)
+            tracer = get_provider_tracer()
+            span = tracer.start_span(
+                name="openai.responses.create",
+                attributes={
+                    "neatlogs.span.kind": "llm",
+                    "neatlogs.llm.provider": "openai",
+                    "neatlogs.llm.system": "openai",
+                    "neatlogs.llm.model_name": model,
+                    "neatlogs.llm.is_streaming": bool(is_stream),
+                    "neatlogs.llm.input_messages.0.role": "user",
+                    "neatlogs.llm.input_messages.0.content": serialize(kwargs.get("input", "")),
+                },
+            )
+            start = time.perf_counter()
+        except Exception:
+            return await orig_create(*args, **kwargs)
         try:
             response = await orig_create(*args, **kwargs)
         except Exception as e:
-            span.set_status(StatusCode.ERROR, str(e))
-            span.record_exception(e)
-            span.end()
+            _record_error(span, e)
             raise
         if is_stream:
             return AsyncStreamWrapper(response, span, _finalize_responses_stream)
-        _finalize_responses_response(span, response, (time.perf_counter() - start) * 1000)
+        _finish_ok(
+            span,
+            lambda: _finalize_responses_response(
+                span, response, (time.perf_counter() - start) * 1000
+            ),
+        )
         return response
 
     responses.create = patched_create

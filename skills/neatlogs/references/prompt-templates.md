@@ -2,6 +2,10 @@
 
 Prompt template tracking and management in the NeatLogs SDK. Covers local template classes (`SystemPromptTemplate`, `UserPromptTemplate`), integration with `trace()` and `bind_templates()`, CrewAI task-level tracking, and the server-side Prompt Management API.
 
+Use `neatlogs-prompts push path/to/prompts.py --label production` to publish
+module-level `SystemPromptTemplate` and `UserPromptTemplate` objects from code to
+the Prompts dashboard.
+
 ---
 
 ## 1. `SystemPromptTemplate` Class

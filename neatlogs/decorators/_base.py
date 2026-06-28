@@ -56,7 +56,9 @@ def _capture_code_attrs(func: Callable[..., Any]) -> Dict[str, Any]:
         _, lineno = inspect.getsourcelines(target)
         attrs["code.line.number"] = lineno
     except (TypeError, OSError):
-        pass
+        code = getattr(target, "__code__", None)
+        if code is not None:
+            attrs["code.line.number"] = code.co_firstlineno
     module = getattr(target, "__module__", None)
     if module:
         attrs["code.namespace"] = module

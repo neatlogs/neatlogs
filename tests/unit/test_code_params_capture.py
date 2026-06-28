@@ -30,6 +30,14 @@ def _install(tracer_provider):
     trace.set_tracer_provider(tracer_provider)
 
 
+def _expected_line_number(func):
+    target = inspect.unwrap(func)
+    try:
+        return inspect.getsourcelines(target)[1]
+    except (TypeError, OSError):
+        return target.__code__.co_firstlineno
+
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
@@ -76,9 +84,7 @@ def test_sync_decorator_sets_code_line_number(tracer_provider, in_memory_span_ex
     def my_agent():
         pass
 
-    expected_lineno = inspect.getsourcelines(
-        my_agent.__wrapped__ if hasattr(my_agent, "__wrapped__") else my_agent
-    )[1]
+    expected_lineno = _expected_line_number(my_agent)
 
     my_agent()
 
@@ -209,7 +215,7 @@ def test_stacked_decorator_reports_inner_function_location(
     def inner_tool():
         pass
 
-    expected_lineno = inspect.getsourcelines(inspect.unwrap(inner_tool))[1]
+    expected_lineno = _expected_line_number(inner_tool)
 
     inner_tool()
 

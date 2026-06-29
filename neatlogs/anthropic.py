@@ -47,26 +47,54 @@ def wrap_anthropic_client(client: Any) -> Any:
     Wrap an Anthropic client instance. Patches messages (create/stream/parse/
     count_tokens), legacy completions, and beta.messages.
     """
-    _patch_messages(client.messages)
-    _extra_message_methods(client.messages, is_async=False)
-    _patch_legacy_completions(getattr(client, "completions", None), is_async=False)
+    messages = getattr(client, "messages", None)
+    _safe(_patch_messages, messages)
+    if messages is not None:
+        _safe(_extra_message_methods, messages, is_async=False)
+    _safe(_patch_legacy_completions, getattr(client, "completions", None), is_async=False)
     beta = getattr(client, "beta", None)
-    if beta is not None and getattr(beta, "messages", None) is not None:
-        _patch_messages(beta.messages)
-        _extra_message_methods(beta.messages, is_async=False)
+    if beta is not None:
+        beta_messages = getattr(beta, "messages", None)
+        _safe(_patch_messages, beta_messages)
+        if beta_messages is not None:
+            _safe(_extra_message_methods, beta_messages, is_async=False)
     return client
 
 
 def wrap_async_anthropic_client(client: Any) -> Any:
     """Wrap an AsyncAnthropic client instance — full coverage."""
-    _patch_async_messages(client.messages)
-    _extra_message_methods(client.messages, is_async=True)
-    _patch_legacy_completions(getattr(client, "completions", None), is_async=True)
+    messages = getattr(client, "messages", None)
+    _safe(_patch_async_messages, messages)
+    if messages is not None:
+        _safe(_extra_message_methods, messages, is_async=True)
+    _safe(_patch_legacy_completions, getattr(client, "completions", None), is_async=True)
     beta = getattr(client, "beta", None)
-    if beta is not None and getattr(beta, "messages", None) is not None:
-        _patch_async_messages(beta.messages)
-        _extra_message_methods(beta.messages, is_async=True)
+    if beta is not None:
+        beta_messages = getattr(beta, "messages", None)
+        _safe(_patch_async_messages, beta_messages)
+        if beta_messages is not None:
+            _safe(_extra_message_methods, beta_messages, is_async=True)
     return client
+
+
+def _resource(client: Any, *path):
+    """Safely walk a nested resource path."""
+    obj = client
+    for p in path:
+        obj = getattr(obj, p, None)
+        if obj is None:
+            return None
+    return obj
+
+
+def _safe(fn, resource, **kw):
+    """Call a patch fn only if the resource exists; never raise."""
+    if resource is None:
+        return
+    try:
+        fn(resource, **kw) if kw else fn(resource)
+    except Exception:
+        pass
 
 
 def _patch_messages(messages: Any) -> None:

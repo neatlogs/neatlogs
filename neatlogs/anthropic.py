@@ -77,16 +77,6 @@ def wrap_async_anthropic_client(client: Any) -> Any:
     return client
 
 
-def _resource(client: Any, *path):
-    """Safely walk a nested resource path."""
-    obj = client
-    for p in path:
-        obj = getattr(obj, p, None)
-        if obj is None:
-            return None
-    return obj
-
-
 def _safe(fn, resource, **kw):
     """Call a patch fn only if the resource exists; never raise."""
     if resource is None:

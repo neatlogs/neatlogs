@@ -54,13 +54,22 @@ def apply_end_user_attributes(
     When ``is_root`` is False the span is a child and the value is ignored — the
     backend reads end-user from the root span and rolls it up to the trace and
     session. ``end_user_id`` is set as-is; ``end_user_metadata`` is JSON-encoded.
+
+    Falls back to the ``identify()`` context when no explicit value is given —
+    this is how wrapper-only code (whose root is an auto-root) gets an end-user
+    without a user-controlled root.
     """
+    if not (end_user_id or end_user_metadata) and is_root:
+        from .identity import current_end_user_id, current_end_user_metadata
+
+        end_user_id = current_end_user_id()
+        end_user_metadata = current_end_user_metadata()
     if not (end_user_id or end_user_metadata):
         return
     if not is_root:
         logger.debug(
             "[end_user] Ignoring end_user_id/metadata on a non-root span — "
-            "declare it on the trace root (top-level trace()/@span) or init()."
+            "declare it on the trace root (top-level trace()/@span) or identify()."
         )
         return
     try:

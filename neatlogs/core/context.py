@@ -21,6 +21,7 @@ def trace(
     version: Optional[str] = None,
     capture_stdout: bool = False,
     mask: Optional[Callable] = None,
+    session_id: Optional[str] = None,
     end_user_id: Optional[str] = None,
     end_user_metadata: Optional[Dict[str, Any]] = None,
     **attributes,
@@ -123,6 +124,7 @@ def trace(
         UserPromptTemplate,
     )
     from .end_user import apply_end_user_attributes
+    from .session import apply_session_attributes
 
     logger = logging.getLogger(__name__)
     tracer = otel_trace.get_tracer(__name__)
@@ -136,9 +138,15 @@ def trace(
     if system_prompt_variables is not None:
         prompt_variables = system_prompt_variables
 
+    from .identity import current_end_user_id, current_end_user_metadata, current_session_id
+
     session_config = get_session_config()
-    session_id = session_config.get("session_id")
     user_id = session_config.get("user_id")
+    # Identity resolution (per field): explicit per-call arg > identify() context.
+    # init() no longer carries session/end-user identity.
+    session_id = session_id or current_session_id()
+    end_user_id = end_user_id or current_end_user_id()
+    end_user_metadata = end_user_metadata or current_end_user_metadata()
     current_span = otel_trace.get_current_span()
     is_in_active_trace = current_span and current_span.is_recording()
 
@@ -212,6 +220,7 @@ def trace(
                     span, kind, template_string, prompt_variables, version, attributes
                 )
                 # This branch always creates a root span (new root trace).
+                apply_session_attributes(span, session_id, is_root=True)
                 apply_end_user_attributes(span, end_user_id, end_user_metadata, is_root=True)
                 if mask is not None:
                     from .mask import register_mask
@@ -233,8 +242,11 @@ def trace(
                 _set_span_attributes(
                     span, kind, template_string, prompt_variables, version, attributes
                 )
-                # End-user belongs to the trace root only. This span is a root
-                # when it is not nested inside an already-active trace.
+                # Session/end-user belong to the trace root only. This span is a
+                # root when it is not nested inside an already-active trace.
+                apply_session_attributes(
+                    span, session_id, is_root=not is_in_active_trace
+                )
                 apply_end_user_attributes(
                     span, end_user_id, end_user_metadata, is_root=not is_in_active_trace
                 )

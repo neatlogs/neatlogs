@@ -27,6 +27,7 @@ Available span kinds:
 """
 
 from .core.context import trace
+from .core.identity import identify
 from .core.crewai_task_registry import register_crewai_task
 from .core.llm_binder import bind_templates
 from .core.log import log
@@ -235,6 +236,7 @@ __all__ = [
     "shutdown",
     "span",
     "trace",
+    "identify",
     "log",
     "SystemPromptTemplate",
     "PromptTemplate",  # backward-compatible alias

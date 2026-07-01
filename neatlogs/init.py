@@ -6,8 +6,6 @@ import atexit
 import os
 import re
 import sys
-import time
-import uuid
 from typing import Any, Callable, Dict, List, Optional
 
 try:
@@ -94,11 +92,7 @@ def init(
     api_key: Optional[str] = None,
     endpoint: str = "https://ingest.neatlogs.com",
     workflow_name: Optional[str] = None,
-    session_id: Optional[str] = None,
-    auto_session: bool = False,
     user_id: Optional[str] = None,
-    end_user_id: Optional[str] = None,
-    end_user_metadata: Optional[Dict[str, Any]] = None,
     tags: Optional[List[str]] = None,
     instrumentations: Optional[List[str]] = None,
     sample_rate: float = 1.0,
@@ -119,18 +113,16 @@ def init(
         api_key: Neatlogs API key (or set NEATLOGS_API_KEY env var)
         endpoint: Neatlogs backend endpoint
         workflow_name: Logical grouping for traces
-        session_id: Custom session ID (for multi-turn conversations)
-        auto_session: Auto-generate session_id (useful for chatbots)
         user_id: Operator identifier — whoever is RUNNING the SDK (a developer, a
                  service account, the OS user). Propagates to all spans as a
                  resource attribute. NOT the end-user of your app.
-        end_user_id: Process-global default for the END-USER — the user of your
-                 application. Use this only for single-user processes (CLI, a
-                 per-user worker). On a multi-tenant server set the end-user per
-                 request via trace(end_user_id=...) instead. One end-user per trace;
-                 the backend rolls it up to the trace and its session.
-        end_user_metadata: Optional dict of arbitrary end-user fields stored as JSON
-                 (e.g. {"plan": "pro"}). Pairs with end_user_id.
+
+                 NOTE: session and end-user identity are NOT set here. They are
+                 per-request, not process-global. Set them at the trace root via
+                 ``@span(kind="WORKFLOW", session_id=..., end_user_id=...)`` /
+                 ``with neatlogs.trace(session_id=..., end_user_id=...)``, or for
+                 wrapper-only code via ``with neatlogs.identify(session_id=...,
+                 end_user_id=...)``.
         tags: Global tags for all traces (list of strings only, e.g., ['production', 'api-v2'])
         instrumentations: Specific libraries to instrument
         sample_rate: Trace sampling rate (0.0-1.0)
@@ -202,16 +194,6 @@ def init(
 
     resolved_workflow_name = _resolve_workflow_name(workflow_name)
 
-    final_session_id = None
-    if session_id:
-        final_session_id = session_id
-    elif auto_session:
-        timestamp = int(time.time())
-        random_suffix = uuid.uuid4().hex[:8]
-        final_session_id = f"session_{timestamp}_{random_suffix}"
-        if debug:
-            logger.debug(f"Auto-generated session_id: {final_session_id}")
-
     from urllib.parse import urlparse as _urlparse
 
     traces_endpoint = _normalize_traces_endpoint(endpoint)
@@ -219,34 +201,21 @@ def init(
     _base_url = f"{_parsed.scheme}://{_parsed.netloc}"
 
     global _session_config
-    _session_config["session_id"] = final_session_id
     _session_config["user_id"] = user_id
     _session_config["workflow_name"] = resolved_workflow_name
     _session_config["_api_key"] = resolved_key
     _session_config["_base_url"] = _base_url
 
+    # Session and end-user identity are deliberately NOT resource attributes:
+    # they are per-request, set at the trace root (trace()/@span) or via
+    # neatlogs.identify(). Only the operator user.id is process-global here.
     resource_attrs = {
         SERVICE_NAME: workflow_name or "neatlogs-app",
         "service.version": __version__,
         "neatlogs.workflow_name": resolved_workflow_name,
     }
-    if final_session_id:
-        resource_attrs["session.id"] = final_session_id
     if user_id:
         resource_attrs["user.id"] = user_id
-    # End-user identity: process-global default (single-user processes). On a
-    # server this is normally set per-request via trace(end_user_id=...), which
-    # takes precedence since span attributes override resource attributes.
-    if end_user_id:
-        from .core.end_user import END_USER_ID_KEY
-
-        resource_attrs[END_USER_ID_KEY] = str(end_user_id)
-    if end_user_metadata:
-        from .core.end_user import END_USER_METADATA_KEY, normalize_metadata
-
-        _eu_meta = normalize_metadata(end_user_metadata)
-        if _eu_meta:
-            resource_attrs[END_USER_METADATA_KEY] = _eu_meta
     if tags:
         # Tags must be a list of strings
         if not isinstance(tags, list):
@@ -417,7 +386,6 @@ def init(
         logger.info("Neatlogs SDK initialized successfully")
         logger.info(f"Endpoint: {endpoint}")
         logger.info(f"Workflow: {resolved_workflow_name}")
-        logger.info(f"Session: {final_session_id or '(none)'}")
         logger.info(f"User: {user_id or '(none)'}")
         logger.info(f"Tags: {tags or []}")
         logger.info(f"Instrumentations: {manager.instrumented or '(none)'}")

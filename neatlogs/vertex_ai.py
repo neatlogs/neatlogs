@@ -68,13 +68,30 @@ def wrap_vertex_ai_client(client: Any) -> Any:
     (generate_content + generate_content_stream) on sync and async, and chat
     sessions (Chat/AsyncChat send_message + send_message_stream).
     """
-    _patch_models(client.models)
-    _patch_models_extra(client.models, is_async=False)
-    if hasattr(client, "aio") and hasattr(client.aio, "models"):
-        _patch_async_models(client.aio.models)
-        _patch_models_extra(client.aio.models, is_async=True)
-    _patch_chat_classes()
+    models = getattr(client, "models", None)
+    _safe(_patch_models, models)
+    if models is not None:
+        _safe(_patch_models_extra, models, is_async=False)
+    aio = getattr(client, "aio", None)
+    aio_models = getattr(aio, "models", None) if aio is not None else None
+    if aio_models is not None:
+        _safe(_patch_async_models, aio_models)
+        _safe(_patch_models_extra, aio_models, is_async=True)
+    try:
+        _patch_chat_classes()
+    except Exception:
+        pass
     return client
+
+
+def _safe(fn, resource, **kw):
+    """Call a patch fn only if the resource exists; never raise."""
+    if resource is None:
+        return
+    try:
+        fn(resource, **kw) if kw else fn(resource)
+    except Exception:
+        pass
 
 
 def _start_span(model: Any, stream: bool, name: str = "vertex_ai.models.generate_content") -> Any:

@@ -94,6 +94,26 @@ def _safe(fn, resource, **kw):
         pass
 
 
+def _record_error(span: Any, error: Exception) -> None:
+    try:
+        span.set_status(StatusCode.ERROR, str(error))
+        span.record_exception(error)
+        span.end()
+    except Exception:
+        pass
+
+
+def _finish_ok(span: Any, finalize) -> None:
+    try:
+        finalize()
+    except Exception:
+        try:
+            span.set_status(StatusCode.OK)
+            span.end()
+        except Exception:
+            pass
+
+
 def _start_span(model: Any, stream: bool, name: str = "vertex_ai.models.generate_content") -> Any:
     return get_provider_tracer().start_span(
         name=name,
@@ -118,20 +138,25 @@ def _patch_models(models: Any) -> None:
         if is_suppressed():
             return orig_generate(*args, **kwargs)
 
-        model = kwargs.get("model", args[0] if args else "")
-        contents = kwargs.get("contents", args[1] if len(args) > 1 else "")
+        try:
+            model = kwargs.get("model", args[0] if args else "")
+            contents = kwargs.get("contents", args[1] if len(args) > 1 else "")
 
-        span = _start_span(model, stream=False)
-        _set_input_attributes(span, contents, kwargs)
+            span = _start_span(model, stream=False)
+            _set_input_attributes(span, contents, kwargs)
 
-        start = time.perf_counter()
+            start = time.perf_counter()
+        except Exception:
+            return orig_generate(*args, **kwargs)
+
         try:
             response = orig_generate(*args, **kwargs)
         except Exception as e:
-            _err(span, e)
+            _record_error(span, e)
             raise
 
-        _finalize_response(span, response, (time.perf_counter() - start) * 1000)
+        duration_ms = (time.perf_counter() - start) * 1000
+        _finish_ok(span, lambda: _finalize_response(span, response, duration_ms))
         return response
 
     models.generate_content = patched_generate_content
@@ -141,14 +166,17 @@ def _patch_models(models: Any) -> None:
             if is_suppressed():
                 return orig_stream(*args, **kwargs)
 
-            model = kwargs.get("model", args[0] if args else "")
-            contents = kwargs.get("contents", args[1] if len(args) > 1 else "")
+            try:
+                model = kwargs.get("model", args[0] if args else "")
+                contents = kwargs.get("contents", args[1] if len(args) > 1 else "")
 
-            span = _start_span(model, stream=True)
-            _set_input_attributes(span, contents, kwargs)
+                span = _start_span(model, stream=True)
+                _set_input_attributes(span, contents, kwargs)
 
-            stream = orig_stream(*args, **kwargs)
-            return SyncStreamWrapper(stream, span, _finalize_stream)
+                stream = orig_stream(*args, **kwargs)
+                return SyncStreamWrapper(stream, span, _finalize_stream)
+            except Exception:
+                return orig_stream(*args, **kwargs)
 
         models.generate_content_stream = patched_generate_content_stream
 
@@ -166,20 +194,25 @@ def _patch_async_models(models: Any) -> None:
         if is_suppressed():
             return await orig_generate(*args, **kwargs)
 
-        model = kwargs.get("model", args[0] if args else "")
-        contents = kwargs.get("contents", args[1] if len(args) > 1 else "")
+        try:
+            model = kwargs.get("model", args[0] if args else "")
+            contents = kwargs.get("contents", args[1] if len(args) > 1 else "")
 
-        span = _start_span(model, stream=False)
-        _set_input_attributes(span, contents, kwargs)
+            span = _start_span(model, stream=False)
+            _set_input_attributes(span, contents, kwargs)
 
-        start = time.perf_counter()
+            start = time.perf_counter()
+        except Exception:
+            return await orig_generate(*args, **kwargs)
+
         try:
             response = await orig_generate(*args, **kwargs)
         except Exception as e:
-            _err(span, e)
+            _record_error(span, e)
             raise
 
-        _finalize_response(span, response, (time.perf_counter() - start) * 1000)
+        duration_ms = (time.perf_counter() - start) * 1000
+        _finish_ok(span, lambda: _finalize_response(span, response, duration_ms))
         return response
 
     models.generate_content = patched_generate_content
@@ -192,19 +225,17 @@ def _patch_async_models(models: Any) -> None:
             if is_suppressed():
                 return await orig_stream(*args, **kwargs)
 
-            model = kwargs.get("model", args[0] if args else "")
-            contents = kwargs.get("contents", args[1] if len(args) > 1 else "")
-
-            span = _start_span(model, stream=True)
-            _set_input_attributes(span, contents, kwargs)
-
             try:
-                stream = await orig_stream(*args, **kwargs)
-            except Exception as e:
-                _err(span, e)
-                raise
+                model = kwargs.get("model", args[0] if args else "")
+                contents = kwargs.get("contents", args[1] if len(args) > 1 else "")
 
-            return AsyncStreamWrapper(stream, span, _finalize_stream)
+                span = _start_span(model, stream=True)
+                _set_input_attributes(span, contents, kwargs)
+
+                stream = await orig_stream(*args, **kwargs)
+                return AsyncStreamWrapper(stream, span, _finalize_stream)
+            except Exception:
+                return await orig_stream(*args, **kwargs)
 
         models.generate_content_stream = patched_generate_content_stream
 

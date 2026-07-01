@@ -181,6 +181,7 @@ def _decorate_span(
     capture_stdout: bool = False,
     postprocess_result: Optional[Callable[[Any, Any, Dict[str, Any]], None]] = None,
     mask: Optional[Callable] = None,
+    session_id: Optional[str] = None,
     end_user_id: Optional[str] = None,
     end_user_metadata: Optional[Dict[str, Any]] = None,
 ) -> Callable[[F], F]:
@@ -214,6 +215,7 @@ def _decorate_span(
             @functools.wraps(func)
             async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
                 from ..core.end_user import apply_end_user_attributes
+                from ..core.session import apply_session_attributes
                 from ..core.log import _CaptureStdoutContext
                 from ..core.mask import register_mask
 
@@ -230,7 +232,8 @@ def _decorate_span(
                         metadata=metadata,
                         attributes=merged_attrs,
                     )
-                    # End-user belongs to the trace root only.
+                    # Session/end-user belong to the trace root only.
+                    apply_session_attributes(span, session_id, is_root=is_root)
                     apply_end_user_attributes(
                         span, end_user_id, end_user_metadata, is_root=is_root
                     )
@@ -276,6 +279,7 @@ def _decorate_span(
         @functools.wraps(func)
         def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
             from ..core.end_user import apply_end_user_attributes
+            from ..core.session import apply_session_attributes
             from ..core.log import _CaptureStdoutContext
             from ..core.mask import register_mask
 
@@ -290,7 +294,8 @@ def _decorate_span(
                     metadata=metadata,
                     attributes=merged_attrs,
                 )
-                # End-user belongs to the trace root only.
+                # Session/end-user belong to the trace root only.
+                apply_session_attributes(span, session_id, is_root=is_root)
                 apply_end_user_attributes(span, end_user_id, end_user_metadata, is_root=is_root)
                 if mask is not None:
                     span.set_attribute("neatlogs.mask_id", register_mask(mask))

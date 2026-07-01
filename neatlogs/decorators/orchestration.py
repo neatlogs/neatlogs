@@ -194,6 +194,8 @@ def span(
     # Tool-specific
     tool_name: Optional[str] = None,
     parameters: Optional[Dict[str, Any]] = None,
+    # Session grouping (groups the traces of a conversation; set on the WORKFLOW root)
+    session_id: Optional[str] = None,
     # End-user identity (one end-user per trace; usually set on the WORKFLOW root)
     end_user_id: Optional[str] = None,
     end_user_metadata: Optional[Dict[str, Any]] = None,
@@ -346,9 +348,10 @@ def span(
         capture_stdout=capture_stdout,
         postprocess_result=postprocess_result,
         mask=mask,
-        # End-user belongs to the trace root only. _decorate_span stamps these
-        # at call time, and only when the decorated span is a root (no active
-        # parent). The backend rolls the value up to the trace and session.
+        # Session/end-user belong to the trace root only. _decorate_span stamps
+        # these at call time, and only when the decorated span is a root (no
+        # active parent). The backend rolls the value up to group session traces.
+        session_id=session_id,
         end_user_id=end_user_id,
         end_user_metadata=end_user_metadata,
     )

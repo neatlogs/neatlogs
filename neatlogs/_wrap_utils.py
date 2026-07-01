@@ -287,6 +287,17 @@ class _AutoRootTracer:
             name=_resolve_root_workflow_name(),
             attributes={"neatlogs.span.kind": "workflow", "neatlogs.auto_root": True},
         )
+        # Stamp request-scoped identity (set via neatlogs.identify()) onto the
+        # auto-root. This is the only path wrapper-only code has to a root span,
+        # so it's where session/end-user attach for bare wrap() usage.
+        try:
+            from .core.end_user import apply_end_user_attributes
+            from .core.session import apply_session_attributes
+
+            apply_session_attributes(root, None, is_root=True)
+            apply_end_user_attributes(root, None, None, is_root=True)
+        except Exception:
+            pass
         token = attach_as_current(root)
         try:
             child = tracer.start_span(name=name, attributes=attributes, **kwargs)

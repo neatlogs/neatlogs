@@ -139,7 +139,7 @@ milvus = ["pymilvus", "milvus-lite"]
 
 [project]
 name = "neatlogs"
-version = "1.4.1"
+version = "1.4.2"
 description = "A Python package for extracting and managing LLM logs to build a collaborative workspace"
 readme = "README.MD"
 license = {text = "MIT"}

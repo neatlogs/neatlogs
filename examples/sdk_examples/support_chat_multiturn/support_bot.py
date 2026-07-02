@@ -185,39 +185,48 @@ class SupportBot:
         # created AFTER neatlogs.init() for auto-instrumentation to attach.
         self.client = genai.Client()
         self.history: list = []  # google-genai `contents`, grows every turn
+        self._current_message = ""  # the turn's user message (for template capture)
 
-    def _generate(self, contents, system_prompt):
-        return self.client.models.generate_content(
-            model=MODEL,
-            contents=contents,
-            config=types.GenerateContentConfig(
-                system_instruction=system_prompt,
-                tools=[_TOOLS],
-                temperature=0.3,
-            ),
-        )
-
-    def ask(self, user_message: str) -> str:
-        """Run one user turn: append to history, run the tool-calling loop, return the reply."""
-        # Wrap the turn's LLM work in an LLM trace carrying the prompt templates.
-        # Compile INSIDE the block and USE the compiled output as the ACTUAL input
-        # (system_instruction + user turn) — the templates are the source of truth.
+    def _generate(self):
+        # Each model call is its OWN LLM span, wrapped in trace(kind="LLM") to
+        # carry the prompt templates. Compile INSIDE the trace so the variable
+        # bindings are captured, and USE the compiled output as the ACTUAL input.
         with neatlogs.trace(
-            "support_llm",
+            "llm_call",
             kind="LLM",
-            prompt_template=_SYSTEM_TPL,
+            system_prompt_template=_SYSTEM_TPL,
             user_prompt_template=_USER_TPL,
         ):
             system_prompt = _SYSTEM_TPL.compile(user_id=USER_ID)
-            user_prompt = _USER_TPL.compile(message=user_message)
-            self.history.append(
-                types.Content(role="user", parts=[types.Part(text=user_prompt)])
+            _USER_TPL.compile(message=self._current_message)
+            return self.client.models.generate_content(
+                model=MODEL,
+                contents=self.history,
+                config=types.GenerateContentConfig(
+                    system_instruction=system_prompt,
+                    tools=[_TOOLS],
+                    temperature=0.3,
+                ),
             )
-            return self._run_tool_loop(system_prompt)
 
-    def _run_tool_loop(self, system_prompt) -> str:
+    def ask(self, user_message: str) -> str:
+        """Run one user turn: append to history, run the tool-calling loop, return the reply."""
+        # One turn is an AGENT step — reasoning across several model calls + tool
+        # calls — so it's kind="AGENT". The individual model calls underneath are
+        # the LLM spans (see _generate); prompt templates live there, not here.
+        with neatlogs.trace("support_agent", kind="AGENT"):
+            # Append the user's turn to history. This is the ACTUAL model input;
+            # the neatlogs UserPromptTemplate is compiled (for capture) inside the
+            # LLM span in _generate(), not here — the AGENT does no prompt compiling.
+            self._current_message = user_message
+            self.history.append(
+                types.Content(role="user", parts=[types.Part(text=user_message)])
+            )
+            return self._run_tool_loop()
+
+    def _run_tool_loop(self) -> str:
         while True:
-            response = self._generate(self.history, system_prompt)
+            response = self._generate()
             candidate = response.candidates[0]
             self.history.append(candidate.content)
 

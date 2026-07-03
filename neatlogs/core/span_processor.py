@@ -132,6 +132,19 @@ class NeatlogsSpanProcessor(SpanProcessor):
     def on_start(self, span: Span, parent_context: Optional[Context] = None) -> None:
         start_time = time.perf_counter()
         try:
+            # Stamp request-scoped identity (neatlogs.identify()) onto EVERY root
+            # span as a fallback. trace()/@span set it explicitly after creation
+            # (overriding this); direct-provider auto-roots stamp it themselves.
+            # This catch-all is what lets identify() reach FRAMEWORK auto-roots
+            # (langchain, openai-agents, strands, ...) whose roots don't stamp it.
+            # No-ops when identify() is inactive; child spans are skipped.
+            if span.parent is None:
+                from .end_user import apply_end_user_attributes
+                from .session import apply_session_attributes
+
+                apply_session_attributes(span, None, is_root=True)
+                apply_end_user_attributes(span, None, None, is_root=True)
+
             span_kind = span.attributes.get("openinference.span.kind") if span.attributes else None
 
             is_llm_span = (

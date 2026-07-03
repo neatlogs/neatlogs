@@ -36,7 +36,6 @@ WORKFLOW = "saas-support-chat"
 
 neatlogs.init(
     api_key=os.getenv("NEATLOGS_API_KEY"),
-    endpoint=os.getenv("NEATLOGS_ENDPOINT"),
     workflow_name=WORKFLOW,
     tags=["sdk-examples", "google-genai", "multi-turn", "session", "end-user"],
     instrumentations=["google_genai"],

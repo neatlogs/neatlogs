@@ -5,11 +5,16 @@ Run:
 
 import os
 import sys
+import time
 
 import neatlogs
 
 WORKFLOW = "support-chat-multiturn"
 END_USER = "u_dave"
+# One session id for the whole conversation. Session/end-user identity is
+# per-request — declared at the trace root (here the @span WORKFLOW decorator),
+# NOT on init(). Every turn passes the same SESSION_ID → one grouped session.
+SESSION_ID = f"conv_{int(time.time())}"
 
 # One conversation, several turns. Metadata evolves across turns (free → pro).
 TURNS = [
@@ -23,7 +28,13 @@ TURNS = [
 # decorator (the trace root) — child spans inside inherit nothing extra. A new
 # decorated call with no active parent + an active session => a new root trace.
 def make_turn(metadata: dict):
-    @neatlogs.span(kind="WORKFLOW", name=WORKFLOW, end_user_id=END_USER, end_user_metadata=metadata)
+    @neatlogs.span(
+        kind="WORKFLOW",
+        name=WORKFLOW,
+        session_id=SESSION_ID,
+        end_user_id=END_USER,
+        end_user_metadata=metadata,
+    )
     def turn(question: str) -> str:
         # A child TOOL span so the trace has agentic content (won't be dropped).
         @neatlogs.span(kind="TOOL", tool_name="lookup")
@@ -45,17 +56,16 @@ def main() -> None:
 
     endpoint = os.getenv("NEATLOGS_ENDPOINT")
 
-    # auto_session=True → SDK generates ONE session id for this process; every
-    # top-level WORKFLOW becomes a new root trace sharing that session.
+    # Session/end-user identity is NOT set on init() (it's per-request). Each turn
+    # declares session_id + end_user on its WORKFLOW root (see make_turn).
     neatlogs.init(
         api_key=api_key,
         endpoint=endpoint,
         workflow_name=WORKFLOW,
-        auto_session=True,
         tags=["end-user-multiturn"],
     )
 
-    print(f"Auto session enabled  end_user: {END_USER}")
+    print(f"Session: {SESSION_ID}  end_user: {END_USER}")
 
     for i, turn in enumerate(TURNS, start=1):
         make_turn(turn["metadata"])(turn["q"])

@@ -161,3 +161,80 @@ def test_identify_restores_on_exit(tracer_provider, in_memory_span_exporter):
     spans = in_memory_span_exporter.get_finished_spans()
     root = next(s for s in spans if s.name == "after")
     assert SESSION_ID_KEY not in root.attributes
+
+
+# ---------------------------------------------------------------------------
+# Span-processor fallback: identify() reaches ANY root span, including framework
+# auto-roots (langchain, openai-agents, strands, ...) whose roots do NOT stamp
+# identity themselves. NeatlogsSpanProcessor.on_start fills it in as a fallback;
+# explicit trace()/@span values still override.
+# ---------------------------------------------------------------------------
+
+
+def _provider_with_neatlogs_processor():
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+        InMemorySpanExporter,
+    )
+
+    from neatlogs.core.span_processor import NeatlogsSpanProcessor
+
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(NeatlogsSpanProcessor())
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    return provider, exporter
+
+
+def test_processor_stamps_identify_on_bare_framework_root():
+    """A root span created WITHOUT explicit identity (e.g. a framework auto-root)
+    picks up identify()'s session + end-user via the processor fallback."""
+    provider, exporter = _provider_with_neatlogs_processor()
+    _install(provider)
+    tracer = trace.get_tracer(__name__)
+
+    with identify(session_id="conv_fw", end_user_id="u_fw"):
+        # Mimic a framework auto-root: a plain root span, no apply_* call.
+        root = tracer.start_span(
+            "LangGraph", attributes={"neatlogs.span.kind": "workflow"}
+        )
+        root.end()
+
+    root = next(s for s in exporter.get_finished_spans() if s.name == "LangGraph")
+    assert root.attributes.get(SESSION_ID_KEY) == "conv_fw"
+    assert root.attributes.get(END_USER_ID_KEY) == "u_fw"
+
+
+def test_processor_skips_child_spans():
+    """The processor fallback stamps only roots; child spans never carry identity."""
+    provider, exporter = _provider_with_neatlogs_processor()
+    _install(provider)
+    tracer = trace.get_tracer(__name__)
+
+    with identify(session_id="conv_fw"):
+        with tracer.start_as_current_span(
+            "root", attributes={"neatlogs.span.kind": "workflow"}
+        ):
+            with tracer.start_as_current_span(
+                "child", attributes={"neatlogs.span.kind": "LLM"}
+            ):
+                pass
+
+    child = next(s for s in exporter.get_finished_spans() if s.name == "child")
+    assert SESSION_ID_KEY not in child.attributes
+
+
+def test_processor_noop_without_identify():
+    """No active identify() → the processor adds no session attribute (no phantom)."""
+    provider, exporter = _provider_with_neatlogs_processor()
+    _install(provider)
+    tracer = trace.get_tracer(__name__)
+
+    with tracer.start_as_current_span(
+        "bare", attributes={"neatlogs.span.kind": "workflow"}
+    ):
+        pass
+
+    root = next(s for s in exporter.get_finished_spans() if s.name == "bare")
+    assert SESSION_ID_KEY not in root.attributes

@@ -34,9 +34,7 @@ def _vertex_response():
 
 
 class TestVertexAIFailOpen:
-    def test_sync_generate_content_fails_open_on_tracer_error(
-        self, in_memory_span_exporter
-    ):
+    def test_sync_generate_content_fails_open_on_tracer_error(self, in_memory_span_exporter):
         from neatlogs.vertex_ai import wrap_vertex_ai_client
 
         _setup_tracer(in_memory_span_exporter)
@@ -44,9 +42,7 @@ class TestVertexAIFailOpen:
         def generate_content(*args, **kwargs):
             return _vertex_response()
 
-        models = SimpleNamespace(
-            generate_content=generate_content, generate_content_stream=None
-        )
+        models = SimpleNamespace(generate_content=generate_content, generate_content_stream=None)
         client = SimpleNamespace(models=models, aio=None)
         wrap_vertex_ai_client(client)
 
@@ -54,17 +50,13 @@ class TestVertexAIFailOpen:
             "neatlogs.vertex_ai.get_provider_tracer",
             side_effect=RuntimeError("trace failed"),
         ):
-            response = client.models.generate_content(
-                model="gemini-2.0-flash", contents="hi"
-            )
+            response = client.models.generate_content(model="gemini-2.0-flash", contents="hi")
 
         assert response.candidates[0].content.parts[0].text == "hello"
         assert len(in_memory_span_exporter.get_finished_spans()) == 0
 
     @pytest.mark.asyncio
-    async def test_async_generate_content_fails_open_on_tracer_error(
-        self, in_memory_span_exporter
-    ):
+    async def test_async_generate_content_fails_open_on_tracer_error(self, in_memory_span_exporter):
         from neatlogs.vertex_ai import wrap_vertex_ai_client
 
         _setup_tracer(in_memory_span_exporter)
@@ -72,9 +64,7 @@ class TestVertexAIFailOpen:
         async def generate_content(*args, **kwargs):
             return _vertex_response()
 
-        models = SimpleNamespace(
-            generate_content=generate_content, generate_content_stream=None
-        )
+        models = SimpleNamespace(generate_content=generate_content, generate_content_stream=None)
         aio = SimpleNamespace(models=models)
         client = SimpleNamespace(models=SimpleNamespace(), aio=aio)
         wrap_vertex_ai_client(client)

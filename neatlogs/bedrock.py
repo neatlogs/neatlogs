@@ -281,15 +281,21 @@ def _patch_converse(client: Any) -> None:
     def patched(*args, **kwargs):
         if is_suppressed():
             return orig(*args, **kwargs)
-        span = _start_span("bedrock.converse", kwargs.get("modelId"), is_stream=False)
-        _set_converse_input(span, kwargs)
-        start = time.perf_counter()
+        try:
+            span = _start_span("bedrock.converse", kwargs.get("modelId"), is_stream=False)
+            _set_converse_input(span, kwargs)
+            start = time.perf_counter()
+        except Exception:
+            return orig(*args, **kwargs)
+
         try:
             response = orig(*args, **kwargs)
         except Exception as e:
-            _err(span, e)
+            _record_error(span, e)
             raise
-        _finalize_converse(span, response, (time.perf_counter() - start) * 1000)
+
+        duration_ms = (time.perf_counter() - start) * 1000
+        _finish_ok(span, lambda: _finalize_converse(span, response, duration_ms))
         return response
 
     client.converse = patched
@@ -301,17 +307,23 @@ def _patch_converse_stream(client: Any) -> None:
     def patched(*args, **kwargs):
         if is_suppressed():
             return orig(*args, **kwargs)
-        span = _start_span("bedrock.converse_stream", kwargs.get("modelId"), is_stream=True)
-        _set_converse_input(span, kwargs)
-        start = time.perf_counter()
+        try:
+            span = _start_span("bedrock.converse_stream", kwargs.get("modelId"), is_stream=True)
+            _set_converse_input(span, kwargs)
+            start = time.perf_counter()
+        except Exception:
+            return orig(*args, **kwargs)
+
         try:
             response = orig(*args, **kwargs)
         except Exception as e:
-            _err(span, e)
+            _record_error(span, e)
             raise
+
         stream = response.get("stream") if isinstance(response, dict) else None
         if stream is None:
-            _ok(span, (time.perf_counter() - start) * 1000)
+            duration_ms = (time.perf_counter() - start) * 1000
+            _finish_ok(span, lambda: _ok(span, duration_ms))
             return response
         response["stream"] = _wrap_converse_stream(stream, span, start)
         return response

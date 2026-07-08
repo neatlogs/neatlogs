@@ -506,6 +506,15 @@ def shutdown(timeout_millis: int = 30000) -> bool:
             logger.debug(f"Error uninstrumenting libraries: {e}")
         _instrumentation_manager = None
 
+    # Drop the cached wrapper tracer (used by wrap()/trace processors like the
+    # OpenAI Agents one) so the next init() rebinds it to the new provider.
+    try:
+        from ._wrap_utils import reset_tracer
+
+        reset_tracer()
+    except Exception:
+        pass
+
     _initialized = False
     _tracer_provider = None
     _meter_provider = None

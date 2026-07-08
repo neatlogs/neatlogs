@@ -66,6 +66,16 @@ def configure(**kwargs: Any) -> None:
     _wrapper_tracer = None
 
 
+def reset_tracer() -> None:
+    """Drop the cached wrapper tracer so the next get_tracer() rebinds to the
+    current global provider. Called by neatlogs.shutdown() — without it, a re-init
+    (or a test that swaps the TracerProvider) keeps emitting wrapper spans through
+    the previous, now-dead provider."""
+    global _wrapper_tracer, _wrapper_bootstrapped
+    _wrapper_tracer = None
+    _wrapper_bootstrapped = False
+
+
 def get_tracer() -> otel_trace.Tracer:
     """
     Return a Tracer from init()'s provider, or auto-bootstrap from env.

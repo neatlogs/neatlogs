@@ -78,7 +78,10 @@ def _make_log_data(
 
 
 def test_filter_passes_normal_record():
-    downstream = MagicMock()
+    # spec to on_emit only: a real LogRecordProcessor exposes on_emit (not emit),
+    # and _forward_emit prefers emit when present — an unspec'd MagicMock has both,
+    # so it would spuriously route to .emit and never call .on_emit.
+    downstream = MagicMock(spec=["on_emit", "shutdown", "force_flush"])
     f = NeatlogsLogFilter(downstream)
     log_data = _make_log_data(trace_id=0xDEADBEEF, scope_name="my_app")
     f.on_emit(log_data)

@@ -10,7 +10,6 @@ import json
 from types import SimpleNamespace
 
 import pytest
-
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
@@ -23,6 +22,7 @@ def _setup_tracer(exporter):
     # Reset the process-global wrapper-tracer cache so each test binds to its
     # own provider (correct in production; leaks across tests otherwise).
     import neatlogs._wrap_utils as _wu
+
     _wu._wrapper_tracer = None
     return provider
 
@@ -62,9 +62,14 @@ class TestBedrockConverse:
         )
         assert resp["stopReason"] == "end_turn"
 
-        spans = in_memory_span_exporter.get_finished_spans()
-        assert len(spans) == 1
-        attrs = spans[0].attributes
+        llm_spans = [
+            s
+            for s in in_memory_span_exporter.get_finished_spans()
+            if s.attributes.get("neatlogs.llm.provider") == "bedrock"
+            and s.attributes.get("neatlogs.span.kind") == "llm"
+        ]
+        assert len(llm_spans) == 1
+        attrs = llm_spans[0].attributes
         assert attrs.get("neatlogs.span.kind") == "llm"
         assert attrs.get("neatlogs.llm.provider") == "bedrock"
         assert attrs.get("neatlogs.llm.system") == "anthropic"
@@ -112,18 +117,21 @@ class TestBedrockInvokeModel:
         client = _fake_bedrock_client(invoke_model=invoke_model)
         wrap_bedrock_client(client)
 
-        req_body = json.dumps(
-            {"messages": [{"role": "user", "content": "Hi"}], "max_tokens": 100}
-        )
+        req_body = json.dumps({"messages": [{"role": "user", "content": "Hi"}], "max_tokens": 100})
         resp = client.invoke_model(modelId="anthropic.claude-3-haiku-20240307-v1:0", body=req_body)
 
         # Body must still be readable by the caller.
         parsed = json.loads(resp["body"].read())
         assert parsed["content"][0]["text"] == "Invoke output"
 
-        spans = in_memory_span_exporter.get_finished_spans()
-        assert len(spans) == 1
-        attrs = spans[0].attributes
+        llm_spans = [
+            s
+            for s in in_memory_span_exporter.get_finished_spans()
+            if s.attributes.get("neatlogs.llm.provider") == "bedrock"
+            and s.attributes.get("neatlogs.span.kind") == "llm"
+        ]
+        assert len(llm_spans) == 1
+        attrs = llm_spans[0].attributes
         assert attrs.get("neatlogs.llm.provider") == "bedrock"
         assert attrs.get("neatlogs.llm.system") == "anthropic"
         assert attrs.get("neatlogs.llm.input_messages.0.content") == "Hi"
@@ -155,7 +163,14 @@ class TestBedrockInvokeModel:
             body=json.dumps({"inputText": "Hi", "textGenerationConfig": {"maxTokenCount": 50}}),
         )
 
-        attrs = in_memory_span_exporter.get_finished_spans()[0].attributes
+        llm_spans = [
+            s
+            for s in in_memory_span_exporter.get_finished_spans()
+            if s.attributes.get("neatlogs.llm.provider") == "bedrock"
+            and s.attributes.get("neatlogs.span.kind") == "llm"
+        ]
+        assert len(llm_spans) == 1
+        attrs = llm_spans[0].attributes
         assert attrs.get("neatlogs.llm.system") == "amazon"
         assert attrs.get("neatlogs.llm.output_messages.0.content") == "Titan says hi"
         assert attrs.get("neatlogs.llm.token_count.prompt") == 9

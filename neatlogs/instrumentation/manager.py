@@ -214,6 +214,35 @@ class InstrumentationManager:
         except Exception as e:
             raise Exception(f"Failed to instrument {library} with {convention}: {e}")
 
+    def uninstrument_all(self) -> None:
+        """Reverse instrument()/instrument_http()/instrument_threading().
+
+        OpenInference/OpenLLMetry instrumentors are BaseInstrumentor singletons, so
+        re-resolving the class and calling .uninstrument() tears down the same global
+        patch instrument() installed. Without this, a re-init (or a test that re-inits
+        with a fresh TracerProvider) leaves the old instrumentor bound to the previous
+        provider, and new spans never reach the new exporter."""
+        try:
+            from opentelemetry.instrumentation.threading import ThreadingInstrumentor
+
+            ThreadingInstrumentor().uninstrument()
+        except Exception:
+            pass
+        for library in list(self.instrumented):
+            info = INSTRUMENTATION_REGISTRY["libraries"].get(library) or {}
+            for convention in ("neatlogs", "openinference", "openllmetry"):
+                package_name = info.get(convention)
+                if not package_name:
+                    continue
+                try:
+                    module = importlib.import_module(package_name)
+                    cls_name = self._get_instrumentor_class_name(library, convention)
+                    getattr(module, cls_name)().uninstrument()
+                    break
+                except Exception:
+                    continue
+        self.instrumented.clear()
+
     # ---------------------------------------------------------------------------
     # OpenInference — OpenAI patches
     # ---------------------------------------------------------------------------

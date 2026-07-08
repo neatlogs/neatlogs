@@ -41,6 +41,7 @@ _tracer_provider = None
 _meter_provider = None
 _log_provider = None
 _span_processor = None
+_instrumentation_manager = None
 _debug_mode = False
 _session_config = {
     "session_id": None,
@@ -364,11 +365,13 @@ def init(
     elif debug:
         logger.debug("Log capture disabled (pass capture_logs=True to enable)")
 
+    global _instrumentation_manager
     manager = InstrumentationManager(
         provider=provider,
         debug=debug,
         excluded_urls=endpoint,
     )
+    _instrumentation_manager = manager
 
     manager.instrument_threading()
     manager.instrument_http()
@@ -441,6 +444,7 @@ def get_session_config():
 def shutdown(timeout_millis: int = 30000) -> bool:
     """Shutdown the SDK and flush pending spans/metrics."""
     global _tracer_provider, _meter_provider, _log_provider, _span_processor, _initialized
+    global _instrumentation_manager
 
     try:
         atexit.unregister(shutdown)
@@ -491,6 +495,16 @@ def shutdown(timeout_millis: int = 30000) -> bool:
         LoggingInstrumentor().uninstrument()
     except Exception:
         pass
+
+    # Reverse the framework/provider instrumentation so a later init() (or a test
+    # re-init with a fresh TracerProvider) rebinds cleanly instead of leaving the
+    # old instrumentor pointing at the now-dead provider.
+    if _instrumentation_manager is not None:
+        try:
+            _instrumentation_manager.uninstrument_all()
+        except Exception as e:
+            logger.debug(f"Error uninstrumenting libraries: {e}")
+        _instrumentation_manager = None
 
     _initialized = False
     _tracer_provider = None

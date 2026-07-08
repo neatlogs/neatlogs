@@ -312,6 +312,18 @@ class NeatlogsCallbackHandler(BaseCallbackHandler):
                                 if tc.get("id"):
                                     span.set_attribute(f"neatlogs.llm.tool_calls.{j}.id", tc["id"])
 
+                            # Structured output / function-calling: the model answered
+                            # with a tool call and NO text content. Mirror it into the
+                            # standard output-message content so the span shows an output
+                            # (the tool call IS the output here). Skip if content was set.
+                            if not text and not content:
+                                rendered = "\n".join(
+                                    f"{tc.get('name', '')}({serialize(tc.get('args', {}))})"
+                                    for tc in tool_calls
+                                )
+                                span.set_attribute("neatlogs.llm.output_messages.0.role", "assistant")
+                                span.set_attribute("neatlogs.llm.output_messages.0.content", rendered)
+
                         thinking_blocks = getattr(message, "thinking_blocks", None)
                         if thinking_blocks:
                             thinking_text = "".join(

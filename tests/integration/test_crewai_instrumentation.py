@@ -51,6 +51,12 @@ from opentelemetry.trace import StatusCode
 # Mocking Env to prevent SDK start-up crash
 os.environ["OPENAI_API_KEY"] = "sk-fake"
 os.environ["ANTHROPIC_API_KEY"] = "sk-ant-fake"
+# Use LiteLLM's bundled price map so the first LLM call in the process doesn't
+# fetch model_prices_and_context_window.json from GitHub. That one-time outbound
+# GET is traced by httpx auto-instrumentation as its own rootless trace and lands
+# in whichever test runs first, breaking "all spans in one trace" assertions.
+# MUST be set before litellm is imported (it reads this at import time).
+os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 
 try:
     from crewai import LLM, Agent, Crew, Task
@@ -568,18 +574,26 @@ class TestCrewAIInstrumentation:
     def test_complex_production_workflow(self, in_memory_span_exporter):
         """Test a complex production-grade workflow with multiple patterns."""
         # Mock multiple API calls
+        # Serve a response for EVERY OpenAI call. A fixed side_effect list runs out
+        # when the agent loop / tool-use makes more calls than mocked responses
+        # (crewai's tool-use path issues follow-up calls), raising StopIteration.
+        # A callable side_effect answers unbounded calls.
+        _complex_responses = [
+            "Research: AI trends",
+            "Analysis: Growing market",
+            "Report: Comprehensive analysis",
+        ]
+
+        def _complex_openai_handler(request):
+            idx = min(_complex_openai_handler.calls, len(_complex_responses) - 1)
+            _complex_openai_handler.calls += 1
+            return httpx.Response(
+                200, json=create_mock_openai_response(content=_complex_responses[idx])
+            )
+
+        _complex_openai_handler.calls = 0
         respx.post(url__regex=r"https://api.openai.com/v1/chat/completions").mock(
-            side_effect=[
-                httpx.Response(
-                    200, json=create_mock_openai_response(content="Research: AI trends")
-                ),
-                httpx.Response(
-                    200, json=create_mock_openai_response(content="Analysis: Growing market")
-                ),
-                httpx.Response(
-                    200, json=create_mock_openai_response(content="Report: Comprehensive analysis")
-                ),
-            ]
+            side_effect=_complex_openai_handler
         )
 
         @tool

@@ -51,6 +51,7 @@ class _NeatlogsTraceProcessor:
         self._spans: Dict[str, Any] = {}
         self._tokens: Dict[str, Any] = {}
         self._start_times: Dict[str, float] = {}
+        self._root_input_done: set = set()
 
     # -- trace lifecycle -------------------------------------------------------
 
@@ -82,6 +83,7 @@ class _NeatlogsTraceProcessor:
             detach(token)
         if start:
             span.set_attribute("neatlogs.llm.metrics.duration_ms", round((time.perf_counter() - start) * 1000, 3))
+        self._root_input_done.discard(key)
         span.set_status(StatusCode.OK)
         span.end()
 
@@ -123,6 +125,25 @@ class _NeatlogsTraceProcessor:
         data = getattr(span, "span_data", None) or span
         span_type = getattr(data, "type", None) or getattr(data, "span_type", "") or ""
         _apply_end_attrs(otel_span, span_type, data)
+
+        # Trace-level I/O: the WORKFLOW root sets no input/output of its own, and the backend fills
+        # the traces-list I/O from the ROOT span only (child-borrow fires only when EXACTLY ONE child
+        # carries IO — a seat turn with a tool call + a final reply has two, so the borrow is skipped
+        # and the row goes blank). Mirror the ADK integration and stamp the still-open root directly:
+        #   input.value  = the first generation's latest user turn (the turn that triggered this trace)
+        #   output.value = the LATEST generation's assistant text (last-write-wins → the final reply)
+        if span_type in ("generation", "llm", "response"):
+            trace_key = str(getattr(span, "trace_id", "") or "")
+            root = self._spans.get(trace_key)
+            if root is not None:
+                if trace_key not in self._root_input_done:
+                    user_turn = _latest_user_turn(getattr(data, "input", None))
+                    if user_turn:
+                        root.set_attribute("input.value", user_turn[:10000])
+                        self._root_input_done.add(trace_key)
+                out_text = _assistant_output_text(span_type, data)
+                if out_text:
+                    root.set_attribute("output.value", out_text[:10000])
 
         # Error: SDK puts it on span.error (a dict) ; span_data may also carry one.
         error = getattr(span, "error", None) or getattr(data, "error", None)
@@ -175,12 +196,12 @@ def _build_start_attrs(span_type: str, data: Any):
         model = getattr(data, "model", None)
         if model:
             attrs["neatlogs.llm.model_name"] = str(model)
-        _set_input_messages(attrs, getattr(data, "input", None))
+        # NOTE: input is NOT read here — the SDK fills span_data.input only at span-END, so it's
+        # captured in _apply_end_attrs (reading it here always got None → dropped input).
         return attrs, "openai_agents.generation"
 
     if span_type == "response":
         attrs = {"neatlogs.span.kind": "llm", "neatlogs.llm.provider": "openai"}
-        _set_input_messages(attrs, getattr(data, "input", None))
         return attrs, "openai_agents.response"
 
     if span_type == "function":
@@ -244,6 +265,10 @@ def _build_start_attrs(span_type: str, data: Any):
 
 def _apply_end_attrs(otel_span: Any, span_type: str, data: Any) -> None:
     if span_type in ("generation", "llm"):
+        # INPUT is captured HERE (span end), not at start: the Agents SDK populates
+        # GenerationSpanData.input only when the generation COMPLETES (at on_span_start it is still
+        # None), so reading it in _build_start_attrs dropped every input. Output is likewise end-only.
+        _apply_input_messages(otel_span, getattr(data, "input", None))
         _set_output_messages(otel_span, getattr(data, "output", None))
         _set_usage(otel_span, getattr(data, "usage", None))
         model = getattr(data, "model", None)
@@ -251,6 +276,7 @@ def _apply_end_attrs(otel_span: Any, span_type: str, data: Any) -> None:
             otel_span.set_attribute("neatlogs.llm.model_name", str(model))
 
     elif span_type == "response":
+        _apply_input_messages(otel_span, getattr(data, "input", None))  # same end-only timing
         response = getattr(data, "response", None)
         if response is not None:
             text = getattr(response, "output_text", None)
@@ -285,19 +311,55 @@ def _apply_end_attrs(otel_span: Any, span_type: str, data: Any) -> None:
             otel_span.set_attribute("output.value", str(output)[:10000])
 
 
+def _apply_input_messages(otel_span: Any, input_msgs: Any) -> None:
+    """Write input messages onto a LIVE span at span-end (reuses the dict mapper — no duplicate
+    logic). Input is captured at end because the Agents SDK only populates span_data.input then."""
+    tmp: dict = {}
+    _set_input_messages(tmp, input_msgs)
+    for k, v in tmp.items():
+        otel_span.set_attribute(k, v)
+
+
+def _latest_user_turn(input_msgs: Any) -> str:
+    """The newest user-role message from a generation's input — this run's actual user turn (the
+    input carries the accumulated history, so the LAST user message is what triggered this trace).
+    Mirrors ADK's runner-span input.value and the backend's reverse().find(user) convention."""
+    if isinstance(input_msgs, str):
+        return input_msgs
+    if not isinstance(input_msgs, list):
+        return ""
+    for msg in reversed(input_msgs):
+        role = msg.get("role", "") if isinstance(msg, dict) else getattr(msg, "role", "")
+        if role == "user":
+            content = msg.get("content", "") if isinstance(msg, dict) else getattr(msg, "content", "")
+            if content:
+                return content if isinstance(content, str) else serialize(content)
+    return ""
+
+
 def _set_input_messages(attrs: dict, input_msgs: Any) -> None:
     if not input_msgs or not isinstance(input_msgs, list):
         if isinstance(input_msgs, str):
             attrs["neatlogs.llm.input_messages.0.role"] = "user"
             attrs["neatlogs.llm.input_messages.0.content"] = input_msgs[:10000]
+            attrs["input.value"] = serialize({"messages": [{"role": "user", "content": input_msgs[:10000]}]})
         return
+    msgs: list = []
     for i, msg in enumerate(input_msgs):
         role = msg.get("role", "") if isinstance(msg, dict) else getattr(msg, "role", "")
         content = msg.get("content", "") if isinstance(msg, dict) else getattr(msg, "content", "")
+        text = (content if isinstance(content, str) else serialize(content))[:10000]
         if role:
             attrs[f"neatlogs.llm.input_messages.{i}.role"] = role
         if content:
-            attrs[f"neatlogs.llm.input_messages.{i}.content"] = (content if isinstance(content, str) else serialize(content))[:10000]
+            attrs[f"neatlogs.llm.input_messages.{i}.content"] = text
+        if role and content:
+            msgs.append({"role": role, "content": text})
+    # Consolidated blob the backend reads (selectInputAttribute → input.value) and its user-turn
+    # extractor parses (the {"messages":[...]} shape). Indexed keys alone are not read by the
+    # finalizer, so without this the full conversation is dropped from the traces INPUT column.
+    if msgs:
+        attrs["input.value"] = serialize({"messages": msgs})
 
 
 def _set_output_messages(otel_span: Any, output: Any) -> None:
@@ -317,6 +379,36 @@ def _set_output_messages(otel_span: Any, output: Any) -> None:
     elif isinstance(output, str):
         otel_span.set_attribute("neatlogs.llm.output_messages.0.role", "assistant")
         otel_span.set_attribute("neatlogs.llm.output_messages.0.content", output[:10000])
+
+
+def _assistant_output_text(span_type: str, data: Any) -> str:
+    """Extract the assistant reply text from a generation/response span's output — the final answer
+    the trace-level output surface should show. Returns '' for anything without assistant text (so a
+    tool-only turn never wins over the terminal reply under last-write-wins). Mirrors the shapes
+    _set_output_messages / the response branch already handle."""
+    if span_type == "response":
+        response = getattr(data, "response", None)
+        text = getattr(response, "output_text", None) if response is not None else None
+        return str(text) if text else ""
+    output = getattr(data, "output", None)
+    if not output:
+        return ""
+    if isinstance(output, str):
+        return output
+    if isinstance(output, list):
+        parts: list = []
+        for msg in output:
+            role = msg.get("role", "assistant") if isinstance(msg, dict) else getattr(msg, "role", "assistant")
+            if role != "assistant":
+                continue
+            content = msg.get("content", "") if isinstance(msg, dict) else getattr(msg, "content", "")
+            if content:
+                parts.append(content if isinstance(content, str) else serialize(content))
+        return "\n".join(parts)
+    if hasattr(output, "content"):
+        c = output.content
+        return c if isinstance(c, str) else serialize(c)
+    return ""
 
 
 def _set_usage(otel_span: Any, usage: Any) -> None:

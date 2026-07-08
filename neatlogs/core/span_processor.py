@@ -39,6 +39,39 @@ _AGENTIC_KINDS = {
     "EMBEDDING", "GUARDRAIL", "LLM", "MCP_TOOL",
 }
 
+# Hosts for third-party framework telemetry that our HTTP auto-instrumentation
+# would otherwise capture as junk spans (often on their own rootless trace). We
+# suppress CrewAI's telemetry at the source (env vars), but a framework may fire
+# such calls before our env takes effect or via a path we don't gate — drop the
+# resulting HTTP spans here as defense-in-depth so they never pollute a trace.
+_TELEMETRY_HTTP_HOSTS = (
+    "telemetry.crewai.com",
+    "app.crewai.com",
+)
+
+
+def _http_span_host(span) -> str:
+    """Best-effort host/URL string for an HTTP-client span, across OTel attr names."""
+    attrs = span.attributes or {}
+    for key in ("server.address", "net.peer.name", "http.host", "url.full", "http.url"):
+        val = attrs.get(key)
+        if val:
+            return str(val)
+    return ""
+
+
+def is_telemetry_http(span) -> bool:
+    """True if `span` is an HTTP-client span calling a known framework-telemetry host."""
+    try:
+        scope = getattr(span, "instrumentation_scope", None)
+        scope_name = getattr(scope, "name", "") or ""
+        if not scope_name.startswith(_HTTP_INSTRUMENTATION_SCOPES):
+            return False
+        target = _http_span_host(span)
+        return any(host in target for host in _TELEMETRY_HTTP_HOSTS)
+    except Exception:
+        return False
+
 
 def is_rootless_infra_http(span) -> bool:
     """True if `span` is a root (no parent) HTTP-client auto-span with no agentic
@@ -227,6 +260,17 @@ class NeatlogsSpanProcessor(SpanProcessor):
                 logger.debug(
                     f"[SpanProcessor] Dropping rootless infra-HTTP span '{span.name}' "
                     f"(scope={getattr(getattr(span, 'instrumentation_scope', None), 'name', '')})"
+                )
+            return
+
+        # Drop HTTP spans that are calls to third-party framework telemetry
+        # endpoints (e.g. CrewAI's app.crewai.com batch tracing). These are noise
+        # and can spawn a stray second trace; suppress regardless of nesting.
+        if is_telemetry_http(span):
+            if self.debug:
+                logger.debug(
+                    f"[SpanProcessor] Dropping framework-telemetry HTTP span '{span.name}' "
+                    f"(host={_http_span_host(span)})"
                 )
             return
 

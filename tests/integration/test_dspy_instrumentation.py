@@ -82,7 +82,6 @@ class TestDSPyInstrumentation:
 
             neatlogs.init(
                 api_key="test-key",
-                enable_otel=True,
                 disable_export=True,
                 # DSPy and OpenAI instrumentation
                 instrumentations=["dspy", "openai"],

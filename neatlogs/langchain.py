@@ -114,6 +114,9 @@ class NeatlogsCallbackHandler(BaseCallbackHandler):
         self._contexts: Dict[UUID, Any] = {}
         # Auto-root spans keyed by the run_id of the child that triggered them.
         self._auto_roots: Dict[UUID, Any] = {}
+        # OTel context-detach tokens for node (chain) spans we made ambient, so
+        # manual neatlogs.trace()/@span/log() inside a node nest under the node.
+        self._ctx_detach: Dict[UUID, Any] = {}
         self._workflow_name = workflow_name
 
     # -- Self-rooting -----------------------------------------------------------
@@ -312,6 +315,18 @@ class NeatlogsCallbackHandler(BaseCallbackHandler):
                                 if tc.get("id"):
                                     span.set_attribute(f"neatlogs.llm.tool_calls.{j}.id", tc["id"])
 
+                            # Structured output / function-calling: the model answered
+                            # with a tool call and NO text content. Mirror it into the
+                            # standard output-message content so the span shows an output
+                            # (the tool call IS the output here). Skip if content was set.
+                            if not text and not content:
+                                rendered = "\n".join(
+                                    f"{tc.get('name', '')}({serialize(tc.get('args', {}))})"
+                                    for tc in tool_calls
+                                )
+                                span.set_attribute("neatlogs.llm.output_messages.0.role", "assistant")
+                                span.set_attribute("neatlogs.llm.output_messages.0.content", rendered)
+
                         thinking_blocks = getattr(message, "thinking_blocks", None)
                         if thinking_blocks:
                             thinking_text = "".join(
@@ -383,21 +398,68 @@ class NeatlogsCallbackHandler(BaseCallbackHandler):
         serialized = serialized or {}
         name = serialized.get("id", [""])[-1] if serialized.get("id") else "chain"
 
+        # Collapse LangGraph/LangChain plumbing chains. A single node fires several
+        # nested on_chain_start events: the real node boundary (tagged "graph:step:N")
+        # plus the internal RunnableSequence steps that make up the node (tagged
+        # "seq:step:N") and hidden helpers (tagged "langsmith:hidden"). Emitting a span
+        # for each shows the same node 4-6x. Keep only the graph:step node span (and
+        # ordinary non-graph chains); skip the seq:step / hidden ones, but forward the
+        # parent context so the real work (LLM call) still nests under the node span.
+        tag_list = tags or []
+        is_internal = any(
+            t == "langsmith:hidden" or str(t).startswith("seq:step:") for t in tag_list
+        )
+        if is_internal:
+            passthrough = self._contexts.get(parent_run_id) if parent_run_id else None
+            if passthrough is not None:
+                self._contexts[run_id] = passthrough
+            return
+
+        # LangGraph passes the node name in metadata["langgraph_node"]; without it
+        # every node is a generic "langchain.chain.chain". Prefer it for the span
+        # name and stamp neatlogs.langgraph.node (the attribute the backend reads).
+        langgraph_node = (metadata or {}).get("langgraph_node")
+        span_name = (
+            f"langchain.node.{langgraph_node}" if langgraph_node else f"langchain.chain.{name}"
+        )
+
         ctx = self._start_ctx(parent_run_id, run_id, "chain")
 
         span = tracer.start_span(
-            name=f"langchain.chain.{name}",
+            name=span_name,
             context=ctx,
             attributes={
                 "neatlogs.span.kind": "chain",
             },
         )
 
+        if langgraph_node:
+            span.set_attribute("neatlogs.langgraph.node", langgraph_node)
+
         if inputs:
             span.set_attribute("input.value", serialize(inputs))
 
         self._spans[run_id] = span
-        self._contexts[run_id] = _span_in_ctx(span, ctx)
+        span_ctx = _span_in_ctx(span, ctx)
+        self._contexts[run_id] = span_ctx
+        # Make a LangGraph NODE span the AMBIENT OTel context so manual
+        # neatlogs.trace()/@span/log() inside the node body nest under it (they read
+        # the ambient context, not the handler's private run tree). Scoped to
+        # langgraph nodes only: generic/framework chains (e.g. crewai's) run their
+        # own callback trees where a stray attach/detach across non-LIFO async
+        # callbacks could leak context into a second trace. Detached in
+        # on_chain_end/on_chain_error.
+        if langgraph_node:
+            self._ctx_detach[run_id] = otel_context.attach(span_ctx)
+
+    def _detach_ctx(self, run_id: UUID) -> None:
+        """Detach the ambient-context token attached for this node span (if any)."""
+        token = self._ctx_detach.pop(run_id, None)
+        if token is not None:
+            try:
+                otel_context.detach(token)
+            except Exception:
+                pass
 
     def on_chain_end(
         self,
@@ -407,6 +469,7 @@ class NeatlogsCallbackHandler(BaseCallbackHandler):
         parent_run_id: Optional[UUID] = None,
         **kwargs: Any,
     ) -> None:
+        self._detach_ctx(run_id)
         span = self._spans.pop(run_id, None)
         self._contexts.pop(run_id, None)
         if not span:
@@ -427,6 +490,7 @@ class NeatlogsCallbackHandler(BaseCallbackHandler):
         parent_run_id: Optional[UUID] = None,
         **kwargs: Any,
     ) -> None:
+        self._detach_ctx(run_id)
         span = self._spans.pop(run_id, None)
         self._contexts.pop(run_id, None)
         if not span:

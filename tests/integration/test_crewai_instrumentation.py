@@ -595,6 +595,19 @@ class TestCrewAIInstrumentation:
         respx.post(url__regex=r"https://api.openai.com/v1/chat/completions").mock(
             side_effect=_complex_openai_handler
         )
+        # memory=True makes crewai embed task outputs via /v1/embeddings — mock it
+        # too, otherwise respx raises AllMockedAssertionError on the unmocked call.
+        respx.post(url__regex=r"https://api.openai.com/v1/embeddings").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "object": "list",
+                    "data": [{"object": "embedding", "index": 0, "embedding": [0.1] * 1536}],
+                    "model": "text-embedding-3-small",
+                    "usage": {"prompt_tokens": 5, "total_tokens": 5},
+                },
+            )
+        )
 
         @tool
         def search_web(query: str) -> str:

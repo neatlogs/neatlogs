@@ -38,39 +38,61 @@ except ImportError:
 # --- HELPER: NEW API MOCK FACTORY ---
 def create_mock_response(content=None, tool_calls=None):
     """
-    Generates a valid response for the new /v1/responses API.
-    Crucial: Includes 'token_details' to pass Pydantic validation.
+    Generates a valid response for the /v1/responses API as required by
+    openai>=2.x. Output items use the real Responses schemas:
+      - message  -> {type:"message", role, status, content:[{type:"output_text",...}]}
+      - function_call -> {type:"function_call", call_id, name, arguments, ...}
+    All top-level required fields (created_at, object, model, tools, etc.) and
+    the usage *_tokens_details blocks are included so Pydantic validation and
+    the `output_text` aggregation property both succeed.
     """
     output_items = []
 
-    # 1. Add Message Content
+    # 1. Message content (Responses API message shape)
     if content:
         output_items.append(
-            {"type": "message", "message": {"role": "assistant", "content": content}}
+            {
+                "type": "message",
+                "id": "msg_mock",
+                "role": "assistant",
+                "status": "completed",
+                "content": [
+                    {"type": "output_text", "text": content, "annotations": []}
+                ],
+            }
         )
 
-    # 2. Add Tool Calls
+    # 2. Tool calls (Responses API function_call shape)
     if tool_calls:
-        for tc in tool_calls:
+        for i, tc in enumerate(tool_calls):
+            call_id = tc.get("id", f"call_{i}")
             output_items.append(
                 {
-                    "type": "tool_call",
-                    "id": tc.get("id", "call_123"),
-                    "function": {"name": tc["name"], "arguments": tc["arguments"]},
+                    "type": "function_call",
+                    "id": f"fc_{call_id}",
+                    "call_id": call_id,
+                    "name": tc["name"],
+                    "arguments": tc["arguments"],
+                    "status": "completed",
                 }
             )
 
     return {
         "id": "resp_mock_123",
+        "created_at": 0,
+        "object": "response",
         "status": "completed",
+        "model": "gpt-4o",
+        "parallel_tool_calls": True,
+        "tool_choice": "auto",
+        "tools": [],
         "output": output_items,
         "usage": {
             "input_tokens": 10,
             "output_tokens": 5,
             "total_tokens": 15,
-            # 🔥 CRITICAL FIELDS FOR NEW SDK
-            "input_token_details": {"cache_read": 0},
-            "output_token_details": {"reasoning": 0},
+            "input_tokens_details": {"cached_tokens": 0},
+            "output_tokens_details": {"reasoning_tokens": 0},
         },
     }
 
@@ -79,14 +101,34 @@ class TestOpenAIAgentsInstrumentation:
 
     @pytest.fixture(autouse=True)
     def setup_teardown(self, in_memory_span_exporter):
+        import neatlogs
+
+        # OTel set_tracer_provider + neatlogs.init are set-once; reset both so
+        # each test installs its own provider + processor (avoids in-group
+        # pollution where later tests' spans go to the first test's exporter).
+        neatlogs.shutdown()
+        trace._TRACER_PROVIDER = None
+        trace._TRACER_PROVIDER_SET_ONCE._done = False
+
         provider = TracerProvider()
         provider.add_span_processor(SimpleSpanProcessor(in_memory_span_exporter))
         trace.set_tracer_provider(provider)
 
-        import neatlogs
+        neatlogs.init(
+            api_key="test-key",
+            disable_export=True,
+            instrumentations=["openai", "openai-agents"],
+        )
 
-        neatlogs.init(api_key="test-key", instrumentations=["openai", "openai-agents"])
+        # AGENT/tool/handoff spans come from the Agents SDK trace processor, which
+        # is NOT auto-registered by instrumentations=["openai-agents"] (that only
+        # wires the OpenInference LLM instrumentation). Register neatlogs' processor
+        # explicitly. set_trace_processors replaces, so it won't stack across tests.
+        from agents import set_trace_processors
+
+        set_trace_processors([neatlogs.openai_agents_processor()])
         yield
+        neatlogs.shutdown()
 
     # =================================================================
     # 🟢 PATTERN 1: BASIC SYNC (Proven Working)
@@ -125,7 +167,7 @@ class TestOpenAIAgentsInstrumentation:
         time.sleep(0.1)
         spans = in_memory_span_exporter.get_finished_spans()
         assert len(spans) >= 1
-        assert any(s.attributes.get("agent.name") == "AsyncBot" for s in spans)
+        assert any(s.attributes.get("neatlogs.agent.name") == "AsyncBot" for s in spans)
 
     # =================================================================
     # 🟡 PATTERN 3: SINGLE TOOL CALLING
@@ -153,8 +195,17 @@ class TestOpenAIAgentsInstrumentation:
         time.sleep(0.1)
         spans = in_memory_span_exporter.get_finished_spans()
 
-        # Verify Tool Span
-        tool_span = next((s for s in spans if s.name == "get_weather"), None)
+        # Verify Tool Span — match on the TOOL kind + tool name, not the exact span
+        # name (the instrumentor names it e.g. "openai_agents.tool.get_weather").
+        tool_span = next(
+            (
+                s
+                for s in spans
+                if s.attributes.get("neatlogs.span.kind") == "tool"
+                and s.attributes.get("neatlogs.tool.name") == "get_weather"
+            ),
+            None,
+        )
         assert tool_span is not None, "Tool execution span missing"
 
     # =================================================================
@@ -188,7 +239,12 @@ class TestOpenAIAgentsInstrumentation:
         time.sleep(0.1)
         spans = in_memory_span_exporter.get_finished_spans()
 
-        stock_spans = [s for s in spans if s.name == "get_stock"]
+        stock_spans = [
+            s
+            for s in spans
+            if s.attributes.get("neatlogs.span.kind") == "tool"
+            and s.attributes.get("neatlogs.tool.name") == "get_stock"
+        ]
         assert len(stock_spans) == 2, f"Expected 2 parallel spans, got {len(stock_spans)}"
 
     # =================================================================
@@ -196,10 +252,10 @@ class TestOpenAIAgentsInstrumentation:
     # =================================================================
     @respx.mock
     def test_agent_handoff(self, in_memory_span_exporter):
-        # 1. TriageBot calls transfer tool
-        # Note: The SDK names transfer tools as 'transfer_to_{AgentName}'
+        # 1. TriageBot calls transfer tool. The SDK names transfer tools
+        # 'transfer_to_<snake_case(agent_name)>' — "SupportBot" -> "supportbot".
         handoff_resp = create_mock_response(
-            tool_calls=[{"name": "transfer_to_SupportBot", "arguments": "{}"}]
+            tool_calls=[{"name": "transfer_to_supportbot", "arguments": "{}"}]
         )
         # 2. SupportBot replies
         support_resp = create_mock_response(content="Support here.")
@@ -219,13 +275,21 @@ class TestOpenAIAgentsInstrumentation:
         time.sleep(0.1)
         spans = in_memory_span_exporter.get_finished_spans()
 
-        # Check trace contains both agents
+        # Check the trace contains BOTH agents (handoff actually executed).
         agent_names = [
-            s.attributes.get("agent.name") for s in spans if s.attributes.get("agent.name")
+            s.attributes.get("neatlogs.agent.name")
+            for s in spans
+            if s.attributes.get("neatlogs.agent.name")
         ]
         assert "TriageBot" in agent_names
-        # Check for handoff event (tool call)
-        assert any("transfer" in s.name for s in spans), "Handoff tool call missing"
+        assert "SupportBot" in agent_names, "Handoff target agent never ran"
+        # Check for the dedicated handoff span (kind=agent, name contains 'handoff',
+        # or carries the handoff_from attribute).
+        assert any(
+            "handoff" in s.name.lower()
+            or any("handoff" in k.lower() for k in s.attributes)
+            for s in spans
+        ), "Handoff span missing"
 
     # =================================================================
     # 🔥 PATTERN 6: RAG + EMBEDDINGS (Nested)
@@ -265,9 +329,25 @@ class TestOpenAIAgentsInstrumentation:
         time.sleep(0.1)
         spans = in_memory_span_exporter.get_finished_spans()
 
-        # Verify Hierarchy
-        embed_span = next((s for s in spans if "embedding" in s.name), None)
-        tool_span = next((s for s in spans if s.name == "rag_search"), None)
+        # Verify Hierarchy — match by kind/tool-name, not exact span names.
+        embed_span = next(
+            (
+                s
+                for s in spans
+                if s.attributes.get("neatlogs.span.kind") == "embedding"
+                or "embedding" in s.name.lower()
+            ),
+            None,
+        )
+        tool_span = next(
+            (
+                s
+                for s in spans
+                if s.attributes.get("neatlogs.span.kind") == "tool"
+                and s.attributes.get("neatlogs.tool.name") == "rag_search"
+            ),
+            None,
+        )
 
         assert tool_span is not None, "Tool span missing"
         assert embed_span is not None, "Embedding span missing"
@@ -302,6 +382,14 @@ class TestOpenAIAgentsInstrumentation:
         time.sleep(0.1)
         spans = in_memory_span_exporter.get_finished_spans()
 
-        fail_span = next((s for s in spans if s.name == "bad_tool"), None)
+        fail_span = next(
+            (
+                s
+                for s in spans
+                if s.attributes.get("neatlogs.span.kind") == "tool"
+                and s.attributes.get("neatlogs.tool.name") == "bad_tool"
+            ),
+            None,
+        )
         assert fail_span is not None
         assert fail_span.status.status_code == StatusCode.ERROR

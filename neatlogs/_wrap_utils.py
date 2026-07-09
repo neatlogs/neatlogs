@@ -8,10 +8,12 @@ Only contains truly shared concerns:
   - Safe JSON serialization
 """
 
+import inspect
 import json
 import os
 import time
-from typing import Any, Callable, Dict, List, Optional
+from contextvars import ContextVar
+from typing import Any, Callable, Dict, List, Mapping, Optional
 from urllib.parse import urlparse
 
 from opentelemetry import context as context_api
@@ -27,6 +29,23 @@ _wrapper_bootstrapped = False
 _bootstrap_warned = False
 
 _wrapper_config: Dict[str, Any] = {}
+_wrap_context: ContextVar[Optional[Dict[str, Any]]] = ContextVar(
+    "neatlogs.wrap_context", default=None
+)
+
+_PROXY_PASSTHROUGH_TYPES = (
+    str,
+    bytes,
+    int,
+    float,
+    bool,
+    type(None),
+    dict,
+    list,
+    tuple,
+    set,
+    frozenset,
+)
 
 
 def _normalize_traces_endpoint(endpoint: str) -> str:
@@ -64,6 +83,130 @@ def configure(**kwargs: Any) -> None:
     _wrapper_config.update(kwargs)
     global _wrapper_tracer
     _wrapper_tracer = None
+
+
+def _filtered_mapping(values: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
+    if not values:
+        return {}
+    return {str(key): value for key, value in values.items() if value is not None}
+
+
+def make_wrap_context(
+    workflow_attributes: Optional[Mapping[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Normalize metadata passed to ``neatlogs.wrap(...)``."""
+    workflow_attrs = _filtered_mapping(workflow_attributes)
+    context: Dict[str, Any] = {}
+    if workflow_attrs:
+        context["workflow"] = workflow_attrs
+    return context
+
+
+def _merged_wrap_context(context: Dict[str, Any]) -> Dict[str, Any]:
+    current = _wrap_context.get() or {}
+    if not current:
+        merged: Dict[str, Any] = {}
+        if context.get("workflow"):
+            merged["workflow"] = dict(context["workflow"])
+        return merged
+
+    merged: Dict[str, Any] = {}
+    workflow_attrs = dict(current.get("workflow") or {})
+    workflow_attrs.update(context.get("workflow") or {})
+    if workflow_attrs:
+        merged["workflow"] = workflow_attrs
+    return merged
+
+
+def _call_with_wrap_context(
+    fn: Callable[..., Any],
+    context: Dict[str, Any],
+    *args: Any,
+    **kwargs: Any,
+) -> Any:
+    if inspect.iscoroutinefunction(fn):
+
+        async def _async_call():
+            token = _wrap_context.set(_merged_wrap_context(context))
+            try:
+                return await fn(*args, **kwargs)
+            finally:
+                _wrap_context.reset(token)
+
+        return _async_call()
+
+    token = _wrap_context.set(_merged_wrap_context(context))
+    try:
+        result = fn(*args, **kwargs)
+        if hasattr(result, "__await__"):
+
+            async def _await_result():
+                await_token = _wrap_context.set(_merged_wrap_context(context))
+                try:
+                    return await result
+                finally:
+                    _wrap_context.reset(await_token)
+
+            return _await_result()
+        return result
+    finally:
+        _wrap_context.reset(token)
+
+
+class _WrapContextProxy:
+    """Forwarding proxy that makes wrap metadata active during method calls."""
+
+    __slots__ = ("_neatlogs_target", "_neatlogs_context")
+
+    def __init__(self, target: Any, context: Dict[str, Any]):
+        object.__setattr__(self, "_neatlogs_target", target)
+        object.__setattr__(self, "_neatlogs_context", context)
+
+    @property
+    def __class__(self):
+        return object.__getattribute__(self, "_neatlogs_target").__class__
+
+    def __getattr__(self, name: str) -> Any:
+        target = object.__getattribute__(self, "_neatlogs_target")
+        context = object.__getattribute__(self, "_neatlogs_context")
+        value = getattr(target, name)
+        if callable(value):
+
+            def _wrapped_callable(*args: Any, **kwargs: Any) -> Any:
+                return _call_with_wrap_context(value, context, *args, **kwargs)
+
+            return _wrapped_callable
+        if isinstance(value, _PROXY_PASSTHROUGH_TYPES):
+            return value
+        return _WrapContextProxy(value, context)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        setattr(object.__getattribute__(self, "_neatlogs_target"), name, value)
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        target = object.__getattribute__(self, "_neatlogs_target")
+        context = object.__getattribute__(self, "_neatlogs_context")
+        return _call_with_wrap_context(target, context, *args, **kwargs)
+
+
+def with_wrap_context(target: Any, context: Optional[Dict[str, Any]]) -> Any:
+    if not context:
+        return target
+    return _WrapContextProxy(target, context)
+
+
+def apply_wrap_context_attributes(span: Any, is_root: bool = True) -> None:
+    if not is_root:
+        return
+    context = _wrap_context.get() or {}
+    if not context:
+        return
+
+    for key, value in (context.get("workflow") or {}).items():
+        try:
+            span.set_attribute(f"neatlogs.workflow.{key}", str(value))
+        except Exception:
+            pass
 
 
 def reset_tracer() -> None:
@@ -304,6 +447,7 @@ class _AutoRootTracer:
             from .core.end_user import apply_end_user_attributes
             from .core.session import apply_session_attributes
 
+            apply_wrap_context_attributes(root, is_root=True)
             apply_session_attributes(root, None, is_root=True)
             apply_end_user_attributes(root, None, None, is_root=True)
         except Exception:

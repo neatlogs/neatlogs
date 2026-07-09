@@ -173,11 +173,15 @@ class NeatlogsSpanProcessor(SpanProcessor):
             # (overriding this); direct-provider auto-roots stamp it themselves.
             # This catch-all is what lets identify() reach FRAMEWORK auto-roots
             # (langchain, openai-agents, strands, ...) whose roots don't stamp it.
-            # No-ops when identify() is inactive; child spans are skipped.
+            # Also stamps metadata from neatlogs.wrap(..., **workflow_attrs)
+            # while a metadata-bound wrapped client call is active. Both helpers
+            # no-op when their context is inactive; child spans are skipped.
             if span.parent is None:
+                from .._wrap_utils import apply_wrap_context_attributes
                 from .end_user import apply_end_user_attributes
                 from .session import apply_session_attributes
 
+                apply_wrap_context_attributes(span, is_root=True)
                 apply_session_attributes(span, None, is_root=True)
                 apply_end_user_attributes(span, None, None, is_root=True)
 

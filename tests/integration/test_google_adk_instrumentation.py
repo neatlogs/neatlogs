@@ -41,7 +41,7 @@ class TestGoogleGenAIInstrumentation:
         import neatlogs
 
         # Instrument the specific Google GenAI library
-        neatlogs.init(api_key="test-key", instrumentations=["google-genai"], enable_otel=True)
+        neatlogs.init(api_key="test-key", instrumentations=["google-genai"])
 
         self.exporter = in_memory_span_exporter
         yield

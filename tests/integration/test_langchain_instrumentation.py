@@ -43,17 +43,25 @@ class TestLangChainInstrumentation:
         from opentelemetry.sdk.trace import TracerProvider
         from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 
+        import neatlogs
+
+        # OTel's set_tracer_provider + neatlogs.init are BOTH set-once (OTel logs
+        # "Overriding ... not allowed"; init() early-returns while _initialized).
+        # Without clearing them, every test after the first keeps the FIRST test's
+        # provider/exporter and its own fresh exporter never receives spans. Reset
+        # both so each test installs its own provider + NeatlogsSpanProcessor.
+        neatlogs.shutdown()
+        trace._TRACER_PROVIDER = None
+        trace._TRACER_PROVIDER_SET_ONCE._done = False
+
         # Setup OpenTelemetry with in-memory exporter
         provider = TracerProvider()
         provider.add_span_processor(SimpleSpanProcessor(in_memory_span_exporter))
         trace.set_tracer_provider(provider)
 
         # Initialize Neatlogs with LangChain instrumentation
-        import neatlogs
-
         neatlogs.init(
             api_key="test-key",
-            enable_otel=True,
             disable_export=True,  # IMPORTANT: Prevent server calls in unit tests
             instrumentations=["langchain"],
         )
@@ -63,6 +71,7 @@ class TestLangChainInstrumentation:
 
         # Cleanup
         self.exporter.clear()
+        neatlogs.shutdown()
 
     @pytest.fixture
     def mock_openai_chat_response(self):
@@ -153,7 +162,6 @@ class TestLangChainInstrumentation:
         model = ChatOpenAI(
             api_key="fake",
             model="gpt-3.5-turbo",
-            base_url="http://test.openai.com",  # Use test URL to avoid real API
         )
         output_parser = StrOutputParser()
 
@@ -172,29 +180,30 @@ class TestLangChainInstrumentation:
         # Debug: Print all spans for inspection
         print(f"All spans generated: {[s.name for s in spans]}")
 
-        # Instead of checking for specific span names, check for span kinds
-        chain_spans = [s for s in spans if s.attributes.get("openinference.span.kind") == "CHAIN"]
+        # Version-agnostic invariant: the LLM call is traced. The intermediate
+        # RunnableSequence/CHAIN wrapper span is version-specific — langchain 1.x
+        # no longer emits it for a plain LCEL pipe — so we don't require it.
         llm_spans = [s for s in spans if s.attributes.get("openinference.span.kind") == "LLM"]
-
-        assert len(chain_spans) > 0, "No CHAIN spans found"
         assert len(llm_spans) > 0, "No LLM spans found"
 
-        # Check for RunnableSequence (might be named differently)
-        runnable_spans = [
-            s for s in spans if "runnable" in s.name.lower() or "sequence" in s.name.lower()
-        ]
-        if runnable_spans:
-            # Check for langchain framework attribute (might be in different attribute)
-            for span in runnable_spans:
+        # The traced LLM call should carry the response output.
+        llm_output = " ".join(
+            str(v)
+            for s in llm_spans
+            for k, v in s.attributes.items()
+            if "output" in k.lower()
+        ).lower()
+        assert "test response" in llm_output
+
+        # A CHAIN/RunnableSequence span is optional; when present it should be langchain.
+        chain_spans = [s for s in spans if s.attributes.get("openinference.span.kind") == "CHAIN"]
+        for span in chain_spans:
+            if "runnable" in span.name.lower() or "sequence" in span.name.lower():
                 framework = (
                     span.attributes.get("llm.framework") or span.attributes.get("framework") or ""
                 )
-                if "langchain" in str(framework).lower():
-                    assert True
-                    return
-
-        # If we get here, just verify we have spans
-        assert len(spans) >= 2, f"Expected at least 2 spans, got {len(spans)}"
+                if framework:
+                    assert "langchain" in str(framework).lower()
 
     @respx.mock
     def test_lcel_branching_chain(self, mock_openai_chat_response):
@@ -207,20 +216,21 @@ class TestLangChainInstrumentation:
         )
 
         from langchain_core.prompts import ChatPromptTemplate
-        from langchain_core.runnables import RunnableBranch, RunnableLambda
+        from langchain_core.runnables import RunnableBranch
         from langchain_openai import ChatOpenAI
 
-        prompt = ChatPromptTemplate.from_template("{input}")
         model = ChatOpenAI(api_key="fake", model="gpt-3.5-turbo")
 
-        # Create branching logic with RunnableLambda
+        # Branch conditions receive the chain input dict directly. Each arm has its
+        # own prompt, so the branch operates on {"input": ...} (no leading prompt
+        # stage that would feed a ChatPromptValue into the conditions).
         def check_technical(x):
             return "technical" in x.get("input", "").lower()
 
         def check_simple(x):
             return "simple" in x.get("input", "").lower()
 
-        branch = RunnableBranch(
+        chain = RunnableBranch(
             (
                 check_technical,
                 ChatPromptTemplate.from_template("Technical answer for: {input}") | model,
@@ -228,8 +238,6 @@ class TestLangChainInstrumentation:
             (check_simple, ChatPromptTemplate.from_template("Simple answer for: {input}") | model),
             ChatPromptTemplate.from_template("Default answer for: {input}") | model,
         )
-
-        chain = prompt | branch
 
         result = chain.invoke({"input": "Explain quantum computing simply"})
 
@@ -388,38 +396,37 @@ class TestLangChainInstrumentation:
 
         from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 
-        # Mock ChromaDB to avoid actual DB dependency
-        with patch("langchain_community.vectorstores.Chroma") as MockChroma:
-            mock_vectorstore = Mock()
-            mock_retriever = Mock()
+        # A real (tiny) BaseRetriever returning fixed docs. RetrievalQA validates
+        # that `retriever` is a BaseRetriever instance (pydantic), so a bare Mock is
+        # rejected — use a real subclass that avoids any actual vector DB dependency.
+        from langchain_core.documents import Document
+        from langchain_core.retrievers import BaseRetriever
 
-            # Mock documents returned by retriever
-            mock_docs = [
-                Mock(
-                    page_content="LangChain is a framework for building LLM applications.",
-                    metadata={"source": "test"},
-                ),
-                Mock(
-                    page_content="OpenTelemetry is used for observability.",
-                    metadata={"source": "test"},
-                ),
-            ]
-            mock_retriever.get_relevant_documents.return_value = mock_docs
-            mock_retriever.invoke = mock_retriever.get_relevant_documents
-            mock_vectorstore.as_retriever.return_value = mock_retriever
+        fixed_docs = [
+            Document(
+                page_content="LangChain is a framework for building LLM applications.",
+                metadata={"source": "test"},
+            ),
+            Document(
+                page_content="OpenTelemetry is used for observability.",
+                metadata={"source": "test"},
+            ),
+        ]
 
-            MockChroma.return_value = mock_vectorstore
+        class FixedRetriever(BaseRetriever):
+            def _get_relevant_documents(self, query, *, run_manager=None):
+                return fixed_docs
 
-            # Build RetrievalQA chain
-            llm = ChatOpenAI(api_key="fake", model="gpt-3.5-turbo")
-            qa_chain = RetrievalQA.from_chain_type(
-                llm=llm,
-                chain_type="stuff",
-                retriever=mock_vectorstore.as_retriever(),
-                return_source_documents=True,
-            )
+        # Build RetrievalQA chain
+        llm = ChatOpenAI(api_key="fake", model="gpt-3.5-turbo")
+        qa_chain = RetrievalQA.from_chain_type(
+            llm=llm,
+            chain_type="stuff",
+            retriever=FixedRetriever(),
+            return_source_documents=True,
+        )
 
-            result = qa_chain.invoke({"query": "What is LangChain?"})
+        result = qa_chain.invoke({"query": "What is LangChain?"})
 
         spans = self.wait_for_spans(min_spans=3, timeout=3.0)
 
@@ -535,11 +542,18 @@ class TestLangChainInstrumentation:
         # Second response: Agent gives final answer
         final_response = mock_openai_chat_response.copy()
 
+        # First call → tool_calls; every subsequent call → final answer. A repeating
+        # callable (vs a fixed side_effect list) won't StopIteration if the agent
+        # makes a different number of calls across langchain versions.
+        _agent_calls = {"n": 0}
+
+        def _agent_side_effect(request):
+            _agent_calls["n"] += 1
+            body = tool_response if _agent_calls["n"] == 1 else final_response
+            return httpx.Response(200, json=body)
+
         respx.post("https://api.openai.com/v1/chat/completions").mock(
-            side_effect=[
-                httpx.Response(200, json=tool_response),
-                httpx.Response(200, json=final_response),
-            ]
+            side_effect=_agent_side_effect
         )
 
         try:
@@ -576,7 +590,12 @@ class TestLangChainInstrumentation:
         )
 
         agent = create_openai_tools_agent(llm, [weather_tool], prompt)
-        agent_executor = AgentExecutor(agent=agent, tools=[weather_tool], verbose=False)
+        # stream_runnable=False forces the non-streaming .invoke() path so the
+        # non-streaming mock response is consumed (langchain 1.x streams by default,
+        # which yields no chunks from a plain JSON mock body).
+        agent_executor = AgentExecutor(
+            agent=agent, tools=[weather_tool], verbose=False, stream_runnable=False
+        )
 
         result = agent_executor.invoke({"input": "What's the weather in SF?"})
 
@@ -691,11 +710,15 @@ class TestLangChainInstrumentation:
         from langchain_core.prompts import ChatPromptTemplate
 
         prompt = ChatPromptTemplate.from_messages(
-            [("system", "You have access to calculator and weather tools."), ("human", "{input}")]
+            [
+                ("system", "You have access to calculator and weather tools."),
+                ("human", "{input}"),
+                ("placeholder", "{agent_scratchpad}"),
+            ]
         )
 
         agent = create_openai_tools_agent(llm, tools, prompt)
-        executor = AgentExecutor(agent=agent, tools=tools, verbose=False)
+        executor = AgentExecutor(agent=agent, tools=tools, verbose=False, stream_runnable=False)
 
         result = executor.invoke({"input": "Calculate 2+2 then check London weather"})
 
@@ -811,12 +834,14 @@ class TestLangChainInstrumentation:
         parser = JsonOutputParser()
 
         llm = ChatOpenAI(api_key="fake", model="gpt-3.5-turbo")
+        # Inject the schema as a partial value, not inline text — its `{...}` would
+        # otherwise be parsed as template variables (nested-replacement-field error).
         prompt = ChatPromptTemplate.from_messages(
             [
-                ("system", f"Extract information in this format: {output_schema}"),
+                ("system", "Extract information in this format: {output_schema}"),
                 ("human", "{text}"),
             ]
-        )
+        ).partial(output_schema=output_schema)
 
         chain = prompt | llm | parser
 

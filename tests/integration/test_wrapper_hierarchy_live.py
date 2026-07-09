@@ -65,7 +65,14 @@ def _exporter():
 
 
 def _kinds(exp):
-    return [s.attributes.get("neatlogs.span.kind") for s in exp.get_finished_spans() if s.attributes.get("neatlogs.span.kind")]
+    # neatlogs.span.kind is stored lowercase on the span (the backend uppercases it
+    # to span_type). Normalize to upper here so assertions can use the conventional
+    # uppercase kind names (CHAIN, LLM, TOOL, ...).
+    return [
+        s.attributes.get("neatlogs.span.kind").upper()
+        for s in exp.get_finished_spans()
+        if s.attributes.get("neatlogs.span.kind")
+    ]
 
 
 def _names(exp):

@@ -4,6 +4,8 @@ ROOT span only, via ``trace(session_id=...)`` and ``@span(session_id=...)``, and
 that nested child spans do not carry it.
 """
 
+from types import SimpleNamespace
+
 from opentelemetry import trace
 
 import neatlogs
@@ -135,6 +137,64 @@ def test_identify_context_stamps_root(tracer_provider, in_memory_span_exporter):
     assert root.attributes.get(END_USER_ID_KEY) == "ctx_user"
 
 
+def test_wrap_context_stamps_workflow_metadata_on_auto_root(
+    tracer_provider, in_memory_span_exporter
+):
+    _install(tracer_provider)
+
+    class OpenAI:
+        def __init__(self):
+            self.chat = SimpleNamespace(
+                completions=SimpleNamespace(create=self._create)
+            )
+
+        def _create(self, **kwargs):
+            return SimpleNamespace(
+                choices=[],
+                usage=None,
+                model=kwargs.get("model"),
+            )
+
+    client = neatlogs.wrap(
+        OpenAI(),
+        workflow_name="Copilot chat",
+        project_id="project_123",
+        project_name="Default project",
+        org_id="org_123",
+        org_name="Workspace",
+        route="/api/v1/copilot/chat",
+        surface="copilot",
+        mode="fast",
+        arbitrary_context="searchable",
+        thread_id="thread_123",
+    )
+    with identify(session_id="session_123", end_user_id="end_user_123"):
+        client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "hi"}],
+        )
+
+    spans = in_memory_span_exporter.get_finished_spans()
+    root = next(s for s in spans if s.attributes.get("neatlogs.auto_root") is True)
+
+    assert root.name == "workflow"
+    assert "neatlogs.workflow_name" not in root.attributes
+    assert root.attributes.get("neatlogs.workflow.workflow_name") == "Copilot chat"
+    assert root.attributes.get("neatlogs.workflow.project_id") == "project_123"
+    assert root.attributes.get("neatlogs.workflow.project_name") == "Default project"
+    assert root.attributes.get("neatlogs.workflow.org_id") == "org_123"
+    assert root.attributes.get("neatlogs.workflow.org_name") == "Workspace"
+    assert root.attributes.get("neatlogs.workflow.route") == "/api/v1/copilot/chat"
+    assert root.attributes.get("neatlogs.workflow.surface") == "copilot"
+    assert root.attributes.get("neatlogs.workflow.mode") == "fast"
+    assert root.attributes.get("neatlogs.workflow.arbitrary_context") == "searchable"
+    assert root.attributes.get("neatlogs.workflow.thread_id") == "thread_123"
+    assert root.attributes.get(SESSION_ID_KEY) == "session_123"
+    assert root.attributes.get(END_USER_ID_KEY) == "end_user_123"
+    assert "neatlogs.session.user_id" not in root.attributes
+    assert "neatlogs.session.thread_id" not in root.attributes
+
+
 def test_percall_arg_wins_over_identify(tracer_provider, in_memory_span_exporter):
     _install(tracer_provider)
 
@@ -204,6 +264,47 @@ def test_processor_stamps_identify_on_bare_framework_root():
     root = next(s for s in exporter.get_finished_spans() if s.name == "LangGraph")
     assert root.attributes.get(SESSION_ID_KEY) == "conv_fw"
     assert root.attributes.get(END_USER_ID_KEY) == "u_fw"
+
+
+def test_processor_stamps_wrap_context_metadata_on_framework_root():
+    provider, exporter = _provider_with_neatlogs_processor()
+    _install(provider)
+    tracer = trace.get_tracer(__name__)
+
+    from neatlogs._wrap_utils import make_wrap_context, with_wrap_context
+
+    class Framework:
+        def run(self):
+            root = tracer.start_span(
+                "LangGraph", attributes={"neatlogs.span.kind": "workflow"}
+            )
+            root.end()
+
+    wrapped = with_wrap_context(
+        Framework(),
+        make_wrap_context(
+            {
+                "project_id": "project_fw",
+                "route": "/framework",
+                "surface": "agent",
+                "user_id": "user_fw",
+                "thread_id": "thread_fw",
+            }
+        ),
+    )
+    with identify(session_id="framework_session"):
+        wrapped.run()
+
+    root = next(s for s in exporter.get_finished_spans() if s.name == "LangGraph")
+    assert "neatlogs.workflow_name" not in root.attributes
+    assert root.attributes.get("neatlogs.workflow.project_id") == "project_fw"
+    assert root.attributes.get("neatlogs.workflow.route") == "/framework"
+    assert root.attributes.get("neatlogs.workflow.surface") == "agent"
+    assert root.attributes.get("neatlogs.workflow.user_id") == "user_fw"
+    assert root.attributes.get("neatlogs.workflow.thread_id") == "thread_fw"
+    assert root.attributes.get(SESSION_ID_KEY) == "framework_session"
+    assert "neatlogs.session.user_id" not in root.attributes
+    assert "neatlogs.session.thread_id" not in root.attributes
 
 
 def test_processor_skips_child_spans():

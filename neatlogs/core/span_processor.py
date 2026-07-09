@@ -115,6 +115,9 @@ class NeatlogsSpanProcessor(SpanProcessor):
         }
         # Track parent span IDs scheduled for suppression (RETRIEVER dedup)
         self._retrievers_to_suppress: set = set()
+        # Per-trace child I/O accumulator for root backfill (see on_end §1b):
+        #   trace_id(int) -> {parent_hex: {"in_ts","in_val","out_ts","out_val"}}
+        self._trace_child_io: dict = {}
 
     def _init_processor(self) -> None:
         base_path = os.path.dirname(os.path.dirname(__file__))
@@ -170,11 +173,15 @@ class NeatlogsSpanProcessor(SpanProcessor):
             # (overriding this); direct-provider auto-roots stamp it themselves.
             # This catch-all is what lets identify() reach FRAMEWORK auto-roots
             # (langchain, openai-agents, strands, ...) whose roots don't stamp it.
-            # No-ops when identify() is inactive; child spans are skipped.
+            # Also stamps metadata from neatlogs.wrap(..., **workflow_attrs)
+            # while a metadata-bound wrapped client call is active. Both helpers
+            # no-op when their context is inactive; child spans are skipped.
             if span.parent is None:
+                from .._wrap_utils import apply_wrap_context_attributes
                 from .end_user import apply_end_user_attributes
                 from .session import apply_session_attributes
 
+                apply_wrap_context_attributes(span, is_root=True)
                 apply_session_attributes(span, None, is_root=True)
                 apply_end_user_attributes(span, None, None, is_root=True)
 
@@ -291,6 +298,17 @@ class NeatlogsSpanProcessor(SpanProcessor):
 
             if self.sample_rate < 1.0 and random.random() > self.sample_rate:
                 return
+
+            # 1b. Root I/O backfill. Children close before their root (nested spans),
+            # so by the time a root span ends we've already seen every descendant's
+            # I/O. If the root carries no input/output of its own — e.g. a
+            # neatlogs.trace(kind="WORKFLOW") wrapper around a chain/graph — borrow the
+            # earliest-starting direct child's input and the latest-starting direct
+            # child's output so the trace row isn't blank. Mirrors the backend's
+            # argMin(input)/argMax(output) borrow, but client-side and without its
+            # single-I/O-child restriction. Runs BEFORE normalization so the injected
+            # input.value/output.value are mapped like any other span's.
+            self._accumulate_or_backfill_root_io(span)
 
             # 2. Process and normalize attributes
             unified_attrs = self.unified_processor.process(span)
@@ -484,6 +502,86 @@ class NeatlogsSpanProcessor(SpanProcessor):
 
         finally:
             self.perf_stats["on_end_time"] += time.perf_counter() - start_time
+
+    def _accumulate_or_backfill_root_io(self, span: ReadableSpan) -> None:
+        """Client-side root I/O backfill for I/O-less roots.
+
+        Non-root spans: record raw input.value/output.value keyed by
+        (trace_id, parent_span_id), keeping the earliest-started input and the
+        latest-started output per parent.
+
+        Root spans: if the root set no input.value/output.value of its own, borrow
+        from its DIRECT children — earliest child's input, latest child's output —
+        so the trace row isn't blank. Direct-child (not any-descendant) borrow keeps
+        the root's output equal to its immediate child's final result rather than a
+        deep grandchild's intermediate blob. Strict fallback: a root that already
+        carries I/O (e.g. @span capturing args/return, or a framework integration
+        that stamps its own root) is never overwritten. Runs at on_end BEFORE
+        normalization, so it reads the raw input.value/output.value keys.
+        """
+        try:
+            attrs = span.attributes or {}
+
+            def _nonempty(key):
+                v = attrs.get(key)
+                return v if isinstance(v, str) and v.strip() else None
+
+            trace_id = span.context.trace_id
+
+            if span.parent is not None:
+                in_val = _nonempty("input.value")
+                out_val = _nonempty("output.value")
+                if in_val is None and out_val is None:
+                    return
+                parent_hex = f"{span.parent.span_id:016x}"
+                ts = span.start_time or 0
+                # Bound memory: buckets are freed when their root ends, but a rootless
+                # trace would leak. Stop tracking NEW traces past a cap (existing
+                # buckets still fill and drain normally).
+                if trace_id not in self._trace_child_io and len(self._trace_child_io) >= 10000:
+                    return
+                per_trace = self._trace_child_io.setdefault(trace_id, {})
+                agg = per_trace.setdefault(parent_hex, {})
+                if in_val is not None and ("in_ts" not in agg or ts < agg["in_ts"]):
+                    agg["in_ts"], agg["in_val"] = ts, in_val
+                if out_val is not None and ("out_ts" not in agg or ts >= agg["out_ts"]):
+                    agg["out_ts"], agg["out_val"] = ts, out_val
+                return
+
+            # Root span: backfill from accumulated direct children, then drop the
+            # per-trace bucket (the trace is complete once its root ends).
+            per_trace = self._trace_child_io.pop(trace_id, None)
+            if not per_trace:
+                return
+            root_hex = f"{span.context.span_id:016x}"
+            agg = per_trace.get(root_hex)
+            if not agg:
+                return
+            span_attrs = span._attributes
+            if span_attrs is None:
+                return
+            want_in = _nonempty("input.value") is None and agg.get("in_val")
+            want_out = _nonempty("output.value") is None and agg.get("out_val")
+            if not (want_in or want_out):
+                return
+            # A root created by neatlogs.trace()/@span is already ended (immutable
+            # BoundedAttributes) by the time its on_end fires. Lift the immutable flag
+            # to add our borrowed keys, then restore it. (§7c relies on the same
+            # attribute write-back but silently no-ops on immutable roots.)
+            was_immutable = getattr(span_attrs, "_immutable", False)
+            if was_immutable:
+                span_attrs._immutable = False
+            try:
+                if want_in:
+                    span_attrs["input.value"] = agg["in_val"][:10000]
+                if want_out:
+                    span_attrs["output.value"] = agg["out_val"][:10000]
+            finally:
+                if was_immutable:
+                    span_attrs._immutable = True
+        except Exception as exc:
+            if self.debug:
+                logger.debug(f"[SpanProcessor] Root I/O backfill skipped: {exc}")
 
     def _emit_completion_marker(
         self,

@@ -137,6 +137,24 @@ def wrap(client, **workflow_attributes):
     cls_name = type(client).__name__
     module = type(client).__module__ or ""
 
+    # Debug: record every wrap() call — the object type and the call site — so a
+    # user can confirm WHICH object was wrapped and from WHERE.
+    try:
+        from .init import is_debug_enabled
+
+        if is_debug_enabled():
+            import inspect
+
+            from .core.logger import get_logger
+
+            _c = inspect.stack()[1]
+            get_logger().debug(
+                f"[neatlogs.wrap] wrapping {cls_name} (module={module}) "
+                f"— called from {_c.filename}:{_c.lineno} (in {_c.function})"
+            )
+    except Exception:
+        pass
+
     # Also fingerprint the full MRO so subclasses defined in user code are
     # detected — e.g. `class QAPipeline(dspy.Module)` has __module__ "src.pipeline"
     # but `dspy.module` appears in a base class. Used as a fallback when the leaf

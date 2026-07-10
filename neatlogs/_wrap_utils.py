@@ -346,6 +346,16 @@ def attach_as_current(span: otel_trace.Span):
             context_api.detach(token)
     """
     ctx = otel_trace.set_span_in_context(span)
+    # Mark that a neatlogs span is active in this context subtree. A foreign
+    # instrumentation (e.g. openlit) may push its OWN spans as the immediate
+    # current span BETWEEN two neatlogs spans (crew kickoff → openlit agent span →
+    # our llm.call). Inspecting only the immediate current span would then mistake
+    # the openlit span for "no neatlogs parent" and detach our child into its own
+    # trace, fragmenting the crew. This flag records that a neatlogs ancestor
+    # exists somewhere up the active chain, so the root-guard nests instead of
+    # detaching. Context is immutable+nested, so the flag scopes to the subtree.
+    if _is_neatlogs_span(span):
+        ctx = context_api.set_value(_NEATLOGS_ACTIVE_KEY, True, ctx)
     return context_api.attach(ctx)
 
 
@@ -409,19 +419,45 @@ def _resolve_root_workflow_name() -> str:
     return _wrapper_config.get("workflow_name") or "workflow"
 
 
-def _has_active_recording_parent() -> bool:
-    """True when there is already an active, recording NEATLOGS span to nest under.
+# Context flag: set by attach_as_current() whenever a neatlogs span is made
+# active, so descendants know a neatlogs ancestor exists even if a foreign span
+# (openlit, etc.) is the IMMEDIATE current span between them.
+_NEATLOGS_ACTIVE_KEY = "neatlogs.active_span_present"
 
-    A foreign span (another OTel instrumentation active in the same process — e.g.
-    a user's own Langfuse/OpenTelemetry tracer) must NOT be treated as a parent:
-    nesting under it produces a neatlogs span whose parent never reaches the
-    neatlogs backend (dangling parent → no root → no completion marker → the trace
-    never finalizes). Only spans WE created (instrumentation scope 'neatlogs.*')
-    count as a parent."""
+
+def _has_neatlogs_ancestor() -> bool:
+    """True if a neatlogs span is active anywhere up the current context chain.
+
+    Prefers the context flag (set by attach_as_current) so a foreign span sitting
+    BETWEEN two neatlogs spans doesn't hide the neatlogs ancestor. Falls back to
+    inspecting the immediate current span for spans neatlogs created without
+    attach_as_current."""
+    try:
+        if context_api.get_value(_NEATLOGS_ACTIVE_KEY):
+            return True
+    except Exception:
+        pass
+    current = otel_trace.get_current_span()
+    return bool(current and current.is_recording() and _is_neatlogs_span(current))
+
+
+def _has_active_recording_parent() -> bool:
+    """True when there is an active, recording NEATLOGS span (anywhere up the
+    chain) to nest under.
+
+    A purely foreign context (another OTel instrumentation — a user's Langfuse
+    tracer, or openlit — with NO neatlogs ancestor) must NOT be treated as a
+    parent: nesting under it produces a neatlogs span whose parent never reaches
+    the neatlogs backend (dangling → no root → no completion marker → never
+    finalizes). But a foreign span nested INSIDE a neatlogs span (e.g. openlit's
+    crew span between our kickoff and our llm.call) still has a neatlogs ancestor,
+    so we DO nest — otherwise the crew fragments into many single-span traces."""
     current = otel_trace.get_current_span()
     if not (current and current.is_recording()):
-        return False
-    return _is_neatlogs_span(current)
+        # No active span at all — but a neatlogs ancestor flag could still be set
+        # in a detached/propagated context; be conservative and treat as parent.
+        return _has_neatlogs_ancestor()
+    return _has_neatlogs_ancestor()
 
 
 def _is_neatlogs_span(span: Any) -> bool:
@@ -436,18 +472,19 @@ def _is_neatlogs_span(span: Any) -> bool:
 
 
 def _neatlogs_root_kwargs() -> dict:
-    """kwargs for start_span so a neatlogs root ignores any FOREIGN active parent.
+    """kwargs for start_span so a neatlogs root ignores a purely FOREIGN context.
 
-    If a neatlogs span is already active, nest normally (return {}). Otherwise —
-    no parent, or only a foreign span active — start in an empty context so the
-    new span is a true root (parent_span_id=''), which lets the completion marker
-    fire and the trace finalize. A caller-supplied shared trace_id still wins via
-    its own context kwarg."""
-    current = otel_trace.get_current_span()
-    if current and current.is_recording() and _is_neatlogs_span(current):
+    If a neatlogs span is active anywhere up the chain, nest normally (return {}) —
+    even when a foreign span (openlit) is the immediate current span. Only when
+    there is NO neatlogs ancestor (no active span, or only foreign spans) do we
+    start in an empty context so the new span is a true root (parent_span_id='')
+    that finalizes. A caller-supplied shared trace_id still wins via its own
+    context kwarg."""
+    if _has_neatlogs_ancestor():
         return {}
+    current = otel_trace.get_current_span()
     if current and current.is_recording():
-        # foreign parent active → detach from it
+        # purely foreign parent active (no neatlogs ancestor) → detach from it
         return {"context": context_api.Context()}
     return {}
 

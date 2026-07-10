@@ -34,6 +34,33 @@ from ._wrap_utils import attach_as_current, detach, get_tracer, serialize
 _CLASS_HOOKS_INSTALLED = False
 
 
+def _dbg(msg: str) -> None:
+    """Emit a debug line only when neatlogs.init(debug=True). Best-effort."""
+    try:
+        from .init import is_debug_enabled
+
+        if not is_debug_enabled():
+            return
+        from .core.logger import get_logger
+
+        get_logger().debug(f"[neatlogs.crewai] {msg}")
+    except Exception:
+        pass
+
+
+def _caller() -> str:
+    """'file:line (in func)' of the user frame that triggered this call."""
+    try:
+        import inspect
+
+        for fr in inspect.stack()[2:]:
+            if "/neatlogs/" not in fr.filename.replace("\\", "/"):
+                return f"{fr.filename}:{fr.lineno} (in {fr.function})"
+    except Exception:
+        pass
+    return "<unknown>"
+
+
 def _suppress_crewai_telemetry() -> None:
     """Disable CrewAI's built-in OTel telemetry.
 
@@ -88,8 +115,17 @@ def wrap_crewai(obj: Any) -> Any:
     cls_name = type(obj).__name__
     module = type(obj).__module__ or ""
 
+    obj_id = hex(id(obj))
+    crew_name = getattr(obj, "name", None) or getattr(obj, "_name", None)
+    _dbg(
+        f"wrap_crewai: received {cls_name} (module={module}, id={obj_id}, "
+        f"name={crew_name!r}, has_tasks={hasattr(obj, 'tasks')}, "
+        f"has_agents={hasattr(obj, 'agents')}) — called from {_caller()}"
+    )
+
     # Flow detection
     if "flow" in module or hasattr(obj, "_methods") and hasattr(obj, "kickoff") and not hasattr(obj, "tasks"):
+        _dbg(f"→ routed to FLOW branch; patching flow {cls_name} (id={obj_id})")
         _patch_flow(obj)
         return obj
 
@@ -103,16 +139,23 @@ def wrap_crewai(obj: Any) -> Any:
         and not hasattr(obj, "tasks")
         and not hasattr(obj, "agents")
     ):
+        _dbg(f"→ routed to STANDALONE AGENT branch (role={getattr(obj, 'role', None)!r}, id={obj_id})")
         _patch_agent_kickoff(obj)
         return obj
 
     # Crew
+    _dbg(
+        f"→ routed to CREW branch; patching kickoff* on {cls_name} "
+        f"(id={obj_id}, tasks={len(getattr(obj, 'tasks', []) or [])}, "
+        f"agents={len(getattr(obj, 'agents', []) or [])})"
+    )
     _patch_kickoff(obj)
     _patch_kickoff_async(obj)
     _patch_kickoff_for_each(obj)
     _patch_kickoff_for_each_async(obj)
     _patch_extra_crew_entrypoints(obj)
     _patch_tasks_and_agents(obj)
+    _dbg(f"→ CREW patched: kickoff={getattr(obj, '_neatlogs_kickoff_patched', False)} (id={obj_id})")
     return obj
 
 
@@ -218,11 +261,17 @@ def _patch_kickoff(crew: Any) -> None:
     orig_kickoff = crew.kickoff
 
     def patched_kickoff(*args, **kwargs):
+        _dbg(
+            f"kickoff() FIRED on crew id={hex(id(crew))} "
+            f"(name={getattr(crew, 'name', None) or getattr(crew, '_name', None)!r}) "
+            f"— called from {_caller()}"
+        )
         # Re-patch in case tasks/agents were added after wrap().
         _patch_tasks_and_agents(crew)
         tracer = get_tracer()
         attrs = _get_crew_attributes(crew)
         span = tracer.start_span(name="crewai.crew.kickoff", attributes=attrs)
+        _dbg(f"opened 'crewai.crew.kickoff' WORKFLOW span for crew id={hex(id(crew))}")
         _set_crew_input(span, crew, kwargs)
         token = attach_as_current(span)
         start = time.perf_counter()

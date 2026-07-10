@@ -208,6 +208,21 @@ def init(
     global _debug_mode
     _debug_mode = debug
 
+    if debug:
+        try:
+            from .core.logger import set_log_level
+
+            set_log_level(logging.DEBUG)  # ensure our debug lines emit from here on
+            import inspect
+
+            caller = inspect.stack()[1]
+            logger.debug(
+                f"[neatlogs.init] called from {caller.filename}:{caller.lineno} "
+                f"(in {caller.function})"
+            )
+        except Exception:
+            pass
+
     resolved_workflow_name = _resolve_workflow_name(workflow_name)
 
     from urllib.parse import urlparse as _urlparse

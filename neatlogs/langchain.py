@@ -54,7 +54,7 @@ def _is_recording(ctx: Any) -> bool:
 
 
 try:
-    from langchain_core.callbacks import BaseCallbackHandler
+    from langchain_core.callbacks import AsyncCallbackHandler, BaseCallbackHandler
     from langchain_core.messages import BaseMessage
     from langchain_core.outputs import LLMResult
 except ImportError:
@@ -113,8 +113,19 @@ def _set_invocation_params(span: Any, kwargs: Dict[str, Any]) -> None:
                     span.set_attribute(f"neatlogs.llm.tools.{i}.input_schema", serialize(params))
 
 
-class NeatlogsCallbackHandler(BaseCallbackHandler):
-    """LangChain callback handler that creates neatlogs.llm.* spans."""
+class NeatlogsCallbackHandler(AsyncCallbackHandler, BaseCallbackHandler):
+    """LangChain callback handler that creates neatlogs.llm.* spans.
+
+    Inherits AsyncCallbackHandler so its callbacks are recognized by LangChain's
+    AsyncCallbackManager (graph.ainvoke / model.ainvoke). The public callbacks are
+    ``async def`` thin wrappers over synchronous ``_*_impl`` bodies:
+      - async path: awaited on the event loop (no thread executor → callbacks
+        actually fire and spans nest correctly);
+      - sync path: LangChain's CallbackManager collects the returned coroutine and
+        runs it, so ``.invoke()`` still works.
+    Parenting uses the run_id-keyed ``_contexts`` dict (not OTel contextvars), so
+    it is independent of which thread/task the callback runs on.
+    """
 
     def __init__(self, workflow_name: Optional[str] = None):
         super().__init__()
@@ -172,7 +183,7 @@ class NeatlogsCallbackHandler(BaseCallbackHandler):
             except Exception:
                 pass
 
-    def on_chat_model_start(
+    async def on_chat_model_start(
         self,
         serialized: Dict[str, Any],
         messages: List[List[BaseMessage]],
@@ -232,7 +243,7 @@ class NeatlogsCallbackHandler(BaseCallbackHandler):
         self._contexts[run_id] = _span_in_ctx(span, ctx)
         self._tokens[run_id] = []
 
-    def on_llm_start(
+    async def on_llm_start(
         self,
         serialized: Dict[str, Any],
         prompts: List[str],
@@ -278,7 +289,7 @@ class NeatlogsCallbackHandler(BaseCallbackHandler):
         self._contexts[run_id] = _span_in_ctx(span, ctx)
         self._tokens[run_id] = []
 
-    def on_llm_new_token(
+    async def on_llm_new_token(
         self,
         token: str,
         *,
@@ -289,7 +300,7 @@ class NeatlogsCallbackHandler(BaseCallbackHandler):
         if run_id in self._tokens:
             self._tokens[run_id].append(token)
 
-    def on_llm_end(
+    async def on_llm_end(
         self,
         response: "LLMResult",
         *,
@@ -377,7 +388,7 @@ class NeatlogsCallbackHandler(BaseCallbackHandler):
         span.end()
         self._end_auto_root(run_id)
 
-    def on_llm_error(
+    async def on_llm_error(
         self,
         error: BaseException,
         *,
@@ -395,7 +406,7 @@ class NeatlogsCallbackHandler(BaseCallbackHandler):
         span.end()
         self._end_auto_root(run_id)
 
-    def on_chain_start(
+    async def on_chain_start(
         self,
         serialized: Dict[str, Any],
         inputs: Dict[str, Any],
@@ -454,26 +465,23 @@ class NeatlogsCallbackHandler(BaseCallbackHandler):
         self._spans[run_id] = span
         span_ctx = _span_in_ctx(span, ctx)
         self._contexts[run_id] = span_ctx
-        # Make a LangGraph NODE span the AMBIENT OTel context so manual
-        # neatlogs.trace()/@span/log() inside the node body nest under it (they read
-        # the ambient context, not the handler's private run tree). Scoped to
-        # langgraph nodes only: generic/framework chains (e.g. crewai's) run their
-        # own callback trees where a stray attach/detach across non-LIFO async
-        # callbacks could leak context into a second trace. Detached in
-        # on_chain_end/on_chain_error.
-        if langgraph_node:
-            self._ctx_detach[run_id] = otel_context.attach(span_ctx)
+        # NOTE: we deliberately do NOT otel_context.attach() the node span as the
+        # ambient context. Under async LangGraph (app.ainvoke), on_chain_start and
+        # on_chain_end run in different asyncio contexts, so otel_context.detach()
+        # raises "Token was created in a different Context" AND leaves the ambient
+        # context corrupted — which drops/mis-parents every LLM span in the run.
+        # Node -> child (LLM/tool) nesting is carried by self._contexts[run_id]
+        # (a plain run_id-keyed dict, async-safe), resolved in _start_ctx via
+        # parent_run_id, so it works in both sync and async without touching
+        # contextvars.
 
     def _detach_ctx(self, run_id: UUID) -> None:
-        """Detach the ambient-context token attached for this node span (if any)."""
-        token = self._ctx_detach.pop(run_id, None)
-        if token is not None:
-            try:
-                otel_context.detach(token)
-            except Exception:
-                pass
+        """No-op retained for call-site compatibility. Ambient-context attach was
+        removed (see on_chain_start) because detach() is unsafe across the async
+        callback boundary; nothing to detach now."""
+        self._ctx_detach.pop(run_id, None)
 
-    def on_chain_end(
+    async def on_chain_end(
         self,
         outputs: Dict[str, Any],
         *,
@@ -494,7 +502,7 @@ class NeatlogsCallbackHandler(BaseCallbackHandler):
         span.end()
         self._end_auto_root(run_id)
 
-    def on_chain_error(
+    async def on_chain_error(
         self,
         error: BaseException,
         *,
@@ -514,7 +522,7 @@ class NeatlogsCallbackHandler(BaseCallbackHandler):
 
     # -- Retriever callbacks ---------------------------------------------------
 
-    def on_retriever_start(
+    async def on_retriever_start(
         self,
         serialized: Dict[str, Any],
         query: str,
@@ -541,7 +549,7 @@ class NeatlogsCallbackHandler(BaseCallbackHandler):
         self._spans[run_id] = span
         self._contexts[run_id] = _span_in_ctx(span, ctx)
 
-    def on_retriever_end(
+    async def on_retriever_end(
         self,
         documents: Any,
         *,
@@ -566,7 +574,7 @@ class NeatlogsCallbackHandler(BaseCallbackHandler):
         span.end()
         self._end_auto_root(run_id)
 
-    def on_retriever_error(
+    async def on_retriever_error(
         self,
         error: BaseException,
         *,
@@ -585,7 +593,7 @@ class NeatlogsCallbackHandler(BaseCallbackHandler):
 
     # -- Agent action / finish (annotate the active chain span) ----------------
 
-    def on_agent_action(
+    async def on_agent_action(
         self,
         action: Any,
         *,
@@ -606,7 +614,7 @@ class NeatlogsCallbackHandler(BaseCallbackHandler):
         if log:
             span.set_attribute("neatlogs.agent.action.log", str(log)[:5000])
 
-    def on_agent_finish(
+    async def on_agent_finish(
         self,
         finish: Any,
         *,
@@ -621,7 +629,7 @@ class NeatlogsCallbackHandler(BaseCallbackHandler):
         if return_values:
             span.set_attribute("neatlogs.agent.finish.output", serialize(return_values)[:10000])
 
-    def on_tool_start(
+    async def on_tool_start(
         self,
         serialized: Dict[str, Any],
         input_str: str,
@@ -653,7 +661,7 @@ class NeatlogsCallbackHandler(BaseCallbackHandler):
         self._spans[run_id] = span
         self._contexts[run_id] = _span_in_ctx(span, ctx)
 
-    def on_tool_end(
+    async def on_tool_end(
         self,
         output: Any,
         *,
@@ -674,7 +682,7 @@ class NeatlogsCallbackHandler(BaseCallbackHandler):
         span.end()
         self._end_auto_root(run_id)
 
-    def on_tool_error(
+    async def on_tool_error(
         self,
         error: BaseException,
         *,

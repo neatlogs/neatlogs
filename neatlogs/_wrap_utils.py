@@ -219,6 +219,46 @@ def reset_tracer() -> None:
     _wrapper_bootstrapped = False
 
 
+class _ForeignParentGuardTracer:
+    """Wraps a neatlogs Tracer so no span it starts ever inherits a FOREIGN
+    (non-neatlogs) active parent.
+
+    Invariant: only a neatlogs span may be the parent of a neatlogs span. When a
+    span starts while a foreign span (a user's own OTel/Langfuse/openlit tracer,
+    or any other instrumentation) is active in OTel context, nesting under it
+    would give our span a parent the neatlogs backend never receives — a dangling
+    parent, so the trace has no root, no completion marker fires, and it never
+    finalizes. This guard detaches from such a parent (starts in an empty context)
+    so the span becomes a true neatlogs root. Neatlogs parents, and explicit
+    context=/callers, are passed through untouched. Applies uniformly to every
+    integration that starts spans via get_tracer() (crewai, openai_agents,
+    pydantic_ai, google_adk, agno, strands, hermes, claude_agent_sdk, ...)."""
+
+    __slots__ = ("_tracer",)
+
+    def __init__(self, tracer: otel_trace.Tracer):
+        object.__setattr__(self, "_tracer", tracer)
+
+    def start_span(self, *args: Any, **kwargs: Any):
+        tracer = object.__getattribute__(self, "_tracer")
+        if "context" not in kwargs:
+            guard = _neatlogs_root_kwargs()  # {} or {"context": empty} if foreign parent
+            if guard:
+                kwargs.update(guard)
+        return tracer.start_span(*args, **kwargs)
+
+    def start_as_current_span(self, *args: Any, **kwargs: Any):
+        tracer = object.__getattribute__(self, "_tracer")
+        if "context" not in kwargs:
+            guard = _neatlogs_root_kwargs()
+            if guard:
+                kwargs.update(guard)
+        return tracer.start_as_current_span(*args, **kwargs)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(object.__getattribute__(self, "_tracer"), name)
+
+
 def get_tracer() -> otel_trace.Tracer:
     """
     Return a Tracer from init()'s provider, or auto-bootstrap from env.
@@ -230,7 +270,7 @@ def get_tracer() -> otel_trace.Tracer:
 
     provider = otel_trace.get_tracer_provider()
     if isinstance(provider, TracerProvider):
-        _wrapper_tracer = provider.get_tracer("neatlogs.wrapper")
+        _wrapper_tracer = _ForeignParentGuardTracer(provider.get_tracer("neatlogs.wrapper"))
         return _wrapper_tracer
 
     api_key = _wrapper_config.get("api_key") or os.environ.get("NEATLOGS_API_KEY", "")
@@ -241,14 +281,14 @@ def get_tracer() -> otel_trace.Tracer:
                 "neatlogs wrapper: no TracerProvider configured and NEATLOGS_API_KEY not set. "
                 "Spans will not be exported. Call neatlogs.init() or set NEATLOGS_API_KEY."
             )
-        _wrapper_tracer = otel_trace.get_tracer("neatlogs.wrapper.noop")
+        _wrapper_tracer = _ForeignParentGuardTracer(otel_trace.get_tracer("neatlogs.wrapper.noop"))
         return _wrapper_tracer
 
     if not _wrapper_bootstrapped:
         _wrapper_bootstrapped = True
         _bootstrap_from_env(api_key)
 
-    _wrapper_tracer = otel_trace.get_tracer("neatlogs.wrapper")
+    _wrapper_tracer = _ForeignParentGuardTracer(otel_trace.get_tracer("neatlogs.wrapper"))
     return _wrapper_tracer
 
 
@@ -370,9 +410,46 @@ def _resolve_root_workflow_name() -> str:
 
 
 def _has_active_recording_parent() -> bool:
-    """True when there is already an active, recording span to nest under."""
+    """True when there is already an active, recording NEATLOGS span to nest under.
+
+    A foreign span (another OTel instrumentation active in the same process — e.g.
+    a user's own Langfuse/OpenTelemetry tracer) must NOT be treated as a parent:
+    nesting under it produces a neatlogs span whose parent never reaches the
+    neatlogs backend (dangling parent → no root → no completion marker → the trace
+    never finalizes). Only spans WE created (instrumentation scope 'neatlogs.*')
+    count as a parent."""
     current = otel_trace.get_current_span()
-    return bool(current and current.is_recording())
+    if not (current and current.is_recording()):
+        return False
+    return _is_neatlogs_span(current)
+
+
+def _is_neatlogs_span(span: Any) -> bool:
+    """True if the span was created by a neatlogs tracer (scope name 'neatlogs.*').
+    Foreign spans (langfuse, openlit, user tracers) return False."""
+    try:
+        scope = getattr(span, "instrumentation_scope", None)
+        name = getattr(scope, "name", "") or ""
+        return name.startswith("neatlogs")
+    except Exception:
+        return False
+
+
+def _neatlogs_root_kwargs() -> dict:
+    """kwargs for start_span so a neatlogs root ignores any FOREIGN active parent.
+
+    If a neatlogs span is already active, nest normally (return {}). Otherwise —
+    no parent, or only a foreign span active — start in an empty context so the
+    new span is a true root (parent_span_id=''), which lets the completion marker
+    fire and the trace finalize. A caller-supplied shared trace_id still wins via
+    its own context kwarg."""
+    current = otel_trace.get_current_span()
+    if current and current.is_recording() and _is_neatlogs_span(current):
+        return {}
+    if current and current.is_recording():
+        # foreign parent active → detach from it
+        return {"context": context_api.Context()}
+    return {}
 
 
 class _RootEndingSpan:
@@ -434,11 +511,23 @@ class _AutoRootTracer:
             and not _has_active_recording_parent()
         )
         if not needs_root:
+            # A root-kind span (or auto-root disabled): still must not inherit a
+            # FOREIGN active parent. If only a foreign span is active, detach so
+            # this span becomes a true neatlogs root. Explicit-context callers and
+            # spans already under a neatlogs parent are untouched.
+            if "context" not in kwargs:
+                foreign_kwargs = _neatlogs_root_kwargs()
+                if foreign_kwargs:
+                    kwargs.update(foreign_kwargs)
             return tracer.start_span(name=name, attributes=attributes, **kwargs)
 
+        # If only a foreign span is active, start the auto-root in an empty context
+        # so it doesn't inherit the foreign (non-neatlogs) parent.
+        root_ctx = _neatlogs_root_kwargs().get("context")
         root = tracer.start_span(
             name=_resolve_root_workflow_name(),
             attributes={"neatlogs.span.kind": "workflow", "neatlogs.auto_root": True},
+            **({"context": root_ctx} if root_ctx is not None else {}),
         )
         # Stamp request-scoped identity (set via neatlogs.identify()) onto the
         # auto-root. This is the only path wrapper-only code has to a root span,

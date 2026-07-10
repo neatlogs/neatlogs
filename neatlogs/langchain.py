@@ -36,10 +36,19 @@ def _span_in_ctx(span: Any, base_ctx: Any):
 
 
 def _is_recording(ctx: Any) -> bool:
-    """True if ``ctx`` already carries an active, recording span to nest under."""
+    """True if ``ctx`` carries an active, recording NEATLOGS span to nest under.
+
+    A foreign span (a user's own OTel/Langfuse tracer active in the same process)
+    does NOT count — nesting under it would give our span a parent that never
+    reaches the neatlogs backend (dangling parent → no root → trace never
+    finalizes). Only neatlogs-created spans (scope 'neatlogs.*') are valid parents."""
     span = otel_trace.get_current_span(ctx)
     try:
-        return bool(span and span.is_recording())
+        if not (span and span.is_recording()):
+            return False
+        from ._wrap_utils import _is_neatlogs_span
+
+        return _is_neatlogs_span(span)
     except Exception:
         return False
 
@@ -137,19 +146,22 @@ class NeatlogsCallbackHandler(BaseCallbackHandler):
             return parent_ctx
 
         current = otel_context.get_current()
-        if (
-            _auto_root_enabled()
-            and kind not in _ROOT_KINDS
-            and not _is_recording(current)
-        ):
+        # Only a NEATLOGS span in `current` counts as a parent. If a foreign span
+        # (user's own OTel/Langfuse tracer) is active, detach from it so our spans
+        # form their own rooted trace instead of dangling off a parent the neatlogs
+        # backend never sees. _is_recording() already ignores foreign spans.
+        neatlogs_parent_active = _is_recording(current)
+        base_ctx = current if neatlogs_parent_active else otel_context.Context()
+
+        if _auto_root_enabled() and kind not in _ROOT_KINDS and not neatlogs_parent_active:
             root = get_tracer().start_span(
                 name=_resolve_root_workflow_name(),
-                context=current,
+                context=base_ctx,
                 attributes={"neatlogs.span.kind": "workflow", "neatlogs.auto_root": True},
             )
             self._auto_roots[run_id] = root
-            return _span_in_ctx(root, current)
-        return current
+            return _span_in_ctx(root, base_ctx)
+        return base_ctx
 
     def _end_auto_root(self, run_id: UUID) -> None:
         """End the auto-root (if any) opened for ``run_id``'s span."""

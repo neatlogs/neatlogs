@@ -114,7 +114,7 @@ def trace(
     import json
     import logging
 
-    from opentelemetry.context import attach, detach, get_current, set_value
+    from opentelemetry.context import Context, attach, detach, get_current, set_value
 
     from ..init import get_session_config
     from ..prompt.template import (
@@ -147,8 +147,14 @@ def trace(
     session_id = session_id or current_session_id()
     end_user_id = end_user_id or current_end_user_id()
     end_user_metadata = end_user_metadata or current_end_user_metadata()
-    current_span = otel_trace.get_current_span()
-    is_in_active_trace = current_span and current_span.is_recording()
+    # Only a NEATLOGS span counts as an active trace to nest under. A foreign span
+    # (a user's own OTel/Langfuse tracer active in-process) must not be treated as
+    # a parent — nesting under it dangles our trace off a parent the backend never
+    # receives (no root → never finalizes). _has_active_recording_parent() ignores
+    # foreign spans; when only a foreign span is active we treat this as a root.
+    from .._wrap_utils import _has_active_recording_parent
+
+    is_in_active_trace = _has_active_recording_parent()
 
     should_create_root_trace = session_id and not is_in_active_trace
 
@@ -178,7 +184,10 @@ def trace(
         else:
             user_template_string = user_prompt_template
 
-    ctx = get_current()
+    # If only a FOREIGN span is active, base the context on an empty one so the
+    # trace() span doesn't inherit that non-neatlogs parent (which would dangle the
+    # trace). A neatlogs parent (is_in_active_trace) is preserved for correct nesting.
+    ctx = get_current() if is_in_active_trace else Context()
     variables_json = json.dumps(prompt_variables, default=str) if prompt_variables else None
     user_variables_json = (
         json.dumps(user_prompt_variables, default=str) if user_prompt_variables else None

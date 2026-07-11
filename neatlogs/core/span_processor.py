@@ -18,6 +18,21 @@ from .mask import apply_mask
 
 logger = get_logger()
 
+
+def _is_neatlogs_scope_span(span: Any) -> bool:
+    """True if the span was created by a neatlogs tracer (scope name 'neatlogs.*').
+
+    Used to avoid emitting a completion marker for a FOREIGN root span when
+    neatlogs is sharing a user's global TracerProvider (their own OTel/Langfuse
+    setup) — their spans pass through this processor but must not trigger
+    neatlogs-side finalization."""
+    try:
+        scope = getattr(span, "instrumentation_scope", None)
+        return str(getattr(scope, "name", "") or "").startswith("neatlogs")
+    except Exception:
+        return False
+
+
 # Instrumentation scopes that produce HTTP-client auto-spans for context
 # propagation. An HTTP span fired INSIDE a workflow nests under it (has a parent);
 # an HTTP call at boot / in infra plumbing (health pings, dependency warmups,
@@ -495,9 +510,13 @@ class NeatlogsSpanProcessor(SpanProcessor):
 
             self.perf_stats["spans_exported"] += 1
 
-            # Emit a completion marker when a root span ends so the backend
-            # knows the trace is complete and can trigger simplification.
-            if not span.parent:
+            # Emit a completion marker when a NEATLOGS root span ends so the backend
+            # knows the trace is complete and can trigger simplification. Guard on
+            # scope: when neatlogs reuses a user's global TracerProvider (their own
+            # OTel/Langfuse setup), this processor also sees their FOREIGN spans —
+            # we must not emit a marker for a foreign root (it would trigger
+            # finalization for a trace that has no neatlogs spans, or dangle).
+            if not span.parent and _is_neatlogs_scope_span(span):
                 self._emit_completion_marker(span, trace_id, resource_attrs)
 
         finally:

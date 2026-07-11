@@ -34,6 +34,20 @@ from ._wrap_utils import attach_as_current, detach, get_tracer, serialize
 _CLASS_HOOKS_INSTALLED = False
 
 
+def _shared_trace_kwargs() -> dict:
+    """Context for the crewai.crew.kickoff root span.
+
+    If a neatlogs span is already active, nest under it (return {}). Otherwise —
+    no parent, or only a FOREIGN (non-neatlogs) span active — start as a true root,
+    detaching from the foreign parent so the trace has a real root and finalizes.
+    """
+    from ._wrap_utils import _has_active_recording_parent, _neatlogs_root_kwargs
+
+    if _has_active_recording_parent():
+        return {}
+    return _neatlogs_root_kwargs()
+
+
 def _dbg(msg: str) -> None:
     """Emit a debug line only when neatlogs.init(debug=True). Best-effort."""
     try:
@@ -270,7 +284,9 @@ def _patch_kickoff(crew: Any) -> None:
         _patch_tasks_and_agents(crew)
         tracer = get_tracer()
         attrs = _get_crew_attributes(crew)
-        span = tracer.start_span(name="crewai.crew.kickoff", attributes=attrs)
+        span = tracer.start_span(
+            name="crewai.crew.kickoff", attributes=attrs, **_shared_trace_kwargs()
+        )
         _dbg(f"opened 'crewai.crew.kickoff' WORKFLOW span for crew id={hex(id(crew))}")
         _set_crew_input(span, crew, kwargs)
         token = attach_as_current(span)

@@ -192,10 +192,20 @@ def _decorate_span(
     """
 
     def _is_root_span() -> bool:
-        """True when no recording span is currently active — i.e. the span this
-        decorator is about to create will be the trace root."""
-        current = otel_trace.get_current_span()
-        return not (current and current.is_recording())
+        """True when no recording NEATLOGS span is currently active — i.e. the span
+        this decorator creates will be the trace root. A foreign span (a user's own
+        OTel/Langfuse tracer active in-process) does NOT count as a parent."""
+        from .._wrap_utils import _has_active_recording_parent
+
+        return not _has_active_recording_parent()
+
+    def _guard_kwargs() -> dict:
+        """When only a FOREIGN span is active, start in an empty context so the
+        decorated span becomes a true neatlogs root instead of dangling off a
+        parent the backend never sees. Neatlogs parents pass through untouched."""
+        from .._wrap_utils import _neatlogs_root_kwargs
+
+        return _neatlogs_root_kwargs()
 
     def decorator(func: F) -> F:
         span_name = name or func.__name__
@@ -223,7 +233,7 @@ def _decorate_span(
 
                 is_root = _is_root_span()
                 with tracer.start_as_current_span(
-                    span_name, kind=otel_trace.SpanKind.INTERNAL
+                    span_name, kind=otel_trace.SpanKind.INTERNAL, **_guard_kwargs()
                 ) as span:
                     _set_common_span_attrs(
                         span,
@@ -286,7 +296,9 @@ def _decorate_span(
             from ..core.mask import register_mask
 
             is_root = _is_root_span()
-            with tracer.start_as_current_span(span_name, kind=otel_trace.SpanKind.INTERNAL) as span:
+            with tracer.start_as_current_span(
+                span_name, kind=otel_trace.SpanKind.INTERNAL, **_guard_kwargs()
+            ) as span:
                 _set_common_span_attrs(
                     span,
                     openinference_kind=openinference_kind,

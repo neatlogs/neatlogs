@@ -88,13 +88,41 @@ def is_telemetry_http(span) -> bool:
         return False
 
 
-def is_rootless_infra_http(span) -> bool:
-    """True if `span` is a root (no parent) HTTP-client auto-span with no agentic
-    kind — i.e. a boot/infra HTTP ping that would otherwise create a junk rootless
-    trace. Nested HTTP spans (parent set) and any agentic span are NEVER dropped."""
+# Span IDs that neatlogs itself created (populated at on_end). Lets the export
+# filter tell a genuinely-nested HTTP span (parent is a neatlogs span → keep) from
+# one whose parent is a FOREIGN/dropped span (openlit, or a span that never reached
+# us → effectively orphaned → drop). Bounded to avoid unbounded growth.
+_NEATLOGS_EMITTED_SPAN_IDS: "set" = set()
+_NEATLOGS_EMITTED_MAX = 50_000
+
+
+def _record_neatlogs_span_id(span) -> None:
     try:
-        if span.parent is not None:
-            return False  # nested under something — keep (propagation child)
+        sid = getattr(getattr(span, "context", None), "span_id", None)
+        if sid is None:
+            return
+        if len(_NEATLOGS_EMITTED_SPAN_IDS) >= _NEATLOGS_EMITTED_MAX:
+            _NEATLOGS_EMITTED_SPAN_IDS.clear()
+        _NEATLOGS_EMITTED_SPAN_IDS.add(sid)
+    except Exception:
+        pass
+
+
+def _is_neatlogs_scope(span) -> bool:
+    try:
+        name = getattr(getattr(span, "instrumentation_scope", None), "name", "") or ""
+        return name.startswith("neatlogs")
+    except Exception:
+        return False
+
+
+def is_rootless_infra_http(span) -> bool:
+    """True if `span` is an HTTP-client auto-span that should NOT be shipped to the
+    neatlogs backend: either a root (no parent) infra ping, OR nested under a parent
+    that is NOT a neatlogs span (a foreign/openlit span, or one that never reached us
+    → the subtree is orphaned in the neatlogs trace and can't be rendered). HTTP spans
+    genuinely nested under a neatlogs span, and any agentic span, are NEVER dropped."""
+    try:
         scope = getattr(span, "instrumentation_scope", None)
         scope_name = getattr(scope, "name", "") or ""
         if not scope_name.startswith(_HTTP_INSTRUMENTATION_SCOPES):
@@ -103,7 +131,34 @@ def is_rootless_infra_http(span) -> bool:
         kind = (attrs.get("openinference.span.kind") or attrs.get("neatlogs.span.kind") or "")
         if str(kind).upper() in _AGENTIC_KINDS:
             return False  # explicitly an agentic root — keep
+        parent = span.parent
+        if parent is None:
+            return True  # rootless infra HTTP — drop
+        # Has a parent, but is that parent a neatlogs span? If not, it's orphaned in
+        # our trace (parent went to a foreign exporter / never reached us) — drop.
+        if parent.span_id in _NEATLOGS_EMITTED_SPAN_IDS:
+            return False  # genuinely nested under a neatlogs span — keep
         return True
+    except Exception:
+        return False
+
+
+def is_foreign_rootless_span(span) -> bool:
+    """True for a NON-neatlogs (e.g. openlit) span that is rootless in the neatlogs
+    export — a parentless span, or one whose parent is not a neatlogs span. Such
+    spans belong to the other tool's own trace and only create orphan/duplicate
+    single-span traces on the neatlogs side, so we don't ship them. Foreign spans
+    genuinely nested under a neatlogs span (e.g. openlit's chat under crewai.llm.call)
+    are KEPT so the crew tree stays complete."""
+    try:
+        if _is_neatlogs_scope(span):
+            return False
+        parent = span.parent
+        if parent is None:
+            return True  # foreign standalone root — drop from neatlogs
+        if parent.span_id in _NEATLOGS_EMITTED_SPAN_IDS:
+            return False  # nested under a neatlogs span — keep (part of our tree)
+        return True  # foreign span under a foreign parent — its own trace — drop
     except Exception:
         return False
 
@@ -183,6 +238,12 @@ class NeatlogsSpanProcessor(SpanProcessor):
     def on_start(self, span: Span, parent_context: Optional[Context] = None) -> None:
         start_time = time.perf_counter()
         try:
+            # Record neatlogs-created span IDs at START (a child ends before its
+            # parent, so recording at on_end would miss the parent). The export/drop
+            # filters use this to distinguish HTTP/foreign spans genuinely nested
+            # under a neatlogs span (keep) from orphaned ones (drop).
+            if _is_neatlogs_scope(span):
+                _record_neatlogs_span_id(span)
             # Stamp request-scoped identity (neatlogs.identify()) onto EVERY root
             # span as a fallback. trace()/@span set it explicitly after creation
             # (overriding this); direct-provider auto-roots stamp it themselves.
@@ -281,6 +342,20 @@ class NeatlogsSpanProcessor(SpanProcessor):
             if self.debug:
                 logger.debug(
                     f"[SpanProcessor] Dropping rootless infra-HTTP span '{span.name}' "
+                    f"(scope={getattr(getattr(span, 'instrumentation_scope', None), 'name', '')})"
+                )
+            return
+
+        # Drop FOREIGN (e.g. openlit) spans that are rootless in the neatlogs export —
+        # standalone or parented to a non-neatlogs span. They belong to the other
+        # tool's OWN trace (it exports them to its own backend independently) and here
+        # would only create orphan single-span traces the backend can't finalize.
+        # Foreign spans nested under a neatlogs span (openlit's chat under
+        # crewai.llm.call) are KEPT so the crew tree stays whole.
+        if is_foreign_rootless_span(span):
+            if self.debug:
+                logger.debug(
+                    f"[SpanProcessor] Dropping foreign rootless span '{span.name}' "
                     f"(scope={getattr(getattr(span, 'instrumentation_scope', None), 'name', '')})"
                 )
             return

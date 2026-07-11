@@ -31,6 +31,7 @@ from .core.identity import identify
 from .core.crewai_task_registry import register_crewai_task
 from .core.llm_binder import bind_templates
 from .core.log import log
+from ._wrap_utils import new_trace_id
 from .decorators import span
 from .init import flush, init, shutdown
 from .prompt.client import (
@@ -71,17 +72,20 @@ def langchain_handler(**kwargs):
     return NeatlogsCallbackHandler(**kwargs)
 
 
-def openai_agents_processor():
+def openai_agents_processor(trace_id=None):
     """
     Return a trace processor for the OpenAI Agents SDK.
 
         >>> import neatlogs
         >>> from agents import add_trace_processor
         >>> add_trace_processor(neatlogs.openai_agents_processor())
+
+    Pass ``trace_id`` (from ``neatlogs.new_trace_id()``) to group every run this
+    processor emits into ONE trace with sibling wrap()/@span/langchain steps.
     """
     from .openai_agents import openai_agents_processor as _proc
 
-    return _proc()
+    return _proc(trace_id=trace_id)
 
 
 def strands_hooks(agent):
@@ -300,6 +304,7 @@ __all__ = [
     "bind_templates",
     "register_crewai_task",
     "wrap",
+    "new_trace_id",
     "langchain_handler",
     "openai_agents_processor",
     "strands_hooks",

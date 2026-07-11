@@ -20,7 +20,9 @@ from opentelemetry.trace import StatusCode
 from ._wrap_utils import (
     _ROOT_KINDS,
     _auto_root_enabled,
+    _coerce_trace_id,
     _resolve_root_workflow_name,
+    _start_root_on_trace_id,
     get_tracer,
     serialize,
 )
@@ -127,7 +129,7 @@ class NeatlogsCallbackHandler(AsyncCallbackHandler, BaseCallbackHandler):
     it is independent of which thread/task the callback runs on.
     """
 
-    def __init__(self, workflow_name: Optional[str] = None):
+    def __init__(self, workflow_name: Optional[str] = None, trace_id: Optional[str] = None):
         super().__init__()
         self._spans: Dict[UUID, Any] = {}
         self._tokens: Dict[UUID, List[str]] = {}
@@ -138,6 +140,12 @@ class NeatlogsCallbackHandler(AsyncCallbackHandler, BaseCallbackHandler):
         # manual neatlogs.trace()/@span/log() inside a node nest under the node.
         self._ctx_detach: Dict[UUID, Any] = {}
         self._workflow_name = workflow_name
+        # Shared trace_id for cross-step grouping: when set, this handler's own root
+        # (a top-level CHAIN, or the auto-root opened for a bare llm.invoke) is forced
+        # onto this trace_id, so a LangChain run groups into the SAME trace as sibling
+        # wrap(trace_id=G)/@span(trace_id=G) steps. Same mechanism as every other
+        # surface — grouping is by shared trace_id, not framework.
+        self._trace_id = _coerce_trace_id(trace_id)
 
     # -- Self-rooting -----------------------------------------------------------
     #
@@ -164,7 +172,27 @@ class NeatlogsCallbackHandler(AsyncCallbackHandler, BaseCallbackHandler):
         neatlogs_parent_active = _is_recording(current)
         base_ctx = current if neatlogs_parent_active else otel_context.Context()
 
-        if _auto_root_enabled() and kind not in _ROOT_KINDS and not neatlogs_parent_active:
+        if neatlogs_parent_active:
+            return base_ctx
+
+        # No neatlogs parent: this callback begins the run's own tree. When a shared
+        # trace_id was passed to langchain_handler(trace_id=G), force a WORKFLOW root
+        # onto G so the whole run groups into the SAME trace as sibling wrap()/@span
+        # steps. This fires for ANY entry kind (bare llm.invoke AND a top-level CHAIN),
+        # so grouping is by trace_id, not by which callback started the run.
+        if self._trace_id is not None:
+            root = _start_root_on_trace_id(
+                get_tracer(),
+                _resolve_root_workflow_name(),
+                {"neatlogs.span.kind": "workflow", "neatlogs.auto_root": True},
+                self._trace_id,
+            )
+            self._auto_roots[run_id] = root
+            return _span_in_ctx(root, base_ctx)
+
+        # No grouping requested: open an auto-root only for a parentless NON-root kind
+        # (a bare llm/tool/retriever). A top-level CHAIN is already root-eligible.
+        if _auto_root_enabled() and kind not in _ROOT_KINDS:
             root = get_tracer().start_span(
                 name=_resolve_root_workflow_name(),
                 context=base_ctx,

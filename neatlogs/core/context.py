@@ -24,6 +24,7 @@ def trace(
     session_id: Optional[str] = None,
     end_user_id: Optional[str] = None,
     end_user_metadata: Optional[Dict[str, Any]] = None,
+    trace_id: Optional[str] = None,
     **attributes,
 ):
     """
@@ -219,10 +220,41 @@ def trace(
 
     from .log import _CaptureStdoutContext
 
+    # Cross-step grouping: when this trace() is a ROOT (no neatlogs parent active) and
+    # a shared trace_id= was given, open it as a real parentless root on that trace_id
+    # so it groups with sibling wrap()/@span/langchain steps. Same mechanism as every
+    # other surface (grouping is by trace_id, not by API). A child trace() (nested in
+    # an active neatlogs trace) ignores trace_id — it inherits its parent's trace.
+    from .._wrap_utils import _coerce_trace_id, forced_trace_id_root, get_tracer
+
+    forced_tid = _coerce_trace_id(trace_id) if not is_in_active_trace else None
+
     ctx_token = attach(ctx)
     stdout_ctx = _CaptureStdoutContext() if capture_stdout else None
     try:
-        if should_create_root_trace:
+        if forced_tid is not None:
+            logger.debug(f"[trace] Creating trace_id-grouped root '{name}' (trace_id={trace_id})")
+            with forced_trace_id_root(get_tracer(), name, otel_trace.SpanKind.INTERNAL, forced_tid) as span:
+                _set_span_attributes(
+                    span, kind, template_string, prompt_variables, version, attributes
+                )
+                apply_session_attributes(span, session_id, is_root=True)
+                apply_end_user_attributes(span, end_user_id, end_user_metadata, is_root=True)
+                if mask is not None:
+                    from .mask import register_mask
+
+                    span.set_attribute("neatlogs.mask_id", register_mask(mask))
+                if stdout_ctx:
+                    stdout_ctx.__enter__()
+                try:
+                    yield span
+                    _finalize_prompt_capture(
+                        span, is_prompt_template_obj, is_user_prompt_template_obj, logger
+                    )
+                finally:
+                    if stdout_ctx:
+                        stdout_ctx.__exit__(None, None, None)
+        elif should_create_root_trace:
             logger.debug(f"[trace] Creating NEW root trace '{name}' (session_id={session_id})")
             with tracer.start_as_current_span(name, context=None) as span:
                 _set_span_attributes(

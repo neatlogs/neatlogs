@@ -24,16 +24,27 @@ trace() / log() calls nest correctly too.
 """
 
 import time
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from opentelemetry.trace import StatusCode
 
-from ._wrap_utils import attach_as_current, detach, get_tracer, serialize
+from ._wrap_utils import (
+    _coerce_trace_id,
+    _start_root_on_trace_id,
+    attach_as_current,
+    detach,
+    get_tracer,
+    serialize,
+)
 
 
-def openai_agents_processor():
-    """Return a trace processor for the OpenAI Agents SDK."""
-    return _NeatlogsTraceProcessor()
+def openai_agents_processor(trace_id: Optional[str] = None):
+    """Return a trace processor for the OpenAI Agents SDK.
+
+    Pass ``trace_id`` (from ``neatlogs.new_trace_id()``) to group every run this
+    processor emits into the SAME trace as sibling wrap()/@span/langchain steps
+    sharing that id."""
+    return _NeatlogsTraceProcessor(trace_id=trace_id)
 
 
 class _NeatlogsTraceProcessor:
@@ -47,11 +58,13 @@ class _NeatlogsTraceProcessor:
     span.span_data, whose ``.type`` discriminates the kind.
     """
 
-    def __init__(self):
+    def __init__(self, trace_id: Optional[str] = None):
         self._spans: Dict[str, Any] = {}
         self._tokens: Dict[str, Any] = {}
         self._start_times: Dict[str, float] = {}
         self._root_input_done: set = set()
+        # Shared trace_id for cross-step grouping (see openai_agents_processor).
+        self._trace_id = _coerce_trace_id(trace_id)
 
     # -- trace lifecycle -------------------------------------------------------
 
@@ -65,7 +78,12 @@ class _NeatlogsTraceProcessor:
         if trace_id:
             attrs["neatlogs.agent.trace_id"] = str(trace_id)
 
-        span = tracer.start_span(name="openai_agents.trace", attributes=attrs)
+        # When a shared trace_id was passed, force this WORKFLOW root onto it so the
+        # run groups with sibling wrap()/@span/langchain steps; else a plain root.
+        if self._trace_id is not None:
+            span = _start_root_on_trace_id(tracer, "openai_agents.trace", attrs, self._trace_id)
+        else:
+            span = tracer.start_span(name="openai_agents.trace", attributes=attrs)
         token = attach_as_current(span)
         key = str(trace_id or id(trace))
         self._spans[key] = span

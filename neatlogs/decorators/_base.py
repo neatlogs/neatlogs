@@ -184,6 +184,7 @@ def _decorate_span(
     session_id: Optional[str] = None,
     end_user_id: Optional[str] = None,
     end_user_metadata: Optional[Dict[str, Any]] = None,
+    trace_id: Optional[str] = None,
 ) -> Callable[[F], F]:
     """
     Generic decorator factory for a single span boundary.
@@ -204,6 +205,20 @@ def _decorate_span(
         from .._wrap_utils import _neatlogs_root_kwargs
 
         return _neatlogs_root_kwargs()
+
+    def _forced_root_ctx(span_name: str, is_root: bool):
+        """When this decorated span is a ROOT and a shared trace_id= was given, return
+        a context manager that opens it as a real parentless root on that trace_id (so
+        it groups with sibling wrap()/langchain/trace() steps). Otherwise return None —
+        the caller falls back to the normal start_as_current_span path."""
+        if not (is_root and trace_id is not None):
+            return None
+        from .._wrap_utils import _coerce_trace_id, forced_trace_id_root, get_tracer
+
+        tid = _coerce_trace_id(trace_id)
+        if tid is None:
+            return None
+        return forced_trace_id_root(get_tracer(), span_name, otel_trace.SpanKind.INTERNAL, tid)
 
     def decorator(func: F) -> F:
         span_name = name or func.__name__
@@ -230,9 +245,10 @@ def _decorate_span(
                 from ..core.mask import register_mask
 
                 is_root = _is_root_span()
-                with tracer.start_as_current_span(
+                _span_cm = _forced_root_ctx(span_name, is_root) or tracer.start_as_current_span(
                     span_name, kind=otel_trace.SpanKind.INTERNAL, **_guard_kwargs()
-                ) as span:
+                )
+                with _span_cm as span:
                     _set_common_span_attrs(
                         span,
                         openinference_kind=openinference_kind,
@@ -294,9 +310,10 @@ def _decorate_span(
             from ..core.mask import register_mask
 
             is_root = _is_root_span()
-            with tracer.start_as_current_span(
+            _span_cm = _forced_root_ctx(span_name, is_root) or tracer.start_as_current_span(
                 span_name, kind=otel_trace.SpanKind.INTERNAL, **_guard_kwargs()
-            ) as span:
+            )
+            with _span_cm as span:
                 _set_common_span_attrs(
                     span,
                     openinference_kind=openinference_kind,

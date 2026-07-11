@@ -12,6 +12,7 @@ import inspect
 import json
 import os
 import time
+from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Any, Callable, Dict, List, Mapping, Optional
 from urllib.parse import urlparse
@@ -91,31 +92,147 @@ def _filtered_mapping(values: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
     return {str(key): value for key, value in values.items() if value is not None}
 
 
+def new_trace_id() -> str:
+    """Generate a fresh, unique 128-bit trace id as 32 lowercase hex chars.
+
+    Pass it as ``trace_id=`` to wrap()/langchain_handler()/@span/trace() on every
+    step that should land in ONE trace — in this process or shipped to another
+    process. Each step emits its own real (parentless) root on that trace_id; the
+    backend collapses the roots into a single tree. Grouping is by shared trace_id,
+    NOT by a business key (which could collide or be absent)."""
+    from opentelemetry.sdk.trace.id_generator import RandomIdGenerator
+
+    return format(RandomIdGenerator().generate_trace_id(), "032x")
+
+
 def make_wrap_context(
     workflow_attributes: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """Normalize metadata passed to ``neatlogs.wrap(...)``."""
-    workflow_attrs = _filtered_mapping(workflow_attributes)
+    """Normalize metadata passed to ``neatlogs.wrap(...)``.
+
+    ``trace_id`` is pulled out (not stamped as a workflow attribute) and used to
+    force this wrapped object's auto-root onto a shared trace so multiple steps
+    group into one trace."""
+    attrs = dict(workflow_attributes or {})
+    trace_id = attrs.pop("trace_id", None)
+    workflow_attrs = _filtered_mapping(attrs)
     context: Dict[str, Any] = {}
     if workflow_attrs:
         context["workflow"] = workflow_attrs
+    if trace_id is not None:
+        context["trace_id"] = trace_id
     return context
 
 
 def _merged_wrap_context(context: Dict[str, Any]) -> Dict[str, Any]:
     current = _wrap_context.get() or {}
-    if not current:
-        merged: Dict[str, Any] = {}
-        if context.get("workflow"):
-            merged["workflow"] = dict(context["workflow"])
-        return merged
-
     merged: Dict[str, Any] = {}
     workflow_attrs = dict(current.get("workflow") or {})
     workflow_attrs.update(context.get("workflow") or {})
     if workflow_attrs:
         merged["workflow"] = workflow_attrs
+    tid = context.get("trace_id", current.get("trace_id"))
+    if tid is not None:
+        merged["trace_id"] = tid
     return merged
+
+
+def _coerce_trace_id(tid: Any) -> Optional[int]:
+    """Coerce a trace_id (32-hex str or int) to int, or None if unusable."""
+    if tid is None:
+        return None
+    try:
+        return int(tid, 16) if isinstance(tid, str) else int(tid)
+    except (ValueError, TypeError):
+        return None
+
+
+def _resolve_shared_trace_id() -> Optional[int]:
+    """The shared trace_id (int) from wrap(trace_id=...) in the active wrap-context,
+    or None. Accepts 32-hex str or int."""
+    ctx = _wrap_context.get() or {}
+    return _coerce_trace_id(ctx.get("trace_id"))
+
+
+def _unwrap_tracer(tracer: Any) -> Any:
+    """Unwrap neatlogs tracer facades (_AutoRootTracer / _ForeignParentGuardTracer)
+    down to the underlying SDK Tracer."""
+    real = tracer
+    for _ in range(5):
+        inner = getattr(real, "_tracer", None)
+        if inner is None or inner is real:
+            break
+        real = inner
+    return real
+
+
+def _start_root_on_trace_id(tracer: Any, name: str, attributes: Dict[str, Any], trace_id_int: int):
+    """Start a REAL parentless root span whose trace_id is forced to trace_id_int
+    (fresh random span_id). Unlike a virtual/NonRecordingSpan parent, this root has
+    parent_span_id='' so the backend accepts it and — sharing the trace_id with the
+    other steps' roots — collapses them into one tree.
+
+    Concurrency-safe: rather than mutate the shared/cached tracer's id_generator
+    (which two concurrent forced-roots on different trace_ids would clobber), we ask
+    the provider for a FRESH tracer instance bound to the same scope. A fresh
+    instance has its OWN id_generator slot (initially the shared one), so rebinding
+    it here is local to this call — the cached wrapper tracer and provider are
+    untouched. The fresh tracer shares the provider's span_processor/resource, so the
+    span still exports normally."""
+    from opentelemetry.sdk.trace.id_generator import RandomIdGenerator
+
+    class _FixedTraceIdGen(RandomIdGenerator):
+        def generate_trace_id(self_inner) -> int:
+            return trace_id_int
+        # span_id stays random → real distinct root per step
+
+    real = _unwrap_tracer(tracer)
+    scope = getattr(getattr(real, "_instrumentation_scope", None), "name", None) or "neatlogs.wrapper"
+
+    provider = otel_trace.get_tracer_provider()
+    if isinstance(provider, TracerProvider):
+        fresh = provider.get_tracer(scope)
+        if getattr(fresh, "id_generator", None) is not None:
+            fresh.id_generator = _FixedTraceIdGen()  # fresh slot → no shared-state race
+            return fresh.start_span(name=name, attributes=attributes, context=context_api.Context())
+
+    # Fallback (no SDK provider, e.g. NoOp during bootstrap): mutate+restore on the
+    # real tracer. Rare and single-threaded enough that the restore is safe.
+    orig = getattr(real, "id_generator", None)
+    try:
+        if orig is not None:
+            real.id_generator = _FixedTraceIdGen()
+        return real.start_span(name=name, attributes=attributes, context=context_api.Context())
+    finally:
+        if orig is not None:
+            real.id_generator = orig
+
+
+@contextmanager
+def forced_trace_id_root(tracer: Any, name: str, kind: Any, trace_id_int: int):
+    """Context manager: open a real parentless root on ``trace_id_int``, make it the
+    active OTel span, and end it on exit. Used by @span / trace() so a decorated
+    root can be forced onto a shared trace without duplicating their span bodies.
+    Status/exception handling is left to the caller's body (mirrors
+    start_as_current_span with record_exception/set_status disabled)."""
+    root = _start_root_on_trace_id(tracer, name, {}, trace_id_int)
+    with otel_trace.use_span(
+        root, end_on_exit=True, record_exception=False, set_status_on_exception=False
+    ) as span:
+        yield span
+
+
+def _extract_name_attrs(args: tuple, kwargs: dict) -> tuple:
+    """Pull (name, attributes) from start_span *args/**kwargs regardless of how they
+    were passed (positionally or by keyword). Signature: start_span(name,
+    context=None, kind=..., attributes=None, ...)."""
+    name = kwargs.get("name")
+    if name is None and args:
+        name = args[0]
+    attributes = kwargs.get("attributes")
+    if attributes is None and len(args) >= 4:
+        attributes = args[3]
+    return name, (attributes or {})
 
 
 def _call_with_wrap_context(
@@ -241,6 +358,17 @@ class _ForeignParentGuardTracer:
 
     def start_span(self, *args: Any, **kwargs: Any):
         tracer = object.__getattribute__(self, "_tracer")
+        if "context" not in kwargs and not _has_neatlogs_ancestor():
+            # This span would be a neatlogs ROOT (no neatlogs ancestor). If the
+            # caller passed a shared trace_id via wrap(trace_id=G), force the root
+            # onto G so every framework step sharing G lands in ONE trace (the
+            # backend collapses the roots). This is the framework-AGNOSTIC grouping
+            # path — it fires for crewai, agno, pydantic_ai, google_adk, dspy, ...
+            # (anything wrapped via wrap()), not just one integration.
+            shared_tid = _resolve_shared_trace_id()
+            if shared_tid is not None:
+                name, attributes = _extract_name_attrs(args, kwargs)
+                return _start_root_on_trace_id(tracer, name, attributes, shared_tid)
         if "context" not in kwargs:
             guard = _neatlogs_root_kwargs()  # {} or {"context": empty} if foreign parent
             if guard:
@@ -558,14 +686,22 @@ class _AutoRootTracer:
                     kwargs.update(foreign_kwargs)
             return tracer.start_span(name=name, attributes=attributes, **kwargs)
 
-        # If only a foreign span is active, start the auto-root in an empty context
-        # so it doesn't inherit the foreign (non-neatlogs) parent.
-        root_ctx = _neatlogs_root_kwargs().get("context")
-        root = tracer.start_span(
-            name=_resolve_root_workflow_name(),
-            attributes={"neatlogs.span.kind": "workflow", "neatlogs.auto_root": True},
-            **({"context": root_ctx} if root_ctx is not None else {}),
-        )
+        # If the caller passed a shared trace_id (wrap(trace_id=G)), force the
+        # auto-root onto that trace_id as a REAL parentless root so every step sharing
+        # G lands in ONE trace (backend collapses the roots). Otherwise, if only a
+        # foreign span is active, start the auto-root in an empty context so it
+        # doesn't inherit the foreign (non-neatlogs) parent.
+        root_attrs = {"neatlogs.span.kind": "workflow", "neatlogs.auto_root": True}
+        shared_tid = _resolve_shared_trace_id()
+        if shared_tid is not None:
+            root = _start_root_on_trace_id(tracer, _resolve_root_workflow_name(), root_attrs, shared_tid)
+        else:
+            root_ctx = _neatlogs_root_kwargs().get("context")
+            root = tracer.start_span(
+                name=_resolve_root_workflow_name(),
+                attributes=root_attrs,
+                **({"context": root_ctx} if root_ctx is not None else {}),
+            )
         # Stamp request-scoped identity (set via neatlogs.identify()) onto the
         # auto-root. This is the only path wrapper-only code has to a root span,
         # so it's where session/end-user attach for bare wrap() usage.

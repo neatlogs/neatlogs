@@ -199,6 +199,9 @@ def span(
     # End-user identity (one end-user per trace; usually set on the WORKFLOW root)
     end_user_id: Optional[str] = None,
     end_user_metadata: Optional[Dict[str, Any]] = None,
+    # Cross-step trace grouping (from neatlogs.new_trace_id()); only takes effect
+    # when this decorated span is the trace ROOT.
+    trace_id: Optional[str] = None,
 ) -> Callable[[F], F]:
     """
     Universal decorator for instrumenting custom code with observability spans.
@@ -354,6 +357,7 @@ def span(
         session_id=session_id,
         end_user_id=end_user_id,
         end_user_metadata=end_user_metadata,
+        trace_id=trace_id,
     )
 
 

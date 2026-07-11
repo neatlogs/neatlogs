@@ -299,7 +299,7 @@ def init(
         # warmups, outbound fetches outside any traced request) are never sent — on
         # their own they're junk rootless traces the backend can't simplify. Nested
         # HTTP spans (with a parent) still export normally.
-        from .core.span_processor import is_rootless_infra_http
+        from .core.span_processor import is_foreign_rootless_span, is_rootless_infra_http
 
         class _FilteredOTLPExporter:
             def __init__(self, inner):
@@ -308,7 +308,10 @@ def init(
             def export(self, spans):
                 from opentelemetry.sdk.trace.export import SpanExportResult
 
-                kept = [s for s in spans if not is_rootless_infra_http(s)]
+                kept = [
+                    s for s in spans
+                    if not is_rootless_infra_http(s) and not is_foreign_rootless_span(s)
+                ]
                 if not kept:
                     return SpanExportResult.SUCCESS
                 return self._inner.export(kept)

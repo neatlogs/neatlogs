@@ -39,6 +39,7 @@ logger = get_logger()
 
 _initialized = False
 _tracer_provider = None
+_owns_tracer_provider = False  # True only when neatlogs created the provider (safe to shut down)
 _meter_provider = None
 _log_provider = None
 _span_processor = None
@@ -262,13 +263,17 @@ def init(
         resource_attrs["neatlogs.pii.span_types"] = ",".join(pii_span_types)
     resource = Resource.create(resource_attrs)
 
-    global _tracer_provider
+    global _tracer_provider, _owns_tracer_provider
     existing_provider = trace.get_tracer_provider()
 
     if existing_provider and hasattr(existing_provider, "add_span_processor"):
+        # Reuse a provider set by the host app / another SDK (e.g. the user's own
+        # OpenTelemetry or Langfuse setup). We do NOT own it — shutdown() must never
+        # tear it down, or it would kill the co-tenant's exporter too.
         provider = existing_provider
+        _owns_tracer_provider = False
         if debug:
-            logger.debug("Using existing tracer provider")
+            logger.debug("Using existing tracer provider (not owned by neatlogs)")
     else:
         sampler = None
         if sample_rate < 1.0:
@@ -282,8 +287,9 @@ def init(
             span_limits=_span_limits_for_capture_everything(),
         )
         trace.set_tracer_provider(provider)
+        _owns_tracer_provider = True
         if debug:
-            logger.debug("Created new tracer provider")
+            logger.debug("Created new tracer provider (owned by neatlogs)")
 
     _tracer_provider = provider
 
@@ -474,7 +480,7 @@ def get_session_config():
 
 def shutdown(timeout_millis: int = 30000) -> bool:
     """Shutdown the SDK and flush pending spans/metrics."""
-    global _tracer_provider, _meter_provider, _log_provider, _span_processor, _initialized
+    global _tracer_provider, _owns_tracer_provider, _meter_provider, _log_provider, _span_processor, _initialized
     global _instrumentation_manager
 
     try:
@@ -492,10 +498,26 @@ def shutdown(timeout_millis: int = 30000) -> bool:
 
     if _tracer_provider:
         try:
-            logger.debug("Shutting down tracer provider...")
-            ok = _tracer_provider.shutdown()
-            success = (ok is None or bool(ok)) and success
-            logger.debug("Tracer provider shut down successfully")
+            if _owns_tracer_provider:
+                # neatlogs created this provider → safe to fully shut down.
+                logger.debug("Shutting down tracer provider (owned by neatlogs)...")
+                ok = _tracer_provider.shutdown()
+                success = (ok is None or bool(ok)) and success
+                logger.debug("Tracer provider shut down successfully")
+            else:
+                # Provider is shared (host app / Langfuse / another SDK set it). Calling
+                # provider.shutdown() would tear down EVERY processor on it — including the
+                # co-tenant's exporter — silently killing their telemetry. Only flush our
+                # own spans and shut down JUST the neatlogs span processor, leaving the
+                # shared provider and other exporters intact.
+                logger.debug("Shared tracer provider — flushing without shutting it down")
+                ok = _tracer_provider.force_flush(timeout_millis=timeout_millis)
+                success = (ok is None or bool(ok)) and success
+                if _span_processor is not None:
+                    try:
+                        _span_processor.shutdown()
+                    except Exception as e:
+                        logger.warning(f"Error shutting down neatlogs span processor: {e}")
         except Exception as e:
             logger.error(f"Error shutting down tracer provider: {e}", exc_info=True)
             success = False

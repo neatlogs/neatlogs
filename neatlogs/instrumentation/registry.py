@@ -105,6 +105,7 @@ INSTRUMENTATION_REGISTRY = {
             "default_span_kind": "LLM",
         },
         "groq": {
+            "neatlogs": "neatlogs.groq",
             "openllmetry": "opentelemetry.instrumentation.groq",
             "openinference": "openinference.instrumentation.groq",
             "default_span_kind": "LLM",

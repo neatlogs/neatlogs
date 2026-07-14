@@ -51,7 +51,18 @@ class InstrumentationManager:
         """
         Instrument HTTP libraries for context propagation.
         Uses standard opentelemetry-instrumentation-* contrib packages (not AI-specific).
+
+        DISABLED: HTTP auto-instrumentation is turned off. It emitted a large volume
+        of infra HTTP spans (POST/GET/HEAD/DELETE to LLM/vector/telemetry endpoints)
+        that add no agentic value and pollute the trace. In-process parent/child
+        linkage for frameworks (CrewAI, LangChain, ...) comes from the OTel context
+        (contextvars), NOT HTTP headers, so disabling this does not fragment traces.
+        To re-enable, delete the early return below.
         """
+        if self.debug:
+            logger.info("⏭️  HTTP instrumentation disabled (no infra HTTP spans)")
+        return
+
         http_libs = ["requests", "httpx", "urllib3", "aiohttp"]
 
         for lib in http_libs:

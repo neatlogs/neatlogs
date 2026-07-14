@@ -232,8 +232,11 @@ def _patch_chat(chat: Any) -> None:
             if is_suppressed():
                 return orig_send(*args, **kwargs)
             is_stream = bool(kwargs.get("stream", False))
-            span = _start(kwargs, is_stream)
-            start = time.perf_counter()
+            try:
+                span = _start(kwargs, is_stream)
+                start = time.perf_counter()
+            except Exception:
+                return orig_send(*args, **kwargs)
             try:
                 response = orig_send(*args, **kwargs)
             except Exception as e:
@@ -252,8 +255,11 @@ def _patch_chat(chat: Any) -> None:
             if is_suppressed():
                 return await orig_send_async(*args, **kwargs)
             is_stream = bool(kwargs.get("stream", False))
-            span = _start(kwargs, is_stream)
-            start = time.perf_counter()
+            try:
+                span = _start(kwargs, is_stream)
+                start = time.perf_counter()
+            except Exception:
+                return await orig_send_async(*args, **kwargs)
             try:
                 response = await orig_send_async(*args, **kwargs)
             except Exception as e:
@@ -438,8 +444,11 @@ def _patch_responses(responses: Any) -> None:
             if is_suppressed():
                 return orig_send(*args, **kwargs)
             is_stream = bool(kwargs.get("stream", False))
-            span = _start(kwargs, is_stream)
-            start = time.perf_counter()
+            try:
+                span = _start(kwargs, is_stream)
+                start = time.perf_counter()
+            except Exception:
+                return orig_send(*args, **kwargs)
             try:
                 response = orig_send(*args, **kwargs)
             except Exception as e:
@@ -458,8 +467,11 @@ def _patch_responses(responses: Any) -> None:
             if is_suppressed():
                 return await orig_send_async(*args, **kwargs)
             is_stream = bool(kwargs.get("stream", False))
-            span = _start(kwargs, is_stream)
-            start = time.perf_counter()
+            try:
+                span = _start(kwargs, is_stream)
+                start = time.perf_counter()
+            except Exception:
+                return await orig_send_async(*args, **kwargs)
             try:
                 response = await orig_send_async(*args, **kwargs)
             except Exception as e:
@@ -571,19 +583,22 @@ def _patch_embeddings(embeddings: Any) -> None:
     def patched(*args, **kwargs):
         if is_suppressed():
             return orig(*args, **kwargs)
-        inp = kwargs.get("input", "")
-        span = get_provider_tracer().start_span(
-            name="openrouter.embeddings.generate",
-            attributes={
-                "neatlogs.span.kind": "embedding",
-                "neatlogs.llm.provider": _PROVIDER,
-                "neatlogs.embedding.model_name": kwargs.get("model", ""),
-                "neatlogs.embedding.text": (
-                    inp if isinstance(inp, str) else serialize(_plain(inp))
-                )[:10000],
-            },
-        )
-        start = time.perf_counter()
+        try:
+            inp = kwargs.get("input", "")
+            span = get_provider_tracer().start_span(
+                name="openrouter.embeddings.generate",
+                attributes={
+                    "neatlogs.span.kind": "embedding",
+                    "neatlogs.llm.provider": _PROVIDER,
+                    "neatlogs.embedding.model_name": kwargs.get("model", ""),
+                    "neatlogs.embedding.text": (
+                        inp if isinstance(inp, str) else serialize(_plain(inp))
+                    )[:10000],
+                },
+            )
+            start = time.perf_counter()
+        except Exception:
+            return orig(*args, **kwargs)
         try:
             response = orig(*args, **kwargs)
         except Exception as e:
@@ -651,22 +666,25 @@ def _patch_rerank(rerank: Any) -> None:
     def patched(*args, **kwargs):
         if is_suppressed():
             return orig(*args, **kwargs)
-        documents = kwargs.get("documents", []) or []
-        span = get_provider_tracer().start_span(
-            name="openrouter.rerank.rerank",
-            attributes={
-                "neatlogs.span.kind": "reranker",
-                "neatlogs.llm.provider": _PROVIDER,
-                "neatlogs.reranker.model_name": kwargs.get("model", ""),
-                "neatlogs.reranker.query": str(kwargs.get("query", "")),
-            },
-        )
-        for i, doc in enumerate(documents):
-            span.set_attribute(
-                f"neatlogs.reranker.input_documents.{i}",
-                doc if isinstance(doc, str) else serialize(_plain(doc)),
+        try:
+            documents = kwargs.get("documents", []) or []
+            span = get_provider_tracer().start_span(
+                name="openrouter.rerank.rerank",
+                attributes={
+                    "neatlogs.span.kind": "reranker",
+                    "neatlogs.llm.provider": _PROVIDER,
+                    "neatlogs.reranker.model_name": kwargs.get("model", ""),
+                    "neatlogs.reranker.query": str(kwargs.get("query", "")),
+                },
             )
-        start = time.perf_counter()
+            for i, doc in enumerate(documents):
+                span.set_attribute(
+                    f"neatlogs.reranker.input_documents.{i}",
+                    doc if isinstance(doc, str) else serialize(_plain(doc)),
+                )
+            start = time.perf_counter()
+        except Exception:
+            return orig(*args, **kwargs)
         try:
             response = orig(*args, **kwargs)
         except Exception as e:

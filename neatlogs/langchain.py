@@ -113,6 +113,85 @@ def _set_invocation_params(span: Any, kwargs: Dict[str, Any]) -> None:
                     span.set_attribute(f"neatlogs.llm.tools.{i}.input_schema", serialize(params))
 
 
+def _normalize_token_usage(usage: Any) -> Dict[str, Any]:
+    """Normalize provider-specific and LangChain-standard token usage keys."""
+    if not isinstance(usage, dict):
+        return {}
+
+    normalized: Dict[str, Any] = {}
+    aliases = {
+        "prompt_tokens": ("prompt_tokens", "input_tokens", "prompt_token_count"),
+        "completion_tokens": (
+            "completion_tokens",
+            "output_tokens",
+            "candidates_token_count",
+        ),
+        "total_tokens": ("total_tokens", "total_token_count"),
+        "cache_read_input_tokens": (
+            "cache_read_input_tokens",
+            "cached_content_token_count",
+        ),
+        "cache_creation_input_tokens": ("cache_creation_input_tokens",),
+        "reasoning_tokens": ("reasoning_tokens", "thoughts_token_count"),
+    }
+    for target, sources in aliases.items():
+        for source in sources:
+            value = usage.get(source)
+            if value is not None:
+                normalized[target] = value
+                break
+
+    input_details = usage.get("input_token_details") or {}
+    if isinstance(input_details, dict):
+        if (
+            "cache_read_input_tokens" not in normalized
+            and input_details.get("cache_read") is not None
+        ):
+            normalized["cache_read_input_tokens"] = input_details["cache_read"]
+        if (
+            "cache_creation_input_tokens" not in normalized
+            and input_details.get("cache_creation") is not None
+        ):
+            normalized["cache_creation_input_tokens"] = input_details["cache_creation"]
+
+    output_details = usage.get("output_token_details") or {}
+    if (
+        isinstance(output_details, dict)
+        and "reasoning_tokens" not in normalized
+        and output_details.get("reasoning") is not None
+    ):
+        normalized["reasoning_tokens"] = output_details["reasoning"]
+
+    return normalized
+
+
+def _message_token_usage(response: Any) -> Dict[str, Any]:
+    """Aggregate standardized usage from the top generation for each prompt."""
+    aggregated: Dict[str, Any] = {}
+    for gen_list in getattr(response, "generations", None) or []:
+        if not gen_list:
+            continue
+        message = getattr(gen_list[0], "message", None)
+        usage = _normalize_token_usage(getattr(message, "usage_metadata", None))
+        for key, value in usage.items():
+            try:
+                aggregated[key] = aggregated.get(key, 0) + value
+            except TypeError:
+                continue
+    return aggregated
+
+
+def _extract_token_usage(response: Any, llm_output: Dict[str, Any]) -> Dict[str, Any]:
+    """Prefer recognized llm_output fields, then fill gaps from AIMessage usage."""
+    normalized: Dict[str, Any] = {}
+    for raw_usage in (llm_output.get("token_usage"), llm_output.get("usage")):
+        for key, value in _normalize_token_usage(raw_usage).items():
+            normalized.setdefault(key, value)
+    for key, value in _message_token_usage(response).items():
+        normalized.setdefault(key, value)
+    return normalized
+
+
 class NeatlogsCallbackHandler(AsyncCallbackHandler, BaseCallbackHandler):
     """LangChain callback handler that creates neatlogs.llm.* spans.
 
@@ -365,8 +444,8 @@ class NeatlogsCallbackHandler(AsyncCallbackHandler, BaseCallbackHandler):
 
         # Token usage
         llm_output = getattr(response, "llm_output", None) or {}
-        token_usage = llm_output.get("token_usage") or llm_output.get("usage") or {}
-        if isinstance(token_usage, dict):
+        token_usage = _extract_token_usage(response, llm_output)
+        if token_usage:
             if "prompt_tokens" in token_usage:
                 span.set_attribute("neatlogs.llm.token_count.prompt", token_usage["prompt_tokens"])
             if "completion_tokens" in token_usage:

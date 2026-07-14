@@ -28,6 +28,25 @@ _wrapper_tracer: Optional[otel_trace.Tracer] = None
 _wrapper_bootstrapped = False
 _bootstrap_warned = False
 
+# Single source of truth for the provider neatlogs emits into. Set by init()
+# (to the owned/shared/private provider). When non-None, EVERY neatlogs tracer
+# resolves from it instead of the global provider — this is what keeps neatlogs
+# spans off a co-tenant's pipeline (e.g. a user's Langfuse provider) when a
+# private provider is passed to init(tracer_provider=...).
+_neatlogs_provider: Optional[TracerProvider] = None
+
+
+def set_neatlogs_provider(provider: Optional[TracerProvider]) -> None:
+    """Register the provider neatlogs must use for all its own spans."""
+    global _neatlogs_provider, _wrapper_tracer
+    _neatlogs_provider = provider
+    _wrapper_tracer = None  # force get_tracer() to rebind to the new provider
+
+
+def get_neatlogs_provider() -> Optional[TracerProvider]:
+    """The provider neatlogs emits into, or None if init() hasn't set one."""
+    return _neatlogs_provider
+
 _wrapper_config: Dict[str, Any] = {}
 _wrap_context: ContextVar[Optional[Dict[str, Any]]] = ContextVar(
     "neatlogs.wrap_context", default=None
@@ -268,7 +287,10 @@ def get_tracer() -> otel_trace.Tracer:
     if _wrapper_tracer is not None:
         return _wrapper_tracer
 
-    provider = otel_trace.get_tracer_provider()
+    # Prefer the provider init() registered (may be a PRIVATE provider never
+    # installed globally). Only when none is set do we fall back to the global
+    # provider — preserving behaviour for the default single-provider mode.
+    provider = _neatlogs_provider or otel_trace.get_tracer_provider()
     if isinstance(provider, TracerProvider):
         _wrapper_tracer = _ForeignParentGuardTracer(provider.get_tracer("neatlogs.wrapper"))
         return _wrapper_tracer

@@ -622,7 +622,18 @@ class NeatlogsSpanProcessor(SpanProcessor):
                 trace_flags=TraceFlags(TraceFlags.SAMPLED),
             )
             ctx = otel_trace.set_span_in_context(NonRecordingSpan(span_ctx))
-            tracer = otel_trace.get_tracer("neatlogs.internal")
+            # Resolve the marker's tracer from the provider neatlogs registered
+            # (a private provider never installed globally, in isolated mode) so
+            # the completion marker is NEVER emitted into a co-tenant's pipeline
+            # (e.g. the user's Langfuse provider). Fall back to global otherwise.
+            from .._wrap_utils import get_neatlogs_provider
+
+            _nl_provider = get_neatlogs_provider()
+            tracer = (
+                _nl_provider.get_tracer("neatlogs.internal")
+                if _nl_provider is not None
+                else otel_trace.get_tracer("neatlogs.internal")
+            )
             marker = tracer.start_span("neatlogs.trace.complete", context=ctx)
             marker.set_attribute("neatlogs.trace.complete", True)
             marker.set_attribute("neatlogs.internal", True)

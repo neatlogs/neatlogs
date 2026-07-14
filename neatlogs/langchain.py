@@ -439,12 +439,11 @@ class NeatlogsCallbackHandler(AsyncCallbackHandler, BaseCallbackHandler):
             return
 
         # LangGraph passes the node name in metadata["langgraph_node"]; without it
-        # every node is a generic "langchain.chain.chain". Prefer it for the span
-        # name and stamp neatlogs.langgraph.node (the attribute the backend reads).
+        # every node is a generic "langchain.chain.chain". Use the bare node name as
+        # the span name (what users expect to see) and stamp neatlogs.langgraph.node
+        # (the attribute the backend reads).
         langgraph_node = (metadata or {}).get("langgraph_node")
-        span_name = (
-            f"langchain.node.{langgraph_node}" if langgraph_node else f"langchain.chain.{name}"
-        )
+        span_name = langgraph_node if langgraph_node else f"langchain.chain.{name}"
 
         ctx = self._start_ctx(parent_run_id, run_id, "chain")
 

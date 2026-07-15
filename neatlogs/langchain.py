@@ -243,6 +243,18 @@ class NeatlogsCallbackHandler(AsyncCallbackHandler, BaseCallbackHandler):
         neatlogs_parent_active = _is_recording(current)
         base_ctx = current if neatlogs_parent_active else otel_context.Context()
 
+        # ISOLATED mode: a surrounding neatlogs span (wrap()/@span/trace()) threads
+        # its parent on the private key rather than the global current-span, so a
+        # LangChain run nested inside it must root there — otherwise it fragments
+        # into its own trace. Only consult the key when no foreign/neatlogs span is
+        # the ambient parent (the global current-span already took precedence above).
+        if not neatlogs_parent_active:
+            from ._wrap_utils import _current_neatlogs_parent
+
+            nl_parent = _current_neatlogs_parent()
+            if nl_parent is not None:
+                return _span_in_ctx(nl_parent, otel_context.Context())
+
         if _auto_root_enabled() and kind not in _ROOT_KINDS and not neatlogs_parent_active:
             root = get_tracer().start_span(
                 name=_resolve_root_workflow_name(),

@@ -38,7 +38,7 @@ from opentelemetry import context as otel_context
 from opentelemetry import trace as otel_trace
 from opentelemetry.trace import StatusCode
 
-from ._wrap_utils import get_tracer, is_suppressed
+from ._wrap_utils import attach_as_current, detach as _nl_detach, get_tracer, is_suppressed
 
 _PROVIDER = "claude_agent_sdk"
 _ROOT_SCOPE = "__root__"
@@ -154,11 +154,15 @@ def _wrap_query(original):
                 except Exception:
                     pass
             agent_ctx = otel_trace.set_span_in_context(agent_span)
-            token = otel_context.attach(agent_ctx)
+            # Mode-aware: in DEFAULT mode makes the agent span the current-span so
+            # nested SDK work nests under it; in ISOLATED mode threads the parent on
+            # the private key WITHOUT touching the global current-span, so co-tenant
+            # instrumentation (openlit) keeps nesting under the host.
+            token = attach_as_current(agent_span)
             try:
                 query_obj = original(*args, **kwargs)
             finally:
-                otel_context.detach(token)
+                _nl_detach(token)
             return _TracingQuery(query_obj, agent_span, agent_ctx, tracer, prompt_ref)
         except Exception:
             # tracing setup failed — run the original un-traced (never break the run)
@@ -242,7 +246,10 @@ class _TracingQuery:
         if self._inner_iter is None:
             self._inner_iter = self._q.__aiter__()
         inner_iter = self._inner_iter
-        token = otel_context.attach(self._agent_ctx)
+        # Mode-aware attach (see _wrap_query): never leaks the neatlogs agent span
+        # onto the global current-span in isolated mode, so foreign instrumentation
+        # emitted while the SDK pulls the next message nests under the host, not us.
+        token = attach_as_current(self._agent_span)
         try:
             try:
                 msg = await inner_iter.__anext__()
@@ -253,7 +260,7 @@ class _TracingQuery:
                 self._finalize("error", e)
                 raise
         finally:
-            otel_context.detach(token)
+            _nl_detach(token)
         try:
             self._handle_message(msg)
         except Exception:

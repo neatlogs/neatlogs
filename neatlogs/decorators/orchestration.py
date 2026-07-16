@@ -39,9 +39,10 @@ def _create_mcp_tool_decorator(
     """
 
     def decorator(func: F) -> F:
+        from .._wrap_utils import neatlogs_span
+
         span_name = name or f"{func.__name__}.tool"
         tool_name_attr = tool_name or func.__name__
-        tracer = otel_trace.get_tracer(__name__)
 
         # Capture code-location attrs once at decoration time so that MCP_TOOL
         # spans carry the same ``code.*`` metadata as every other kind.
@@ -55,7 +56,8 @@ def _create_mcp_tool_decorator(
 
             @functools.wraps(func)
             async def async_wrapper(*args, **kwargs):
-                with tracer.start_as_current_span(
+                with neatlogs_span(
+                    __name__,
                     span_name,
                     kind=otel_trace.SpanKind.INTERNAL,
                 ) as span:
@@ -116,7 +118,8 @@ def _create_mcp_tool_decorator(
 
             @functools.wraps(func)
             def sync_wrapper(*args, **kwargs):
-                with tracer.start_as_current_span(
+                with neatlogs_span(
+                    __name__,
                     span_name,
                     kind=otel_trace.SpanKind.INTERNAL,
                 ) as span:

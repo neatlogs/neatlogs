@@ -18,12 +18,22 @@ Span hierarchy:
               ↳ LLM   (LLM.call)
               ↳ TOOL  (BaseTool.run)
 
-Crew/task/agent spans are patched on the instance; TOOL and LLM spans are
-installed once at the class level so every tool call and model call nests under
-the active task/agent — including tools/agents/tasks added after wrap().
+Crew (WORKFLOW), Task, Agent, TOOL and LLM spans are all installed ONCE at the
+class level (Crew.kickoff / Task._execute_core / Agent.execute_task / BaseTool.run
+/ LLM.call). So every crew gets a full tree whether or not it was passed through
+``neatlogs.wrap()`` — including bare crews under ``instrumentations=["crewai"]``
+and mini-crews created deep inside a request. ``wrap()`` only binds metadata.
+
+``kickoff_async`` is NOT patched: CrewAI implements it as
+``asyncio.to_thread(self.kickoff, inputs)``, so it delegates to the already-hooked
+``kickoff`` on a worker thread; the neatlogs parent key propagates across the
+thread via ThreadingInstrumentor, so the async path is covered with no second span.
 """
 
+import json
 import os
+import sys
+import threading
 import time
 from typing import Any
 
@@ -102,6 +112,14 @@ def _suppress_crewai_telemetry() -> None:
     if os.getenv("CREWAI_TRACING_ENABLED") is None:
         os.environ["CREWAI_TRACING_ENABLED"] = "false"
 
+    # If crewai was imported before us, its Telemetry singleton is already built
+    # (env re-read only in __init__), armed with a live exporter to
+    # telemetry.crewai.com. Disarm it directly so no lifecycle spans flush.
+    tel_mod = sys.modules.get("crewai.telemetry.telemetry")
+    inst = getattr(getattr(tel_mod, "Telemetry", None), "_instance", None)
+    if inst is not None and getattr(inst, "ready", False):
+        inst.ready = False
+
 
 def _safe_setattr(obj: Any, name: str, value: Any) -> None:
     """
@@ -118,13 +136,27 @@ def _safe_setattr(obj: Any, name: str, value: Any) -> None:
             pass
 
 
-def wrap_crewai(obj: Any) -> Any:
-    """
-    Wrap a CrewAI Crew or Flow instance.
-    Returns the same instance with full span-hierarchy tracing.
-    """
+def instrument_crewai() -> None:
+    """Install neatlogs' CrewAI class-level hooks (no instance needed).
+
+    Called both by ``neatlogs.wrap(Crew(...))`` and by the instrumentation
+    manager for ``instrumentations=["crewai"]``, so bare crews get a full tree.
+    Idempotent."""
     _suppress_crewai_telemetry()
     _install_class_hooks()
+
+
+def wrap_crewai(obj: Any) -> Any:
+    """
+    Wrap a CrewAI Crew, Flow or standalone Agent instance.
+
+    Span creation is entirely class-level (see :func:`_install_class_hooks`), so
+    the instance is already traced the moment the class hooks are installed. This
+    only routes Flows / standalone Agents to their dedicated class hooks and
+    returns the same instance. Metadata bound at ``wrap(...)`` is applied by the
+    proxy in ``neatlogs.wrap``.
+    """
+    instrument_crewai()
 
     cls_name = type(obj).__name__
     module = type(obj).__module__ or ""
@@ -137,15 +169,14 @@ def wrap_crewai(obj: Any) -> Any:
         f"has_agents={hasattr(obj, 'agents')}) — called from {_caller()}"
     )
 
-    # Flow detection
+    # Flow detection — Flows are their own class hierarchy; patch at the class level.
     if "flow" in module or hasattr(obj, "_methods") and hasattr(obj, "kickoff") and not hasattr(obj, "tasks"):
-        _dbg(f"→ routed to FLOW branch; patching flow {cls_name} (id={obj_id})")
-        _patch_flow(obj)
+        _dbg(f"→ routed to FLOW branch; patching flow class {cls_name} (id={obj_id})")
+        _patch_flow_class(type(obj))
         return obj
 
-    # Standalone Agent (no Crew): agent.kickoff(messages=...). Has a `role` and
-    # `execute_task` but no `tasks`/`agents` — must NOT go through the Crew branch,
-    # which would mislabel the run as `crewai.crew.kickoff`.
+    # Standalone Agent (no Crew): agent.kickoff(messages=...). Covered by the
+    # class-level Agent hooks already installed; nothing instance-specific to do.
     if (
         hasattr(obj, "kickoff")
         and hasattr(obj, "execute_task")
@@ -157,19 +188,12 @@ def wrap_crewai(obj: Any) -> Any:
         _patch_agent_kickoff(obj)
         return obj
 
-    # Crew
+    # Crew — fully covered by the class-level Crew.kickoff hook. Nothing per-instance.
     _dbg(
-        f"→ routed to CREW branch; patching kickoff* on {cls_name} "
+        f"→ CREW branch; class-level hooks cover kickoff* on {cls_name} "
         f"(id={obj_id}, tasks={len(getattr(obj, 'tasks', []) or [])}, "
         f"agents={len(getattr(obj, 'agents', []) or [])})"
     )
-    _patch_kickoff(obj)
-    _patch_kickoff_async(obj)
-    _patch_kickoff_for_each(obj)
-    _patch_kickoff_for_each_async(obj)
-    _patch_extra_crew_entrypoints(obj)
-    _patch_tasks_and_agents(obj)
-    _dbg(f"→ CREW patched: kickoff={getattr(obj, '_neatlogs_kickoff_patched', False)} (id={obj_id})")
     return obj
 
 
@@ -269,141 +293,146 @@ def _finalize_crew_span(span: Any, result: Any, duration_ms: float) -> None:
     span.end()
 
 
-def _patch_kickoff(crew: Any) -> None:
-    if getattr(crew, "_neatlogs_kickoff_patched", False):
+# Re-entrancy guard: a crew.kickoff whose body re-enters kickoff on the SAME
+# instance in the SAME thread (e.g. CrewAI 1.x's stream=True branch) must not open
+# a second WORKFLOW span. kickoff_for_each copies the crew (new id → new span, the
+# desired batch→item nesting) and kickoff_async runs on a fresh thread (fresh
+# thread-local → span opens), so neither is suppressed. Thread-local so concurrent
+# crews on different threads never mask each other.
+_kickoff_active = threading.local()
+
+
+def _kickoff_in_progress(crew: Any) -> bool:
+    active = getattr(_kickoff_active, "ids", None)
+    return active is not None and id(crew) in active
+
+
+def _mark_kickoff(crew: Any, on: bool) -> None:
+    active = getattr(_kickoff_active, "ids", None)
+    if active is None:
+        active = set()
+        _kickoff_active.ids = active
+    if on:
+        active.add(id(crew))
+    else:
+        active.discard(id(crew))
+
+
+def _patch_crew_class(CrewCls: Any) -> None:
+    """Install the class-level WORKFLOW hooks on the Crew class.
+
+    kickoff is the canonical root; kickoff_for_each(_async) open a batch root
+    (their per-item copies re-enter the patched kickoff for the item spans);
+    train/test/replay each open their own root. kickoff_async is intentionally
+    NOT patched — it delegates to kickoff via asyncio.to_thread."""
+    if getattr(CrewCls, "_neatlogs_class_patched", False):
         return
-    orig_kickoff = crew.kickoff
 
-    def patched_kickoff(*args, **kwargs):
-        _dbg(
-            f"kickoff() FIRED on crew id={hex(id(crew))} "
-            f"(name={getattr(crew, 'name', None) or getattr(crew, '_name', None)!r}) "
-            f"— called from {_caller()}"
-        )
-        # Re-patch in case tasks/agents were added after wrap().
-        _patch_tasks_and_agents(crew)
-        tracer = get_tracer()
-        attrs = _get_crew_attributes(crew)
-        span = tracer.start_span(
-            name="crewai.crew.kickoff", attributes=attrs, **_shared_trace_kwargs()
-        )
-        _dbg(f"opened 'crewai.crew.kickoff' WORKFLOW span for crew id={hex(id(crew))}")
-        _set_crew_input(span, crew, kwargs)
-        token = attach_as_current(span)
-        start = time.perf_counter()
-        try:
-            result = orig_kickoff(*args, **kwargs)
-        except Exception as e:
-            _err(span, e); raise
-        finally:
-            detach(token)
-        _finalize_crew_span(span, result, (time.perf_counter() - start) * 1000)
-        return result
+    # --- kickoff (canonical WORKFLOW root) ---
+    if "kickoff" in CrewCls.__dict__:
+        orig_kickoff = CrewCls.kickoff
 
-    _safe_setattr(crew, "kickoff", patched_kickoff)
-    _safe_setattr(crew, "_neatlogs_kickoff_patched", True)
-
-
-def _patch_kickoff_async(crew: Any) -> None:
-    if not hasattr(crew, "kickoff_async") or getattr(crew, "_neatlogs_kickoff_async_patched", False):
-        return
-    orig = crew.kickoff_async
-
-    async def patched(*args, **kwargs):
-        _patch_tasks_and_agents(crew)
-        tracer = get_tracer()
-        attrs = _get_crew_attributes(crew)
-        span = tracer.start_span(name="crewai.crew.kickoff_async", attributes=attrs)
-        _set_crew_input(span, crew, kwargs)
-        token = attach_as_current(span)
-        start = time.perf_counter()
-        try:
-            result = await orig(*args, **kwargs)
-        except Exception as e:
-            _err(span, e); raise
-        finally:
-            detach(token)
-        _finalize_crew_span(span, result, (time.perf_counter() - start) * 1000)
-        return result
-
-    _safe_setattr(crew, "kickoff_async", patched)
-    _safe_setattr(crew, "_neatlogs_kickoff_async_patched", True)
-
-
-def _patch_kickoff_for_each(crew: Any) -> None:
-    if not hasattr(crew, "kickoff_for_each") or getattr(crew, "_neatlogs_kfe_patched", False):
-        return
-    orig = crew.kickoff_for_each
-
-    def patched(*args, **kwargs):
-        _patch_tasks_and_agents(crew)
-        tracer = get_tracer()
-        inputs = kwargs.get("inputs") or (args[0] if args else None)
-        attrs = _get_crew_attributes(crew)
-        if inputs and hasattr(inputs, "__len__"):
-            attrs["neatlogs.workflow.batch_size"] = len(inputs)
-        if inputs:
-            attrs["input.value"] = serialize(inputs)[:10000]
-        span = tracer.start_span(name="crewai.crew.kickoff_for_each", attributes=attrs)
-        token = attach_as_current(span)
-        start = time.perf_counter()
-        try:
-            results = orig(*args, **kwargs)
-        except Exception as e:
-            _err(span, e); raise
-        finally:
-            detach(token)
-        if results is not None:
+        def patched_kickoff(self, *args, **kwargs):
+            if _kickoff_in_progress(self):
+                return orig_kickoff(self, *args, **kwargs)
+            _dbg(
+                f"kickoff() FIRED on crew id={hex(id(self))} "
+                f"(name={getattr(self, 'name', None) or getattr(self, '_name', None)!r}) "
+                f"— called from {_caller()}"
+            )
+            # Catch provider LLM / tool subclasses imported after class hooks ran.
+            _patch_tasks_and_agents(self)
+            tracer = get_tracer()
+            span = tracer.start_span(
+                name="crewai.crew.kickoff", attributes=_get_crew_attributes(self),
+                **_shared_trace_kwargs(),
+            )
+            _dbg(f"opened 'crewai.crew.kickoff' WORKFLOW span for crew id={hex(id(self))}")
+            _set_crew_input(span, self, kwargs)
+            token = attach_as_current(span)
+            _mark_kickoff(self, True)
+            start = time.perf_counter()
             try:
-                span.set_attribute("output.value", serialize([getattr(r, "raw", str(r)) for r in results])[:10000])
-            except TypeError:
-                pass
-        span.set_attribute("neatlogs.llm.metrics.duration_ms", round((time.perf_counter() - start) * 1000, 3))
-        span.set_status(StatusCode.OK)
-        span.end()
-        return results
+                result = orig_kickoff(self, *args, **kwargs)
+            except Exception as e:
+                _err(span, e); raise
+            finally:
+                _mark_kickoff(self, False)
+                detach(token)
+            _finalize_crew_span(span, result, (time.perf_counter() - start) * 1000)
+            return result
 
-    _safe_setattr(crew, "kickoff_for_each", patched)
-    _safe_setattr(crew, "_neatlogs_kfe_patched", True)
+        CrewCls.kickoff = patched_kickoff
+
+    # --- kickoff_for_each / kickoff_for_each_async (batch roots) ---
+    if "kickoff_for_each" in CrewCls.__dict__:
+        orig_kfe = CrewCls.kickoff_for_each
+
+        def patched_kfe(self, *args, **kwargs):
+            tracer = get_tracer()
+            inputs = kwargs.get("inputs") or (args[0] if args else None)
+            attrs = _get_crew_attributes(self)
+            if inputs and hasattr(inputs, "__len__"):
+                attrs["neatlogs.workflow.batch_size"] = len(inputs)
+            if inputs:
+                attrs["input.value"] = serialize(inputs)[:10000]
+            span = tracer.start_span(name="crewai.crew.kickoff_for_each", attributes=attrs)
+            token = attach_as_current(span)
+            start = time.perf_counter()
+            try:
+                results = orig_kfe(self, *args, **kwargs)
+            except Exception as e:
+                _err(span, e); raise
+            finally:
+                detach(token)
+            if results is not None:
+                try:
+                    span.set_attribute("output.value", serialize([getattr(r, "raw", str(r)) for r in results])[:10000])
+                except TypeError:
+                    pass
+            span.set_attribute("neatlogs.llm.metrics.duration_ms", round((time.perf_counter() - start) * 1000, 3))
+            span.set_status(StatusCode.OK)
+            span.end()
+            return results
+
+        CrewCls.kickoff_for_each = patched_kfe
+
+    if "kickoff_for_each_async" in CrewCls.__dict__:
+        orig_kfea = CrewCls.kickoff_for_each_async
+
+        async def patched_kfea(self, *args, **kwargs):
+            tracer = get_tracer()
+            inputs = kwargs.get("inputs") or (args[0] if args else None)
+            attrs = _get_crew_attributes(self)
+            if inputs and hasattr(inputs, "__len__"):
+                attrs["neatlogs.workflow.batch_size"] = len(inputs)
+            if inputs:
+                attrs["input.value"] = serialize(inputs)[:10000]
+            span = tracer.start_span(name="crewai.crew.kickoff_for_each_async", attributes=attrs)
+            token = attach_as_current(span)
+            start = time.perf_counter()
+            try:
+                results = await orig_kfea(self, *args, **kwargs)
+            except Exception as e:
+                _err(span, e); raise
+            finally:
+                detach(token)
+            span.set_attribute("neatlogs.llm.metrics.duration_ms", round((time.perf_counter() - start) * 1000, 3))
+            span.set_status(StatusCode.OK)
+            span.end()
+            return results
+
+        CrewCls.kickoff_for_each_async = patched_kfea
+
+    # --- akickoff (native async in CrewAI 1.x; ABSENT in 0.130.0) + train/test/replay ---
+    _patch_extra_crew_class_entrypoints(CrewCls)
+
+    CrewCls._neatlogs_class_patched = True
 
 
-def _patch_kickoff_for_each_async(crew: Any) -> None:
-    if not hasattr(crew, "kickoff_for_each_async") or getattr(crew, "_neatlogs_kfea_patched", False):
-        return
-    orig = crew.kickoff_for_each_async
-
-    async def patched(*args, **kwargs):
-        _patch_tasks_and_agents(crew)
-        tracer = get_tracer()
-        inputs = kwargs.get("inputs") or (args[0] if args else None)
-        attrs = _get_crew_attributes(crew)
-        if inputs and hasattr(inputs, "__len__"):
-            attrs["neatlogs.workflow.batch_size"] = len(inputs)
-        if inputs:
-            attrs["input.value"] = serialize(inputs)[:10000]
-        span = tracer.start_span(name="crewai.crew.kickoff_for_each_async", attributes=attrs)
-        token = attach_as_current(span)
-        start = time.perf_counter()
-        try:
-            results = await orig(*args, **kwargs)
-        except Exception as e:
-            _err(span, e); raise
-        finally:
-            detach(token)
-        span.set_attribute("neatlogs.llm.metrics.duration_ms", round((time.perf_counter() - start) * 1000, 3))
-        span.set_status(StatusCode.OK)
-        span.end()
-        return results
-
-    _safe_setattr(crew, "kickoff_for_each_async", patched)
-    _safe_setattr(crew, "_neatlogs_kfea_patched", True)
-
-
-# Additional Crew entrypoints: async aliases (akickoff*) + train / test / replay.
-# CrewAI exposes akickoff as a DISTINCT coroutine (not kickoff_async), and
-# train/test/replay are sync run entrypoints (declared as project scripts) that
-# would otherwise emit no span at all.
-
+# akickoff is a DISTINCT coroutine (does NOT delegate to kickoff) → needs its own
+# span. train/test/replay are sync run entrypoints. All version-guarded: only
+# patched if the class actually defines them.
 _EXTRA_CREW_ENTRYPOINTS = {
     "akickoff": ("crewai.crew.akickoff", True),
     "akickoff_for_each": ("crewai.crew.akickoff_for_each", True),
@@ -413,31 +442,28 @@ _EXTRA_CREW_ENTRYPOINTS = {
 }
 
 
-def _patch_extra_crew_entrypoints(crew: Any) -> None:
+def _patch_extra_crew_class_entrypoints(CrewCls: Any) -> None:
     for method_name, (span_name, is_async) in _EXTRA_CREW_ENTRYPOINTS.items():
-        if not hasattr(crew, method_name):
+        if method_name not in CrewCls.__dict__:
             continue
-        flag = f"_neatlogs_{method_name}_patched"
-        if getattr(crew, flag, False):
-            continue
-        orig = getattr(crew, method_name)
+        orig = CrewCls.__dict__[method_name]
 
         def _make(orig=orig, span_name=span_name, is_async=is_async):
-            def _open(kwargs):
-                _patch_tasks_and_agents(crew)
+            def _open(self, kwargs):
+                _patch_tasks_and_agents(self)
                 span = get_tracer().start_span(
-                    name=span_name, attributes=_get_crew_attributes(crew)
+                    name=span_name, attributes=_get_crew_attributes(self)
                 )
-                _set_crew_input(span, crew, kwargs)
+                _set_crew_input(span, self, kwargs)
                 return span
 
             if is_async:
-                async def patched(*args, **kwargs):
-                    span = _open(kwargs)
+                async def patched(self, *args, **kwargs):
+                    span = _open(self, kwargs)
                     token = attach_as_current(span)
                     start = time.perf_counter()
                     try:
-                        result = await orig(*args, **kwargs)
+                        result = await orig(self, *args, **kwargs)
                     except Exception as e:
                         _err(span, e); raise
                     finally:
@@ -446,12 +472,12 @@ def _patch_extra_crew_entrypoints(crew: Any) -> None:
                     return result
                 return patched
 
-            def patched(*args, **kwargs):
-                span = _open(kwargs)
+            def patched(self, *args, **kwargs):
+                span = _open(self, kwargs)
                 token = attach_as_current(span)
                 start = time.perf_counter()
                 try:
-                    result = orig(*args, **kwargs)
+                    result = orig(self, *args, **kwargs)
                 except Exception as e:
                     _err(span, e); raise
                 finally:
@@ -460,8 +486,7 @@ def _patch_extra_crew_entrypoints(crew: Any) -> None:
                 return result
             return patched
 
-        _safe_setattr(crew, method_name, _make())
-        _safe_setattr(crew, flag, True)
+        setattr(CrewCls, method_name, _make())
 
 
 # ---------------------------------------------------------------------------
@@ -734,31 +759,40 @@ def _set_flow_input(span: Any, flow: Any, kwargs: dict) -> None:
             pass
 
 
-def _patch_flow(flow: Any) -> None:
-    if getattr(flow, "_neatlogs_flow_patched", False):
+def _patch_flow_class(FlowCls: Any) -> None:
+    """Patch a Flow subclass at the class level.
+
+    CrewAI's ``Flow.kickoff`` delegates to ``kickoff_async`` (``asyncio.run``), so
+    patching both would double-count. The re-entrancy guard opens exactly one
+    WORKFLOW span for the outermost of the two, whichever the user calls."""
+    if getattr(FlowCls, "_neatlogs_flow_patched", False):
         return
 
-    def _attrs():
-        attrs = {"neatlogs.span.kind": "workflow", "neatlogs.workflow.type": "flow"}
-        name = type(flow).__name__
-        attrs["neatlogs.workflow.name"] = name
-        return attrs
+    def _attrs(flow):
+        return {
+            "neatlogs.span.kind": "workflow",
+            "neatlogs.workflow.type": "flow",
+            "neatlogs.workflow.name": type(flow).__name__,
+        }
 
-    if hasattr(flow, "kickoff"):
-        orig = flow.kickoff
+    if "kickoff" in FlowCls.__dict__:
+        orig = FlowCls.kickoff
 
-        def patched_kickoff(*args, **kwargs):
+        def patched_kickoff(self, *args, **kwargs):
+            if _kickoff_in_progress(self):
+                return orig(self, *args, **kwargs)
             tracer = get_tracer()
-            attrs = _attrs()
-            span = tracer.start_span(name="crewai.flow.kickoff", attributes=attrs)
-            _set_flow_input(span, flow, kwargs)
+            span = tracer.start_span(name="crewai.flow.kickoff", attributes=_attrs(self))
+            _set_flow_input(span, self, kwargs)
             token = attach_as_current(span)
+            _mark_kickoff(self, True)
             start = time.perf_counter()
             try:
-                result = orig(*args, **kwargs)
+                result = orig(self, *args, **kwargs)
             except Exception as e:
                 _err(span, e); raise
             finally:
+                _mark_kickoff(self, False)
                 detach(token)
             if result is not None:
                 span.set_attribute("output.value", str(result)[:10000])
@@ -767,23 +801,26 @@ def _patch_flow(flow: Any) -> None:
             span.end()
             return result
 
-        _safe_setattr(flow, "kickoff", patched_kickoff)
+        FlowCls.kickoff = patched_kickoff
 
-    if hasattr(flow, "kickoff_async"):
-        orig_async = flow.kickoff_async
+    if "kickoff_async" in FlowCls.__dict__:
+        orig_async = FlowCls.kickoff_async
 
-        async def patched_kickoff_async(*args, **kwargs):
+        async def patched_kickoff_async(self, *args, **kwargs):
+            if _kickoff_in_progress(self):
+                return await orig_async(self, *args, **kwargs)
             tracer = get_tracer()
-            attrs = _attrs()
-            span = tracer.start_span(name="crewai.flow.kickoff_async", attributes=attrs)
-            _set_flow_input(span, flow, kwargs)
+            span = tracer.start_span(name="crewai.flow.kickoff_async", attributes=_attrs(self))
+            _set_flow_input(span, self, kwargs)
             token = attach_as_current(span)
+            _mark_kickoff(self, True)
             start = time.perf_counter()
             try:
-                result = await orig_async(*args, **kwargs)
+                result = await orig_async(self, *args, **kwargs)
             except Exception as e:
                 _err(span, e); raise
             finally:
+                _mark_kickoff(self, False)
                 detach(token)
             if result is not None:
                 span.set_attribute("output.value", str(result)[:10000])
@@ -792,9 +829,9 @@ def _patch_flow(flow: Any) -> None:
             span.end()
             return result
 
-        _safe_setattr(flow, "kickoff_async", patched_kickoff_async)
+        FlowCls.kickoff_async = patched_kickoff_async
 
-    _safe_setattr(flow, "_neatlogs_flow_patched", True)
+    FlowCls._neatlogs_flow_patched = True
 
 
 # ---------------------------------------------------------------------------
@@ -807,9 +844,21 @@ def _install_class_hooks() -> None:
     if _CLASS_HOOKS_INSTALLED:
         return
     _CLASS_HOOKS_INSTALLED = True
+    _patch_crew_classes()
     _patch_base_tool()
     _patch_structured_tool()
     _patch_llm()
+
+
+def _patch_crew_classes() -> None:
+    """Patch the Crew class (WORKFLOW roots). Task/Agent spans are opened per
+    instance from inside the class-level kickoff via ``_patch_tasks_and_agents``,
+    so they're covered for wrapped and bare crews alike."""
+    try:
+        from crewai.crew import Crew
+        _patch_crew_class(Crew)
+    except Exception as e:
+        _dbg(f"could not class-patch Crew: {e}")
 
 
 def _patch_base_tool() -> None:
@@ -940,24 +989,81 @@ def _all_subclasses(cls):
     return out
 
 
-def _crewai_usage_snapshot(llm: Any) -> dict:
-    """Cumulative token usage from a crewai LLM via get_token_usage_summary()."""
+# CrewAI's LLM.call goes through litellm.completion(**params) and returns ONLY a
+# string — per-call usage/model/provider/request-params never surface on the LLM
+# object (there is no get_token_usage_summary on current versions). We wrap
+# litellm.completion ONCE to record the last completion's usage + request params
+# into a thread-local, then read it back in patched_call after the call returns.
+# This records data only (no spans), so isolation is untouched.
+_litellm_capture = threading.local()
+_LITELLM_WRAPPED = False
+
+
+def _install_litellm_capture() -> None:
+    global _LITELLM_WRAPPED
+    if _LITELLM_WRAPPED:
+        return
     try:
-        summary = llm.get_token_usage_summary()
+        import litellm
     except Exception:
-        return {}
-    out = {}
-    for key in ("prompt_tokens", "completion_tokens", "total_tokens",
-                "cached_prompt_tokens", "reasoning_tokens"):
-        v = getattr(summary, key, None)
-        if v is None and isinstance(summary, dict):
-            v = summary.get(key)
-        if isinstance(v, (int, float)):
-            out[key] = v
-    return out
+        return
+
+    def _record(resp: Any, kwargs: dict) -> None:
+        try:
+            rec: dict = {}
+            usage = getattr(resp, "usage", None)
+            if usage is not None:
+                for k in ("prompt_tokens", "completion_tokens", "total_tokens"):
+                    v = getattr(usage, k, None)
+                    if v is None and isinstance(usage, dict):
+                        v = usage.get(k)
+                    if isinstance(v, (int, float)):
+                        rec[k] = v
+                ptd = getattr(usage, "prompt_tokens_details", None)
+                if ptd is not None:
+                    cached = getattr(ptd, "cached_tokens", None)
+                    if isinstance(cached, (int, float)):
+                        rec["cached_tokens"] = cached
+                ctd = getattr(usage, "completion_tokens_details", None)
+                if ctd is not None:
+                    reasoning = getattr(ctd, "reasoning_tokens", None)
+                    if isinstance(reasoning, (int, float)):
+                        rec["reasoning_tokens"] = reasoning
+            model = getattr(resp, "model", None)
+            if model:
+                rec["model"] = str(model)
+            hp = getattr(resp, "_hidden_params", None) or {}
+            if isinstance(hp, dict):
+                if hp.get("custom_llm_provider"):
+                    rec["provider"] = str(hp["custom_llm_provider"])
+            # Request params AS SENT (crewai maps max_completion_tokens→max_tokens here).
+            params = {}
+            for p in ("temperature", "top_p", "max_tokens", "frequency_penalty", "presence_penalty"):
+                v = kwargs.get(p)
+                if v is not None:
+                    params[p] = v
+            if params:
+                rec["params"] = params
+            _litellm_capture.last = rec
+        except Exception:
+            pass
+
+    orig_completion = litellm.completion
+
+    def _wrapped_completion(*args, **kwargs):
+        resp = orig_completion(*args, **kwargs)
+        # Non-streaming ModelResponse has .usage immediately; streams don't — skip
+        # those (crewai's streaming path tracks usage on its own).
+        if getattr(resp, "usage", None) is not None:
+            _record(resp, kwargs)
+        return resp
+
+    litellm.completion = _wrapped_completion
+    _LITELLM_WRAPPED = True
 
 
 def _patch_llm_call(LLM) -> None:
+    _install_litellm_capture()
     orig_call = LLM.call
 
     def patched_call(self, messages, *args, **kwargs):
@@ -979,18 +1085,20 @@ def _patch_llm_call(LLM) -> None:
                 if content:
                     attrs[f"neatlogs.llm.input_messages.{i}.content"] = (content if isinstance(content, str) else serialize(content))[:10000]
 
-        for p in ("temperature", "max_tokens", "top_p"):
-            v = getattr(self, p, None)
-            if v is not None:
-                attrs[f"neatlogs.llm.{p}"] = v
+        # Invocation params from the LLM object (max_completion_tokens is crewai's
+        # alias for max_tokens). The litellm capture below overrides these with the
+        # params AS SENT when available — this is the fallback for streaming/mocks.
+        req_params = {}
+        for src, dst in (("temperature", "temperature"), ("top_p", "top_p"),
+                         ("max_tokens", "max_tokens"), ("max_completion_tokens", "max_tokens"),
+                         ("frequency_penalty", "frequency_penalty"),
+                         ("presence_penalty", "presence_penalty")):
+            v = getattr(self, src, None)
+            if v is not None and dst not in req_params:
+                req_params[dst] = v
 
-        # crewai's LLM.call returns only a string (no per-call usage). The LLM
-        # object tracks CUMULATIVE usage via get_token_usage_summary(); snapshot it
-        # before/after and emit the DELTA so each LLM span carries its own tokens
-        # (otherwise tokens only exist as an aggregate on the kickoff span, which the
-        # backend doesn't surface for non-LLM kinds).
-        before = _crewai_usage_snapshot(self)
-
+        # Clear any stale capture so we only read THIS call's record.
+        _litellm_capture.last = None
         span = tracer.start_span(name="crewai.llm.call", attributes=attrs)
         token = attach_as_current(span)
         start = time.perf_counter()
@@ -1003,13 +1111,34 @@ def _patch_llm_call(LLM) -> None:
         if result is not None:
             span.set_attribute("neatlogs.llm.output_messages.0.role", "assistant")
             span.set_attribute("neatlogs.llm.output_messages.0.content", str(result)[:10000])
-        after = _crewai_usage_snapshot(self)
+
+        # Read what our litellm.completion wrapper recorded for THIS call: real
+        # per-call tokens, resolved provider (e.g. "azure"), response model, and the
+        # request params as litellm received them.
+        rec = getattr(_litellm_capture, "last", None) or {}
+        if rec.get("params"):
+            req_params.update(rec["params"])
+        if rec.get("provider"):
+            attrs["neatlogs.llm.provider"] = rec["provider"]
+            span.set_attribute("neatlogs.llm.provider", rec["provider"])
+        if rec.get("model"):
+            span.set_attribute("neatlogs.llm.model_name", rec["model"])
+
+        # Emit invocation_parameters as the JSON blob the backend reads for
+        # model_settings (flat keys are NOT read there); keep flat keys too for
+        # any consumer that wants them.
+        if req_params:
+            span.set_attribute("neatlogs.llm.invocation_parameters", json.dumps(req_params))
+            for k, v in req_params.items():
+                span.set_attribute(f"neatlogs.llm.{k}", v)
+
         for dst, key in (("prompt", "prompt_tokens"), ("completion", "completion_tokens"),
-                         ("total", "total_tokens"), ("cache_read", "cached_prompt_tokens"),
+                         ("total", "total_tokens"), ("cache_read", "cached_tokens"),
                          ("reasoning", "reasoning_tokens")):
-            delta = after.get(key, 0) - before.get(key, 0)
-            if delta > 0:
-                span.set_attribute(f"neatlogs.llm.token_count.{dst}", delta)
+            v = rec.get(key)
+            if isinstance(v, (int, float)) and v > 0:
+                span.set_attribute(f"neatlogs.llm.token_count.{dst}", v)
+
         span.set_attribute("neatlogs.llm.metrics.duration_ms", round((time.perf_counter() - start) * 1000, 3))
         span.set_status(StatusCode.OK)
         span.end()

@@ -60,3 +60,5 @@ examples/sdk_examples/support_bot/
 # Vorflux agent artifacts
 .vorflux/
 smoke_test.py
+
+examples/sdk_examples/neatlogs_support_bot_isolation

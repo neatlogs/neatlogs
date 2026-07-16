@@ -197,17 +197,10 @@ def _decorate_span(
 
         return not _has_active_recording_parent()
 
-    def _guard_kwargs() -> dict:
-        """When only a FOREIGN span is active, start in an empty context so the
-        decorated span becomes a true neatlogs root instead of dangling off a
-        parent the backend never sees. Neatlogs parents pass through untouched."""
-        from .._wrap_utils import _neatlogs_root_kwargs
-
-        return _neatlogs_root_kwargs()
-
     def decorator(func: F) -> F:
+        from .._wrap_utils import neatlogs_span
+
         span_name = name or func.__name__
-        tracer = otel_trace.get_tracer(__name__)
 
         cap = _should_capture_content()
         cap_in = cap if capture_input is None else capture_input
@@ -230,8 +223,8 @@ def _decorate_span(
                 from ..core.mask import register_mask
 
                 is_root = _is_root_span()
-                with tracer.start_as_current_span(
-                    span_name, kind=otel_trace.SpanKind.INTERNAL, **_guard_kwargs()
+                with neatlogs_span(
+                    __name__, span_name, kind=otel_trace.SpanKind.INTERNAL
                 ) as span:
                     _set_common_span_attrs(
                         span,
@@ -294,8 +287,8 @@ def _decorate_span(
             from ..core.mask import register_mask
 
             is_root = _is_root_span()
-            with tracer.start_as_current_span(
-                span_name, kind=otel_trace.SpanKind.INTERNAL, **_guard_kwargs()
+            with neatlogs_span(
+                __name__, span_name, kind=otel_trace.SpanKind.INTERNAL
             ) as span:
                 _set_common_span_attrs(
                     span,

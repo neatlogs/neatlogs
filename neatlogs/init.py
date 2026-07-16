@@ -40,7 +40,73 @@ logger = get_logger()
 _initialized = False
 _tracer_provider = None
 _owns_tracer_provider = False  # True only when neatlogs created the provider (safe to shut down)
-_isolated_provider = False  # True when a private tracer_provider= was passed (full isolation)
+_isolated_provider = False  # True when isolated (explicit tracer_provider= OR auto-detected)
+
+# Foreign LLM-observability instrumentors that own the global OTel pipeline and
+# resolve their span parent from the GLOBAL current-span. If one is active while
+# neatlogs would otherwise reuse the global provider, spans cross-contaminate both
+# ways. Their presence is the auto-detect signal to isolate onto a private provider.
+#
+# NOTE: `openinference` is deliberately NOT listed. The bare
+# `openinference-instrumentation-*` packages are neatlogs' OWN instrumentation
+# backend (hard dependency) — neatlogs imports them itself the moment it
+# instruments anything, and they are always importable. So their presence in
+# sys.modules / on disk carries no information about a co-tenant and would cause
+# a false-positive isolation (spurious for every standalone user, and — because
+# the modules stay resident after shutdown — for every re-init in one process).
+# Genuine OpenInference-based co-tenants (Arize Phoenix, Arize) import `phoenix`/
+# `arize` and are detected via those entries below.
+_FOREIGN_LLM_INSTRUMENTORS = (
+    "openlit",
+    "langfuse",
+    "traceloop",  # traceloop-sdk / openllmetry
+    "phoenix",  # arize-phoenix (uses OpenInference under the hood)
+    "arize",
+    "logfire",
+)
+
+
+def _foreign_llm_instrumentor_active():
+    """Return the name of a loaded foreign LLM-observability instrumentor, or None.
+
+    Import presence in ``sys.modules`` is the signal: these packages install their
+    instrumentation onto the global provider at import/init time, so being loaded
+    in-process means their spans are (or will be) flowing through the global
+    pipeline neatlogs would otherwise share.
+    """
+    for name in _FOREIGN_LLM_INSTRUMENTORS:
+        if name in sys.modules:
+            return name
+    return None
+
+
+def _foreign_llm_instrumentor_installed():
+    """Return the name of an INSTALLED (importable) foreign LLM instrumentor, or None.
+
+    Unlike ``_foreign_llm_instrumentor_active`` (which requires the package to be
+    imported already), this only checks that it is importable. That is the signal
+    we need when neatlogs is the FIRST tracing SDK to init: the foreign tool
+    (openlit/langfuse/…) frequently loads LATER — e.g. in a FastAPI startup event
+    that runs after an import-time ``neatlogs.init()``. If neatlogs claimed the
+    global provider now, that later instrumentor would bind to OUR provider and
+    both pipelines would cross-contaminate. Detecting the package on-disk lets us
+    pre-emptively stay private and leave the global slot free for the co-tenant,
+    WITHOUT requiring the customer to pass ``isolate=True``.
+
+    A user who has a foreign package installed but genuinely wants neatlogs to own
+    the global provider (e.g. to capture their own raw-OTel spans) can force the
+    legacy behaviour with ``isolate=False``.
+    """
+    import importlib.util
+
+    for name in _FOREIGN_LLM_INSTRUMENTORS:
+        try:
+            if importlib.util.find_spec(name) is not None:
+                return name
+        except (ImportError, ValueError):
+            # find_spec can raise for namespace-package edge cases; treat as absent.
+            continue
+    return None
 _meter_provider = None
 _log_provider = None
 _span_processor = None
@@ -124,6 +190,7 @@ def init(
     pii_enabled: Optional[bool] = None,
     pii_span_types: Optional[List[str]] = None,
     tracer_provider: Optional[Any] = None,
+    isolate: Optional[bool] = None,
 ) -> None:
     """
     Initialize Neatlogs SDK.
@@ -182,8 +249,29 @@ def init(
               to Langfuse) and you need neatlogs and that tool to share NO pipeline: no
               neatlogs span reaches the other backend and no foreign span reaches neatlogs.
               neatlogs never shuts this provider down and never claims the global
-              meter/logger providers. When None (default), behaviour is unchanged
-              (own-or-reuse the global provider).
+              meter/logger providers. When None (default), behaviour is auto-detected
+              (see ``isolate``): neatlogs isolates automatically when a foreign LLM
+              instrumentor owns the global provider, and otherwise owns-or-reuses it.
+        isolate: Override the auto-isolation decision. When None (default), neatlogs
+              AUTO-DETECTS and isolates onto a private provider — with NO customer
+              code change — in either of these cases:
+                * a foreign LLM-observability instrumentor
+                  (openlit/langfuse/traceloop/openinference/…) already owns the
+                  global tracer provider (it loaded first), OR
+                * neatlogs is the first tracing SDK to load but a foreign
+                  instrumentor is INSTALLED (importable) and may attach to the
+                  global provider later (the common FastAPI-startup ordering, where
+                  neatlogs.init runs at import time and openlit.init runs in a
+                  startup event).
+              In both cases neatlogs routes ALL its spans through a private provider
+              so the two pipelines share nothing — no neatlogs span reaches the
+              foreign backend, no foreign span reaches neatlogs, and no foreign span
+              inherits a neatlogs parent. When NO foreign instrumentor is installed,
+              neatlogs owns-or-reuses the global provider exactly as before (standalone
+              behaviour is unchanged). Pass True to force isolation unconditionally, or
+              False to force the legacy own-or-reuse behaviour even when a foreign
+              instrumentor is present. Passing ``tracer_provider=`` implies isolation
+              regardless of this flag.
     """
     global _initialized
 
@@ -290,17 +378,56 @@ def init(
         provider = tracer_provider
         _owns_tracer_provider = False
         _isolated_provider = True
+        # Merge neatlogs' resource (service.name + neatlogs.workflow_name + tags/pii)
+        # onto the caller's provider so exported spans carry workflow_name — the
+        # branches that build their OWN provider pass resource= at construction,
+        # this branch cannot, so merge it in (neatlogs values win over the SDK's
+        # unknown_service sentinel). Best-effort: never fail init on a custom provider.
+        try:
+            if getattr(provider, "resource", None) is not None:
+                provider._resource = provider.resource.merge(resource)
+        except Exception:  # noqa: BLE001
+            if debug:
+                logger.debug("Could not merge neatlogs resource onto provided provider")
         if debug:
             logger.debug("Using explicitly provided tracer provider (isolated mode)")
     elif existing_provider and hasattr(existing_provider, "add_span_processor"):
-        # Reuse a provider set by the host app / another SDK (e.g. the user's own
-        # OpenTelemetry or Langfuse setup). We do NOT own it — shutdown() must never
-        # tear it down, or it would kill the co-tenant's exporter too.
-        provider = existing_provider
-        _owns_tracer_provider = False
-        _isolated_provider = False
-        if debug:
-            logger.debug("Using existing tracer provider (not owned by neatlogs)")
+        # A real provider already owns the global pipeline. Two sub-cases:
+        _foreign = None if isolate is False else _foreign_llm_instrumentor_active()
+        if isolate is True or _foreign is not None:
+            # AUTO-DETECT ISOLATION. A foreign LLM-observability instrumentor
+            # (openlit/langfuse/traceloop/…) owns the global provider AND resolves
+            # its parent from the global current-span. Reusing that provider would
+            # cross-contaminate both pipelines: neatlogs spans export to the foreign
+            # backend, and foreign spans (a) export to neatlogs and (b) inherit a
+            # neatlogs parent. So we build a PRIVATE provider neatlogs never installs
+            # globally — identical semantics to an explicit tracer_provider=.
+            provider = TracerProvider(
+                resource=resource,
+                span_limits=_span_limits_for_capture_everything(),
+            )
+            _owns_tracer_provider = True  # we made it; safe to shut down
+            _isolated_provider = True
+            if debug:
+                _why = (
+                    f"detected foreign LLM instrumentor '{_foreign}'"
+                    if _foreign is not None
+                    else "isolate=True was requested"
+                )
+                logger.info(
+                    f"Auto-isolation engaged: {_why} owning the global tracer "
+                    f"provider — routing all neatlogs spans through a private "
+                    f"provider so the two pipelines share nothing."
+                )
+        else:
+            # Reuse a provider set by the host app / another SDK (plain OpenTelemetry
+            # with no foreign LLM instrumentor). We do NOT own it — shutdown() must
+            # never tear it down, or it would kill the co-tenant's exporter too.
+            provider = existing_provider
+            _owns_tracer_provider = False
+            _isolated_provider = False
+            if debug:
+                logger.debug("Using existing tracer provider (not owned by neatlogs)")
     else:
         sampler = None
         if sample_rate < 1.0:
@@ -313,11 +440,40 @@ def init(
             sampler=sampler,
             span_limits=_span_limits_for_capture_everything(),
         )
-        trace.set_tracer_provider(provider)
         _owns_tracer_provider = True
-        _isolated_provider = False
-        if debug:
-            logger.debug("Created new tracer provider (owned by neatlogs)")
+
+        # neatlogs is the first tracing SDK to load (no real global provider yet).
+        # We must still decide whether to claim the global slot or stay private. A
+        # foreign LLM instrumentor (openlit/langfuse/…) frequently attaches to the
+        # global provider LATER — e.g. in a FastAPI startup event that runs after an
+        # import-time neatlogs.init(). If we claimed the global now, that later
+        # instrumentor would bind to OUR provider and both pipelines would
+        # cross-contaminate. So when isolation is requested OR a foreign instrumentor
+        # is merely INSTALLED (importable), we pre-emptively keep a private provider
+        # and leave the global slot free for the co-tenant to own — no isolate=True
+        # required from the customer.
+        _foreign_installed = (
+            None if isolate is False else _foreign_llm_instrumentor_installed()
+        )
+        if isolate is True or _foreign_installed is not None:
+            _isolated_provider = True
+            if debug:
+                _why = (
+                    "isolate=True was requested"
+                    if isolate is True
+                    else f"foreign LLM instrumentor '{_foreign_installed}' is installed "
+                    f"(may attach to the global provider later)"
+                )
+                logger.info(
+                    f"Pre-emptive isolation: {_why} — neatlogs loaded first but keeps "
+                    f"a PRIVATE tracer provider and leaves the global slot free for the "
+                    f"co-tenant so the two pipelines share nothing."
+                )
+        else:
+            trace.set_tracer_provider(provider)
+            _isolated_provider = False
+            if debug:
+                logger.debug("Created new tracer provider (owned by neatlogs)")
 
     _tracer_provider = provider
 

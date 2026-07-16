@@ -127,7 +127,17 @@ def trace(
     from .session import apply_session_attributes
 
     logger = logging.getLogger(__name__)
-    tracer = otel_trace.get_tracer(__name__)
+    # Resolve from the NEATLOGS provider (not the OTel global) so trace() spans
+    # never export into a co-tenant's pipeline (e.g. the user's Langfuse provider)
+    # in isolated mode.
+    from .._wrap_utils import (
+        _neatlogs_root_kwargs,
+        attach_as_current,
+        detach as _nl_detach,
+        get_internal_tracer,
+    )
+
+    tracer = get_internal_tracer(__name__)
 
     # Resolve canonical kwargs. `system_prompt_template` / `system_prompt_variables`
     # are the canonical names; `prompt_template` / `prompt_variables` are kept as
@@ -184,96 +194,75 @@ def trace(
         else:
             user_template_string = user_prompt_template
 
-    # If only a FOREIGN span is active, base the context on an empty one so the
-    # trace() span doesn't inherit that non-neatlogs parent (which would dangle the
-    # trace). A neatlogs parent (is_in_active_trace) is preserved for correct nesting.
-    ctx = get_current() if is_in_active_trace else Context()
+    # Mode-aware PARENT context for the trace() span. Never a FOREIGN parent: in
+    # DEFAULT mode a neatlogs parent lives on the current-span (get_current()); in
+    # ISOLATED mode it's threaded on the private key, so _neatlogs_root_kwargs()
+    # returns a context rooted at the neatlogs parent (or empty). When there is no
+    # neatlogs parent, an empty context makes the span a true neatlogs root.
+    if is_in_active_trace:
+        parent_ctx = _neatlogs_root_kwargs().get("context") or get_current()
+    else:
+        parent_ctx = Context()
+
     variables_json = json.dumps(prompt_variables, default=str) if prompt_variables else None
     user_variables_json = (
         json.dumps(user_prompt_variables, default=str) if user_prompt_variables else None
     )
 
-    if variables_json:
-        ctx = set_value("neatlogs.system_prompt_variables", variables_json, context=ctx)
-        logger.debug(
-            f"[trace] Set neatlogs.system_prompt_variables in context: {variables_json}"
-        )
-    if template_string:
-        ctx = set_value("neatlogs.system_prompt_template", template_string, context=ctx)
-        logger.debug(
-            f"[trace] Set neatlogs.system_prompt_template in context: {template_string}"
-        )
-    if user_variables_json:
-        ctx = set_value("neatlogs.user_prompt_variables", user_variables_json, context=ctx)
-        logger.debug(
-            f"[trace] Set neatlogs.user_prompt_variables in context: {user_variables_json}"
-        )
-    if user_template_string:
-        ctx = set_value("neatlogs.user_prompt_template", user_template_string, context=ctx)
-        logger.debug(
-            f"[trace] Set neatlogs.user_prompt_template in context: {user_template_string}"
-        )
-    if version:
-        ctx = set_value("neatlogs.prompt_version", version, context=ctx)
-        logger.debug(f"[trace] Set neatlogs.prompt_version in context: {version}")
+    def _with_prompt_values(base):
+        """Layer prompt-template metadata onto ``base`` so the nested auto-
+        instrumented LLM span reads it from the active context."""
+        c = base
+        if variables_json:
+            c = set_value("neatlogs.system_prompt_variables", variables_json, context=c)
+        if template_string:
+            c = set_value("neatlogs.system_prompt_template", template_string, context=c)
+        if user_variables_json:
+            c = set_value("neatlogs.user_prompt_variables", user_variables_json, context=c)
+        if user_template_string:
+            c = set_value("neatlogs.user_prompt_template", user_template_string, context=c)
+        if version:
+            c = set_value("neatlogs.prompt_version", version, context=c)
+        return c
+
+    # Keep prompt-template values ambient (nested LLM span reads them) WITHOUT
+    # promoting any span to the global current-span — attach_as_current() decides,
+    # per mode, whether to touch the global current-span.
+    ambient_ctx = _with_prompt_values(get_current())
+    parent_ctx = _with_prompt_values(parent_ctx)
 
     from .log import _CaptureStdoutContext
 
-    ctx_token = attach(ctx)
+    is_root = not is_in_active_trace
+    ctx_token = attach(ambient_ctx)
     stdout_ctx = _CaptureStdoutContext() if capture_stdout else None
+    span = tracer.start_span(name, context=parent_ctx)
+    span_token = attach_as_current(span)
     try:
-        if should_create_root_trace:
-            logger.debug(f"[trace] Creating NEW root trace '{name}' (session_id={session_id})")
-            with tracer.start_as_current_span(name, context=None) as span:
-                _set_span_attributes(
-                    span, kind, template_string, prompt_variables, version, attributes
-                )
-                # This branch always creates a root span (new root trace).
-                apply_session_attributes(span, session_id, is_root=True)
-                apply_end_user_attributes(span, end_user_id, end_user_metadata, is_root=True)
-                if mask is not None:
-                    from .mask import register_mask
+        logger.debug(
+            f"[trace] Creating {'root' if is_root else 'child'} span '{name}'"
+        )
+        _set_span_attributes(span, kind, template_string, prompt_variables, version, attributes)
+        # Session/end-user belong to the trace root only.
+        apply_session_attributes(span, session_id, is_root=is_root)
+        apply_end_user_attributes(span, end_user_id, end_user_metadata, is_root=is_root)
+        if mask is not None:
+            from .mask import register_mask
 
-                    span.set_attribute("neatlogs.mask_id", register_mask(mask))
-                if stdout_ctx:
-                    stdout_ctx.__enter__()
-                try:
-                    yield span
-                    _finalize_prompt_capture(
-                        span, is_prompt_template_obj, is_user_prompt_template_obj, logger
-                    )
-                finally:
-                    if stdout_ctx:
-                        stdout_ctx.__exit__(None, None, None)
-        else:
-            logger.debug(f"[trace] Creating child span '{name}'")
-            with tracer.start_as_current_span(name, context=ctx) as span:
-                _set_span_attributes(
-                    span, kind, template_string, prompt_variables, version, attributes
-                )
-                # Session/end-user belong to the trace root only. This span is a
-                # root when it is not nested inside an already-active trace.
-                apply_session_attributes(
-                    span, session_id, is_root=not is_in_active_trace
-                )
-                apply_end_user_attributes(
-                    span, end_user_id, end_user_metadata, is_root=not is_in_active_trace
-                )
-                if mask is not None:
-                    from .mask import register_mask
-
-                    span.set_attribute("neatlogs.mask_id", register_mask(mask))
-                if stdout_ctx:
-                    stdout_ctx.__enter__()
-                try:
-                    yield span
-                    _finalize_prompt_capture(
-                        span, is_prompt_template_obj, is_user_prompt_template_obj, logger
-                    )
-                finally:
-                    if stdout_ctx:
-                        stdout_ctx.__exit__(None, None, None)
+            span.set_attribute("neatlogs.mask_id", register_mask(mask))
+        if stdout_ctx:
+            stdout_ctx.__enter__()
+        try:
+            yield span
+            _finalize_prompt_capture(
+                span, is_prompt_template_obj, is_user_prompt_template_obj, logger
+            )
+        finally:
+            if stdout_ctx:
+                stdout_ctx.__exit__(None, None, None)
     finally:
+        _nl_detach(span_token)
+        span.end()
         if is_prompt_template_obj:
             PromptContext.clear()
         if is_user_prompt_template_obj:

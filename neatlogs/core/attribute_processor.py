@@ -982,6 +982,13 @@ class UnifiedAttributeProcessor:
         if span_kind not in ("embedding", "retriever", "vector_store"):
             unified.pop("neatlogs.vectordb.embedding_model", None)
 
+        # Instrumentors emit the embedded text on neatlogs.embedding.text, but the
+        # backend maps embedding input from neatlogs.embedding.input. Alias so the
+        # human-readable text lands in input_value (else the span looks empty and is
+        # dropped from the simplified view).
+        if span_kind == "embedding" and unified.get("neatlogs.embedding.text") is not None:
+            unified.setdefault("neatlogs.embedding.input", unified["neatlogs.embedding.text"])
+
         if self.debug:
             self.logger.debug(
                 "[ScopeDetectionFinal] span_name=%s scope=%s framework=%s",

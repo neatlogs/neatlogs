@@ -12,6 +12,7 @@ from opentelemetry.instrumentation.threading import ThreadingInstrumentor
 from opentelemetry.sdk.trace import TracerProvider
 
 from .http_context_propagation import patch_http_context_propagation
+from .openinference_isolation import provider_for_openinference
 from .registry import INSTRUMENTATION_REGISTRY, get_libraries_by_tag
 
 logger = logging.getLogger(__name__)
@@ -101,7 +102,9 @@ class InstrumentationManager:
         try:
             from openinference.instrumentation.mcp import MCPInstrumentor
 
-            MCPInstrumentor().instrument(tracer_provider=self.provider)
+            MCPInstrumentor().instrument(
+                tracer_provider=provider_for_openinference(self.provider)
+            )
             self.instrumented.add("mcp")
             if self.debug:
                 logger.info("✅ MCP (OpenInference)")
@@ -133,6 +136,16 @@ class InstrumentationManager:
           2. OpenInference (primary — rich semantic attributes, no duplicates)
           3. Stop — no OpenLLMetry fallback for AI libraries
         """
+        # CrewAI builds its telemetry singleton at import; suppress BEFORE the
+        # install-check below imports it, else the singleton comes up armed.
+        if library == "crewai":
+            try:
+                from ..crewai import _suppress_crewai_telemetry
+
+                _suppress_crewai_telemetry()
+            except Exception:
+                pass
+
         if not self._is_library_installed(library):
             if self.debug:
                 logger.info(f"⏭️  Skipped: {library} (not installed)")
@@ -142,6 +155,23 @@ class InstrumentationManager:
         if not info:
             if self.debug:
                 logger.warning(f"⚠️  Unknown library: {library}")
+            return
+
+        # CrewAI: neatlogs' own class-level hooks (crewai.py) build the full
+        # crew→task→agent→llm→tool tree as a single neatlogs-owned trace, so bare
+        # crews under instrumentations=["crewai"] are covered without any wrap()
+        # call. Use them instead of OpenInference to avoid a second, parallel tree.
+        if library == "crewai":
+            try:
+                from ..crewai import instrument_crewai
+
+                instrument_crewai()
+                self.instrumented.add(library)
+                if self.debug:
+                    logger.info("✅ crewai (Neatlogs - class hooks)")
+            except Exception as e:
+                if self.debug:
+                    logger.warning(f"⚠️  crewai (Neatlogs class hooks): {e}")
             return
 
         # 1. Neatlogs custom instrumentor (highest priority)
@@ -185,12 +215,17 @@ class InstrumentationManager:
             instrumentor_class = getattr(module, instrumentor_class_name)
 
             is_http_lib = library in ["requests", "httpx", "urllib3", "aiohttp"]
+            tracer_provider = (
+                provider_for_openinference(self.provider)
+                if convention == "openinference"
+                else self.provider
+            )
             if is_http_lib and self.excluded_urls:
                 instrumentor_class().instrument(
-                    tracer_provider=self.provider, excluded_urls=self.excluded_urls
+                    tracer_provider=tracer_provider, excluded_urls=self.excluded_urls
                 )
             else:
-                instrumentor_class().instrument(tracer_provider=self.provider)
+                instrumentor_class().instrument(tracer_provider=tracer_provider)
 
             # Post-instrument patches for OpenInference libraries
             if convention == "openinference":
@@ -868,7 +903,11 @@ class InstrumentationManager:
             from .._wrap_utils import (
                 _ROOT_KINDS,
                 _auto_root_enabled,
+                _current_neatlogs_parent,
+                _isolation_active,
                 _resolve_root_workflow_name,
+                attach_as_current,
+                detach,
                 get_tracer,
             )
 
@@ -884,15 +923,18 @@ class InstrumentationManager:
                 kind = _run_type_kind(run)
                 if not _auto_root_enabled() or kind in _ROOT_KINDS:
                     return
-                current = trace_api.get_current_span()
+                current = (
+                    _current_neatlogs_parent()
+                    if _isolation_active()
+                    else trace_api.get_current_span()
+                )
                 if current is not None and current.is_recording():
                     return
                 root = get_tracer().start_span(
                     name=_resolve_root_workflow_name(),
                     attributes={"neatlogs.span.kind": "workflow", "neatlogs.auto_root": True},
                 )
-                ctx = trace_api.set_span_in_context(root)
-                token = context_api.attach(ctx)
+                token = attach_as_current(root)
                 if not hasattr(self, "_nl_auto_roots"):
                     self._nl_auto_roots = {}
                 self._nl_auto_roots[run.id] = (root, token)
@@ -907,7 +949,7 @@ class InstrumentationManager:
                 root, token = entry
                 # End the child first (already done by caller), then detach + end root.
                 try:
-                    context_api.detach(token)
+                    detach(token)
                 except Exception:
                     pass
                 try:
@@ -932,7 +974,11 @@ class InstrumentationManager:
                     if run.parent_run_id:
                         parent_span = self._spans_by_run.get(run.parent_run_id)
                     if parent_span is None:
-                        current = trace_api.get_current_span()
+                        current = (
+                            _current_neatlogs_parent()
+                            if _isolation_active()
+                            else trace_api.get_current_span()
+                        )
                         if current is not None and current.is_recording():
                             parent_span = current
                     if parent_span is not None:
@@ -940,9 +986,10 @@ class InstrumentationManager:
                     return
                 _maybe_open_auto_root(self, run)
                 _orig_start_trace(self, run)
-                # Attach the created span to thread-local OTel context so that
-                # neatlogs.trace(), HTTP instrumentation, and other OTel spans
-                # created inside LangChain callbacks see this span as parent.
+                # Activate the created span for nested callbacks.  The shared
+                # OpenInference adapter redirects this to Neatlogs' private
+                # parent key in isolation mode; otherwise this remains ordinary
+                # OTel current-span behavior.
                 span = self._spans_by_run.get(run.id)
                 if span is not None:
                     ctx = trace_api.set_span_in_context(span)
@@ -1108,18 +1155,19 @@ class InstrumentationManager:
         """
         try:
             from crewai.agents.crew_agent_executor import CrewAgentExecutor
+            from .._wrap_utils import neatlogs_span
 
             original = CrewAgentExecutor._handle_native_tool_calls
-            tracer = self.provider.get_tracer("neatlogs.crewai.tools")
 
-            def _make_tool_wrapper(fn, tool_name, _tracer):
+            def _make_tool_wrapper(fn, tool_name):
                 def _wrapped_tool(**kwargs):
                     import json as _json
 
                     from opentelemetry.trace import SpanKind as _SK
                     from opentelemetry.trace import StatusCode as _SC
 
-                    with _tracer.start_as_current_span(
+                    with neatlogs_span(
+                        "neatlogs.crewai.tools",
                         tool_name,
                         kind=_SK.INTERNAL,
                     ) as span:
@@ -1149,7 +1197,7 @@ class InstrumentationManager:
 
             def _patched_handle(executor_self, tool_calls, available_functions):
                 wrapped_fns = {
-                    name: _make_tool_wrapper(func, name, tracer)
+                    name: _make_tool_wrapper(func, name)
                     for name, func in available_functions.items()
                 }
                 return original(executor_self, tool_calls, wrapped_fns)

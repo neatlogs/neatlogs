@@ -184,7 +184,12 @@ INSTRUMENTATION_REGISTRY = {
             "openllmetry": "opentelemetry.instrumentation.crewai",
             "openinference": "openinference.instrumentation.crewai",
             "default_span_kind": "AGENT",
-            "auto_load": ["litellm"],
+            # NOTE: litellm intentionally NOT auto-loaded. Our crewai class hooks
+            # emit crewai.llm.call with full I/O + tokens (via _install_litellm_capture,
+            # a data-only monkeypatch — no spans). The OI-litellm instrumentor would
+            # add redundant `completion` spans that, when a co-tenant (openlit) also
+            # wraps the model call, inherit the co-tenant's parent/trace_id → orphan
+            # spans in our tree. Dropping it loses no data and keeps the tree clean.
         },
         "autogen": {
             "openllmetry": None,

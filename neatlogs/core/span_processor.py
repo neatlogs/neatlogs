@@ -460,16 +460,14 @@ class NeatlogsSpanProcessor(SpanProcessor):
             results = self._inject_crewai_task_templates([span_data])
             span_data = results[0] if results else span_data
 
-            # 7b. Apply client-side mask before writing attributes back.
-            # This ensures masked values flow to both OTLP export and file logging.
-            if self.mask is not None:
-                span_data = apply_mask(span_data, self.mask)
+            # A per-span mask_id (from @span(mask=)/trace(mask=)) takes precedence
+            # over the global init(mask=); mask whenever either exists.
+            mask_id = (span_data.get("attributes") or {}).get("neatlogs.mask_id")
+            has_mask = bool(mask_id) or self.mask is not None
 
-            # 7c. Write normalized (and masked) attributes back to the OTel span so that
-            # BatchSpanProcessor → OTLPSpanExporter exports them to the backend.
-            # ReadableSpan._attributes is a BoundedAttributes (MutableMapping) and is
-            # mutable even after span.end(). The original OI attributes stay on the span
-            # as-is; we only add the normalized neatlogs.* keys alongside them.
+            # Write normalized neatlogs.* keys onto the (still-mutable) OTel span,
+            # then mask the whole surface once so non-idempotent masks (e.g.
+            # translation) aren't applied twice.
             final_attrs = span_data.get("attributes") or {}
             try:
                 span_attrs = span._attributes
@@ -481,29 +479,29 @@ class NeatlogsSpanProcessor(SpanProcessor):
                             isinstance(_i, (str, int, float, bool)) for _i in _v
                         ):
                             span_attrs[_k] = list(_v)
-                    # Unmapped attributes (e.g. input.user_email) stay on the OTel
-                    # span outside the neatlogs.* namespace. Apply the mask to those
-                    # too by building a temporary dict keyed by the original attr
-                    # names, running the mask, and writing redacted values back.
-                    if self.mask is not None:
-                        raw_span = {
+
+                    if has_mask:
+                        snapshot = {
                             "name": span_data.get("name"),
                             "attributes": dict(span_attrs),
                         }
-                        masked_raw = apply_mask(raw_span, self.mask)
-                        masked_raw_attrs = masked_raw.get("attributes") or {}
+                        masked = apply_mask(snapshot, self.mask)
+                        masked_attrs = (masked or snapshot).get("attributes") or {}
                         for _k in list(span_attrs.keys()):
-                            if _k in masked_raw_attrs and masked_raw_attrs[_k] != span_attrs[_k]:
-                                span_attrs[_k] = masked_raw_attrs[_k]
+                            if _k in masked_attrs and masked_attrs[_k] != span_attrs[_k]:
+                                span_attrs[_k] = masked_attrs[_k]
+                        # Mirror masked values so the file log reuses them.
+                        for _k in list(final_attrs.keys()):
+                            if _k in masked_attrs:
+                                final_attrs[_k] = masked_attrs[_k]
+                        span_data["attributes"] = final_attrs
             except Exception as _wb_exc:
                 if self.debug:
                     logger.debug(f"[SpanProcessor] Attr write-back failed: {_wb_exc}")
 
-            # 8. Log processed span dict (human-readable JSON lines, same format as before)
             if self._processed_log_file_handle and not self._processed_log_file_handle.closed:
                 try:
-                    span_data_for_log = apply_mask(dict(span_data), self.mask)
-                    self._processed_log_file_handle.write(json.dumps(span_data_for_log) + "\n")
+                    self._processed_log_file_handle.write(json.dumps(span_data) + "\n")
                     self._processed_log_file_handle.flush()
                 except Exception as e:
                     logger.warning(f"Failed to write span to processed log file: {e}")

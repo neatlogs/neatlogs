@@ -135,7 +135,9 @@ def _set_invocation_params(span: Any, kwargs: dict) -> None:
             params[key] = val
             # max_output_tokens normalizes to the max_tokens individual attr.
             attr = "max_tokens" if key == "max_output_tokens" else key
-            span.set_attribute(f"neatlogs.llm.{attr}", val if not isinstance(val, (list, dict)) else serialize(val))
+            span.set_attribute(
+                f"neatlogs.llm.{attr}", val if not isinstance(val, (list, dict)) else serialize(val)
+            )
     if params:
         span.set_attribute("neatlogs.llm.invocation_parameters", serialize(params))
 
@@ -169,7 +171,9 @@ def _set_chat_input(span: Any, kwargs: dict) -> None:
                 span.set_attribute(f"neatlogs.llm.tools.{i}.description", desc)
             schema = _get(fn, "parameters", None)
             if schema:
-                span.set_attribute(f"neatlogs.llm.tools.{i}.input_schema", serialize(_plain(schema)))
+                span.set_attribute(
+                    f"neatlogs.llm.tools.{i}.input_schema", serialize(_plain(schema))
+                )
 
 
 def _get(obj: Any, key: str, default: Any) -> Any:
@@ -223,12 +227,16 @@ def _patch_chat(chat: Any) -> None:
         return span
 
     if callable(orig_send):
+
         def patched_send(*args, **kwargs):
             if is_suppressed():
                 return orig_send(*args, **kwargs)
             is_stream = bool(kwargs.get("stream", False))
-            span = _start(kwargs, is_stream)
-            start = time.perf_counter()
+            try:
+                span = _start(kwargs, is_stream)
+                start = time.perf_counter()
+            except Exception:
+                return orig_send(*args, **kwargs)
             try:
                 response = orig_send(*args, **kwargs)
             except Exception as e:
@@ -242,12 +250,16 @@ def _patch_chat(chat: Any) -> None:
         chat.send = patched_send
 
     if callable(orig_send_async):
+
         async def patched_send_async(*args, **kwargs):
             if is_suppressed():
                 return await orig_send_async(*args, **kwargs)
             is_stream = bool(kwargs.get("stream", False))
-            span = _start(kwargs, is_stream)
-            start = time.perf_counter()
+            try:
+                span = _start(kwargs, is_stream)
+                start = time.perf_counter()
+            except Exception:
+                return await orig_send_async(*args, **kwargs)
             try:
                 response = await orig_send_async(*args, **kwargs)
             except Exception as e:
@@ -304,7 +316,9 @@ def _finalize_chat(span: Any, response: Any, duration_ms: float) -> None:
     _ok(span, duration_ms)
 
 
-def _finalize_chat_stream(span: Any, chunks: List[Any], duration_ms: float, ttft_ms: Optional[float]) -> None:
+def _finalize_chat_stream(
+    span: Any, chunks: List[Any], duration_ms: float, ttft_ms: Optional[float]
+) -> None:
     text_parts: List[str] = []
     tool_calls_acc: dict = {}
     finish_reason = None
@@ -415,7 +429,9 @@ def _patch_responses(responses: Any) -> None:
                 "neatlogs.llm.input_messages.0.content",
                 inp if isinstance(inp, str) else serialize(_plain(inp)),
             )
-            span.set_attribute("input.value", inp if isinstance(inp, str) else serialize(_plain(inp)))
+            span.set_attribute(
+                "input.value", inp if isinstance(inp, str) else serialize(_plain(inp))
+            )
         instructions = kwargs.get("instructions")
         if isinstance(instructions, str) and instructions:
             span.set_attribute("neatlogs.llm.system_prompt", instructions)
@@ -423,12 +439,16 @@ def _patch_responses(responses: Any) -> None:
         return span
 
     if callable(orig_send):
+
         def patched_send(*args, **kwargs):
             if is_suppressed():
                 return orig_send(*args, **kwargs)
             is_stream = bool(kwargs.get("stream", False))
-            span = _start(kwargs, is_stream)
-            start = time.perf_counter()
+            try:
+                span = _start(kwargs, is_stream)
+                start = time.perf_counter()
+            except Exception:
+                return orig_send(*args, **kwargs)
             try:
                 response = orig_send(*args, **kwargs)
             except Exception as e:
@@ -442,12 +462,16 @@ def _patch_responses(responses: Any) -> None:
         responses.send = patched_send
 
     if callable(orig_send_async):
+
         async def patched_send_async(*args, **kwargs):
             if is_suppressed():
                 return await orig_send_async(*args, **kwargs)
             is_stream = bool(kwargs.get("stream", False))
-            span = _start(kwargs, is_stream)
-            start = time.perf_counter()
+            try:
+                span = _start(kwargs, is_stream)
+                start = time.perf_counter()
+            except Exception:
+                return await orig_send_async(*args, **kwargs)
             try:
                 response = await orig_send_async(*args, **kwargs)
             except Exception as e:
@@ -500,7 +524,9 @@ def _finalize_responses(span: Any, response: Any, duration_ms: float) -> None:
     _ok(span, duration_ms)
 
 
-def _finalize_responses_stream(span: Any, chunks: List[Any], duration_ms: float, ttft_ms: Optional[float]) -> None:
+def _finalize_responses_stream(
+    span: Any, chunks: List[Any], duration_ms: float, ttft_ms: Optional[float]
+) -> None:
     text_parts: List[str] = []
     model = None
     usage = None
@@ -557,17 +583,22 @@ def _patch_embeddings(embeddings: Any) -> None:
     def patched(*args, **kwargs):
         if is_suppressed():
             return orig(*args, **kwargs)
-        inp = kwargs.get("input", "")
-        span = get_provider_tracer().start_span(
-            name="openrouter.embeddings.generate",
-            attributes={
-                "neatlogs.span.kind": "embedding",
-                "neatlogs.llm.provider": _PROVIDER,
-                "neatlogs.embedding.model_name": kwargs.get("model", ""),
-                "neatlogs.embedding.text": (inp if isinstance(inp, str) else serialize(_plain(inp)))[:10000],
-            },
-        )
-        start = time.perf_counter()
+        try:
+            inp = kwargs.get("input", "")
+            span = get_provider_tracer().start_span(
+                name="openrouter.embeddings.generate",
+                attributes={
+                    "neatlogs.span.kind": "embedding",
+                    "neatlogs.llm.provider": _PROVIDER,
+                    "neatlogs.embedding.model_name": kwargs.get("model", ""),
+                    "neatlogs.embedding.text": (
+                        inp if isinstance(inp, str) else serialize(_plain(inp))
+                    )[:10000],
+                },
+            )
+            start = time.perf_counter()
+        except Exception:
+            return orig(*args, **kwargs)
         try:
             response = orig(*args, **kwargs)
         except Exception as e:
@@ -586,7 +617,9 @@ def _patch_embeddings(embeddings: Any) -> None:
 def _finalize_embeddings(span: Any, response: Any, duration_ms: float) -> None:
     # response is a CreateEmbeddingsResponse wrapper; the body may be under
     # common attribute names — probe a few.
-    body = _first_present(response, ("data", "object_", "create_embeddings_response_body", "result"))
+    body = _first_present(
+        response, ("data", "object_", "create_embeddings_response_body", "result")
+    )
     data = _get(response, "data", None)
     if data is None and body is not None and body is not response:
         data = _get(body, "data", None)
@@ -633,22 +666,25 @@ def _patch_rerank(rerank: Any) -> None:
     def patched(*args, **kwargs):
         if is_suppressed():
             return orig(*args, **kwargs)
-        documents = kwargs.get("documents", []) or []
-        span = get_provider_tracer().start_span(
-            name="openrouter.rerank.rerank",
-            attributes={
-                "neatlogs.span.kind": "reranker",
-                "neatlogs.llm.provider": _PROVIDER,
-                "neatlogs.reranker.model_name": kwargs.get("model", ""),
-                "neatlogs.reranker.query": str(kwargs.get("query", "")),
-            },
-        )
-        for i, doc in enumerate(documents):
-            span.set_attribute(
-                f"neatlogs.reranker.input_documents.{i}",
-                doc if isinstance(doc, str) else serialize(_plain(doc)),
+        try:
+            documents = kwargs.get("documents", []) or []
+            span = get_provider_tracer().start_span(
+                name="openrouter.rerank.rerank",
+                attributes={
+                    "neatlogs.span.kind": "reranker",
+                    "neatlogs.llm.provider": _PROVIDER,
+                    "neatlogs.reranker.model_name": kwargs.get("model", ""),
+                    "neatlogs.reranker.query": str(kwargs.get("query", "")),
+                },
             )
-        start = time.perf_counter()
+            for i, doc in enumerate(documents):
+                span.set_attribute(
+                    f"neatlogs.reranker.input_documents.{i}",
+                    doc if isinstance(doc, str) else serialize(_plain(doc)),
+                )
+            start = time.perf_counter()
+        except Exception:
+            return orig(*args, **kwargs)
         try:
             response = orig(*args, **kwargs)
         except Exception as e:

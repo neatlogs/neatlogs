@@ -47,26 +47,64 @@ def wrap_anthropic_client(client: Any) -> Any:
     Wrap an Anthropic client instance. Patches messages (create/stream/parse/
     count_tokens), legacy completions, and beta.messages.
     """
-    _patch_messages(client.messages)
-    _extra_message_methods(client.messages, is_async=False)
-    _patch_legacy_completions(getattr(client, "completions", None), is_async=False)
+    messages = getattr(client, "messages", None)
+    _safe(_patch_messages, messages)
+    if messages is not None:
+        _safe(_extra_message_methods, messages, is_async=False)
+    _safe(_patch_legacy_completions, getattr(client, "completions", None), is_async=False)
     beta = getattr(client, "beta", None)
-    if beta is not None and getattr(beta, "messages", None) is not None:
-        _patch_messages(beta.messages)
-        _extra_message_methods(beta.messages, is_async=False)
+    if beta is not None:
+        beta_messages = getattr(beta, "messages", None)
+        _safe(_patch_messages, beta_messages)
+        if beta_messages is not None:
+            _safe(_extra_message_methods, beta_messages, is_async=False)
     return client
 
 
 def wrap_async_anthropic_client(client: Any) -> Any:
     """Wrap an AsyncAnthropic client instance — full coverage."""
-    _patch_async_messages(client.messages)
-    _extra_message_methods(client.messages, is_async=True)
-    _patch_legacy_completions(getattr(client, "completions", None), is_async=True)
+    messages = getattr(client, "messages", None)
+    _safe(_patch_async_messages, messages)
+    if messages is not None:
+        _safe(_extra_message_methods, messages, is_async=True)
+    _safe(_patch_legacy_completions, getattr(client, "completions", None), is_async=True)
     beta = getattr(client, "beta", None)
-    if beta is not None and getattr(beta, "messages", None) is not None:
-        _patch_async_messages(beta.messages)
-        _extra_message_methods(beta.messages, is_async=True)
+    if beta is not None:
+        beta_messages = getattr(beta, "messages", None)
+        _safe(_patch_async_messages, beta_messages)
+        if beta_messages is not None:
+            _safe(_extra_message_methods, beta_messages, is_async=True)
     return client
+
+
+def _safe(fn, resource, **kw):
+    """Call a patch fn only if the resource exists; never raise."""
+    if resource is None:
+        return
+    try:
+        fn(resource, **kw) if kw else fn(resource)
+    except Exception:
+        pass
+
+
+def _record_error(span: Any, error: Exception) -> None:
+    try:
+        span.set_status(StatusCode.ERROR, str(error))
+        span.record_exception(error)
+        span.end()
+    except Exception:
+        pass
+
+
+def _finish_ok(span: Any, finalize) -> None:
+    try:
+        finalize()
+    except Exception:
+        try:
+            span.set_status(StatusCode.OK)
+            span.end()
+        except Exception:
+            pass
 
 
 def _patch_messages(messages: Any) -> None:
@@ -80,52 +118,11 @@ def _patch_messages(messages: Any) -> None:
         if is_suppressed():
             return orig_create(*args, **kwargs)
 
-        model = kwargs.get("model", "")
-        input_messages = kwargs.get("messages", [])
-        system = kwargs.get("system")
-        is_stream = kwargs.get("stream", False)
-
-        tracer = get_provider_tracer()
-        span = tracer.start_span(
-            name="anthropic.messages.create",
-            attributes={
-                "neatlogs.span.kind": "llm",
-                "neatlogs.llm.provider": "anthropic",
-                "neatlogs.llm.system": "anthropic",
-                "neatlogs.llm.model_name": model,
-                "neatlogs.llm.is_streaming": is_stream,
-            },
-        )
-
-        _set_input_attributes(span, input_messages, system, kwargs)
-
-        start = time.perf_counter()
-
         try:
-            response = orig_create(*args, **kwargs)
-        except Exception as e:
-            span.set_status(StatusCode.ERROR, str(e))
-            span.record_exception(e)
-            span.end()
-            raise
-
-        if is_stream:
-            return SyncStreamWrapper(response, span, _finalize_stream)
-
-        duration_ms = (time.perf_counter() - start) * 1000
-        _finalize_response(span, response, duration_ms)
-        return response
-
-    messages.create = patched_create
-
-    if orig_stream:
-        def patched_stream(*args, **kwargs):
-            if is_suppressed():
-                return orig_stream(*args, **kwargs)
-
             model = kwargs.get("model", "")
             input_messages = kwargs.get("messages", [])
             system = kwargs.get("system")
+            is_stream = kwargs.get("stream", False)
 
             tracer = get_provider_tracer()
             span = tracer.start_span(
@@ -135,14 +132,59 @@ def _patch_messages(messages: Any) -> None:
                     "neatlogs.llm.provider": "anthropic",
                     "neatlogs.llm.system": "anthropic",
                     "neatlogs.llm.model_name": model,
-                    "neatlogs.llm.is_streaming": True,
+                    "neatlogs.llm.is_streaming": is_stream,
                 },
             )
 
             _set_input_attributes(span, input_messages, system, kwargs)
 
-            stream_mgr = orig_stream(*args, **kwargs)
-            return _SyncStreamManagerWrapper(stream_mgr, span)
+            start = time.perf_counter()
+        except Exception:
+            return orig_create(*args, **kwargs)
+
+        try:
+            response = orig_create(*args, **kwargs)
+        except Exception as e:
+            _record_error(span, e)
+            raise
+
+        if is_stream:
+            return SyncStreamWrapper(response, span, _finalize_stream)
+
+        duration_ms = (time.perf_counter() - start) * 1000
+        _finish_ok(span, lambda: _finalize_response(span, response, duration_ms))
+        return response
+
+    messages.create = patched_create
+
+    if orig_stream:
+        def patched_stream(*args, **kwargs):
+            if is_suppressed():
+                return orig_stream(*args, **kwargs)
+
+            try:
+                model = kwargs.get("model", "")
+                input_messages = kwargs.get("messages", [])
+                system = kwargs.get("system")
+
+                tracer = get_provider_tracer()
+                span = tracer.start_span(
+                    name="anthropic.messages.create",
+                    attributes={
+                        "neatlogs.span.kind": "llm",
+                        "neatlogs.llm.provider": "anthropic",
+                        "neatlogs.llm.system": "anthropic",
+                        "neatlogs.llm.model_name": model,
+                        "neatlogs.llm.is_streaming": True,
+                    },
+                )
+
+                _set_input_attributes(span, input_messages, system, kwargs)
+
+                stream_mgr = orig_stream(*args, **kwargs)
+                return _SyncStreamManagerWrapper(stream_mgr, span)
+            except Exception:
+                return orig_stream(*args, **kwargs)
 
         messages.stream = patched_stream
 
@@ -160,52 +202,11 @@ def _patch_async_messages(messages: Any) -> None:
         if is_suppressed():
             return await orig_create(*args, **kwargs)
 
-        model = kwargs.get("model", "")
-        input_messages = kwargs.get("messages", [])
-        system = kwargs.get("system")
-        is_stream = kwargs.get("stream", False)
-
-        tracer = get_provider_tracer()
-        span = tracer.start_span(
-            name="anthropic.messages.create",
-            attributes={
-                "neatlogs.span.kind": "llm",
-                "neatlogs.llm.provider": "anthropic",
-                "neatlogs.llm.system": "anthropic",
-                "neatlogs.llm.model_name": model,
-                "neatlogs.llm.is_streaming": is_stream,
-            },
-        )
-
-        _set_input_attributes(span, input_messages, system, kwargs)
-
-        start = time.perf_counter()
-
         try:
-            response = await orig_create(*args, **kwargs)
-        except Exception as e:
-            span.set_status(StatusCode.ERROR, str(e))
-            span.record_exception(e)
-            span.end()
-            raise
-
-        if is_stream:
-            return AsyncStreamWrapper(response, span, _finalize_stream)
-
-        duration_ms = (time.perf_counter() - start) * 1000
-        _finalize_response(span, response, duration_ms)
-        return response
-
-    messages.create = patched_create
-
-    if orig_stream:
-        def patched_stream(*args, **kwargs):
-            if is_suppressed():
-                return orig_stream(*args, **kwargs)
-
             model = kwargs.get("model", "")
             input_messages = kwargs.get("messages", [])
             system = kwargs.get("system")
+            is_stream = kwargs.get("stream", False)
 
             tracer = get_provider_tracer()
             span = tracer.start_span(
@@ -215,14 +216,59 @@ def _patch_async_messages(messages: Any) -> None:
                     "neatlogs.llm.provider": "anthropic",
                     "neatlogs.llm.system": "anthropic",
                     "neatlogs.llm.model_name": model,
-                    "neatlogs.llm.is_streaming": True,
+                    "neatlogs.llm.is_streaming": is_stream,
                 },
             )
 
             _set_input_attributes(span, input_messages, system, kwargs)
 
-            stream_mgr = orig_stream(*args, **kwargs)
-            return _AsyncStreamManagerWrapper(stream_mgr, span)
+            start = time.perf_counter()
+        except Exception:
+            return await orig_create(*args, **kwargs)
+
+        try:
+            response = await orig_create(*args, **kwargs)
+        except Exception as e:
+            _record_error(span, e)
+            raise
+
+        if is_stream:
+            return AsyncStreamWrapper(response, span, _finalize_stream)
+
+        duration_ms = (time.perf_counter() - start) * 1000
+        _finish_ok(span, lambda: _finalize_response(span, response, duration_ms))
+        return response
+
+    messages.create = patched_create
+
+    if orig_stream:
+        def patched_stream(*args, **kwargs):
+            if is_suppressed():
+                return orig_stream(*args, **kwargs)
+
+            try:
+                model = kwargs.get("model", "")
+                input_messages = kwargs.get("messages", [])
+                system = kwargs.get("system")
+
+                tracer = get_provider_tracer()
+                span = tracer.start_span(
+                    name="anthropic.messages.create",
+                    attributes={
+                        "neatlogs.span.kind": "llm",
+                        "neatlogs.llm.provider": "anthropic",
+                        "neatlogs.llm.system": "anthropic",
+                        "neatlogs.llm.model_name": model,
+                        "neatlogs.llm.is_streaming": True,
+                    },
+                )
+
+                _set_input_attributes(span, input_messages, system, kwargs)
+
+                stream_mgr = orig_stream(*args, **kwargs)
+                return _AsyncStreamManagerWrapper(stream_mgr, span)
+            except Exception:
+                return orig_stream(*args, **kwargs)
 
         messages.stream = patched_stream
 

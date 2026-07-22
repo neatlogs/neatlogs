@@ -18,23 +18,26 @@ and provide credentials (env, or ~/.hermes/.env)::
 Traces are grouped under the workflow name "hermes". If the API key is missing the
 hooks no-op silently (fail-open).
 
-Span tree produced — ONE session = ONE trace, with a single WORKFLOW root::
+Span tree produced — ONE turn = ONE trace, all turns grouped into a session::
 
-    WORKFLOW  hermes.session             (the root; one per Hermes session)
-      AGENT   hermes.turn                 (one per user message / run_conversation)
-        LLM   hermes.api_request          (one per provider attempt; usage + I/O)
-        TOOL  hermes.tool.<name>          (one per tool dispatch)
-        AGENT hermes.subagent.<role>      (a delegated child, under the spawning TURN)
-          AGENT hermes.turn               (the child agent's own turns)
-            LLM / TOOL
+    WORKFLOW  hermes.turn                 (the root; one TRACE per user message / run_conversation)
+      LLM   hermes.api_request            (one per provider attempt; usage + I/O)
+      TOOL  hermes.tool.<name>            (one per tool dispatch)
+      AGENT hermes.subagent.<role>        (a delegated child, under the spawning TURN)
+        AGENT hermes.turn                 (the child agent's own turns, nested in this trace)
+          LLM / TOOL
 
-Deterministic IDs (like @neatlogs/claude-code): the session's trace_id and root
-span_id are derived from the session_id via SHA-256, so EVERY process — the agent
-loop AND kanban worker subprocesses, which run in separate Python interpreters —
-recomputes the same IDs and parents its spans under the one session trace without
-shared memory. The root span is emitted (and ended) the moment the session starts
-so the trace renders immediately; each child span exports as it completes, so the
-trace grows live.
+Every turn's WORKFLOW root carries ``neatlogs.session.id`` so the backend groups a
+session's turn-traces into one multi-turn session in the UI. Kanban tasks (async,
+often in a worker subprocess) each become their own trace in the session too.
+
+Deterministic IDs (like @neatlogs/claude-code): each turn's trace_id and root
+span_id are derived from the turn key (Hermes' session-prefixed, per-turn turn_id)
+via SHA-256, so children emitted live can parent under the not-yet-emitted root and
+any process recomputes the same IDs without shared memory. The WORKFLOW root is
+emitted ONCE at turn close carrying input+output; children export as they complete
+(nesting under the deterministic root context) and the trace finalizes on the
+per-turn completion marker.
 
 Why this plugin and not the openai instrumentor: in plugin mode the user never
 calls ``neatlogs.init()``, so the auto-instrumentors are not active — these hooks
@@ -90,35 +93,44 @@ logger = get_logger()
 
 _PROVIDER = "hermes"
 _MAX_TURN_STATE = 256       # bound the leak from turns that never finalize cleanly
-_MAX_SESSION_STATE = 256    # bound session roots that never finalize
 
 
 # ---------------------------------------------------------------------------
 # Span state
 #
 # Hierarchy is threaded by EXPLICIT parent context (hook callbacks are separate
-# invocations and can't share the ambient active span):
-#   session root  ── parent of ──▶  turn  ── parent of ──▶  llm / tool / subagent
-#   subagent      ── parent of ──▶  child-session turns
+# invocations and can't share the ambient active span). Each TURN is its own
+# trace, rooted at a WORKFLOW ``hermes.turn`` span:
+#   turn (WORKFLOW root)  ── parent of ──▶  llm / tool / subagent
+#   subagent              ── parent of ──▶  the child agent's own turns
+# All of a session's turn-traces are grouped by ``neatlogs.session.id``.
 # ---------------------------------------------------------------------------
 @dataclass
 class _TurnState:
-    """An AGENT turn span plus the LLM/TOOL children currently open under it."""
+    """A WORKFLOW turn span (the root of its own trace) plus the LLM/TOOL
+    children currently open under it."""
 
     span: Any
+    turn_key: str                     # deterministic-id key for this turn's trace
     session_id: Optional[str] = None  # owning session — lets cleanup find turns
+    model: Any = None                 # remembered for the root at close
+    input_value: Any = None           # user message, stamped on the root at close
     llm_spans: Dict[str, Any] = field(default_factory=dict)   # keyed by api_request_id
     tool_spans: Dict[str, Any] = field(default_factory=dict)  # keyed by tool span key
     last_updated_at: float = field(default_factory=time.time)
 
 
 _STATE_LOCK = threading.Lock()
-# session_ids whose deterministic WORKFLOW root span has already been emitted in
-# THIS process (so we emit it once per process; other processes emit their own
-# copy — same deterministic id, so the backend dedups/merges on span id).
+# turn_keys whose deterministic WORKFLOW root span has already been emitted in
+# THIS process (so we emit it once per turn; other processes emit their own copy
+# — same deterministic id, so the backend dedups/merges on span id).
 _ROOTS_EMITTED: set = set()
 # turn_key -> _TurnState.
 _TURN_STATE: Dict[str, _TurnState] = {}
+# Open TOOL spans keyed by tool-span key (tool_call_id, else tool_name) → (span,
+# owning _TurnState). Process-global so on_post_tool_call closes the exact span it
+# opened even if the pre/post turn-key resolution diverges (re-entrant dispatch).
+_OPEN_TOOL_SPANS: Dict[str, Any] = {}
 # Delegated-child AGENT spans. A subagent parents under the spawning TURN; the
 # child's own turns (which fire with the CHILD's session_id) parent under the
 # subagent span via _SUBAGENT_BY_SESSION.
@@ -128,6 +140,16 @@ _SUBAGENT_BY_SESSION: Dict[str, Any] = {}   # child_session_id -> subagent AGENT
 # pre_approval_request and post_approval_response.
 _APPROVAL_SPANS: Dict[str, Any] = {}
 _CONFIGURED = False
+
+# Compression-root resolution. When a conversation gets long Hermes compresses it
+# and ROTATES agent.session_id to a fresh id, linking the old one via
+# parent_session_id (end_reason="compression"). Those post-compression turns are
+# still ONE conversation, so we resolve every raw session_id back to its
+# compression root before stamping ``neatlogs.session.id`` — otherwise the session
+# splits in the UI. Only the grouping id is resolved; the raw id still keys
+# turn/subagent state so the other hooks keep matching. Read-only DB, cached.
+_SESSION_ROOT_CACHE: Dict[str, str] = {}
+_SESSION_ROOT_LOCK = threading.Lock()
 
 # Approval choices that mean the command was allowed through the gate; anything
 # else (deny / timeout) means the guardrail blocked it.
@@ -183,19 +205,6 @@ def _turn_key(turn_id: Any, api_request_id: Any, session_id: Any, task_id: Any) 
     return None
 
 
-def _session_of(session_id: Any = None, turn_id: Any = None) -> Optional[str]:
-    """Resolve the owning session id for a span. Hermes' turn_id is compound —
-    ``"<session_id>:<uuid>:<frag>"`` — so when an explicit session_id is absent
-    (e.g. some approval payloads carry only turn_id), the session is the prefix
-    before the first ':'. This is what lets approval/late spans attach to the
-    SAME deterministic session root instead of starting an orphan trace."""
-    if session_id:
-        return str(session_id)
-    if turn_id:
-        return str(turn_id).split(":", 1)[0]
-    return None
-
-
 def _safe_end(span: Any) -> None:
     try:
         if span is not None:
@@ -218,121 +227,181 @@ def _set_text(span: Any, attr: str, value: Any) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Deterministic session IDs — derived from session_id via SHA-256 so EVERY
-# process (agent loop + kanban worker subprocesses) recomputes the same trace
-# and root span id, joining one trace without shared memory.
+# Deterministic per-trace IDs — derived from a TRACE KEY (a turn key, or a
+# kanban task key) via SHA-256 so the live root span, the completion marker, and
+# any cross-path span (a late approval) all resolve to the SAME trace_id + root
+# span_id without shared memory. A cross-process worker recomputes them too.
 # ---------------------------------------------------------------------------
-def _det_trace_id(session_id: str) -> int:
-    return int.from_bytes(hashlib.sha256(session_id.encode()).digest()[:16], "big")
+def _det_trace_id(key: str) -> int:
+    return int.from_bytes(hashlib.sha256(key.encode()).digest()[:16], "big")
 
 
-def _det_span_id(session_id: str) -> int:
-    return int.from_bytes(hashlib.sha256((session_id + ":root").encode()).digest()[:8], "big")
+def _det_root_span_id(key: str) -> int:
+    return int.from_bytes(hashlib.sha256((key + ":root").encode()).digest()[:8], "big")
 
 
-def _root_span_context(session_id: str) -> SpanContext:
-    """The deterministic, non-recording SpanContext for a session's WORKFLOW root.
-    Children parent under this; any process can rebuild it from session_id."""
-    return SpanContext(
-        trace_id=_det_trace_id(session_id),
-        span_id=_det_span_id(session_id),
+def _root_ctx(key: str):
+    """A non-recording OTel Context whose current span is the deterministic root
+    for ``key``'s trace — pass as ``context=`` to parent a span (completion
+    marker, fallback approval/subagent parent) onto that trace without holding
+    the live root span."""
+    ctx = SpanContext(
+        trace_id=_det_trace_id(key),
+        span_id=_det_root_span_id(key),
         is_remote=True,
         trace_flags=TraceFlags(TraceFlags.SAMPLED),
     )
+    return set_span_in_context(NonRecordingSpan(ctx))
 
 
-def _session_parent_ctx(session_id: str):
-    """An OTel Context whose current span is the deterministic root — pass as
-    ``context=`` to start_span to nest a span directly under the session root."""
-    return set_span_in_context(NonRecordingSpan(_root_span_context(session_id)))
+def _open_session_db():
+    """Open Hermes' state.db READ-ONLY (no write lock → never contends with a
+    live Hermes writer). Returns None if Hermes isn't importable or the DB is
+    absent — callers then fall back to the raw session id."""
+    try:
+        from hermes_state import SessionDB, DEFAULT_DB_PATH
+        if not DEFAULT_DB_PATH.exists():
+            return None
+        return SessionDB(read_only=True)
+    except Exception as exc:
+        logger.debug("hermes plugin: session DB unavailable for root resolution: %s", exc)
+        return None
 
 
-def _emit_session_root(session_id: str, *, model: Any = None,
-                       user_message: Any = None) -> None:
-    """Emit the WORKFLOW root span ONCE per process, with the deterministic
-    trace/span id so it lines up with children emitted here and in other
-    processes. Ended immediately (zero-duration) for live tailing."""
+def _resolve_session_root(session_id: Any) -> Optional[str]:
+    """Resolve a raw per-turn session_id to its COMPRESSION ROOT so all turns of
+    one conversation share a ``neatlogs.session.id``.
+
+    Walks ``parent_session_id`` backward following ONLY compression edges — the
+    same rule Hermes uses internally (web_server.compression_root): a parent
+    counts only when ``parent.end_reason == "compression"`` AND the child started
+    at/after the parent ended. Branch/delegate edges are genuine forks and stop
+    the walk. Fully defensive: any failure returns the raw id unchanged, so
+    grouping degrades to today's behaviour rather than breaking."""
+    if not session_id:
+        return None
     sid = str(session_id)
-    with _STATE_LOCK:
-        if sid in _ROOTS_EMITTED:
-            return
-        _ROOTS_EMITTED.add(sid)
-        if len(_ROOTS_EMITTED) > _MAX_SESSION_STATE:
-            for old in list(_ROOTS_EMITTED)[: len(_ROOTS_EMITTED) - _MAX_SESSION_STATE]:
-                _ROOTS_EMITTED.discard(old)
+    with _SESSION_ROOT_LOCK:
+        cached = _SESSION_ROOT_CACHE.get(sid)
+    if cached is not None:
+        return cached
 
+    root = sid
+    db = _open_session_db()
+    if db is not None:
+        try:
+            chain = []
+            cur = sid
+            visited: set = set()
+            # The visited-set guard makes this walk cycle-proof: every node is
+            # recorded before we follow its parent, so a repeat exits the loop.
+            while cur and cur not in visited:
+                visited.add(cur)
+                chain.append(cur)
+                s = db.get_session(cur)
+                if not s:
+                    root = cur
+                    break
+                parent = s.get("parent_session_id")
+                if not parent:
+                    root = cur
+                    break
+                parent_session = db.get_session(parent)
+                if not parent_session:
+                    root = cur
+                    break
+                parent_ended_at = parent_session.get("ended_at")
+                started_at = s.get("started_at")
+                is_compression_edge = (
+                    parent_session.get("end_reason") == "compression"
+                    and parent_ended_at is not None
+                    and started_at is not None
+                    and started_at >= parent_ended_at
+                )
+                if not is_compression_edge:
+                    root = cur
+                    break
+                cur = parent
+            with _SESSION_ROOT_LOCK:
+                for node in chain:
+                    _SESSION_ROOT_CACHE[node] = root
+        except Exception as exc:
+            logger.debug("hermes plugin: session root walk failed for %s: %s", sid, exc)
+            root = sid
+        finally:
+            try:
+                db.close()
+            except Exception:
+                pass
+
+    with _SESSION_ROOT_LOCK:
+        _SESSION_ROOT_CACHE[sid] = root
+    return root
+
+
+def _start_root_span(key: str, name: str, kind: str, *, session_id: Any = None,
+                     model: Any = None):
+    """Start a span forced to ``key``'s deterministic trace_id + root span_id, so
+    it IS the root of that trace. Used for the WORKFLOW turn root and standalone
+    kanban task traces. Caller ends it (turn roots stay open across the turn;
+    kanban roots end immediately)."""
     tracer = get_tracer()
-    # Force the deterministic trace_id + span_id for just this start by swapping
-    # the tracer's id generator (subclass of the real one so the SDK interface is
-    # intact), then restoring it. Verified safe + reset in the POC.
-    fixed = _FixedIdGen(_det_trace_id(sid), _det_span_id(sid))
-    orig = getattr(tracer, "id_generator", None)
+    # get_tracer() hands back a _ForeignParentGuardTracer whose start_span
+    # DELEGATES to the wrapped SDK tracer — and the SDK reads id_generator off
+    # that inner tracer, not the wrapper (which is slotted and rejects the set).
+    # So unwrap to the real SDK tracer and swap its id generator; the guard still
+    # applies its parenting behaviour because we call start_span through it.
+    sdk_tracer = getattr(tracer, "_tracer", tracer)
+    # Force the deterministic ids for just this start by swapping the tracer's id
+    # generator (subclass of the real one so the SDK interface stays intact),
+    # then restoring it.
+    fixed = _FixedIdGen(_det_trace_id(key), _det_root_span_id(key))
+    orig = getattr(sdk_tracer, "id_generator", None)
     try:
         if orig is not None:
-            tracer.id_generator = fixed
-        root = tracer.start_span(
-            name="hermes.session",
+            sdk_tracer.id_generator = fixed
+        span = tracer.start_span(
+            name=name,
             attributes={
-                "neatlogs.span.kind": "workflow",
+                "neatlogs.span.kind": kind,
                 "neatlogs.agent.framework": _PROVIDER,
                 "neatlogs.llm.provider": _PROVIDER,
-                "neatlogs.conversation.id": sid,
-                "neatlogs.session.id": sid,
             },
         )
     finally:
         if orig is not None:
-            tracer.id_generator = orig
-    if model:
-        root.set_attribute("neatlogs.agent.model", str(model))
-    _set_text(root, "neatlogs.input.value", user_message)
-    root.set_status(StatusCode.OK)
-    _safe_end(root)
-
-
-def _ensure_session_root(session_id: Any, *, model: Any = None,
-                         user_message: Any = None):
-    """Ensure the session's WORKFLOW root is emitted, and return a parenting
-    Context for it. Returns None when tracing is disabled / no session id."""
-    if not _ensure_configured() or not session_id:
-        return None
-    sid = str(session_id)
-    _emit_session_root(sid, model=model, user_message=user_message)
-    return _session_parent_ctx(sid)
-
-
-def _parent_for_session(session_id: Any, *, model: Any = None,
-                        user_message: Any = None):
-    """The parenting Context a turn nests under: the subagent span if this session
-    is a delegated child, otherwise the deterministic session root context."""
+            sdk_tracer.id_generator = orig
     if session_id:
-        sub = _SUBAGENT_BY_SESSION.get(str(session_id))
-        if sub is not None:
-            return _child_context(sub)
-    return _ensure_session_root(session_id, model=model, user_message=user_message)
+        # neatlogs.session.id drives grouping in the backend, so it carries the
+        # compression ROOT (all turns of one conversation → one session).
+        span.set_attribute(
+            "neatlogs.session.id", _resolve_session_root(session_id) or str(session_id)
+        )
+        span.set_attribute("neatlogs.conversation.id", str(session_id))
+    if model:
+        span.set_attribute("neatlogs.agent.model", str(model))
+    return span
 
 
-def _emit_completion_marker(session_id: Any) -> None:
-    """Emit a ``neatlogs.trace.complete`` marker span on the session's trace.
+def _emit_completion_marker(key: Any) -> None:
+    """Emit a ``neatlogs.trace.complete`` marker span on ``key``'s trace.
 
     REQUIRED for the trace to render: the backend's trace-finalizer only
     processes (finalizes) a trace when it sees this marker span name on the
     trace_id (kafka-consumer matches purely on span_name; the span is filtered
     out, never persisted). Without it, spans ingest (HTTP 200) but never appear
-    in the UI. We emit it after every turn (incremental finalize → live tailing)
-    and at session finalize, mirroring @neatlogs/claude-code."""
-    if not _ensure_configured() or not session_id:
+    in the UI. Emitted once per turn (its own trace) and per kanban task trace."""
+    if not _ensure_configured() or not key:
         return
-    sid = str(session_id)
-    # Only finalize a trace we actually started. Without this, finalize/reset on a
-    # session that never emitted a root (no turns) would mark a nonexistent trace.
+    k = str(key)
+    # Only finalize a trace we actually started here.
     with _STATE_LOCK:
-        if sid not in _ROOTS_EMITTED:
+        if k not in _ROOTS_EMITTED:
             return
     try:
         marker = get_tracer().start_span(
             name="neatlogs.trace.complete",
-            context=_session_parent_ctx(sid),
+            context=_root_ctx(k),
         )
         _safe_end(marker)
     except Exception as exc:
@@ -340,12 +409,15 @@ def _emit_completion_marker(session_id: Any) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Turn  (AGENT) — one per run_conversation / user message
+# Turn  (WORKFLOW root) — one per run_conversation / user message = one TRACE
 # ---------------------------------------------------------------------------
 def _ensure_turn(key: str, *, session_id: Any = None, model: Any = None,
                  user_message: Any = None) -> Optional[_TurnState]:
-    """Get-or-create the AGENT turn span, parented under the session root (or the
-    subagent span for delegated child turns)."""
+    """Get-or-create the WORKFLOW turn span that ROOTS this turn's trace. Its
+    trace_id + span_id are the deterministic ids for ``key`` (so children and the
+    completion marker line up), and it carries ``neatlogs.session.id`` so the
+    backend groups the session's per-turn traces. A delegated child turn instead
+    nests under the spawning subagent span (same trace as the parent turn)."""
     if not _ensure_configured():
         return None
     with _STATE_LOCK:
@@ -353,9 +425,8 @@ def _ensure_turn(key: str, *, session_id: Any = None, model: Any = None,
         if state is not None:
             state.last_updated_at = time.time()
             return state
-
-    # Resolve the parenting context OUTSIDE the turn lock (it takes its own locks).
-    parent_ctx = _parent_for_session(session_id, model=model, user_message=user_message)
+        # A delegated child turn belongs to the parent turn's trace, not its own.
+        sub = _SUBAGENT_BY_SESSION.get(str(session_id)) if session_id else None
 
     with _STATE_LOCK:
         state = _TURN_STATE.get(key)
@@ -363,28 +434,53 @@ def _ensure_turn(key: str, *, session_id: Any = None, model: Any = None,
             state.last_updated_at = time.time()
             return state
 
-        start_kwargs = {"context": parent_ctx} if parent_ctx is not None else {}
-        span = get_tracer().start_span(
-            name="hermes.turn",
-            attributes={
-                "neatlogs.span.kind": "agent",
-                "neatlogs.agent.framework": _PROVIDER,
-                "neatlogs.llm.provider": _PROVIDER,
-            },
-            **start_kwargs,
-        )
-        if session_id:
-            span.set_attribute("neatlogs.conversation.id", str(session_id))
-        if model:
-            span.set_attribute("neatlogs.agent.model", str(model))
-        _set_text(span, "neatlogs.input.value", user_message)
+        if sub is not None:
+            # Child turn: an AGENT span nested under the subagent (no new trace).
+            span = get_tracer().start_span(
+                name="hermes.turn",
+                context=_child_context(sub),
+                attributes={
+                    "neatlogs.span.kind": "agent",
+                    "neatlogs.agent.framework": _PROVIDER,
+                    "neatlogs.llm.provider": _PROVIDER,
+                },
+            )
+            if session_id:
+                span.set_attribute("neatlogs.conversation.id", str(session_id))
+            if model:
+                span.set_attribute("neatlogs.agent.model", str(model))
+            _set_text(span, "neatlogs.input.value", user_message)
+        else:
+            # Top-level turn: the WORKFLOW root of its own per-turn trace. Left
+            # OPEN across the turn; input/output stamped and ended at turn close.
+            span = _start_root_span(key, "hermes.turn", "workflow",
+                                    session_id=session_id, model=model)
+            # A kanban worker (`hermes chat -q "work kanban task <id>"`) is a
+            # subprocess dedicated to ONE task, pinned via env. Tag its turn roots
+            # with the task identity so they're attributable to the task — the
+            # terminal kanban_complete/kanban_block already lands as a TOOL child.
+            _stamp_kanban_task_context(span)
+            _ROOTS_EMITTED.add(key)
 
-        state = _TurnState(span=span, session_id=str(session_id) if session_id else None)
+        state = _TurnState(
+            span=span,
+            turn_key=key,
+            session_id=str(session_id) if session_id else None,
+            model=model,
+            input_value=user_message,
+        )
         _TURN_STATE[key] = state
         if len(_TURN_STATE) > _MAX_TURN_STATE:
             stale = sorted(_TURN_STATE.items(), key=lambda kv: kv[1].last_updated_at)
             for k, st in stale[: len(_TURN_STATE) - _MAX_TURN_STATE]:
+                # Purge any open tool spans from the global registry (still under
+                # _STATE_LOCK, so inline rather than via _drain_tool_spans).
+                for tk, sp in list(st.tool_spans.items()):
+                    _OPEN_TOOL_SPANS.pop(tk, None)
+                    _safe_end(sp)
+                st.tool_spans.clear()
                 _safe_end(st.span)
+                _ROOTS_EMITTED.discard(k)
                 _TURN_STATE.pop(k, None)
         return state
 
@@ -393,29 +489,37 @@ def _ensure_turn(key: str, *, session_id: Any = None, model: Any = None,
 # Hook callbacks — all keyword-only, **kwargs for forward-compat, fail-open.
 # ---------------------------------------------------------------------------
 def on_session_start(**kwargs: Any) -> None:
-    """A new session began. We do NOT emit the root here: a session that never
-    produces a turn/tool/subagent (user opens hermes, types nothing, quits) would
-    otherwise leave a childless WORKFLOW root — a lone-root orphan trace. The root
-    is created lazily on the first real child (see _parent_for_session), so an
-    empty session produces no trace at all. Kept registered for forward-compat."""
+    """A new session began. Nothing to emit: there is no session-level root
+    anymore — each turn is its own trace, opened lazily on its first hook. A
+    session with no turns produces no trace at all. Kept registered for
+    forward-compat."""
     return None
 
 
 def on_pre_llm_call(**kwargs: Any) -> None:
-    """Turn begins — open the AGENT turn span and stamp the user input."""
+    """Turn begins — open the WORKFLOW turn trace and remember the user input."""
     try:
         key = _turn_key(kwargs.get("turn_id"), kwargs.get("api_request_id"),
                         kwargs.get("session_id"), kwargs.get("task_id"))
         if not key:
             return
-        _ensure_turn(key, session_id=kwargs.get("session_id"),
-                     model=kwargs.get("model"), user_message=kwargs.get("user_message"))
+        state = _ensure_turn(key, session_id=kwargs.get("session_id"),
+                             model=kwargs.get("model"), user_message=kwargs.get("user_message"))
+        # If the API layer opened the turn first (no user_message then), backfill
+        # the input/model now so the root carries them at close.
+        if state is not None:
+            with _STATE_LOCK:
+                if kwargs.get("user_message") is not None:
+                    state.input_value = kwargs.get("user_message")
+                if kwargs.get("model") is not None and state.model is None:
+                    state.model = kwargs.get("model")
     except Exception as exc:
         logger.debug("hermes plugin on_pre_llm_call failed: %s", exc)
 
 
 def on_post_llm_call(**kwargs: Any) -> None:
-    """Turn ends — stamp the assistant output and close the AGENT turn span."""
+    """Turn ends — stamp input+output on the WORKFLOW root, close it, and finalize
+    this turn's trace with a completion marker."""
     try:
         key = _turn_key(kwargs.get("turn_id"), kwargs.get("api_request_id"),
                         kwargs.get("session_id"), kwargs.get("task_id"))
@@ -426,19 +530,34 @@ def on_post_llm_call(**kwargs: Any) -> None:
         if state is None:
             return
         # Close any LLM/TOOL children left open by an interrupted path.
-        for child in list(state.llm_spans.values()) + list(state.tool_spans.values()):
+        for child in list(state.llm_spans.values()):
             _safe_end(child)
+        _drain_tool_spans(state)
+        _set_text(state.span, "neatlogs.input.value", state.input_value)
         out = kwargs.get("assistant_response")
         if out is None:
             out = kwargs.get("assistant_message")
         _set_text(state.span, "neatlogs.output.value", out)
         state.span.set_status(StatusCode.OK)
         _safe_end(state.span)
-        # Marker AFTER the turn span ends → the finalizer renders the trace
-        # incrementally (live tailing) with this turn's spans complete.
-        _emit_completion_marker(kwargs.get("session_id"))
+        # Marker on the TURN'S trace key AFTER the root ends → the finalizer
+        # renders this turn's trace complete. A child turn (no own root) doesn't
+        # emit a marker — its spans belong to the parent turn's trace.
+        _finalize_turn_trace(state)
     except Exception as exc:
         logger.debug("hermes plugin on_post_llm_call failed: %s", exc)
+
+
+def _finalize_turn_trace(state: _TurnState) -> None:
+    """Emit the completion marker for a top-level turn's own trace, and drop its
+    once-per-trace root flag. Child turns (which nest in the parent turn's trace)
+    have no own root flag, so this no-ops for them."""
+    with _STATE_LOCK:
+        is_root = state.turn_key in _ROOTS_EMITTED
+    if is_root:
+        _emit_completion_marker(state.turn_key)
+        with _STATE_LOCK:
+            _ROOTS_EMITTED.discard(state.turn_key)
 
 
 def on_pre_api_request(**kwargs: Any) -> None:
@@ -540,15 +659,17 @@ def _finalize_error_turn(key: str, error: Any, status_code: Any) -> None:
         state = _TURN_STATE.pop(key, None)
     if state is None:
         return
-    for child in list(state.llm_spans.values()) + list(state.tool_spans.values()):
+    for child in list(state.llm_spans.values()):
         _safe_end(child)
+    _drain_tool_spans(state)
+    _set_text(state.span, "neatlogs.input.value", state.input_value)
     msg = error.get("message") if isinstance(error, dict) else (str(error) if error else None)
     state.span.set_status(StatusCode.ERROR, str(msg or "api_request_error"))
     if status_code is not None:
         state.span.set_attribute("http.status_code", status_code)
     _safe_end(state.span)
-    # Marker so the aborted-turn error trace finalizes and renders.
-    _emit_completion_marker(state.session_id)
+    # Marker so the aborted-turn's trace finalizes and renders.
+    _finalize_turn_trace(state)
 
 
 def _request_messages(request: Any) -> Any:
@@ -612,14 +733,42 @@ def _set_usage(span: Any, usage: Any) -> None:
         span.set_attribute("neatlogs.llm.token_count.reasoning", reasoning)
 
 
-def on_pre_tool_call(**kwargs: Any) -> None:
-    """Tool dispatch begins — open a TOOL child under the turn span."""
-    try:
+def _resolve_open_turn(kwargs: Dict[str, Any]) -> Optional[_TurnState]:
+    """Find the OPEN turn a tool call belongs to — WITHOUT ever minting a root.
+
+    A tool is always requested by the LLM mid-turn, so an open turn already
+    exists. But a re-entrant dispatch (e.g. a tool run from inside execute_code)
+    can reach pre_tool_call with a turn_id no LLM hook used, so its _turn_key
+    misses _TURN_STATE. Calling _ensure_turn there would mint a fresh WORKFLOW
+    root that never gets a post_llm_call → never ends/exports → stuck trace with
+    an orphan tool child. So we only ATTACH to a live turn: try the key, then the
+    session's most-recent open turn, then (single live turn) that one. Returns
+    None if truly no turn is open — the caller then skips rather than orphaning."""
+    with _STATE_LOCK:
         key = _turn_key(kwargs.get("turn_id"), kwargs.get("api_request_id"),
                         kwargs.get("session_id"), kwargs.get("task_id"))
-        if not key:
+        state = _TURN_STATE.get(key) if key else None
+        if state is not None:
+            return state
+        sid = kwargs.get("session_id")
+        if sid:
+            sid = str(sid)
+            candidates = [s for s in _TURN_STATE.values() if s.session_id == sid]
+            if candidates:
+                return max(candidates, key=lambda s: s.last_updated_at)
+        if len(_TURN_STATE) == 1:
+            return next(iter(_TURN_STATE.values()))
+    return None
+
+
+def on_pre_tool_call(**kwargs: Any) -> None:
+    """Tool dispatch begins — open a TOOL child under the OPEN turn span. Never
+    mints a root: an unmatched tool attaches to the live turn (see
+    _resolve_open_turn), else is skipped so it can't orphan a ghost trace."""
+    try:
+        if not _ensure_configured():
             return
-        state = _ensure_turn(key, session_id=kwargs.get("session_id"))
+        state = _resolve_open_turn(kwargs)
         if state is None:
             return
         name = kwargs.get("tool_name") or "tool"
@@ -634,23 +783,29 @@ def on_pre_tool_call(**kwargs: Any) -> None:
         if kwargs.get("tool_call_id"):
             span.set_attribute("neatlogs.tool_call.id", str(kwargs["tool_call_id"]))
         _set_text(span, "neatlogs.input.value", kwargs.get("args"))
+        tskey = _tool_span_key(kwargs)
         with _STATE_LOCK:
-            state.tool_spans[_tool_span_key(kwargs)] = span
+            state.tool_spans[tskey] = span
+            _OPEN_TOOL_SPANS[tskey] = (span, state)
             state.last_updated_at = time.time()
     except Exception as exc:
         logger.debug("hermes plugin on_pre_tool_call failed: %s", exc)
 
 
 def on_post_tool_call(**kwargs: Any) -> None:
-    """Tool dispatch finished (ok / error / blocked / cancelled) — close TOOL."""
+    """Tool dispatch finished (ok / error / blocked / cancelled) — close TOOL.
+
+    Closes the exact span opened in pre_tool_call via the process-global
+    _OPEN_TOOL_SPANS registry, so key divergence between pre/post (re-entrant
+    dispatch) can't leave the span open."""
     try:
-        key = _turn_key(kwargs.get("turn_id"), kwargs.get("api_request_id"),
-                        kwargs.get("session_id"), kwargs.get("task_id"))
-        if not key:
-            return
+        tskey = _tool_span_key(kwargs)
         with _STATE_LOCK:
-            state = _TURN_STATE.get(key)
-            span = state.tool_spans.pop(_tool_span_key(kwargs), None) if state else None
+            entry = _OPEN_TOOL_SPANS.pop(tskey, None)
+            span = None
+            if entry is not None:
+                span, owner = entry
+                owner.tool_spans.pop(tskey, None)
         if span is None:
             return
         _set_text(span, "neatlogs.output.value", kwargs.get("result"))
@@ -663,6 +818,13 @@ def on_post_tool_call(**kwargs: Any) -> None:
         else:
             span.set_status(StatusCode.OK)
         _safe_end(span)
+        # NOTE: terminal kanban tools (kanban_complete / kanban_block) need no
+        # special handling — this very TOOL span already captures the action, and
+        # it lives inside the worker's WORKFLOW turn trace (which finalizes). The
+        # task identity is stamped on that turn root (_stamp_kanban_task_context).
+        # A separate TASK-rooted trace would be redundant AND wouldn't finalize:
+        # the backend only treats WORKFLOW/CHAIN/AGENT/MCP_TOOL roots as
+        # simplifiable (trace-finalizer/root-readiness.ts) — a task is not a root.
     except Exception as exc:
         logger.debug("hermes plugin on_post_tool_call failed: %s", exc)
 
@@ -671,6 +833,21 @@ def _tool_span_key(kwargs: Dict[str, Any]) -> str:
     """Key a TOOL span within a turn. tool_call_id is the provider-supplied
     identity; fall back to the tool name when absent."""
     return str(kwargs.get("tool_call_id") or kwargs.get("tool_name") or "tool")
+
+
+def _drain_tool_spans(state: _TurnState) -> None:
+    """End every TOOL span still open under ``state`` and purge its entries from
+    the process-global _OPEN_TOOL_SPANS registry. Called from every turn-teardown
+    path so an interrupted tool can't leak a registry entry (which would later
+    mis-close a same-keyed tool in another turn)."""
+    with _STATE_LOCK:
+        keys = list(state.tool_spans.keys())
+        spans = list(state.tool_spans.values())
+        state.tool_spans.clear()
+        for k in keys:
+            _OPEN_TOOL_SPANS.pop(k, None)
+    for span in spans:
+        _safe_end(span)
 
 
 # ---------------------------------------------------------------------------
@@ -698,15 +875,19 @@ def on_subagent_start(**kwargs: Any) -> None:
         key = _subagent_key(kwargs.get("child_subagent_id"), kwargs.get("child_session_id"))
         if not key:
             return
-        # Parent = the spawning TURN span (looked up by parent_turn_id). Fall back
-        # to the parent session root context if the turn isn't tracked here.
+        # Parent = the spawning TURN span (looked up by parent_turn_id), so the
+        # subagent joins that turn's trace. Fall back to the parent turn's
+        # deterministic root context (same trace) when its live span isn't tracked
+        # in this process.
         parent_turn_id = kwargs.get("parent_turn_id")
         with _STATE_LOCK:
             parent_state = _TURN_STATE.get(str(parent_turn_id)) if parent_turn_id else None
         if parent_state is not None:
             parent_ctx = _child_context(parent_state.span)
+        elif parent_turn_id:
+            parent_ctx = _root_ctx(str(parent_turn_id))
         else:
-            parent_ctx = _ensure_session_root(kwargs.get("parent_session_id"))
+            parent_ctx = None
 
         role = kwargs.get("child_role") or "subagent"
         start_kwargs = {"context": parent_ctx} if parent_ctx is not None else {}
@@ -778,17 +959,17 @@ def on_pre_approval_request(**kwargs: Any) -> None:
         if not key:
             return
         # Parent = the active turn (by turn_id) when one is live; otherwise the
-        # SESSION ROOT (never a fresh root — that would orphan the approval onto
-        # its own trace, which is the bug this fixes). The session is resolved
-        # from session_id/turn_id-prefix so the guardrail joins the agent's trace.
+        # turn's deterministic root context (same trace) so the guardrail joins
+        # the turn it triggered instead of orphaning onto its own trace.
         turn_id = kwargs.get("turn_id")
         with _STATE_LOCK:
             state = _TURN_STATE.get(str(turn_id)) if turn_id else None
         if state is not None:
             parent_ctx = _child_context(state.span)
+        elif turn_id:
+            parent_ctx = _root_ctx(str(turn_id))
         else:
-            sid = _session_of(kwargs.get("session_id"), turn_id)
-            parent_ctx = _ensure_session_root(sid) if sid else None
+            parent_ctx = None
         start_kwargs = {"context": parent_ctx} if parent_ctx is not None else {}
         name = kwargs.get("pattern_key") or "approval"
         span = get_tracer().start_span(
@@ -839,139 +1020,86 @@ def on_post_approval_response(**kwargs: Any) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Kanban — task lifecycle, often in a worker SUBPROCESS. The hook payload has no
-# session_id, so we recover it from HERMES_SESSION_ID (env) — set by the agent /
-# gateway before spawning the worker. With the deterministic root context built
-# from that session_id, the kanban span joins the session trace even though the
-# worker is a different interpreter with no in-memory root.
+# Kanban — task attribution. A kanban worker runs as a dedicated SUBPROCESS
+# (`hermes chat -q "work kanban task <id>"`) pinned to ONE task via env
+# (HERMES_KANBAN_TASK / _BOARD / _RUN_ID, HERMES_PROFILE). It traces exactly like
+# any interactive session — the worker's per-turn WORKFLOW roots and the
+# kanban_complete/kanban_block TOOL children are already captured. We do NOT mint
+# a separate TASK-rooted trace: it would be redundant with that TOOL span and, by
+# design, would never finalize — a task is not a trace root (the backend only
+# treats WORKFLOW/CHAIN/AGENT/MCP_TOOL as simplifiable roots). Instead we stamp
+# the task identity onto the worker's turn root, so its execution is attributable
+# to the task without inventing an artificial root.
 # ---------------------------------------------------------------------------
-def _kanban_session_id(kwargs: Dict[str, Any]) -> Optional[str]:
-    """Resolve the session a kanban task belongs to — WITHOUT any Hermes change.
-
-    The kanban hooks don't carry session_id, and HERMES_SESSION_ID (env) is
-    GLOBAL and gets overwritten with the CHILD session during delegation and
-    never restored — so a post-delegation kanban task read from env would attach
-    to the wrong (child) trace. Instead we look the task up in Hermes' own kanban
-    DB via the public get_task() (the task row stores the session that created
-    it). The hook fires AFTER the write txn commits, so a read is safe. Fall back
-    to the hook's session_id (if ever present) then the env."""
-    sid = kwargs.get("session_id")
-    if sid:
-        return str(sid)
-    task_id = kwargs.get("task_id")
-    if task_id:
-        try:
-            from hermes_cli import kanban_db as _kdb
-            with _kdb.connect_closing(board=kwargs.get("board")) as conn:
-                task = _kdb.get_task(conn, str(task_id))
-            row_sid = getattr(task, "session_id", None) if task else None
-            if row_sid:
-                return str(row_sid)
-        except Exception as exc:
-            logger.debug("hermes plugin kanban session lookup failed: %s", exc)
-    env = os.environ.get("HERMES_SESSION_ID", "").strip()
-    return env or None
-
-
-def _emit_kanban_span(status: str, kwargs: Dict[str, Any]) -> None:
-    """Emit a self-contained TASK span for a terminal kanban transition. Claim and
-    completion may happen in different processes, so we don't hold a span open
-    across them — each terminal event is one span under the session root."""
+def _stamp_kanban_task_context(span: Any) -> None:
+    """If this process is a kanban worker (task pinned in env), tag its turn root
+    with the task identity. No-op for ordinary interactive/oneshot turns."""
     try:
-        if not _ensure_configured():
+        task_id = os.environ.get("HERMES_KANBAN_TASK", "").strip()
+        if not task_id:
             return
-        sid = _kanban_session_id(kwargs)
-        # _fire_kanban_lifecycle_hook normalizes the positional task_id into a
-        # task_id kwarg before invoke_hook, so it's always a keyword here.
-        task_id = kwargs.get("task_id")
-        start_kwargs = {"context": _session_parent_ctx(sid)} if sid else {}
-        # Ensure the root exists in this process too (idempotent, deterministic id).
-        if sid:
-            _emit_session_root(sid)
-        name = task_id or "task"
-        span = get_tracer().start_span(
-            name=f"hermes.kanban.{name}",
-            attributes={
-                "neatlogs.span.kind": "task",
-                "neatlogs.agent.framework": _PROVIDER,
-            },
-            **start_kwargs,
-        )
-        if task_id:
-            span.set_attribute("neatlogs.task.id", str(task_id))
-        for field_name, attr in (("board", "neatlogs.task.board"),
-                                  ("assignee", "neatlogs.task.assignee"),
-                                  ("run_id", "neatlogs.task.run_id")):
-            val = kwargs.get(field_name)
-            if val is not None:
-                span.set_attribute(attr, str(val))
-        _set_text(span, "neatlogs.output.value", kwargs.get("summary") or kwargs.get("reason"))
-        if status in ("blocked",):
-            span.set_status(StatusCode.ERROR, "kanban task blocked")
-        else:
-            span.set_status(StatusCode.OK)
-        _safe_end(span)
-        # A kanban worker is often a standalone subprocess with no turn hooks, so
-        # emit the completion marker here too — otherwise its TASK span ingests
-        # but the trace never finalizes/renders.
-        if sid:
-            _emit_completion_marker(sid)
+        span.set_attribute("neatlogs.task.id", task_id)
+        board = os.environ.get("HERMES_KANBAN_BOARD", "").strip()
+        if board:
+            span.set_attribute("neatlogs.task.board", board)
+        run_id = os.environ.get("HERMES_KANBAN_RUN_ID", "").strip()
+        if run_id:
+            span.set_attribute("neatlogs.task.run_id", run_id)
+        assignee = os.environ.get("HERMES_PROFILE", "").strip()
+        if assignee:
+            span.set_attribute("neatlogs.task.assignee", assignee)
     except Exception as exc:
-        logger.debug("hermes plugin kanban span (%s) failed: %s", status, exc)
-
-
-def on_kanban_task_completed(**kwargs: Any) -> None:
-    _emit_kanban_span("completed", kwargs)
-
-
-def on_kanban_task_blocked(**kwargs: Any) -> None:
-    _emit_kanban_span("blocked", kwargs)
+        logger.debug("hermes plugin kanban task stamp failed: %s", exc)
 
 
 # ---------------------------------------------------------------------------
 # Session lifecycle cleanup
 # ---------------------------------------------------------------------------
 def _close_session(sid: str) -> None:
-    """End any turns/subagents still open for a session and drop its root handle.
-    The root span itself was already ended (and exported) at creation."""
+    """End any turns/subagents still open for a session. Each open top-level turn
+    finalizes ITS OWN trace (completion marker on the turn key); child turns just
+    close their span in the parent turn's trace."""
     with _STATE_LOCK:
-        turn_keys = [k for k, st in _TURN_STATE.items() if st.session_id == sid]
-        for k in turn_keys:
-            st = _TURN_STATE.pop(k)
-            for child in list(st.llm_spans.values()) + list(st.tool_spans.values()):
-                _safe_end(child)
-            _safe_end(st.span)
+        open_states = [st for st in _TURN_STATE.values() if st.session_id == sid]
+    for st in open_states:
+        with _STATE_LOCK:
+            _TURN_STATE.pop(st.turn_key, None)
+        for child in list(st.llm_spans.values()):
+            _safe_end(child)
+        _drain_tool_spans(st)
+        _set_text(st.span, "neatlogs.input.value", st.input_value)
+        st.span.set_status(StatusCode.OK)
+        _safe_end(st.span)
+        _finalize_turn_trace(st)
+    with _STATE_LOCK:
         sub = _SUBAGENT_BY_SESSION.pop(sid, None)
         if sub is not None:
             for k in [k for k, v in list(_SUBAGENT_STATE.items()) if v is sub]:
                 _SUBAGENT_STATE.pop(k, None)
             _safe_end(sub)
-    # Final completion marker so the finished session's trace is finalized.
-    # Emit BEFORE discarding the root marker — _emit_completion_marker only fires
-    # for sessions whose root was emitted (guards against marking empty sessions).
-    _emit_completion_marker(sid)
-    with _STATE_LOCK:
-        # The root span was emitted+ended lazily on first child (deterministic id);
-        # just drop the once-per-process emission marker.
-        _ROOTS_EMITTED.discard(sid)
 
 
 def on_session_end(**kwargs: Any) -> None:
-    """Per-turn safety net (fires at the end of every run_conversation): close a
-    turn that didn't reach post_llm_call. Does NOT drop the session root — the
-    session can continue with more turns; that's on_session_finalize/reset."""
+    """Per-turn safety net (fires at the end of every run_conversation): close and
+    finalize any turn that didn't reach post_llm_call. Subsequent turns open
+    their own new traces, so closing these here is safe."""
     try:
         sid = kwargs.get("session_id")
         if not sid:
             return
         sid = str(sid)
         with _STATE_LOCK:
-            for k in [k for k, st in _TURN_STATE.items() if st.session_id == sid]:
-                st = _TURN_STATE.pop(k)
-                for child in list(st.llm_spans.values()) + list(st.tool_spans.values()):
-                    _safe_end(child)
-                st.span.set_status(StatusCode.OK)
-                _safe_end(st.span)
+            open_states = [st for st in _TURN_STATE.values() if st.session_id == sid]
+        for st in open_states:
+            with _STATE_LOCK:
+                _TURN_STATE.pop(st.turn_key, None)
+            for child in list(st.llm_spans.values()):
+                _safe_end(child)
+            _drain_tool_spans(st)
+            _set_text(st.span, "neatlogs.input.value", st.input_value)
+            st.span.set_status(StatusCode.OK)
+            _safe_end(st.span)
+            _finalize_turn_trace(st)
     except Exception as exc:
         logger.debug("hermes plugin on_session_end failed: %s", exc)
 
@@ -1020,9 +1148,8 @@ def register(ctx) -> None:
     # Dangerous-command approval gate (GUARDRAIL span).
     ctx.register_hook("pre_approval_request", on_pre_approval_request)
     ctx.register_hook("post_approval_response", on_post_approval_response)
-    # Kanban task lifecycle (TASK span; joins the session trace via HERMES_SESSION_ID).
-    ctx.register_hook("kanban_task_completed", on_kanban_task_completed)
-    ctx.register_hook("kanban_task_blocked", on_kanban_task_blocked)
+    # Kanban TASK spans are emitted from on_post_tool_call (kanban_complete /
+    # kanban_block) — Hermes has no dedicated kanban lifecycle hook.
     # Session lifecycle cleanup.
     ctx.register_hook("on_session_end", on_session_end)
     ctx.register_hook("on_session_finalize", on_session_finalize)

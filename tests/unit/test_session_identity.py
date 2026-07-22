@@ -7,6 +7,7 @@ that nested child spans do not carry it.
 from types import SimpleNamespace
 
 from opentelemetry import trace
+import pytest
 
 import neatlogs
 from neatlogs.core.context import trace as nl_trace
@@ -140,6 +141,11 @@ def test_identify_context_stamps_root(tracer_provider, in_memory_span_exporter):
 def test_wrap_context_stamps_workflow_metadata_on_auto_root(
     tracer_provider, in_memory_span_exporter
 ):
+    # This test exercises the OpenAI wrapper's auto-root span path; it requires
+    # the optional ``openai`` package. Skip cleanly when the SDK isn't installed
+    # so the suite stays green in environments where users only install
+    # selected provider extras (mirroring what CI does).
+    pytest.importorskip("openai")
     _install(tracer_provider)
 
     class OpenAI:

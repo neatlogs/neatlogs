@@ -163,9 +163,36 @@ def wrap(client, **workflow_attributes):
         (getattr(base, "__module__", "") or "") for base in type(client).__mro__
     )
 
+    # Helper: attempt to import a provider-specific wrapper module; on
+    # ``ImportError`` (the optional provider package isn't installed in the
+    # current environment) return ``True`` so the caller can fall back to
+    # the universal ``_WrapContextProxy`` wrapping. Real provider classes
+    # still take the dedicated path — the fallback only fires when the
+    # wrapper module itself fails to load, which keeps ``neatlogs.wrap()``
+    # working for tests and user code that defines a class named ``OpenAI``
+    # (or another known name) without pulling in the real provider SDK.
+    def _safe_import(provider_module: str):
+        try:
+            return __import__(provider_module, fromlist=["*"])
+        except ImportError:
+            return None
+
+    # Universal fallback used when ``cls_name`` matches a known provider but
+    # the optional provider package is missing — OR when the matched branch
+    # is for a user-defined class that just happens to share a name. The
+    # workflow metadata still gets stamped on the auto-root because the
+    # ``_WrapContextProxy`` and ``NeatlogsSpanProcessor`` work independently
+    # of provider-specific OTel instrumentation.
+    def _proxy_only():
+        from ._wrap_utils import with_wrap_context as _wc
+
+        return _wc(client, wrap_context)
+
     # Azure OpenAI must be checked before plain OpenAI: AzureOpenAI subclasses
     # OpenAI and its module ("openai.lib.azure") contains "openai".
     if cls_name in ("AzureOpenAI", "AsyncAzureOpenAI"):
+        if _safe_import("neatlogs.azure_openai") is None:
+            return _proxy_only()
         from .azure_openai import wrap_async_azure_openai_client, wrap_azure_openai_client
 
         if "Async" in cls_name:
@@ -173,6 +200,8 @@ def wrap(client, **workflow_attributes):
         return _finish(wrap_azure_openai_client(client))
 
     if "openai" in module or cls_name in ("OpenAI", "AsyncOpenAI"):
+        if _safe_import("neatlogs.openai") is None:
+            return _proxy_only()
         from .openai import wrap_async_openai_client, wrap_openai_client
 
         if "Async" in cls_name:
@@ -180,6 +209,8 @@ def wrap(client, **workflow_attributes):
         return _finish(wrap_openai_client(client))
 
     if "anthropic" in module or cls_name in ("Anthropic", "AsyncAnthropic"):
+        if _safe_import("neatlogs.anthropic") is None:
+            return _proxy_only()
         from .anthropic import wrap_anthropic_client, wrap_async_anthropic_client
 
         if "Async" in cls_name:
@@ -190,6 +221,8 @@ def wrap(client, **workflow_attributes):
     if "botocore" in module or "boto3" in module:
         service = getattr(getattr(client, "meta", None), "service_model", None)
         if getattr(service, "service_name", None) == "bedrock-runtime":
+            if _safe_import("neatlogs.bedrock") is None:
+                return _proxy_only()
             from .bedrock import wrap_bedrock_client
 
             return _finish(wrap_bedrock_client(client))
@@ -197,6 +230,8 @@ def wrap(client, **workflow_attributes):
     if ("google" in module and "genai" in module) or cls_name == "Client":
         # A google-genai Client in Vertex mode is traced as vertex_ai; otherwise
         # as google_genai (Gemini / AI Studio).
+        if _safe_import("neatlogs.vertex_ai") is None or _safe_import("neatlogs.google_genai") is None:
+            return _proxy_only()
         from .vertex_ai import _is_vertex_client
 
         if _is_vertex_client(client):
@@ -209,31 +244,43 @@ def wrap(client, **workflow_attributes):
         return _finish(wrap_google_genai_client(client))
 
     if cls_name in ("Crew", "Flow") or "crewai" in mro_modules:
+        if _safe_import("neatlogs.crewai") is None:
+            return _proxy_only()
         from .crewai import wrap_crewai
 
         return _finish(wrap_crewai(client))
 
     if cls_name == "Agent" and ("pydantic_ai" in module or "pydantic_ai" in mro_modules):
+        if _safe_import("neatlogs.pydantic_ai") is None:
+            return _proxy_only()
         from .pydantic_ai import wrap_pydantic_ai
 
         return _finish(wrap_pydantic_ai(client))
 
     if "dspy" in module or "dspy" in mro_modules:
+        if _safe_import("neatlogs.dspy") is None:
+            return _proxy_only()
         from .dspy import wrap_dspy
 
         return _finish(wrap_dspy(client))
 
     if "agno" in module or "agno" in mro_modules:
+        if _safe_import("neatlogs.agno") is None:
+            return _proxy_only()
         from .agno import wrap_agno
 
         return _finish(wrap_agno(client))
 
     if "google.adk" in module or "google_adk" in module:
+        if _safe_import("neatlogs.google_adk") is None:
+            return _proxy_only()
         from .google_adk import wrap_google_adk
 
         return _finish(wrap_google_adk(client))
 
     if "strands" in module:
+        if _safe_import("neatlogs.strands") is None:
+            return _proxy_only()
         from .strands import strands_hooks
 
         return _finish(strands_hooks(client))
@@ -241,12 +288,16 @@ def wrap(client, **workflow_attributes):
     # Hermes (NousResearch/hermes-agent): AIAgent lives in the top-level
     # `run_agent` module.
     if cls_name == "AIAgent" or "run_agent" in module:
+        if _safe_import("neatlogs.hermes") is None:
+            return _proxy_only()
         from .hermes import wrap_hermes
 
         return _finish(wrap_hermes(client))
 
     # OpenRouter official Python SDK — OpenRouter client from `openrouter.sdk`.
     if cls_name == "OpenRouter" or module.startswith("openrouter"):
+        if _safe_import("neatlogs.openrouter") is None:
+            return _proxy_only()
         from .openrouter import wrap_openrouter_client
 
         return _finish(wrap_openrouter_client(client))
@@ -257,6 +308,8 @@ def wrap(client, **workflow_attributes):
     # either the module itself (`neatlogs.wrap(claude_agent_sdk)`) or a ClaudeSDKClient instance.
     if (cls_name == "module" and getattr(client, "__name__", "") == "claude_agent_sdk") \
             or cls_name == "ClaudeSDKClient" or "claude_agent_sdk" in module:
+        if _safe_import("neatlogs.claude_agent_sdk") is None:
+            return _proxy_only()
         from .claude_agent_sdk import wrap_claude_agent_sdk
 
         return _finish(wrap_claude_agent_sdk(client))

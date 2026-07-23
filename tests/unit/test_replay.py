@@ -84,15 +84,12 @@ class TestNormalizeKind:
         assert _normalize_kind("SpanKind.CLIENT") == "CLIENT"
 
     def test_spankind_uppercase_prefix(self):
-        # Defensive: the raw exporter always writes "SpanKind." but other
-        # sources might uppercase the prefix.
         assert _normalize_kind("SPANKIND.SERVER") == "SERVER"
 
     def test_empty(self):
         assert _normalize_kind("") == "?"
 
     def test_none_safe(self):
-        # Build paths pass strings, but be defensive.
         assert _normalize_kind("") == "?"
         assert _normalize_kind("   ") == "?"
 
@@ -143,7 +140,6 @@ class TestIterJsonObjects:
     def test_malformed_object_is_skipped(self):
         text = '{"a": 1}\n{not valid json}\n{"b": 2}'
         objs = list(_iter_json_objects(text))
-        # The malformed object is silently dropped by the brace-balanced parser.
         assert len(objs) >= 1
         assert {"a": 1} in objs
         assert {"b": 2} in objs
@@ -244,7 +240,6 @@ class TestParseLineProcessed:
         d = _processed_span_dict(parent_span_id="0000000000000000", span_id="1111", trace_id="aaaa")
         record = parse_line(json.dumps(d))
         assert record is not None
-        # The processor already strips zero parent_ids; replay is defensive.
         assert record.parent_span_id in (None, "0000000000000000")
 
     def test_empty_line(self):
@@ -441,21 +436,17 @@ class TestBuildTrees:
         buf = io.StringIO()
         trees = build_trees(spans, warn_stream=buf)
         assert len(trees) == 1
-        # Two roots: the real root + a synthetic _orphan root.
         assert len(trees[0].roots) == 2
         names = [r.span.name for r in trees[0].roots]
         assert "root" in names
         assert "_orphan" in names
-        # The orphan span lives under the synthetic root.
         orphan_root = next(r for r in trees[0].roots if r.span.name == "_orphan")
         assert len(orphan_root.children) == 1
         assert orphan_root.children[0].span.name == "orphan"
-        # Warning surfaces the missing parent id.
         assert "DEAD" in buf.getvalue()
 
     def test_no_warn_when_warn_stream_is_none(self):
         spans = [_processed("a", "1", parent="DEAD", name="orphan")]
-        # Default warn_stream is stderr; we just confirm no exception is raised.
         trees = build_trees(spans, warn_stream=io.StringIO())
         assert len(trees) == 1
 
@@ -465,7 +456,6 @@ class TestBuildTrees:
             _processed("b", "2", parent="1", name="wrong-parent"),
         ]
         trees = build_trees(spans)
-        # Two traces, each with one root.
         assert len(trees) == 2
         for t in trees:
             assert len(t.roots) == 1
@@ -506,7 +496,6 @@ class TestFormatText:
         out = format_tree(trees, style="text", use_color=False, max_depth=1)
         assert "[WORKFLOW] root" in out
         assert "child" in out
-        # grand is below the max_depth cutoff.
         assert "grand" not in out
 
     def test_filter_kind(self):
@@ -518,21 +507,18 @@ class TestFormatText:
         trees = build_trees(spans)
         out = format_tree(trees, style="text", use_color=False, filter_kind="llm")
         assert "llm-call" in out
-        # tool-call sits below the LLM but is excluded by filter; root renders too.
         assert "tool-call" not in out
 
     def test_no_color_when_disabled(self):
         spans = [_processed("a", "1", name="root", kind="workflow")]
         trees = build_trees(spans)
         out = format_tree(trees, style="text", use_color=False)
-        # No ANSI escape codes.
         assert "\033[" not in out
 
     def test_color_when_enabled(self):
         spans = [_processed("a", "1", name="root", kind="workflow")]
         trees = build_trees(spans)
         out = format_tree(trees, style="text", use_color=True)
-        # ANSI escape codes are present (the kind uses color code 33 for workflow).
         assert "\033[" in out
 
 

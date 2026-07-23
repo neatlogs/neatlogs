@@ -188,8 +188,6 @@ def _iter_json_objects(text: str) -> Iterator[Dict[str, Any]]:
                 try:
                     yield json.loads(chunk)
                 except json.JSONDecodeError:
-                    # Skip malformed objects silently here; the caller decides
-                    # whether to warn via a returned list of (obj, error) pairs.
                     pass
                 start = -1
             elif depth < 0:
@@ -347,10 +345,9 @@ def parse_paths(paths: Sequence[PathLike]) -> ParseResult:
         text = _read_file(path)
         if not text.strip():
             continue
-        # Count non-blank lines for the malformed denominator. The brace-
-        # balancer may yield fewer objects than this if a line is invalid JSON
-        # or has a non-span shape; the difference is what we surface to the
-        # user as "malformed".
+        # Non-blank lines are the malformed denominator: brace-balanced parsing
+        # may yield fewer objects when a line is invalid JSON or has a
+        # non-span shape.
         non_blank = sum(1 for line in text.splitlines() if line.strip())
         file_spans: List[SpanRecord] = []
         for obj in _iter_json_objects(text):
@@ -403,8 +400,6 @@ def build_trees(
 
     trees: List[TraceTree] = []
     for trace_id, members in sorted(by_trace.items(), key=lambda kv: kv[0]):
-        # Roots = spans with no parent, or whose parent is in a different trace,
-        # or whose parent_id is None / missing / zero.
         root_nodes: List[TreeNode] = []
         seen_orphans: Dict[str, TreeNode] = {}
         for s in members:
@@ -413,10 +408,8 @@ def build_trees(
                 root_nodes.append(make_node(s))
                 continue
             if parent_id not in spans_by_id:
-                # Orphan: the parent is missing (different file, dropped, etc.).
-                # We park the span under a synthetic root named after the
-                # missing parent so the output still shows it; the warning
-                # tells the user which parent went missing.
+                # Orphan: parent is missing in this log file. Park under a
+                # synthetic root named after the missing parent.
                 bucket = seen_orphans.get(parent_id)
                 if bucket is None:
                     orphan = SpanRecord(
@@ -447,15 +440,10 @@ def build_trees(
                         )
                 bucket.children.append(make_node(s))
                 continue
-            # If the parent belongs to a different trace (very rare; usually
-            # means a corrupted file), the span still needs to render. Treat
-            # it as a root so it isn't silently dropped.
+            # Parent in a different trace (very rare; usually a corrupted file):
+            # treat as a root so it isn't silently dropped.
             if spans_by_id[parent_id].trace_id != s.trace_id:
                 root_nodes.append(make_node(s))
-                continue
-            # Normal case: the span has a parent in the same trace, so it will
-            # be reached via make_node recursion on the parent. No need to
-            # add it to roots here.
         trees.append(TraceTree(trace_id=trace_id, roots=root_nodes))
     return trees
 
@@ -464,9 +452,6 @@ def build_trees(
 # Rendering
 # ---------------------------------------------------------------------------
 
-
-# Color helpers: only emit ANSI when the stream is a TTY (or when force_color
-# is True). The CLI passes force_color=True when --color is set.
 
 _USE_COLOR = True
 
@@ -752,8 +737,6 @@ def replay(
 def _expand_paths(argv: Sequence[str]) -> List[PathLike]:
     out: List[PathLike] = []
     for a in argv:
-        # Treat as a literal path; do not expand globs (the brace-balancer
-        # reads the whole file anyway, so a glob would only ever match one).
         out.append(a)
     return out
 

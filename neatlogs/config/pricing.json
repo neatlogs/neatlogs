@@ -1,0 +1,212 @@
+{
+  "_meta": {
+    "currency": "USD",
+    "units": "per_1m_tokens",
+    "schema_version": "2.0",
+    "notes": "v2 schema: usage_types is a dict mapping usage type → USD per 1M tokens. Capabilities is a list of strings. Tiers are a per-usage-type list of {above_tokens, rate} entries (Langfuse convention). Override via --pricing-file or NEATLOGS_PRICING_FILE.",
+    "last_updated": "2026-07"
+  },
+  "models": {
+    "openai/gpt-5": {
+      "provider": "openai",
+      "context_window": 400000,
+      "capabilities": ["tools", "json_mode", "vision", "reasoning"],
+      "usage_types": {"input": 1.25, "output": 10.00}
+    },
+    "openai/gpt-5-mini": {
+      "provider": "openai",
+      "context_window": 400000,
+      "capabilities": ["tools", "json_mode", "vision", "reasoning"],
+      "usage_types": {"input": 0.25, "output": 2.00}
+    },
+    "openai/gpt-5-nano": {
+      "provider": "openai",
+      "context_window": 400000,
+      "capabilities": ["tools", "json_mode", "vision", "reasoning"],
+      "usage_types": {"input": 0.05, "output": 0.40}
+    },
+    "openai/gpt-4.1": {
+      "provider": "openai",
+      "context_window": 1000000,
+      "capabilities": ["vision", "tools", "json_mode", "prompt_cache"],
+      "usage_types": {"input": 2.00, "output": 8.00, "cache_read": 0.50}
+    },
+    "openai/gpt-4.1-mini": {
+      "provider": "openai",
+      "context_window": 1000000,
+      "capabilities": ["vision", "tools", "json_mode", "prompt_cache"],
+      "usage_types": {"input": 0.40, "output": 1.60, "cache_read": 0.10}
+    },
+    "openai/gpt-4.1-nano": {
+      "provider": "openai",
+      "context_window": 1000000,
+      "capabilities": ["vision", "tools", "json_mode", "prompt_cache"],
+      "usage_types": {"input": 0.10, "output": 0.40, "cache_read": 0.025}
+    },
+    "openai/gpt-4o": {
+      "provider": "openai",
+      "context_window": 128000,
+      "capabilities": ["vision", "tools", "json_mode", "prompt_cache"],
+      "usage_types": {"input": 2.50, "output": 10.00, "cache_read": 1.25}
+    },
+    "openai/gpt-4o-mini": {
+      "provider": "openai",
+      "context_window": 128000,
+      "capabilities": ["vision", "tools", "json_mode", "prompt_cache"],
+      "usage_types": {"input": 0.15, "output": 0.60, "cache_read": 0.075}
+    },
+    "openai/gpt-4o-mini-2024-07-18": {
+      "provider": "openai",
+      "context_window": 128000,
+      "capabilities": ["vision", "tools", "json_mode", "prompt_cache"],
+      "usage_types": {"input": 0.15, "output": 0.60, "cache_read": 0.075}
+    },
+    "openai/o1": {
+      "provider": "openai",
+      "context_window": 200000,
+      "capabilities": ["tools", "json_mode", "reasoning", "prompt_cache"],
+      "usage_types": {"input": 15.00, "output": 60.00, "reasoning": 60.00, "cache_read": 7.50}
+    },
+    "openai/o1-mini": {
+      "provider": "openai",
+      "context_window": 128000,
+      "capabilities": ["tools", "json_mode", "reasoning", "prompt_cache"],
+      "usage_types": {"input": 3.00, "output": 12.00, "reasoning": 12.00, "cache_read": 1.50}
+    },
+    "openai/o3": {
+      "provider": "openai",
+      "context_window": 200000,
+      "capabilities": ["tools", "json_mode", "reasoning", "prompt_cache"],
+      "usage_types": {"input": 10.00, "output": 40.00, "reasoning": 40.00, "cache_read": 5.00}
+    },
+    "openai/o3-mini": {
+      "provider": "openai",
+      "context_window": 200000,
+      "capabilities": ["tools", "json_mode", "reasoning", "prompt_cache"],
+      "usage_types": {"input": 1.10, "output": 4.40, "reasoning": 4.40, "cache_read": 0.55}
+    },
+    "openai/o4-mini": {
+      "provider": "openai",
+      "context_window": 200000,
+      "capabilities": ["tools", "json_mode", "reasoning", "prompt_cache"],
+      "usage_types": {"input": 1.10, "output": 4.40, "reasoning": 4.40, "cache_read": 0.55}
+    },
+    "openai/text-embedding-3-small": {
+      "provider": "openai",
+      "context_window": 8191,
+      "capabilities": ["embedding"],
+      "usage_types": {"input": 0.02, "output": 0.0}
+    },
+    "openai/text-embedding-3-large": {
+      "provider": "openai",
+      "context_window": 8191,
+      "capabilities": ["embedding"],
+      "usage_types": {"input": 0.13, "output": 0.0}
+    },
+    "anthropic/claude-opus-4-1": {
+      "provider": "anthropic",
+      "context_window": 200000,
+      "capabilities": ["vision", "tools", "json_mode", "prompt_cache"],
+      "usage_types": {"input": 15.00, "output": 75.00, "cache_write": 18.75, "cache_read": 1.50}
+    },
+    "anthropic/claude-opus-4": {
+      "provider": "anthropic",
+      "context_window": 200000,
+      "capabilities": ["vision", "tools", "json_mode", "prompt_cache"],
+      "usage_types": {"input": 15.00, "output": 75.00, "cache_write": 18.75, "cache_read": 1.50}
+    },
+    "anthropic/claude-sonnet-4": {
+      "provider": "anthropic",
+      "context_window": 200000,
+      "capabilities": ["vision", "tools", "json_mode", "prompt_cache"],
+      "usage_types": {"input": 3.00, "output": 15.00, "cache_write": 3.75, "cache_read": 0.30},
+      "tiers": {"input": [{"above_tokens": 200000, "rate": 6.00}], "output": [{"above_tokens": 200000, "rate": 22.50}]}
+    },
+    "anthropic/claude-3-7-sonnet-latest": {
+      "provider": "anthropic",
+      "context_window": 200000,
+      "capabilities": ["vision", "tools", "json_mode", "prompt_cache"],
+      "usage_types": {"input": 3.00, "output": 15.00, "cache_write": 3.75, "cache_read": 0.30},
+      "tiers": {"input": [{"above_tokens": 200000, "rate": 6.00}], "output": [{"above_tokens": 200000, "rate": 22.50}]}
+    },
+    "anthropic/claude-3-5-sonnet-latest": {
+      "provider": "anthropic",
+      "context_window": 200000,
+      "capabilities": ["vision", "tools", "json_mode", "prompt_cache"],
+      "usage_types": {"input": 3.00, "output": 15.00, "cache_write": 3.75, "cache_read": 0.30}
+    },
+    "anthropic/claude-3-5-haiku-latest": {
+      "provider": "anthropic",
+      "context_window": 200000,
+      "capabilities": ["tools", "json_mode", "prompt_cache"],
+      "usage_types": {"input": 0.80, "output": 4.00, "cache_write": 1.00, "cache_read": 0.08}
+    },
+    "anthropic/claude-3-haiku-20240307": {
+      "provider": "anthropic",
+      "context_window": 200000,
+      "capabilities": ["tools", "json_mode", "prompt_cache"],
+      "usage_types": {"input": 0.25, "output": 1.25, "cache_write": 0.30, "cache_read": 0.03}
+    },
+    "google_genai/gemini-2.5-pro": {
+      "provider": "google_genai",
+      "context_window": 1000000,
+      "capabilities": ["vision", "tools", "json_mode"],
+      "usage_types": {"input": 1.25, "output": 10.00},
+      "tiers": {"input": [{"above_tokens": 200000, "rate": 2.50}], "output": [{"above_tokens": 200000, "rate": 15.00}]}
+    },
+    "google_genai/gemini-2.5-flash": {
+      "provider": "google_genai",
+      "context_window": 1000000,
+      "capabilities": ["vision", "tools", "json_mode"],
+      "usage_types": {"input": 0.30, "output": 2.50}
+    },
+    "google_genai/gemini-2.0-flash": {
+      "provider": "google_genai",
+      "context_window": 1000000,
+      "capabilities": ["vision", "tools", "json_mode"],
+      "usage_types": {"input": 0.10, "output": 0.40}
+    },
+    "google_genai/gemini-1.5-pro": {
+      "provider": "google_genai",
+      "context_window": 2000000,
+      "capabilities": ["vision", "tools", "json_mode"],
+      "usage_types": {"input": 1.25, "output": 5.00}
+    },
+    "google_genai/gemini-1.5-flash": {
+      "provider": "google_genai",
+      "context_window": 1000000,
+      "capabilities": ["vision", "tools", "json_mode"],
+      "usage_types": {"input": 0.075, "output": 0.30}
+    },
+    "deepseek/deepseek-chat": {
+      "provider": "deepseek",
+      "context_window": 128000,
+      "capabilities": ["tools", "json_mode", "prompt_cache"],
+      "usage_types": {"input": 0.27, "output": 1.10, "cache_read": 0.07}
+    },
+    "deepseek/deepseek-reasoner": {
+      "provider": "deepseek",
+      "context_window": 128000,
+      "capabilities": ["reasoning"],
+      "usage_types": {"input": 0.55, "output": 2.19, "reasoning": 2.19}
+    },
+    "groq/llama-3.1-70b-versatile": {
+      "provider": "groq",
+      "context_window": 128000,
+      "capabilities": ["tools", "json_mode"],
+      "usage_types": {"input": 0.59, "output": 0.79}
+    },
+    "groq/llama-3.1-8b-instant": {
+      "provider": "groq",
+      "context_window": 128000,
+      "capabilities": ["tools", "json_mode"],
+      "usage_types": {"input": 0.05, "output": 0.08}
+    },
+    "groq/llama-3.3-70b-versatile": {
+      "provider": "groq",
+      "context_window": 128000,
+      "capabilities": ["tools", "json_mode"],
+      "usage_types": {"input": 0.59, "output": 0.79}
+    }
+  }
+}

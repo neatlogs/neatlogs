@@ -182,18 +182,6 @@ def _extract_usage(obj: Dict[str, Any]) -> SpanUsage:
     )
 
 
-def _detect_source(obj: Dict[str, Any]) -> str:
-    if isinstance(obj.get("context"), dict) and "trace_id" in obj.get("context", {}):
-        return "raw"
-    if (
-        "trace_id" in obj
-        and "span_id" in obj
-        and isinstance(obj.get("parent_span_id"), (str, type(None)))
-    ):
-        return "processed"
-    return "unknown"
-
-
 def _iter_json_objects(text: str) -> Iterator[Dict[str, Any]]:
     """Brace-balanced parser. Tolerates newlines inside string values."""
     depth = 0
@@ -245,7 +233,6 @@ def _read_usages(path: PathLike) -> Tuple[List[SpanUsage], int]:
     for obj in _iter_json_objects(text):
         if not isinstance(obj, dict):
             continue
-        _detect_source(obj)  # currently unused; reserved for future raw-specific paths
         out.append(_extract_usage(obj))
     return out, 1
 
@@ -540,12 +527,6 @@ class ModelComparison:
     spans_incompatible: int
     missing_capabilities: List[str] = dataclasses.field(default_factory=list)
     is_baseline: bool = False
-
-    @property
-    def delta_pct(self) -> Optional[float]:
-        """Percent change vs baseline. ``None`` for the baseline itself, or if
-        there is no baseline."""
-        return None  # filled in by ComparisonReport.delta_pct_for()
 
 
 @dataclasses.dataclass
@@ -842,7 +823,7 @@ def format_comparison(
 def _format_comparison_text(report: ComparisonReport, *, use_color: bool) -> str:
     buf = io.StringIO()
     has_results = report.baseline is not None or bool(report.alternatives)
-    if not has_results and report.spans_with_tokens == 0:
+    if not has_results:
         if report.spans_skipped:
             buf.write(
                 f"(no comparable models and no LLM spans with token counts found; "
@@ -853,12 +834,8 @@ def _format_comparison_text(report: ComparisonReport, *, use_color: bool) -> str
                 "(no comparable models — none of the candidates are in the pricing catalog)\n"
             )
         return buf.getvalue()
-    if not has_results:
-        buf.write("(no comparable models — none of the candidates are in the pricing catalog)\n")
-        return buf.getvalue()
-    if report.spans_with_tokens == 0:
-        # Baseline selected, but no input spans; we still render the row at $0.
-        pass  # fall through to the normal table
+    # has_results=True: render the table. When spans_with_tokens is 0 the
+    # rows are $0.00; the user still sees the model breakdown they asked for.
     header = (
         f"{'Model':<32} {'Provider':<12} {'Input':>10} {'Output':>10} "
         f"{'Cache':>10} {'Reason':>8} {'Total':>12} {'vs base':>9}"

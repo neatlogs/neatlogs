@@ -27,7 +27,6 @@ from neatlogs.cost import (
     SpanCost,
     SpanUsage,
     _capability_dict,
-    _detect_source,
     _extract_usage,
     _format_comparison_csv,
     _format_comparison_json,
@@ -306,17 +305,30 @@ class TestExtractUsage:
         assert u.uses_reasoning is False
 
 
-class TestDetectSource:
-    def test_processed(self):
-        assert (
-            _detect_source({"trace_id": "a", "span_id": "b", "parent_span_id": None}) == "processed"
+class TestFormatColor:
+    def test_color_in_output(self, tmp_path: Path):
+        # The text formatter emits ANSI codes when use_color=True. Baseline
+        # → bold yellow, more expensive → red, savings → green.
+        p = tmp_path / "spans.jsonl"
+        _write_span_log(p, [_processed_span(prompt=1_000_000, completion=1_000_000)])
+        c = _catalog()
+        report = compare(
+            p,
+            models=["openai/gpt-4o-mini", "openai/gpt-4o"],
+            catalog=c,
         )
+        out = _format_comparison_text(report, use_color=True)
+        assert "\033[" in out
+        # gpt-4o is more expensive than gpt-4o-mini → red (31).
+        assert "\033[31m" in out
 
-    def test_raw(self):
-        assert _detect_source({"context": {"trace_id": "a"}}) == "raw"
-
-    def test_unknown(self):
-        assert _detect_source({"foo": "bar"}) == "unknown"
+    def test_color_disabled_no_ansi(self, tmp_path: Path):
+        p = tmp_path / "spans.jsonl"
+        _write_span_log(p, [_processed_span(prompt=100, completion=50)])
+        c = _catalog()
+        report = compare(p, models=["openai/gpt-4o-mini"], catalog=c)
+        out = _format_comparison_text(report, use_color=False)
+        assert "\033[" not in out
 
 
 # ---------------------------------------------------------------------------

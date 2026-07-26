@@ -322,6 +322,14 @@ milvus = [
 [project.entry-points."hermes_agent.plugins"]
 neatlogs = "neatlogs.hermes_plugin"
 
+# Console scripts installed by `pip install neatlogs`. `neatlogs-cost` reads
+# the JSONL span log files produced by `NEATLOGS_LOG_SPANS` /
+# `NEATLOGS_LOG_RAW_SPANS` and prints a per-model USD cost breakdown using
+# the bundled pricing table (overridable via `--pricing-file`). Pure
+# stdlib, no extra deps.
+[project.scripts]
+neatlogs-cost = "neatlogs.cost:_cli"
+
 [project.urls]
 Homepage = "https://github.com/NeatLogs/neatlogs"
 Repository = "https://github.com/NeatLogs/neatlogs.git"

@@ -492,14 +492,56 @@ def _current_neatlogs_parent(
     context: Optional[context_api.Context] = None,
 ) -> Optional[otel_trace.Span]:
     """The neatlogs span threaded via the private parent key (isolated mode), or
-    None. Returns None for non-recording/ended spans so a stale parent never
-    dangles a child."""
+    None. Returns None for stale/ended local spans so a dead parent never dangles
+    a child — but ACCEPTS a valid REMOTE parent (a non-recording span installed by
+    ``extract_trace_context`` from an inbound W3C ``traceparent``), so a callee
+    nests under the caller's cross-process trace."""
     try:
         parent = context_api.get_value(_NEATLOGS_PARENT_KEY, context)
     except Exception:
         parent = None
-    if parent is not None and getattr(parent, "is_recording", lambda: False)():
-        return parent
+    if parent is None:
+        return None
+    try:
+        if parent.is_recording():
+            return parent
+        # Remote parents are non-recording by construction; accept only when the
+        # span context is both remote and valid. A stale ENDED LOCAL span is
+        # non-recording AND is_remote=False, so it stays rejected.
+        sc = parent.get_span_context()
+        if getattr(sc, "is_remote", False) and sc.is_valid:
+            return parent
+    except Exception:
+        pass
+    return None
+
+
+def active_neatlogs_context(
+    context: Optional[context_api.Context] = None,
+) -> Optional[context_api.Context]:
+    """Return a context whose current-span is the active NEATLOGS span, or None.
+
+    This is the isolation-aware analog of the TS SDK's ``getActiveNeatlogsSpan``:
+    in ISOLATED mode the active neatlogs span lives on the private parent key
+    (the global current-span is the host's), so we resolve it from there and
+    rebuild a context with it as the current span — exactly what W3C
+    ``inject(context=...)`` needs to write our ``traceparent``. In DEFAULT mode
+    the neatlogs span already IS the global current-span, so the ambient context
+    works and we return it unchanged.
+
+    Returns None when no recording neatlogs span is active, so callers can no-op
+    (the inject helper leaves the carrier untouched)."""
+    if _isolation_active():
+        parent = _current_neatlogs_parent(context)
+        if parent is None:
+            return None
+        base = context if context is not None else context_api.Context()
+        return otel_trace.set_span_in_context(parent, base)
+    # DEFAULT mode: only report a context when a recording neatlogs span is the
+    # active ancestor — never let a purely foreign current-span be injected as ours.
+    current = otel_trace.get_current_span()
+    if current and current.is_recording() and _has_neatlogs_ancestor():
+        return context if context is not None else context_api.get_current()
     return None
 
 

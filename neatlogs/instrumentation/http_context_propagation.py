@@ -51,7 +51,16 @@ def _inject_trace_context(headers: MutableMapping[str, str]) -> None:
     if _has_traceparent(headers):
         return
     try:
-        inject(headers)
+        # Inject the active NEATLOGS span, not whatever the global propagator sees.
+        # In isolated mode the neatlogs span lives on a private context key, so a
+        # bare inject(headers) reads an empty global context and writes nothing —
+        # the root cause of Python dropping the traceparent at a service boundary.
+        from .._wrap_utils import active_neatlogs_context
+
+        ctx = active_neatlogs_context()
+        if ctx is None:
+            return  # no neatlogs span active — nothing to propagate
+        inject(headers, context=ctx)
     except Exception:
         return
 

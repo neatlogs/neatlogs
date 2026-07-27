@@ -173,6 +173,7 @@ def init(
     log_level: str = "INFO",
     mask: Optional[Callable[[Dict[str, Any]], Optional[Dict[str, Any]]]] = None,
     pii_enabled: Optional[bool] = None,
+    pii_entities: Optional[List[str]] = None,
     pii_span_types: Optional[List[str]] = None,
     tracer_provider: Optional[Any] = None,
     isolate: Optional[bool] = None,
@@ -221,11 +222,16 @@ def init(
 
                   neatlogs.init(mask=redact)
         pii_enabled: Override the team-level server-side PII redaction toggle for this
-              project. True = enable redaction, False = disable redaction entirely.
-              When None (default), the team setting in the Neatlogs dashboard is used.
+              project and persist the setting so the dashboard reflects it.
+              True = enable redaction, False = disable redaction entirely. When None
+              (default), the project setting in the Neatlogs dashboard is used.
+        pii_entities: Optional project-level Presidio entity selection to persist with
+              the SDK override, e.g. ["PERSON", "EMAIL_ADDRESS"]. When None, the
+              project's existing saved entity selection is preserved.
         pii_span_types: Override which span types have server-side PII redaction applied.
-              Pass a list of span kind strings, e.g. ["LLM", "TOOL"]. When None (default),
-              the team setting is used. Pass an empty list to disable redaction for all types.
+              Pass a list of span kind strings, e.g. ["LLM", "TOOL"]. This selection
+              is persisted so the dashboard reflects it. When None (default), the
+              project setting is preserved.
         tracer_provider: Opt-in FULL ISOLATION. Pass a private ``TracerProvider`` (one you
               created but did NOT install as the OTel global) and neatlogs will emit ALL of
               its spans — auto-instrumented, wrap()/trace()/@span, and the internal
@@ -344,6 +350,14 @@ def init(
         resource_attrs["neatlogs.tags"] = ",".join(tags)
     if pii_enabled is not None:
         resource_attrs["neatlogs.pii.enabled"] = "true" if pii_enabled else "false"
+    if pii_entities is not None:
+        if not pii_entities or not all(
+            isinstance(entity, str) and entity.strip() for entity in pii_entities
+        ):
+            raise ValueError("pii_entities must be a non-empty list of strings")
+        resource_attrs["neatlogs.pii.entities"] = ",".join(
+            entity.strip() for entity in pii_entities
+        )
     if pii_span_types is not None:
         resource_attrs["neatlogs.pii.span_types"] = ",".join(pii_span_types)
     resource = Resource.create(resource_attrs)

@@ -28,6 +28,7 @@ Available span kinds:
 
 from .core.context import trace
 from .core.identity import identify
+from .core.propagation import extract_trace_context, inject_trace_context
 from .core.crewai_task_registry import register_crewai_task
 from .core.llm_binder import bind_templates
 from .core.log import log
@@ -277,6 +278,8 @@ __all__ = [
     "span",
     "trace",
     "identify",
+    "inject_trace_context",
+    "extract_trace_context",
     "log",
     "SystemPromptTemplate",
     "PromptTemplate",  # backward-compatible alias

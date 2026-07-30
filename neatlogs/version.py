@@ -21,10 +21,15 @@ def _version_from_pyproject() -> str | None:
 
 
 def get_version() -> str:
+    # In a source checkout, the project file is authoritative. Editable installs
+    # can retain stale distribution metadata after a version bump.
+    source_version = _version_from_pyproject()
+    if source_version:
+        return source_version
     try:
         return package_version("neatlogs")
     except PackageNotFoundError:
-        return _version_from_pyproject() or "0.0.0"
+        return "0.0.0"
 
 
 __version__ = get_version()

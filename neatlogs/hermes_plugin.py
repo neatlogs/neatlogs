@@ -12,7 +12,7 @@ Enable it once Hermes and neatlogs are installed in the same environment::
 and provide credentials (env, or ~/.hermes/.env)::
 
     NEATLOGS_API_KEY   - Neatlogs project write key (required)
-    NEATLOGS_ENDPOINT  - Backend URL (optional; default https://staging-cloud.neatlogs.com,
+    NEATLOGS_ENDPOINT  - Backend URL (optional; default https://ingest.neatlogs.com,
                          the same canonical default neatlogs.init() uses)
 
 Traces are grouped under the workflow name "hermes". If the API key is missing the
@@ -177,12 +177,10 @@ def _ensure_configured() -> bool:
         return False
 
     # Resolve the endpoint to the SAME canonical default as neatlogs.init()
-    # (staging-cloud). We can't omit it: configure()'s wrapper-mode bootstrap
-    # defaults to a DIFFERENT host (cloud.neatlogs.com), so relying on that path
-    # would silently export to the wrong backend. Honor NEATLOGS_ENDPOINT when set.
+    # (ingest.neatlogs.com) and honor NEATLOGS_ENDPOINT when set.
     endpoint = (
         os.environ.get("NEATLOGS_ENDPOINT", "").strip()
-        or "https://staging-cloud.neatlogs.com"
+        or "https://ingest.neatlogs.com"
     )
     # workflow_name is an init()/configure() argument, not an env var, so we pass
     # our default directly. configure() only sets wrapper-mode defaults; if

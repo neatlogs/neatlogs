@@ -12,10 +12,11 @@ import csv
 import io
 import json
 import sys
-from typing import Any, Dict, Optional, TextIO
+from typing import Any, Dict, Iterable, List, Optional, TextIO
 
 from .breakdown import BreakdownReport, ModelCostBreakdown
 from .forecast import ForecastReport
+from .pricing import ModelDefinition
 from .ranking import EvaluationReport, ScoredModel
 
 # ---------------------------------------------------------------------------
@@ -442,3 +443,149 @@ def format_forecast(
         return format_forecast_json(report)
     use_color = _supports_color(stream or sys.stdout)
     return format_forecast_text(report, use_color=use_color)
+
+
+# ---------------------------------------------------------------------------
+# Pricing catalog (list + show)
+# ---------------------------------------------------------------------------
+
+
+def _sorted_catalog(models: Iterable[ModelDefinition]) -> List[ModelDefinition]:
+    return sorted(models, key=lambda m: (m.provider, m.model_key))
+
+
+def _pricing_model_row(m: ModelDefinition) -> Dict[str, Any]:
+    return {
+        "model": m.model_key,
+        "provider": m.provider,
+        "context_window": m.context_window,
+        "capabilities": sorted(m.capabilities),
+        "usage_types": {k: round(v, 6) for k, v in m.usage_types.items()},
+        "tiers": {
+            k: [{"above_tokens": t.above_tokens, "rate": round(t.rate, 6)} for t in v]
+            for k, v in m.tiers.items()
+        },
+    }
+
+
+def _pricing_list_row(m: ModelDefinition) -> Dict[str, Any]:
+    return {
+        "model": m.model_key,
+        "provider": m.provider,
+        "context_window": m.context_window,
+        "capabilities": sorted(m.capabilities),
+    }
+
+
+def format_pricing_list_text(models: Iterable[ModelDefinition], *, use_color: bool = True) -> str:
+    buf = io.StringIO()
+    rows = _sorted_catalog(models)
+    if not rows:
+        buf.write("(no models in the pricing catalog)\n")
+        return buf.getvalue()
+    header = f"{'provider':<14} {'model':<44} {'context':>10} {'capabilities'}"
+    buf.write(header + "\n")
+    buf.write("-" * len(header) + "\n")
+    for m in rows:
+        ctx = f"{m.context_window:,}" if m.context_window is not None else "-"
+        line = (
+            f"{m.provider[:14]:<14} {m.model_key[:44]:<44} "
+            f"{ctx:>10} {','.join(sorted(m.capabilities))}"
+        )
+        if use_color:
+            line = _ansi("2", line)
+        buf.write(line + "\n")
+    buf.write("-" * len(header) + "\n")
+    buf.write(f"{len(rows)} model(s) listed.\n")
+    return buf.getvalue()
+
+
+def format_pricing_list_json(models: Iterable[ModelDefinition]) -> str:
+    rows = _sorted_catalog(models)
+    return (
+        json.dumps(
+            {
+                "currency": "USD",
+                "model_count": len(rows),
+                "models": [_pricing_list_row(m) for m in rows],
+            },
+            indent=2,
+        )
+        + "\n"
+    )
+
+
+def format_pricing_list_csv(models: Iterable[ModelDefinition]) -> str:
+    buf = io.StringIO()
+    w = csv.writer(buf, lineterminator="\n")
+    w.writerow(["model", "provider", "context_window", "capabilities"])
+    for m in _sorted_catalog(models):
+        w.writerow(
+            [
+                m.model_key,
+                m.provider,
+                m.context_window if m.context_window is not None else "",
+                ";".join(sorted(m.capabilities)),
+            ]
+        )
+    return buf.getvalue()
+
+
+def format_pricing_list(
+    models: Iterable[ModelDefinition],
+    *,
+    style: str = "text",
+    stream: Optional[TextIO] = None,
+) -> str:
+    if style not in ("text", "json", "csv"):
+        raise ValueError(f"unknown style: {style!r}")
+    if style == "json":
+        return format_pricing_list_json(models)
+    if style == "csv":
+        return format_pricing_list_csv(models)
+    use_color = _supports_color(stream or sys.stdout)
+    return format_pricing_list_text(models, use_color=use_color)
+
+
+def format_pricing_show_text(model: ModelDefinition, *, use_color: bool = True) -> str:
+    buf = io.StringIO()
+    buf.write(f"provider:        {model.provider}\n")
+    ctx = f"{model.context_window:,}" if model.context_window is not None else "not declared"
+    buf.write(f"context_window:  {ctx}\n")
+    caps = sorted(model.capabilities)
+    buf.write(f"capabilities:    {', '.join(caps) if caps else '(none)'}\n")
+    buf.write("\n")
+    if model.usage_types:
+        buf.write("rates (USD per 1M tokens):\n")
+        for usage_type in sorted(model.usage_types):
+            buf.write(f"  {usage_type:<14} ${model.usage_types[usage_type]:>9.6f}\n")
+    else:
+        buf.write("(no usage rates declared)\n")
+    if model.tiers:
+        buf.write("\ntiers:\n")
+        for usage_type in sorted(model.tiers):
+            for tier in model.tiers[usage_type]:
+                buf.write(
+                    f"  {usage_type:<14} > {tier.above_tokens:>10,} → " f"${tier.rate:>9.6f}\n"
+                )
+    if use_color:
+        pass
+    return buf.getvalue()
+
+
+def format_pricing_show_json(model: ModelDefinition) -> str:
+    return json.dumps(_pricing_model_row(model), indent=2) + "\n"
+
+
+def format_pricing_show(
+    model: ModelDefinition,
+    *,
+    style: str = "text",
+    stream: Optional[TextIO] = None,
+) -> str:
+    if style not in ("text", "json"):
+        raise ValueError(f"unknown style: {style!r}")
+    if style == "json":
+        return format_pricing_show_json(model)
+    use_color = _supports_color(stream or sys.stdout)
+    return format_pricing_show_text(model, use_color=use_color)

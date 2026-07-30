@@ -51,6 +51,13 @@ from neatlogs.cost import (
     format_forecast,
     format_forecast_json,
     format_forecast_text,
+    format_pricing_list,
+    format_pricing_list_csv,
+    format_pricing_list_json,
+    format_pricing_list_text,
+    format_pricing_show,
+    format_pricing_show_json,
+    format_pricing_show_text,
 )
 
 # Private symbols (from submodules — not part of the public API).
@@ -2493,3 +2500,219 @@ class TestCLIForecast:
         assert rc == 0
         out = capsys.readouterr().out
         assert "openai/gpt-4o-mini" in out
+
+
+# ---------------------------------------------------------------------------
+# Pricing catalog formatters
+# ---------------------------------------------------------------------------
+
+
+def _make_pricing_models() -> List[ModelDefinition]:
+    return [
+        ModelDefinition(
+            model_key="acme/widget",
+            provider="acme",
+            context_window=128000,
+            capabilities={"tools", "json_mode"},
+            usage_types={"input": 0.5, "output": 1.5},
+            tiers={},
+        ),
+        ModelDefinition(
+            model_key="acme/flagged",
+            provider="acme",
+            context_window=None,
+            capabilities=set(),
+            usage_types={"input": 0.1, "output": 0.2},
+            tiers={},
+        ),
+        ModelDefinition(
+            model_key="anthropic/claude-sonnet-4",
+            provider="anthropic",
+            context_window=200000,
+            capabilities={"vision", "tools", "prompt_cache"},
+            usage_types={"input": 3.0, "output": 15.0, "cache_read": 0.3, "cache_write": 3.75},
+            tiers={
+                "input": [Tier(above_tokens=200000, rate=6.0)],
+                "output": [Tier(above_tokens=200000, rate=22.5)],
+            },
+        ),
+    ]
+
+
+class TestFormatPricingList:
+    def test_text_lists_every_model(self):
+        out = format_pricing_list_text(_make_pricing_models(), use_color=False)
+        assert "acme/widget" in out
+        assert "acme/flagged" in out
+        assert "anthropic/claude-sonnet-4" in out
+        assert "3 model(s) listed." in out
+
+    def test_text_sorts_by_provider_then_model(self):
+        out = format_pricing_list_text(_make_pricing_models(), use_color=False)
+        i_acme = out.index("acme/flagged")
+        i_anth = out.index("anthropic/claude-sonnet-4")
+        # Sort key is (provider, model_key); "acme" < "anthropic", so acme first.
+        assert i_acme < i_anth
+
+    def test_text_shows_dash_for_missing_context(self):
+        out = format_pricing_list_text(_make_pricing_models(), use_color=False)
+        # The line for acme/flagged has context_window=None, so the column shows "-"
+        flagged_line = next(ln for ln in out.splitlines() if "acme/flagged" in ln)
+        assert "            - " in flagged_line or flagged_line.endswith("- ")
+
+    def test_text_no_color_strips_ansi(self):
+        out = format_pricing_list_text(_make_pricing_models(), use_color=False)
+        assert "\033[" not in out
+
+    def test_text_with_color_includes_ansi(self):
+        out = format_pricing_list_text(_make_pricing_models(), use_color=True)
+        assert "\033[2m" in out
+
+    def test_text_handles_empty_catalog(self):
+        out = format_pricing_list_text([], use_color=False)
+        assert "no models" in out
+
+    def test_json_includes_currency_and_count(self):
+        out = format_pricing_list_json(_make_pricing_models())
+        data = json.loads(out)
+        assert data["currency"] == "USD"
+        assert data["model_count"] == 3
+        assert {m["model"] for m in data["models"]} == {
+            "acme/widget",
+            "acme/flagged",
+            "anthropic/claude-sonnet-4",
+        }
+
+    def test_json_round_trippable(self):
+        out = format_pricing_list_json(_make_pricing_models())
+        json.loads(out)  # must not raise
+
+    def test_csv_header_and_rows(self):
+        out = format_pricing_list_csv(_make_pricing_models())
+        rows = list(csv.reader(io.StringIO(out)))
+        assert rows[0] == ["model", "provider", "context_window", "capabilities"]
+        data_rows = rows[1:]
+        assert len(data_rows) == 3
+        widget = next(r for r in data_rows if r[0] == "acme/widget")
+        assert widget[1] == "acme"
+        assert widget[2] == "128000"
+        assert "tools" in widget[3] and "json_mode" in widget[3]
+        # Missing context_window should be blank in CSV
+        flagged = next(r for r in data_rows if r[0] == "acme/flagged")
+        assert flagged[2] == ""
+
+    def test_csv_sorted_by_provider_then_model(self):
+        out = format_pricing_list_csv(_make_pricing_models())
+        rows = list(csv.reader(io.StringIO(out)))[1:]
+        assert rows[0][1] == "acme"
+        assert rows[-1][1] == "anthropic"
+
+    def test_dispatcher_text(self):
+        out = format_pricing_list(_make_pricing_models(), style="text", stream=io.StringIO())
+        assert "3 model(s) listed." in out
+
+    def test_dispatcher_json(self):
+        out = format_pricing_list(_make_pricing_models(), style="json")
+        data = json.loads(out)
+        assert data["model_count"] == 3
+
+    def test_dispatcher_csv(self):
+        out = format_pricing_list(_make_pricing_models(), style="csv")
+        assert "acme/widget" in out
+
+    def test_dispatcher_rejects_unknown_style(self):
+        with pytest.raises(ValueError, match="unknown style"):
+            format_pricing_list(_make_pricing_models(), style="yaml")
+
+
+class TestFormatPricingShow:
+    def test_text_shows_provider_context_caps_rates_tiers(self):
+        m = next(m for m in _make_pricing_models() if m.model_key == "anthropic/claude-sonnet-4")
+        out = format_pricing_show_text(m, use_color=False)
+        assert "provider:        anthropic" in out
+        assert "context_window:  200,000" in out
+        assert "vision" in out and "tools" in out
+        assert "rates (USD per 1M tokens):" in out
+        # Width spec pads the number, not the dollar sign: "$ 3.000000" not "$3.000000"
+        assert "input" in out and "$ 3.000000" in out
+        assert "tiers:" in out
+        assert ">    200,000" in out
+        assert "$22.500000" in out
+
+    def test_text_handles_no_context_window(self):
+        m = next(m for m in _make_pricing_models() if m.model_key == "acme/flagged")
+        out = format_pricing_show_text(m, use_color=False)
+        assert "not declared" in out
+
+    def test_text_handles_no_capabilities(self):
+        m = next(m for m in _make_pricing_models() if m.model_key == "acme/flagged")
+        out = format_pricing_show_text(m, use_color=False)
+        assert "(none)" in out
+
+    def test_text_handles_no_tiers(self):
+        m = next(m for m in _make_pricing_models() if m.model_key == "acme/widget")
+        out = format_pricing_show_text(m, use_color=False)
+        assert "tiers:" not in out
+
+    def test_text_handles_no_usage_rates(self):
+        empty = ModelDefinition(
+            model_key="empty/blank",
+            provider="empty",
+            context_window=4096,
+            capabilities={"tools"},
+            usage_types={},
+            tiers={},
+        )
+        out = format_pricing_show_text(empty, use_color=False)
+        assert "no usage rates declared" in out
+
+    def test_json_includes_all_fields(self):
+        m = next(m for m in _make_pricing_models() if m.model_key == "anthropic/claude-sonnet-4")
+        out = format_pricing_show_json(m)
+        data = json.loads(out)
+        assert data["model"] == "anthropic/claude-sonnet-4"
+        assert data["provider"] == "anthropic"
+        assert data["context_window"] == 200000
+        assert sorted(data["capabilities"]) == ["prompt_cache", "tools", "vision"]
+        assert data["usage_types"]["input"] == 3.0
+        assert data["tiers"]["input"] == [{"above_tokens": 200000, "rate": 6.0}]
+        assert data["tiers"]["output"] == [{"above_tokens": 200000, "rate": 22.5}]
+
+    def test_json_handles_missing_context_window(self):
+        m = next(m for m in _make_pricing_models() if m.model_key == "acme/flagged")
+        out = format_pricing_show_json(m)
+        data = json.loads(out)
+        assert data["context_window"] is None
+
+    def test_dispatcher_text(self):
+        m = next(m for m in _make_pricing_models() if m.model_key == "anthropic/claude-sonnet-4")
+        out = format_pricing_show(m, style="text", stream=io.StringIO())
+        assert "tiers:" in out
+
+    def test_dispatcher_json(self):
+        m = next(m for m in _make_pricing_models() if m.model_key == "acme/widget")
+        out = format_pricing_show(m, style="json")
+        data = json.loads(out)
+        assert data["model"] == "acme/widget"
+
+    def test_dispatcher_rejects_csv(self):
+        m = _make_pricing_models()[0]
+        with pytest.raises(ValueError, match="unknown style"):
+            format_pricing_show(m, style="csv")
+
+    def test_works_on_real_catalog_known_model(self):
+        # End-to-end: pull a model from the bundled catalog, format it, sanity-check.
+        ch = default_chain()
+        m = ch.lookup("anthropic/claude-sonnet-4")
+        assert m is not None
+        text = format_pricing_show_text(m, use_color=False)
+        assert "anthropic" in text
+        assert "tiers:" in text
+
+    def test_works_on_real_catalog_text_model_without_tiers(self):
+        ch = default_chain()
+        m = ch.lookup("openai/gpt-4o-mini")
+        assert m is not None
+        text = format_pricing_show_text(m, use_color=False)
+        assert "openai" in text
+        assert "tiers:" not in text

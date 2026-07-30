@@ -2716,3 +2716,177 @@ class TestFormatPricingShow:
         text = format_pricing_show_text(m, use_color=False)
         assert "openai" in text
         assert "tiers:" not in text
+
+
+# ---------------------------------------------------------------------------
+# CLI: pricing subcommand
+# ---------------------------------------------------------------------------
+
+
+class TestCLIPricing:
+    def test_list_text(self, capsys):
+        from neatlogs.cost.cli import _cli
+
+        rc = _cli(["pricing", "list", "--no-color"])
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "anthropic/claude-3-5-sonnet-latest" in out
+        assert "openai/gpt-4o-mini" in out
+        assert "model(s) listed." in out
+
+    def test_list_json(self, capsys):
+        from neatlogs.cost.cli import _cli
+
+        rc = _cli(["pricing", "list", "--format", "json", "--no-color"])
+        assert rc == 0
+        out = capsys.readouterr().out
+        data = json.loads(out)
+        assert data["model_count"] >= 30
+        keys = {m["model"] for m in data["models"]}
+        assert "openai/gpt-4o-mini" in keys
+
+    def test_list_csv(self, capsys):
+        from neatlogs.cost.cli import _cli
+
+        rc = _cli(["pricing", "list", "--format", "csv", "--no-color"])
+        assert rc == 0
+        out = capsys.readouterr().out
+        rows = list(csv.reader(io.StringIO(out)))
+        assert rows[0] == ["model", "provider", "context_window", "capabilities"]
+        assert len(rows) >= 31  # 1 header + 30+ models
+
+    def test_show_text_known_model(self, capsys):
+        from neatlogs.cost.cli import _cli
+
+        rc = _cli(["pricing", "show", "openai/gpt-4o-mini", "--no-color"])
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "provider:        openai" in out
+        assert "context_window:  128,000" in out
+        assert "rates (USD per 1M tokens):" in out
+
+    def test_show_text_model_with_tiers(self, capsys):
+        from neatlogs.cost.cli import _cli
+
+        rc = _cli(["pricing", "show", "anthropic/claude-sonnet-4", "--no-color"])
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "tiers:" in out
+        assert ">    200,000" in out
+
+    def test_show_json(self, capsys):
+        from neatlogs.cost.cli import _cli
+
+        rc = _cli(["pricing", "show", "openai/gpt-4o-mini", "--format", "json", "--no-color"])
+        assert rc == 0
+        out = capsys.readouterr().out
+        data = json.loads(out)
+        assert data["model"] == "openai/gpt-4o-mini"
+        assert data["usage_types"]["input"] == 0.15
+
+    def test_show_unknown_model_exits_2(self, capsys):
+        from neatlogs.cost.cli import _cli
+
+        rc = _cli(["pricing", "show", "openai/wrong-key", "--no-color"])
+        assert rc == 2
+        captured = capsys.readouterr()
+        assert "unknown model" in captured.err
+        assert "wrong-key" in captured.err
+
+    def test_show_csv_rejected(self, capsys):
+        # show is text | json only; CSV must be rejected by the parser.
+        from neatlogs.cost.cli import _cli
+
+        with pytest.raises(SystemExit):
+            _cli(
+                [
+                    "pricing",
+                    "show",
+                    "openai/gpt-4o-mini",
+                    "--format",
+                    "csv",
+                    "--no-color",
+                ]
+            )
+
+    def test_pricing_list_with_custom_pricing_file(self, capsys, tmp_path: Path):
+        from neatlogs.cost.cli import _cli
+
+        custom = tmp_path / "custom.json"
+        custom.write_text(
+            json.dumps(
+                {
+                    "_meta": {"schema_version": "2.0"},
+                    "models": {
+                        "acme/widget": {
+                            "provider": "acme",
+                            "capabilities": ["tools"],
+                            "usage_types": {"input": 0.5, "output": 1.5},
+                        }
+                    },
+                }
+            )
+        )
+        rc = _cli(["pricing", "list", "--pricing-file", str(custom), "--no-color"])
+        assert rc == 0
+        out = capsys.readouterr().out
+        # The chain returns the union of the override and the bundled
+        # catalog (deduped by model_key). Both should appear.
+        assert "acme/widget" in out
+        assert "anthropic/claude-3-5-sonnet-latest" in out
+
+    def test_pricing_show_with_custom_pricing_file(self, capsys, tmp_path: Path):
+        from neatlogs.cost.cli import _cli
+
+        custom = tmp_path / "custom.json"
+        custom.write_text(
+            json.dumps(
+                {
+                    "_meta": {"schema_version": "2.0"},
+                    "models": {
+                        "acme/widget": {
+                            "provider": "acme",
+                            "capabilities": ["tools"],
+                            "usage_types": {"input": 0.5, "output": 1.5},
+                        }
+                    },
+                }
+            )
+        )
+        rc = _cli(
+            [
+                "pricing",
+                "show",
+                "acme/widget",
+                "--pricing-file",
+                str(custom),
+                "--no-color",
+            ]
+        )
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "acme" in out
+        assert "$ 0.500000" in out
+        assert "$ 1.500000" in out
+
+    def test_dispatch_does_not_break_main_parser(self, capsys):
+        # Regression: the pricing dispatch must not steal args from the
+        # main parser. A normal main-parser invocation still works.
+        from neatlogs.cost.cli import _cli
+
+        rc = _cli(
+            [
+                "--forecast",
+                "--candidates",
+                "openai/gpt-4o-mini",
+                "--monthly-calls",
+                "1000",
+                "--avg-prompt",
+                "100",
+                "--no-color",
+            ]
+        )
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "Forecast" in out
+        assert "openai/gpt-4o-mini" in out

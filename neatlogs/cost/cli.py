@@ -5,6 +5,7 @@ Three modes share one CLI:
 * default: what-if ranking with compatibility scoring
 * ``--breakdown``: per-model cost breakdown
 * ``--forecast``: monthly / annual cost projection
+* ``pricing`` subcommand: catalog discovery (``list`` and ``show``)
 """
 
 from __future__ import annotations
@@ -20,13 +21,81 @@ from .formatters import (
     format_breakdown,
     format_evaluation,
     format_forecast,
+    format_pricing_list,
+    format_pricing_show,
 )
 from .pricing import default_chain
 from .ranking import evaluate_workload
 from .workload import WorkloadConstraints
 
 
-def _build_parser() -> argparse.ArgumentParser:
+def _build_pricing_parser() -> argparse.ArgumentParser:
+    """Parser for the ``pricing`` subcommand group (``list`` and ``show``).
+
+    Kept separate from the main parser because argparse's subparsers
+    don't play well with a top-level ``paths`` positional that uses
+    ``nargs="*"``. Pre-parse dispatch (``_dispatch``) picks this parser
+    when argv starts with ``pricing``.
+    """
+    p = argparse.ArgumentParser(
+        prog="neatlogs-cost pricing",
+        description=(
+            "Query the pricing catalog directly (no span log required). "
+            "Two subcommands: `list` for an overview of every known model, "
+            "`show` for the full breakdown of one model (rates, tiered "
+            "rates, capabilities, context window)."
+        ),
+    )
+    sub = p.add_subparsers(dest="pricing_action", required=True)
+
+    list_p = sub.add_parser(
+        "list",
+        help="List every model in the pricing catalog.",
+        description="List every model in the pricing catalog with provider, "
+        "context window, and capabilities.",
+    )
+    list_p.add_argument(
+        "--format",
+        choices=("text", "json", "csv"),
+        default="text",
+        help="Output format. Default: text.",
+    )
+    list_p.add_argument(
+        "--pricing-file",
+        default=None,
+        help="Path to a JSON pricing catalog override. Default: the bundled catalog.",
+    )
+    list_p.add_argument("--no-color", action="store_true")
+    list_p.add_argument("--color", action="store_true")
+
+    show_p = sub.add_parser(
+        "show",
+        help="Show full pricing breakdown for one model.",
+        description="Show the full pricing breakdown (rates, tiered rates, "
+        "capabilities, context window) for one model.",
+    )
+    show_p.add_argument(
+        "model_key",
+        help="Provider/model key, e.g. openai/gpt-4o-mini or anthropic/claude-3-5-sonnet-latest.",
+    )
+    show_p.add_argument(
+        "--format",
+        choices=("text", "json"),
+        default="text",
+        help="Output format. Default: text.",
+    )
+    show_p.add_argument(
+        "--pricing-file",
+        default=None,
+        help="Path to a JSON pricing catalog override. Default: the bundled catalog.",
+    )
+    show_p.add_argument("--no-color", action="store_true")
+    show_p.add_argument("--color", action="store_true")
+
+    return p
+
+
+def _build_main_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="neatlogs-cost",
         description=(
@@ -178,14 +247,60 @@ def _build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def _cli(argv: Optional[Sequence[str]] = None) -> int:
-    parser = _build_parser()
-    args = parser.parse_args(argv)
+def _build_parser() -> argparse.ArgumentParser:
+    return _build_main_parser()
+
+
+def _apply_color_flags(args) -> None:
     global _USE_COLOR
-    if args.no_color:
+    if getattr(args, "no_color", False):
         _USE_COLOR = False
-    elif args.color:
+    elif getattr(args, "color", False):
         _USE_COLOR = True
+
+
+def _handle_pricing_list(args) -> int:
+    pricing = default_chain(args.pricing_file)
+    models = pricing.catalog()
+    sys.stdout.write(format_pricing_list(models, style=args.format, stream=sys.stdout))
+    return 0
+
+
+def _handle_pricing_show(args) -> int:
+    pricing = default_chain(args.pricing_file)
+    model = pricing.lookup(args.model_key)
+    if model is None:
+        print(
+            f"[neatlogs-cost] unknown model: {args.model_key!r}. "
+            f"Use `neatlogs-cost pricing list` to see available models, or "
+            f"override with --pricing-file.",
+            file=sys.stderr,
+        )
+        return 2
+    sys.stdout.write(format_pricing_show(model, style=args.format, stream=sys.stdout))
+    return 0
+
+
+def _cli(argv: Optional[Sequence[str]] = None) -> int:
+    if argv is None:
+        argv = sys.argv[1:]
+    argv = list(argv)
+    if argv and argv[0] == "pricing":
+        # Strip the "pricing" prefix; the pricing parser expects the
+        # subcommand (list | show) as the first positional.
+        parser = _build_pricing_parser()
+        args = parser.parse_args(argv[1:])
+        _apply_color_flags(args)
+        if args.pricing_action == "list":
+            return _handle_pricing_list(args)
+        if args.pricing_action == "show":
+            return _handle_pricing_show(args)
+        return 2
+
+    parser = _build_main_parser()
+    args = parser.parse_args(argv)
+    _apply_color_flags(args)
+
     pricing = default_chain(args.pricing_file)
 
     if args.forecast:

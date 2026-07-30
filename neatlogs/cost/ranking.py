@@ -52,6 +52,12 @@ def _is_span_compatible(
                 f"min context {constraints.min_context_window:,} required; "
                 f"model has no declared context"
             )
+        elif model.context_window < constraints.min_context_window:
+            compatible = False
+            reasons.append(
+                f"model context {model.context_window:,} < required "
+                f"min {constraints.min_context_window:,}"
+            )
         elif model.context_window < usage.input_total:
             compatible = False
             reasons.append(f"prompt {usage.input_total:,} > context {model.context_window:,}")

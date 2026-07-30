@@ -247,10 +247,6 @@ def _build_main_parser() -> argparse.ArgumentParser:
     return p
 
 
-def _build_parser() -> argparse.ArgumentParser:
-    return _build_main_parser()
-
-
 def _apply_color_flags(args) -> None:
     global _USE_COLOR
     if getattr(args, "no_color", False):

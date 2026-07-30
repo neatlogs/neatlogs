@@ -568,8 +568,6 @@ def format_pricing_show_text(model: ModelDefinition, *, use_color: bool = True) 
                 buf.write(
                     f"  {usage_type:<14} > {tier.above_tokens:>10,} → " f"${tier.rate:>9.6f}\n"
                 )
-    if use_color:
-        pass
     return buf.getvalue()
 
 

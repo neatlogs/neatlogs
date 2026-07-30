@@ -104,6 +104,11 @@ def _build_main_parser() -> argparse.ArgumentParser:
             "and a list of `provider/model` keys, find the cheapest model "
             "that can still serve the same workload."
         ),
+        epilog=(
+            "Run `neatlogs-cost pricing list` to see every model in the "
+            "catalog, or `neatlogs-cost pricing show <model>` for the full "
+            "breakdown (rates, tiered rates, capabilities) of one model."
+        ),
     )
     p.add_argument(
         "paths",

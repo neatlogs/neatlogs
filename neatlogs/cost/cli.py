@@ -282,8 +282,6 @@ def _cli(argv: Optional[Sequence[str]] = None) -> int:
         argv = sys.argv[1:]
     argv = list(argv)
     if argv and argv[0] == "pricing":
-        # Strip the "pricing" prefix; the pricing parser expects the
-        # subcommand (list | show) as the first positional.
         parser = _build_pricing_parser()
         args = parser.parse_args(argv[1:])
         _apply_color_flags(args)

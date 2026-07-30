@@ -96,6 +96,10 @@ def forecast(
             cw = d.effective_rate(UsageType.CACHE_WRITE, hit_prompt)
             if cw is not None:
                 cache_cost = (hit_prompt / 1_000_000) * cw
+                notes.append(
+                    f"model has no cache_read rate; falling back to "
+                    f"cache_write (${cw:.6f}/M) for cache-hit traffic"
+                )
 
     reasoning_cost = 0.0
     if reasoning_per_call > 0:

@@ -4,26 +4,39 @@
     "units": "per_1m_tokens",
     "schema_version": "2.0",
     "notes": "v2 schema: usage_types is a dict mapping usage type → USD per 1M tokens. Capabilities is a list of strings. Tiers are a per-usage-type list of {above_tokens, rate} entries (Langfuse convention). Override via --pricing-file or NEATLOGS_PRICING_FILE.",
-    "last_updated": "2026-07"
+    "last_updated": "2026-07-30",
+    "verified_from": {
+      "openai": "https://platform.openai.com/docs/pricing (fetched 2026-07-30)",
+      "anthropic": "https://docs.claude.com/en/docs/about-claude/pricing (fetched 2026-07-30)",
+      "google_genai": "https://ai.google.dev/gemini-api/docs/pricing (fetched 2026-07-30)",
+      "deepseek": "https://api-docs.deepseek.com/quick_start/pricing (fetched 2026-07-30)",
+      "groq": "https://groq.com/pricing (fetched 2026-07-30)"
+    },
+    "known_legacy": [
+      "openai/gpt-4o-mini-2024-07-18 (frozen snapshot, inference rates match gpt-4o-mini)",
+      "groq/llama-3.1-70b-versatile (removed from Groq's public pricing page; rates kept for backward compat)",
+      "deepseek/deepseek-chat (DeepSeek-V3, superseded by deepseek-v4-flash)",
+      "deepseek/deepseek-reasoner (DeepSeek-R1, superseded by deepseek-v4-pro)"
+    ]
   },
   "models": {
     "openai/gpt-5": {
       "provider": "openai",
       "context_window": 400000,
       "capabilities": ["tools", "json_mode", "vision", "reasoning"],
-      "usage_types": {"input": 1.25, "output": 10.00}
+      "usage_types": {"input": 1.25, "output": 10.00, "cache_read": 0.125}
     },
     "openai/gpt-5-mini": {
       "provider": "openai",
       "context_window": 400000,
       "capabilities": ["tools", "json_mode", "vision", "reasoning"],
-      "usage_types": {"input": 0.25, "output": 2.00}
+      "usage_types": {"input": 0.25, "output": 2.00, "cache_read": 0.025}
     },
     "openai/gpt-5-nano": {
       "provider": "openai",
       "context_window": 400000,
       "capabilities": ["tools", "json_mode", "vision", "reasoning"],
-      "usage_types": {"input": 0.05, "output": 0.40}
+      "usage_types": {"input": 0.05, "output": 0.40, "cache_read": 0.005}
     },
     "openai/gpt-4.1": {
       "provider": "openai",
@@ -71,13 +84,13 @@
       "provider": "openai",
       "context_window": 128000,
       "capabilities": ["tools", "json_mode", "reasoning", "prompt_cache"],
-      "usage_types": {"input": 3.00, "output": 12.00, "reasoning": 12.00, "cache_read": 1.50}
+      "usage_types": {"input": 1.10, "output": 4.40, "reasoning": 4.40, "cache_read": 0.55}
     },
     "openai/o3": {
       "provider": "openai",
       "context_window": 200000,
       "capabilities": ["tools", "json_mode", "reasoning", "prompt_cache"],
-      "usage_types": {"input": 10.00, "output": 40.00, "reasoning": 40.00, "cache_read": 5.00}
+      "usage_types": {"input": 2.00, "output": 8.00, "reasoning": 8.00, "cache_read": 0.50}
     },
     "openai/o3-mini": {
       "provider": "openai",
@@ -89,7 +102,7 @@
       "provider": "openai",
       "context_window": 200000,
       "capabilities": ["tools", "json_mode", "reasoning", "prompt_cache"],
-      "usage_types": {"input": 1.10, "output": 4.40, "reasoning": 4.40, "cache_read": 0.55}
+      "usage_types": {"input": 1.10, "output": 4.40, "reasoning": 4.40, "cache_read": 0.275}
     },
     "openai/text-embedding-3-small": {
       "provider": "openai",

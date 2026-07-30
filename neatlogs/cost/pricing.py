@@ -130,6 +130,16 @@ class PricingProvider(abc.ABC):
     ) -> Optional[ModelDefinition]:
         return None
 
+    def catalog(self) -> List[ModelDefinition]:
+        """Return every model known to this provider.
+
+        Default returns an empty list. Concrete providers with a
+        static catalog (built-in JSON, custom override file) override
+        this. Remote providers that can't enumerate (litellm mirror)
+        can leave the default; ``ChainProvider`` will simply skip them.
+        """
+        return []
+
 
 def _build_def(key: str, raw: Dict) -> Optional[ModelDefinition]:
     if not isinstance(raw, dict):
@@ -211,6 +221,9 @@ class BuiltinProvider(PricingProvider):
                 return self._models.get(self._by_pn[(prov, name)])
         return None
 
+    def catalog(self) -> List[ModelDefinition]:
+        return list(self._models.values())
+
 
 class CustomProvider(PricingProvider):
     """A user-supplied override file. Sits on top of the builtin catalog
@@ -246,6 +259,9 @@ class CustomProvider(PricingProvider):
                 return self._models.get(self._by_pn[(prov, name)])
         return None
 
+    def catalog(self) -> List[ModelDefinition]:
+        return list(self._models.values())
+
 
 class ChainProvider(PricingProvider):
     """Composes a list of providers in priority order. The first one
@@ -271,6 +287,17 @@ class ChainProvider(PricingProvider):
             if r is not None:
                 return r
         return None
+
+    def catalog(self) -> List[ModelDefinition]:
+        seen: Set[str] = set()
+        out: List[ModelDefinition] = []
+        for p in self._providers:
+            for m in p.catalog():
+                if m.model_key in seen:
+                    continue
+                seen.add(m.model_key)
+                out.append(m)
+        return out
 
 
 def default_chain(pricing_file: Optional[str | os.PathLike] = None) -> ChainProvider:

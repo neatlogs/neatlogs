@@ -539,6 +539,19 @@ class TestBuiltinProvider:
         provider = BuiltinProvider(p)
         assert provider.lookup("custom/m1") is not None
 
+    def test_catalog_returns_all_models(self):
+        provider = BuiltinProvider()
+        models = provider.catalog()
+        assert len(models) == len(provider._models)
+        assert {m.model_key for m in models} == set(provider._models)
+
+    def test_catalog_includes_specific_known_model(self):
+        provider = BuiltinProvider()
+        models = provider.catalog()
+        keys = [m.model_key for m in models]
+        assert "openai/gpt-4o-mini" in keys
+        assert "anthropic/claude-3-5-sonnet-latest" in keys
+
 
 class TestCustomProvider:
     def test_loads(self):
@@ -555,6 +568,31 @@ class TestCustomProvider:
             p = CustomProvider(path)
             d = p.lookup_by_provider_and_name("anthropic", "claude-3-5-haiku-latest")
             assert d is not None
+        finally:
+            path.unlink(missing_ok=True)
+
+    def test_catalog_returns_custom_models(self):
+        path = _write_catalog_to_tmp(
+            {
+                "_meta": {"schema_version": "2.0"},
+                "models": {
+                    "acme/widget": {
+                        "provider": "acme",
+                        "capabilities": ["tools"],
+                        "usage_types": {"input": 0.5, "output": 1.5},
+                    },
+                    "acme/gadget": {
+                        "provider": "acme",
+                        "capabilities": ["vision"],
+                        "usage_types": {"input": 1.0, "output": 2.0},
+                    },
+                },
+            }
+        )
+        try:
+            p = CustomProvider(path)
+            models = p.catalog()
+            assert {m.model_key for m in models} == {"acme/widget", "acme/gadget"}
         finally:
             path.unlink(missing_ok=True)
 
@@ -622,6 +660,65 @@ class TestChainProvider:
         chain = ChainProvider([])
         assert chain.lookup("openai/gpt-4o-mini") is None
         assert chain.lookup_by_provider_and_name("openai", "gpt-4o-mini") is None
+        assert chain.catalog() == []
+
+    def test_catalog_dedupes_custom_wins(self):
+        # Custom declares openai/gpt-4o-mini; builtin also has it.
+        # Custom's version must surface first and the builtin copy must be skipped.
+        custom_path = _write_catalog_to_tmp(
+            {
+                "_meta": {"schema_version": "2.0"},
+                "models": {
+                    "openai/gpt-4o-mini": {
+                        "provider": "openai",
+                        "capabilities": ["vision"],
+                        "usage_types": {"input": 0.10, "output": 0.40},
+                    }
+                },
+            }
+        )
+        try:
+            chain = ChainProvider([CustomProvider(custom_path), _build_test_provider()])
+            catalog = chain.catalog()
+            keys = [m.model_key for m in catalog]
+            assert keys.count("openai/gpt-4o-mini") == 1
+            m = next(m for m in catalog if m.model_key == "openai/gpt-4o-mini")
+            assert m.usage_types["input"] == 0.10
+        finally:
+            custom_path.unlink(missing_ok=True)
+
+    def test_catalog_combines_unique_models(self):
+        # Custom has 1 model not in builtin; builtin has its own set.
+        # Both should appear in the chained catalog.
+        custom_path = _write_catalog_to_tmp(
+            {
+                "_meta": {"schema_version": "2.0"},
+                "models": {
+                    "acme/widget": {
+                        "provider": "acme",
+                        "capabilities": ["tools"],
+                        "usage_types": {"input": 0.5, "output": 1.5},
+                    }
+                },
+            }
+        )
+        try:
+            chain = ChainProvider([CustomProvider(custom_path), _build_test_provider()])
+            keys = {m.model_key for m in chain.catalog()}
+            assert "acme/widget" in keys
+            assert "openai/gpt-4o-mini" in keys
+        finally:
+            custom_path.unlink(missing_ok=True)
+
+    def test_abstract_provider_catalog_default_is_empty(self):
+        # Subclasses of PricingProvider that don't override catalog() get [].
+        from neatlogs.cost.pricing import PricingProvider
+
+        class _EmptyProvider(PricingProvider):
+            def lookup(self, model_key):  # pragma: no cover - not invoked
+                return None
+
+        assert _EmptyProvider().catalog() == []
 
 
 class TestDefaultChain:

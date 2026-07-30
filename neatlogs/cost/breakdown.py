@@ -71,10 +71,10 @@ def cost_span(usage: SpanUsage, model: ModelDefinition) -> SpanCost:
         sc.input_cost = (usage.prompt_tokens / 1_000_000) * in_rate
     if out_rate is not None and usage.completion_tokens > 0:
         sc.output_cost = (usage.completion_tokens / 1_000_000) * out_rate
-    if usage.cache_creation_tokens > 0:
-        rate = model.effective_rate(UsageType.CACHE_WRITE, usage.cache_creation_tokens)
+    if usage.cache_write_tokens > 0:
+        rate = model.effective_rate(UsageType.CACHE_WRITE, usage.cache_write_tokens)
         if rate is not None:
-            sc.cache_write_cost = (usage.cache_creation_tokens / 1_000_000) * rate
+            sc.cache_write_cost = (usage.cache_write_tokens / 1_000_000) * rate
     if usage.cache_read_tokens > 0:
         rate = model.effective_rate(UsageType.CACHE_READ, usage.cache_read_tokens)
         if rate is not None:

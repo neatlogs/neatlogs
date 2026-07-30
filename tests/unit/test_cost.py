@@ -243,7 +243,7 @@ class TestExtractUsage:
         assert u.provider == "openai"  # lowercased
         assert u.prompt_tokens == 100
         assert u.completion_tokens == 50
-        assert u.cache_creation_tokens == 0
+        assert u.cache_write_tokens == 0
         assert u.cache_read_tokens == 0
         assert u.reasoning_tokens == 0
 
@@ -273,13 +273,47 @@ class TestExtractUsage:
             }
         }
         u = _extract_usage(d)
-        assert u.cache_creation_tokens == 200
+        assert u.cache_write_tokens == 200
         assert u.cache_read_tokens == 800
         assert u.reasoning_tokens == 100
         assert u.uses_prompt_cache is True
         assert u.uses_reasoning is True
         assert u.input_total == 2000
         assert u.output_total == 600
+
+    def test_cache_write_canonical_key(self):
+        # Regression: the SDK's canonical normalized attribute is
+        # `neatlogs.llm.token_count.cache_write` (see attribute-mapping.json).
+        # Processed span logs use this key, not the older
+        # `cache_creation` name. Before the fix, processed logs
+        # undercounted cache_write cost as $0.
+        d = {
+            "attributes": {
+                "neatlogs.llm.model_name": "claude-sonnet-4",
+                "neatlogs.llm.provider": "anthropic",
+                "neatlogs.llm.token_count.prompt": 1000,
+                "neatlogs.llm.token_count.completion": 500,
+                "neatlogs.llm.token_count.cache_write": 400,
+                "neatlogs.llm.token_count.cache_read": 100,
+            }
+        }
+        u = _extract_usage(d)
+        assert u.cache_write_tokens == 400
+        assert u.cache_read_tokens == 100
+        assert u.input_total == 1500
+
+    def test_cache_write_key_takes_precedence_over_legacy(self):
+        # When both the canonical `cache_write` and the legacy
+        # `cache_creation` are present, `cache_write` wins.
+        d = {
+            "attributes": {
+                "neatlogs.llm.model_name": "m",
+                "neatlogs.llm.token_count.cache_write": 100,
+                "neatlogs.llm.token_count.cache_creation": 999,
+            }
+        }
+        u = _extract_usage(d)
+        assert u.cache_write_tokens == 100
 
 
 class TestIterJsonObjects:
@@ -990,6 +1024,25 @@ class TestSpanCompatibility:
         u = SpanUsage("s", "t", "m", "p", 100_000, 50, 0, 0, 0)
         ok, _ = _is_span_compatible(u, m, WorkloadConstraints(min_context_window=0))
         assert ok is True
+
+    def test_min_context_floor_enforced_independent_of_prompt_size(self):
+        # Regression: --min-context must be a hard floor, not just a
+        # on/off flag. With min=200K, a 128K-context model must be
+        # incompatible even if the prompt is small.
+        m = ModelDefinition(
+            model_key="m",
+            provider="p",
+            context_window=128_000,
+            usage_types={"input": 0.15, "output": 0.60},
+        )
+        u = SpanUsage("s", "t", "m", "p", 1_000, 50, 0, 0, 0)
+        ok, reasons = _is_span_compatible(
+            u,
+            m,
+            WorkloadConstraints(min_context_window=200_000),
+        )
+        assert ok is False
+        assert any("min 200,000" in r for r in reasons)
 
 
 # ---------------------------------------------------------------------------
@@ -2128,6 +2181,48 @@ class TestForecast:
         assert report.cache_hit_rate == 1.0
         # 100% of 1k prompt tokens at cache rate 0.075/1M = 7.5e-5
         assert report.cache_cost == pytest.approx(0.000075, abs=1e-9)
+
+    def test_cache_read_falls_back_to_cache_write_with_note(self):
+        # When the model has cache_write but no cache_read rate, the
+        # forecast falls back to cache_write for cache-hit traffic and
+        # appends a note explaining the fallback.
+        chain = ChainProvider(
+            [
+                CustomProvider(
+                    _write_catalog_to_tmp(
+                        {
+                            "_meta": {"schema_version": "2.0"},
+                            "models": {
+                                "vendor/cacheonly-write": {
+                                    "provider": "vendor",
+                                    "context_window": 100000,
+                                    "capabilities": ["prompt_cache"],
+                                    "usage_types": {
+                                        "input": 1.0,
+                                        "output": 2.0,
+                                        "cache_write": 0.5,
+                                    },
+                                }
+                            },
+                        }
+                    )
+                )
+            ]
+        )
+        try:
+            report = forecast(
+                model_key="vendor/cacheonly-write",
+                monthly_calls=10_000,
+                avg_prompt_tokens=1_000,
+                avg_completion_tokens=500,
+                cache_hit_rate=0.5,
+                pricing=chain,
+            )
+            # 50% of 1k prompt at cache_write 0.5/1M = 0.00025 per call
+            assert report.cache_cost == pytest.approx(0.00025, abs=1e-9)
+            assert any("cache_read" in n and "cache_write" in n for n in report.notes)
+        finally:
+            chain._providers[0]._path.unlink(missing_ok=True)
 
 
 class TestFormatForecast:

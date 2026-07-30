@@ -116,7 +116,7 @@ def build_workload_profile(
         prompt_vals.append(u.prompt_tokens)
         completion_vals.append(u.completion_tokens)
         cache_read_total += u.cache_read_tokens
-        cache_write_total += u.cache_creation_tokens
+        cache_write_total += u.cache_write_tokens
         reasoning_total += u.reasoning_tokens
         if auto_infer_capabilities:
             d = _resolve_definition(u, pricing)

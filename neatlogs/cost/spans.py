@@ -30,13 +30,13 @@ class SpanUsage:
     provider: str | None
     prompt_tokens: int
     completion_tokens: int
-    cache_creation_tokens: int
+    cache_write_tokens: int
     cache_read_tokens: int
     reasoning_tokens: int
 
     @property
     def input_total(self) -> int:
-        return self.prompt_tokens + self.cache_creation_tokens + self.cache_read_tokens
+        return self.prompt_tokens + self.cache_write_tokens + self.cache_read_tokens
 
     @property
     def output_total(self) -> int:
@@ -49,7 +49,7 @@ class SpanUsage:
             for t in (
                 self.prompt_tokens,
                 self.completion_tokens,
-                self.cache_creation_tokens,
+                self.cache_write_tokens,
                 self.cache_read_tokens,
                 self.reasoning_tokens,
             )
@@ -57,7 +57,7 @@ class SpanUsage:
 
     @property
     def uses_prompt_cache(self) -> bool:
-        return self.cache_creation_tokens > 0 or self.cache_read_tokens > 0
+        return self.cache_write_tokens > 0 or self.cache_read_tokens > 0
 
     @property
     def uses_reasoning(self) -> bool:
@@ -110,8 +110,9 @@ def _extract_usage(obj: Dict[str, Any]) -> SpanUsage:
             "gen_ai.usage.output_tokens",
             "gen_ai.usage.completion_tokens",
         ),
-        cache_creation_tokens=_int_attr(
+        cache_write_tokens=_int_attr(
             attrs,
+            "neatlogs.llm.token_count.cache_write",
             "neatlogs.llm.token_count.cache_creation",
             "gen_ai.usage.cache_creation_input_tokens",
         ),

@@ -282,11 +282,6 @@ class TestExtractUsage:
         assert u.output_total == 600
 
     def test_cache_write_canonical_key(self):
-        # Regression: the SDK's canonical normalized attribute is
-        # `neatlogs.llm.token_count.cache_write` (see attribute-mapping.json).
-        # Processed span logs use this key, not the older
-        # `cache_creation` name. Before the fix, processed logs
-        # undercounted cache_write cost as $0.
         d = {
             "attributes": {
                 "neatlogs.llm.model_name": "claude-sonnet-4",
@@ -303,8 +298,6 @@ class TestExtractUsage:
         assert u.input_total == 1500
 
     def test_cache_write_key_takes_precedence_over_legacy(self):
-        # When both the canonical `cache_write` and the legacy
-        # `cache_creation` are present, `cache_write` wins.
         d = {
             "attributes": {
                 "neatlogs.llm.model_name": "m",
@@ -1026,9 +1019,6 @@ class TestSpanCompatibility:
         assert ok is True
 
     def test_min_context_floor_enforced_independent_of_prompt_size(self):
-        # Regression: --min-context must be a hard floor, not just a
-        # on/off flag. With min=200K, a 128K-context model must be
-        # incompatible even if the prompt is small.
         m = ModelDefinition(
             model_key="m",
             provider="p",
@@ -2183,9 +2173,6 @@ class TestForecast:
         assert report.cache_cost == pytest.approx(0.000075, abs=1e-9)
 
     def test_cache_read_falls_back_to_cache_write_with_note(self):
-        # When the model has cache_write but no cache_read rate, the
-        # forecast falls back to cache_write for cache-hit traffic and
-        # appends a note explaining the fallback.
         chain = ChainProvider(
             [
                 CustomProvider(

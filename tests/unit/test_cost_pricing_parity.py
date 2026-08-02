@@ -1,10 +1,18 @@
 """Parity test: bundled pricing catalog vs. LiteLLM community catalog.
 
 Catches drift in `neatlogs/config/pricing.json` against a pinned snapshot of
-LiteLLM's `model_prices_and_context_window.json`. Default test runs offline
-against the local fixture; `NEATLOGS_RUN_PARITY=1` would re-fetch the pinned
-URL, but the live mode is not exercised in this test file (the fixture is the
-authoritative source here; live refresh is a separate workflow).
+LiteLLM's `model_prices_and_context_window.json`.
+
+Two run modes:
+
+- Default: loads the local fixture from
+  `tests/fixtures/litellm_pricing_snapshot.json`. Offline, fast, what runs
+  on every push and PR. Catches local-side drift (someone editing
+  `pricing.json` without updating the fixture).
+
+- Live (`NEATLOGS_RUN_PARITY=1`): fetches the pinned URL fresh and compares
+  against the bundled catalog. Does NOT write the fixture. What the weekly
+  GitHub Actions cron runs to catch upstream LiteLLM drift.
 
 Fixture:  tests/fixtures/litellm_pricing_snapshot.json
 Mapping:  tests/data/pricing_model_map.json
@@ -13,7 +21,10 @@ Mapping:  tests/data/pricing_model_map.json
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 import pytest
 
@@ -22,6 +33,10 @@ from neatlogs.cost import BuiltinProvider
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FIXTURE_PATH = REPO_ROOT / "tests" / "fixtures" / "litellm_pricing_snapshot.json"
 MAPPING_PATH = REPO_ROOT / "tests" / "data" / "pricing_model_map.json"
+LITELLM_URL_TEMPLATE = (
+    "https://raw.githubusercontent.com/BerriAI/litellm/{sha}/"
+    "model_prices_and_context_window.json"
+)
 
 # Per-token drift tolerance. 1% covers minor rounding in LiteLLM and per-million
 # conversions on our side without masking real pricing errors.
@@ -45,6 +60,31 @@ def _load_fixture() -> dict:
 
 def _load_mapping() -> dict:
     return json.loads(MAPPING_PATH.read_text())
+
+
+def _load_pinned_sha() -> str:
+    return json.loads(MAPPING_PATH.read_text())["_meta"]["litellm_pinned_sha"]
+
+
+def _load_live_snapshot() -> dict:
+    """Fetch the LiteLLM snapshot at the pinned SHA. Network call.
+
+    Only invoked when NEATLOGS_RUN_PARITY=1. The fixture is not written;
+    this is a read-only live check used by the weekly CI cron to catch
+    upstream LiteLLM drift.
+    """
+    sha = _load_pinned_sha()
+    url = LITELLM_URL_TEMPLATE.format(sha=sha)
+    req = Request(url, headers={"User-Agent": "neatlogs-parity-test/1.0"})
+    try:
+        with urlopen(req, timeout=30) as resp:
+            return json.loads(resp.read())
+    except (HTTPError, URLError) as exc:
+        pytest.fail(
+            f"NEATLOGS_RUN_PARITY=1 but failed to fetch {url}: {exc}. "
+            "Either unset the env var to use the local fixture, or fix "
+            "the network/auth and rerun."
+        )
 
 
 def _our_rates_per_million(bundled) -> dict[str, float | None]:
@@ -100,7 +140,12 @@ def _check_pair(our_key: str, bundled_rates: dict, litellm_rates: dict) -> list[
 
 def test_pricing_parity():
     """Each bundled model matches the LiteLLM pinned snapshot within 1% drift."""
-    fixture = _load_fixture()
+    if os.environ.get("NEATLOGS_RUN_PARITY") == "1":
+        fixture = _load_live_snapshot()
+        source = "live LiteLLM snapshot"
+    else:
+        fixture = _load_fixture()
+        source = "local fixture (set NEATLOGS_RUN_PARITY=1 to use live)"
     mapping = _load_mapping()
     builtin = BuiltinProvider()
 
@@ -133,6 +178,7 @@ def test_pricing_parity():
     # The test is allowed to skip entries (with a warning, not a failure) but
     # we surface the skipped list so the maintainer sees which models are not
     # covered by the parity check.
+    print(f"\nParity check source: {source}")
     if skipped:
         print("\nParity check skipped for these models:")
         print("\n".join(skipped))
@@ -152,7 +198,7 @@ def test_pricing_parity():
     if drift_lines:
         pytest.fail(
             "\nPricing drift between bundled catalog and LiteLLM snapshot "
-            f"(tolerance {TOLERANCE * 100:.0f}%):\n"
+            f"(tolerance {TOLERANCE * 100:.0f}%, source: {source}):\n"
             + "\n".join(drift_lines)
             + f"\n\n{compared} models compared, {len(skipped)} skipped. "
             "Update neatlogs/config/pricing.json to match the LiteLLM source "

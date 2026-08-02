@@ -78,31 +78,31 @@
       "provider": "openai",
       "context_window": 200000,
       "capabilities": ["tools", "json_mode", "reasoning", "prompt_cache"],
-      "usage_types": {"input": 15.00, "output": 60.00, "reasoning": 60.00, "cache_read": 7.50}
+      "usage_types": {"input": 15.00, "output": 60.00, "cache_read": 7.50}
     },
     "openai/o1-mini": {
       "provider": "openai",
       "context_window": 128000,
       "capabilities": ["tools", "json_mode", "reasoning", "prompt_cache"],
-      "usage_types": {"input": 1.10, "output": 4.40, "reasoning": 4.40, "cache_read": 0.55}
+      "usage_types": {"input": 1.10, "output": 4.40, "cache_read": 0.55}
     },
     "openai/o3": {
       "provider": "openai",
       "context_window": 200000,
       "capabilities": ["tools", "json_mode", "reasoning", "prompt_cache"],
-      "usage_types": {"input": 2.00, "output": 8.00, "reasoning": 8.00, "cache_read": 0.50}
+      "usage_types": {"input": 2.00, "output": 8.00, "cache_read": 0.50}
     },
     "openai/o3-mini": {
       "provider": "openai",
       "context_window": 200000,
       "capabilities": ["tools", "json_mode", "reasoning", "prompt_cache"],
-      "usage_types": {"input": 1.10, "output": 4.40, "reasoning": 4.40, "cache_read": 0.55}
+      "usage_types": {"input": 1.10, "output": 4.40, "cache_read": 0.55}
     },
     "openai/o4-mini": {
       "provider": "openai",
       "context_window": 200000,
       "capabilities": ["tools", "json_mode", "reasoning", "prompt_cache"],
-      "usage_types": {"input": 1.10, "output": 4.40, "reasoning": 4.40, "cache_read": 0.275}
+      "usage_types": {"input": 1.10, "output": 4.40, "cache_read": 0.275}
     },
     "openai/text-embedding-3-small": {
       "provider": "openai",
@@ -164,20 +164,20 @@
       "provider": "google_genai",
       "context_window": 1000000,
       "capabilities": ["vision", "tools", "json_mode"],
-      "usage_types": {"input": 1.25, "output": 10.00},
+      "usage_types": {"input": 1.25, "output": 10.00, "cache_read": 0.125},
       "tiers": {"input": [{"above_tokens": 200000, "rate": 2.50}], "output": [{"above_tokens": 200000, "rate": 15.00}]}
     },
     "google_genai/gemini-2.5-flash": {
       "provider": "google_genai",
       "context_window": 1000000,
       "capabilities": ["vision", "tools", "json_mode"],
-      "usage_types": {"input": 0.30, "output": 2.50}
+      "usage_types": {"input": 0.30, "output": 2.50, "cache_read": 0.03, "reasoning": 2.50}
     },
     "google_genai/gemini-2.0-flash": {
       "provider": "google_genai",
       "context_window": 1000000,
       "capabilities": ["vision", "tools", "json_mode"],
-      "usage_types": {"input": 0.10, "output": 0.40}
+      "usage_types": {"input": 0.10, "output": 0.40, "cache_read": 0.025}
     },
     "google_genai/gemini-1.5-pro": {
       "provider": "google_genai",
@@ -201,7 +201,7 @@
       "provider": "deepseek",
       "context_window": 128000,
       "capabilities": ["reasoning"],
-      "usage_types": {"input": 0.55, "output": 2.19, "reasoning": 2.19}
+      "usage_types": {"input": 0.55, "output": 2.19}
     },
     "groq/llama-3.1-70b-versatile": {
       "provider": "groq",

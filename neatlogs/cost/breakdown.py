@@ -81,6 +81,12 @@ def cost_span(usage: SpanUsage, model: ModelDefinition) -> SpanCost:
             sc.cache_read_cost = (usage.cache_read_tokens / 1_000_000) * rate
     if usage.reasoning_tokens > 0:
         rate = model.effective_rate(UsageType.REASONING, usage.reasoning_tokens)
+        if rate is None:
+            # No separate reasoning rate. Reasoning tokens are a subset of
+            # output (OpenAI o-series, deepseek-reasoner) and charge at the
+            # output rate. Falling back here keeps a span from showing
+            # reasoning_cost=$0 when the model has no explicit reasoning rate.
+            rate = model.effective_rate(UsageType.OUTPUT, usage.reasoning_tokens)
         if rate is not None:
             sc.reasoning_cost = (usage.reasoning_tokens / 1_000_000) * rate
     return sc

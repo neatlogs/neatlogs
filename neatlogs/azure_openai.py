@@ -145,7 +145,9 @@ def _set_chat_input(span: Any, kwargs: dict) -> None:
             if fn.get("description"):
                 span.set_attribute(f"neatlogs.llm.tools.{i}.description", fn["description"])
             if fn.get("parameters"):
-                span.set_attribute(f"neatlogs.llm.tools.{i}.input_schema", serialize(fn["parameters"]))
+                span.set_attribute(
+                    f"neatlogs.llm.tools.{i}.input_schema", serialize(fn["parameters"])
+                )
 
     for param in ("temperature", "top_p", "max_tokens", "frequency_penalty", "presence_penalty"):
         if param in kwargs and kwargs[param] is not None:
@@ -329,10 +331,13 @@ def _patch_embeddings(embeddings: Any, sync: bool = True) -> None:
         _ok(span, duration_ms)
 
     if sync:
+
         def patched(*args, **kwargs):
             if is_suppressed():
                 return orig(*args, **kwargs)
-            span = get_provider_tracer().start_span(name="azure_openai.embeddings.create", attributes=_start(kwargs))
+            span = get_provider_tracer().start_span(
+                name="azure_openai.embeddings.create", attributes=_start(kwargs)
+            )
             start = time.perf_counter()
             try:
                 response = orig(*args, **kwargs)
@@ -341,11 +346,15 @@ def _patch_embeddings(embeddings: Any, sync: bool = True) -> None:
                 raise
             _finalize(span, response, (time.perf_counter() - start) * 1000)
             return response
+
     else:
+
         async def patched(*args, **kwargs):
             if is_suppressed():
                 return await orig(*args, **kwargs)
-            span = get_provider_tracer().start_span(name="azure_openai.embeddings.create", attributes=_start(kwargs))
+            span = get_provider_tracer().start_span(
+                name="azure_openai.embeddings.create", attributes=_start(kwargs)
+            )
             start = time.perf_counter()
             try:
                 response = await orig(*args, **kwargs)
@@ -405,7 +414,9 @@ def _finalize_response(span: Any, response: Any, duration_ms: float) -> None:
     span.end()
 
 
-def _finalize_stream(span: Any, chunks: List[Any], duration_ms: float, ttft_ms: Optional[float]) -> None:
+def _finalize_stream(
+    span: Any, chunks: List[Any], duration_ms: float, ttft_ms: Optional[float]
+) -> None:
     text_parts: List[str] = []
     tool_calls_acc: dict = {}
     finish_reason = None
@@ -498,7 +509,9 @@ def _finalize_responses_response(span: Any, response: Any, duration_ms: float) -
     span.end()
 
 
-def _finalize_responses_stream(span: Any, chunks: List[Any], duration_ms: float, ttft_ms: Optional[float]) -> None:
+def _finalize_responses_stream(
+    span: Any, chunks: List[Any], duration_ms: float, ttft_ms: Optional[float]
+) -> None:
     text_parts: List[str] = []
     model = None
     usage = None
@@ -550,7 +563,9 @@ def _err(span: Any, e: Exception) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _patch_method(resource: Any, method_name: str, flag: str, start_attrs, finalize, is_async: bool) -> None:
+def _patch_method(
+    resource: Any, method_name: str, flag: str, start_attrs, finalize, is_async: bool
+) -> None:
     """
     Wrap resource.<method_name> with a span. start_attrs(kwargs)->dict builds the
     initial attributes; finalize(span, response, duration_ms) records the result.
@@ -561,10 +576,13 @@ def _patch_method(resource: Any, method_name: str, flag: str, start_attrs, final
     orig = getattr(resource, method_name)
 
     if is_async:
+
         async def patched(*args, **kwargs):
             if is_suppressed():
                 return await orig(*args, **kwargs)
-            span = get_provider_tracer().start_span(name=start_attrs.__name__, attributes=start_attrs(kwargs))
+            span = get_provider_tracer().start_span(
+                name=start_attrs.__name__, attributes=start_attrs(kwargs)
+            )
             start = time.perf_counter()
             try:
                 response = await orig(*args, **kwargs)
@@ -574,13 +592,18 @@ def _patch_method(resource: Any, method_name: str, flag: str, start_attrs, final
             try:
                 finalize(span, response, (time.perf_counter() - start) * 1000)
             except Exception:
-                span.set_status(StatusCode.OK); span.end()
+                span.set_status(StatusCode.OK)
+                span.end()
             return response
+
     else:
+
         def patched(*args, **kwargs):
             if is_suppressed():
                 return orig(*args, **kwargs)
-            span = get_provider_tracer().start_span(name=start_attrs.__name__, attributes=start_attrs(kwargs))
+            span = get_provider_tracer().start_span(
+                name=start_attrs.__name__, attributes=start_attrs(kwargs)
+            )
             start = time.perf_counter()
             try:
                 response = orig(*args, **kwargs)
@@ -590,7 +613,8 @@ def _patch_method(resource: Any, method_name: str, flag: str, start_attrs, final
             try:
                 finalize(span, response, (time.perf_counter() - start) * 1000)
             except Exception:
-                span.set_status(StatusCode.OK); span.end()
+                span.set_status(StatusCode.OK)
+                span.end()
             return response
 
     setattr(resource, method_name, patched)
@@ -611,12 +635,20 @@ def _patch_chat_parse(completions: Any, sync: bool = True) -> None:
             "neatlogs.llm.model_name": kwargs.get("model", ""),
             "neatlogs.llm.structured_output": True,
         }
+
     start_attrs.__name__ = "azure_openai.chat.completions.parse"
 
     def finalize(span, response, duration_ms):
         _finalize_response(span, response, duration_ms)
 
-    _patch_method(completions, "parse", "_neatlogs_azure_parse_patched", start_attrs, finalize, is_async=not sync)
+    _patch_method(
+        completions,
+        "parse",
+        "_neatlogs_azure_parse_patched",
+        start_attrs,
+        finalize,
+        is_async=not sync,
+    )
 
 
 def _patch_responses_parse(responses: Any, sync: bool = True) -> None:
@@ -630,12 +662,20 @@ def _patch_responses_parse(responses: Any, sync: bool = True) -> None:
             "neatlogs.llm.input_messages.0.role": "user",
             "neatlogs.llm.input_messages.0.content": serialize(kwargs.get("input", "")),
         }
+
     start_attrs.__name__ = "azure_openai.responses.parse"
 
     def finalize(span, response, duration_ms):
         _finalize_responses_response(span, response, duration_ms)
 
-    _patch_method(responses, "parse", "_neatlogs_azure_parse_patched", start_attrs, finalize, is_async=not sync)
+    _patch_method(
+        responses,
+        "parse",
+        "_neatlogs_azure_parse_patched",
+        start_attrs,
+        finalize,
+        is_async=not sync,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -652,8 +692,11 @@ def _patch_legacy_completions(completions: Any, sync: bool = True) -> None:
             "neatlogs.llm.system": _SYSTEM,
             "neatlogs.llm.model_name": kwargs.get("model", ""),
             "neatlogs.llm.input_messages.0.role": "user",
-            "neatlogs.llm.input_messages.0.content": (prompt if isinstance(prompt, str) else serialize(prompt))[:10000],
+            "neatlogs.llm.input_messages.0.content": (
+                prompt if isinstance(prompt, str) else serialize(prompt)
+            )[:10000],
         }
+
     start_attrs.__name__ = "azure_openai.completions.create"
 
     def finalize(span, response, duration_ms):
@@ -676,7 +719,14 @@ def _patch_legacy_completions(completions: Any, sync: bool = True) -> None:
                 span.set_attribute("neatlogs.llm.token_count.total", usage.total_tokens)
         _ok(span, duration_ms)
 
-    _patch_method(completions, "create", "_neatlogs_azure_legacy_patched", start_attrs, finalize, is_async=not sync)
+    _patch_method(
+        completions,
+        "create",
+        "_neatlogs_azure_legacy_patched",
+        start_attrs,
+        finalize,
+        is_async=not sync,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -685,12 +735,19 @@ def _patch_legacy_completions(completions: Any, sync: bool = True) -> None:
 
 
 def _patch_images(images: Any, sync: bool = True) -> None:
-    for method, span_name in (("generate", "azure_openai.images.generate"),
-                              ("edit", "azure_openai.images.edit"),
-                              ("create_variation", "azure_openai.images.create_variation")):
+    for method, span_name in (
+        ("generate", "azure_openai.images.generate"),
+        ("edit", "azure_openai.images.edit"),
+        ("create_variation", "azure_openai.images.create_variation"),
+    ):
+
         def make(method=method, span_name=span_name):
             def start_attrs(kwargs):
-                attrs = {"neatlogs.span.kind": "llm", "neatlogs.llm.provider": _PROVIDER, "neatlogs.llm.task": "image"}
+                attrs = {
+                    "neatlogs.span.kind": "llm",
+                    "neatlogs.llm.provider": _PROVIDER,
+                    "neatlogs.llm.task": "image",
+                }
                 if kwargs.get("model"):
                     attrs["neatlogs.llm.model_name"] = kwargs["model"]
                 if kwargs.get("prompt"):
@@ -698,6 +755,7 @@ def _patch_images(images: Any, sync: bool = True) -> None:
                 if kwargs.get("size"):
                     attrs["neatlogs.image.size"] = str(kwargs["size"])
                 return attrs
+
             start_attrs.__name__ = span_name
 
             def finalize(span, response, duration_ms):
@@ -708,10 +766,13 @@ def _patch_images(images: Any, sync: bool = True) -> None:
                     except TypeError:
                         pass
                 _ok(span, duration_ms)
+
             return start_attrs, finalize
 
         sa, fin = make()
-        _patch_method(images, method, f"_neatlogs_azure_{method}_patched", sa, fin, is_async=not sync)
+        _patch_method(
+            images, method, f"_neatlogs_azure_{method}_patched", sa, fin, is_async=not sync
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -722,8 +783,13 @@ def _patch_images(images: Any, sync: bool = True) -> None:
 def _patch_audio(audio: Any, sync: bool = True) -> None:
     speech = getattr(audio, "speech", None)
     if speech is not None:
+
         def start_attrs(kwargs):
-            attrs = {"neatlogs.span.kind": "llm", "neatlogs.llm.provider": _PROVIDER, "neatlogs.llm.task": "tts"}
+            attrs = {
+                "neatlogs.span.kind": "llm",
+                "neatlogs.llm.provider": _PROVIDER,
+                "neatlogs.llm.task": "tts",
+            }
             if kwargs.get("model"):
                 attrs["neatlogs.llm.model_name"] = kwargs["model"]
             if kwargs.get("input"):
@@ -731,19 +797,33 @@ def _patch_audio(audio: Any, sync: bool = True) -> None:
             if kwargs.get("voice"):
                 attrs["neatlogs.audio.voice"] = str(kwargs["voice"])
             return attrs
+
         start_attrs.__name__ = "azure_openai.audio.speech.create"
-        _patch_method(speech, "create", "_neatlogs_azure_patched", start_attrs, lambda s, r, d: _ok(s, d), is_async=not sync)
+        _patch_method(
+            speech,
+            "create",
+            "_neatlogs_azure_patched",
+            start_attrs,
+            lambda s, r, d: _ok(s, d),
+            is_async=not sync,
+        )
 
     for sub, task in (("transcriptions", "stt"), ("translations", "translation")):
         res = getattr(audio, sub, None)
         if res is None:
             continue
+
         def make(task=task, sub=sub):
             def start_attrs(kwargs):
-                attrs = {"neatlogs.span.kind": "llm", "neatlogs.llm.provider": _PROVIDER, "neatlogs.llm.task": task}
+                attrs = {
+                    "neatlogs.span.kind": "llm",
+                    "neatlogs.llm.provider": _PROVIDER,
+                    "neatlogs.llm.task": task,
+                }
                 if kwargs.get("model"):
                     attrs["neatlogs.llm.model_name"] = kwargs["model"]
                 return attrs
+
             start_attrs.__name__ = f"azure_openai.audio.{sub}.create"
 
             def finalize(span, response, duration_ms):
@@ -752,7 +832,9 @@ def _patch_audio(audio: Any, sync: bool = True) -> None:
                     span.set_attribute("neatlogs.llm.output_messages.0.role", "assistant")
                     span.set_attribute("neatlogs.llm.output_messages.0.content", str(text)[:10000])
                 _ok(span, duration_ms)
+
             return start_attrs, finalize
+
         sa, fin = make()
         _patch_method(res, "create", "_neatlogs_azure_patched", sa, fin, is_async=not sync)
 
@@ -764,25 +846,34 @@ def _patch_audio(audio: Any, sync: bool = True) -> None:
 
 def _patch_moderations(moderations: Any, sync: bool = True) -> None:
     def start_attrs(kwargs):
-        attrs = {"neatlogs.span.kind": "llm", "neatlogs.llm.provider": _PROVIDER, "neatlogs.llm.task": "moderation"}
+        attrs = {
+            "neatlogs.span.kind": "llm",
+            "neatlogs.llm.provider": _PROVIDER,
+            "neatlogs.llm.task": "moderation",
+        }
         if kwargs.get("model"):
             attrs["neatlogs.llm.model_name"] = kwargs["model"]
         inp = kwargs.get("input")
         if inp:
             attrs["input.value"] = (inp if isinstance(inp, str) else serialize(inp))[:10000]
         return attrs
+
     start_attrs.__name__ = "azure_openai.moderations.create"
 
     def finalize(span, response, duration_ms):
         results = getattr(response, "results", None)
         if results:
             try:
-                span.set_attribute("neatlogs.moderation.flagged", bool(getattr(results[0], "flagged", False)))
+                span.set_attribute(
+                    "neatlogs.moderation.flagged", bool(getattr(results[0], "flagged", False))
+                )
             except (TypeError, AttributeError):
                 pass
         _ok(span, duration_ms)
 
-    _patch_method(moderations, "create", "_neatlogs_azure_patched", start_attrs, finalize, is_async=not sync)
+    _patch_method(
+        moderations, "create", "_neatlogs_azure_patched", start_attrs, finalize, is_async=not sync
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -793,6 +884,7 @@ def _patch_moderations(moderations: Any, sync: bool = True) -> None:
 def _patch_batches(batches: Any, sync: bool = True) -> None:
     def start_attrs(kwargs):
         return {"neatlogs.span.kind": "task", "neatlogs.batch.endpoint": kwargs.get("endpoint", "")}
+
     start_attrs.__name__ = "azure_openai.batches.create"
 
     def finalize(span, response, duration_ms):
@@ -804,13 +896,16 @@ def _patch_batches(batches: Any, sync: bool = True) -> None:
             span.set_attribute("neatlogs.batch.status", str(status))
         _ok(span, duration_ms)
 
-    _patch_method(batches, "create", "_neatlogs_azure_patched", start_attrs, finalize, is_async=not sync)
+    _patch_method(
+        batches, "create", "_neatlogs_azure_patched", start_attrs, finalize, is_async=not sync
+    )
 
 
 # ---------------------------------------------------------------------------
 # Import-replacement: `from neatlogs.azure_openai import AzureOpenAI`
 # Patches AzureOpenAI/AsyncAzureOpenAI.__init__ so every client is auto-wrapped.
 # ---------------------------------------------------------------------------
+
 
 def _patch_azure_openai_module() -> None:
     global _PATCHED, _ORIG_INIT, _ORIG_ASYNC_INIT

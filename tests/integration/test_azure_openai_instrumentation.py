@@ -8,7 +8,6 @@ with provider="azure" and the canonical neatlogs.* attributes.
 from types import SimpleNamespace
 
 import pytest
-
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
@@ -21,6 +20,7 @@ def _setup_tracer(exporter):
     # Reset the process-global wrapper-tracer cache so each test binds to its
     # own provider (correct in production; leaks across tests otherwise).
     import neatlogs._wrap_utils as _wu
+
     _wu._wrapper_tracer = None
     return provider
 
@@ -122,7 +122,9 @@ class TestAzureOpenAIInstrumentation:
         wrap_azure_openai_client(client)
 
         with pytest.raises(RuntimeError):
-            client.chat.completions.create(model="gpt-4o", messages=[{"role": "user", "content": "Hi"}])
+            client.chat.completions.create(
+                model="gpt-4o", messages=[{"role": "user", "content": "Hi"}]
+            )
 
         spans = in_memory_span_exporter.get_finished_spans()
         assert len(spans) == 1

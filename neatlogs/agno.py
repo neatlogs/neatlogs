@@ -166,10 +166,17 @@ def _finalize_agent_span(span: Any, response: Any, duration_ms: float) -> None:
             args = (
                 getattr(tool, "tool_args", None)
                 or getattr(tool, "arguments", None)
-                or (tool.get("tool_args") or tool.get("arguments") if isinstance(tool, dict) else None)
+                or (
+                    tool.get("tool_args") or tool.get("arguments")
+                    if isinstance(tool, dict)
+                    else None
+                )
             )
             if args:
-                span.set_attribute(f"neatlogs.llm.tool_calls.{i}.arguments", args if isinstance(args, str) else serialize(args))
+                span.set_attribute(
+                    f"neatlogs.llm.tool_calls.{i}.arguments",
+                    args if isinstance(args, str) else serialize(args),
+                )
 
     model = getattr(response, "model", None)
     if model:
@@ -320,12 +327,15 @@ def _patch_workflow(workflow: Any) -> None:
                 try:
                     iterator = orig_run(*args, **kwargs)
                 except Exception as e:
-                    _err(span, e); detach(token); raise
+                    _err(span, e)
+                    detach(token)
+                    raise
                 return _AgnoStreamIter(iterator, span, token, start, sync=True, workflow=True)
             try:
                 result = orig_run(*args, **kwargs)
             except Exception as e:
-                _err(span, e); raise
+                _err(span, e)
+                raise
             finally:
                 detach(token)
             _finalize_workflow_span(span, result, (time.perf_counter() - start) * 1000)
@@ -350,12 +360,15 @@ def _patch_workflow(workflow: Any) -> None:
                 try:
                     aiter = orig_arun(*args, **kwargs)
                 except Exception as e:
-                    _err(span, e); detach(token); raise
+                    _err(span, e)
+                    detach(token)
+                    raise
                 return _AgnoAsyncStreamIter(aiter, span, token, start, workflow=True)
             try:
                 result = await orig_arun(*args, **kwargs)
             except Exception as e:
-                _err(span, e); raise
+                _err(span, e)
+                raise
             finally:
                 detach(token)
             _finalize_workflow_span(span, result, (time.perf_counter() - start) * 1000)
@@ -523,7 +536,8 @@ def _patch_function_call_class() -> None:
             try:
                 result = orig_execute(self, *a, **k)
             except Exception as e:
-                _err(span, e); raise
+                _err(span, e)
+                raise
             finally:
                 detach(token)
             _finalize_tool(span, self, result)
@@ -542,7 +556,8 @@ def _patch_function_call_class() -> None:
             try:
                 result = await orig_aexecute(self, *a, **k)
             except Exception as e:
-                _err(span, e); raise
+                _err(span, e)
+                raise
             finally:
                 detach(token)
             _finalize_tool(span, self, result)
@@ -600,7 +615,11 @@ def _patch_model_class(target=None) -> None:
         if isinstance(msgs, list) and msgs:
             collected = []
             for i, m in enumerate(msgs):
-                role = getattr(m, "role", None) or (m.get("role") if isinstance(m, dict) else None) or ""
+                role = (
+                    getattr(m, "role", None)
+                    or (m.get("role") if isinstance(m, dict) else None)
+                    or ""
+                )
                 content = getattr(m, "content", None)
                 if content is None and isinstance(m, dict):
                     content = m.get("content")
@@ -639,10 +658,13 @@ def _patch_model_class(target=None) -> None:
         is_stream = "stream" in method
 
         if is_async and is_stream:
+
             def make(orig=orig):
                 async def wrapper(self, *a, **k):
                     tracer = get_tracer()
-                    span = tracer.start_span(name="agno.model.invoke", attributes=_model_attrs(self, k))
+                    span = tracer.start_span(
+                        name="agno.model.invoke", attributes=_model_attrs(self, k)
+                    )
                     token = attach_as_current(span)
                     chunks = []
                     try:
@@ -651,34 +673,46 @@ def _patch_model_class(target=None) -> None:
                             chunks.append(chunk)
                             yield chunk
                     except Exception as e:
-                        _err(span, e); raise
+                        _err(span, e)
+                        raise
                     finally:
                         detach(token)
                         if span.is_recording():
                             _finalize_model_stream(span, chunks)
+
                 return wrapper
+
             setattr(cls, method, make())
         elif is_async:
+
             def make(orig=orig):
                 async def wrapper(self, *a, **k):
                     tracer = get_tracer()
-                    span = tracer.start_span(name="agno.model.invoke", attributes=_model_attrs(self, k))
+                    span = tracer.start_span(
+                        name="agno.model.invoke", attributes=_model_attrs(self, k)
+                    )
                     token = attach_as_current(span)
                     try:
                         result = await orig(self, *a, **k)
                     except Exception as e:
-                        _err(span, e); raise
+                        _err(span, e)
+                        raise
                     finally:
                         detach(token)
                     _finalize_model(span, result)
                     return result
+
                 return wrapper
+
             setattr(cls, method, make())
         elif is_stream:
+
             def make(orig=orig):
                 def wrapper(self, *a, **k):
                     tracer = get_tracer()
-                    span = tracer.start_span(name="agno.model.invoke", attributes=_model_attrs(self, k))
+                    span = tracer.start_span(
+                        name="agno.model.invoke", attributes=_model_attrs(self, k)
+                    )
                     token = attach_as_current(span)
                     chunks = []
                     try:
@@ -687,28 +721,37 @@ def _patch_model_class(target=None) -> None:
                             chunks.append(chunk)
                             yield chunk
                     except Exception as e:
-                        _err(span, e); raise
+                        _err(span, e)
+                        raise
                     finally:
                         detach(token)
                         if span.is_recording():
                             _finalize_model_stream(span, chunks)
+
                 return wrapper
+
             setattr(cls, method, make())
         else:
+
             def make(orig=orig):
                 def wrapper(self, *a, **k):
                     tracer = get_tracer()
-                    span = tracer.start_span(name="agno.model.invoke", attributes=_model_attrs(self, k))
+                    span = tracer.start_span(
+                        name="agno.model.invoke", attributes=_model_attrs(self, k)
+                    )
                     token = attach_as_current(span)
                     try:
                         result = orig(self, *a, **k)
                     except Exception as e:
-                        _err(span, e); raise
+                        _err(span, e)
+                        raise
                     finally:
                         detach(token)
                     _finalize_model(span, result)
                     return result
+
                 return wrapper
+
             setattr(cls, method, make())
 
     cls._neatlogs_patched = True
@@ -787,7 +830,10 @@ def _finalize_model(span: Any, result: Any) -> None:
                 if name:
                     span.set_attribute(f"neatlogs.llm.tool_calls.{j}.name", name)
                 if args:
-                    span.set_attribute(f"neatlogs.llm.tool_calls.{j}.arguments", args if isinstance(args, str) else serialize(args))
+                    span.set_attribute(
+                        f"neatlogs.llm.tool_calls.{j}.arguments",
+                        args if isinstance(args, str) else serialize(args),
+                    )
                 if tc_id:
                     span.set_attribute(f"neatlogs.llm.tool_calls.{j}.id", str(tc_id))
                 collected_calls.append({"name": name, "arguments": args})

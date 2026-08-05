@@ -27,11 +27,11 @@ Available span kinds:
 """
 
 from .core.context import trace
-from .core.identity import identify
-from .core.propagation import extract_trace_context, inject_trace_context
 from .core.crewai_task_registry import register_crewai_task
+from .core.identity import identify
 from .core.llm_binder import bind_templates
 from .core.log import log
+from .core.propagation import extract_trace_context, inject_trace_context
 from .decorators import span
 from .init import flush, init, shutdown
 from .prompt.client import (
@@ -160,9 +160,7 @@ def wrap(client, **workflow_attributes):
     # detected — e.g. `class QAPipeline(dspy.Module)` has __module__ "src.pipeline"
     # but `dspy.module` appears in a base class. Used as a fallback when the leaf
     # class's own module doesn't reveal the framework.
-    mro_modules = " ".join(
-        (getattr(base, "__module__", "") or "") for base in type(client).__mro__
-    )
+    mro_modules = " ".join((getattr(base, "__module__", "") or "") for base in type(client).__mro__)
 
     # Azure OpenAI must be checked before plain OpenAI: AzureOpenAI subclasses
     # OpenAI and its module ("openai.lib.azure") contains "openai".
@@ -256,8 +254,11 @@ def wrap(client, **workflow_attributes):
     # async iterator of typed messages (query() / ClaudeSDKClient). There's no in-process LLM client
     # to wrap — we patch the streaming entry points and build spans from the message stream. Accept
     # either the module itself (`neatlogs.wrap(claude_agent_sdk)`) or a ClaudeSDKClient instance.
-    if (cls_name == "module" and getattr(client, "__name__", "") == "claude_agent_sdk") \
-            or cls_name == "ClaudeSDKClient" or "claude_agent_sdk" in module:
+    if (
+        (cls_name == "module" and getattr(client, "__name__", "") == "claude_agent_sdk")
+        or cls_name == "ClaudeSDKClient"
+        or "claude_agent_sdk" in module
+    ):
         from .claude_agent_sdk import wrap_claude_agent_sdk
 
         return _finish(wrap_claude_agent_sdk(client))

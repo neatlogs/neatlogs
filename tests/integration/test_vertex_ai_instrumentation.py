@@ -8,7 +8,6 @@ Vertex mode with provider="vertex_ai" / system="vertexai".
 from types import SimpleNamespace
 
 import pytest
-
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
@@ -22,6 +21,7 @@ def _setup_tracer(exporter):
     # (the cache is process-global and correct in production, where init() sets
     # the provider once, but leaks across tests).
     import neatlogs._wrap_utils as _wu
+
     _wu._wrapper_tracer = None
     return provider
 
@@ -90,7 +90,9 @@ class TestVertexAIInstrumentation:
         def generate_content(*args, **kwargs):
             raise RuntimeError("vertex boom")
 
-        client = SimpleNamespace(vertexai=True, models=SimpleNamespace(generate_content=generate_content))
+        client = SimpleNamespace(
+            vertexai=True, models=SimpleNamespace(generate_content=generate_content)
+        )
         wrap_vertex_ai_client(client)
 
         with pytest.raises(RuntimeError):

@@ -177,9 +177,11 @@ def _patch_tool_dispatch() -> None:
             span.set_attribute("input.value", serialize(args)[:10000])
         except Exception:
             pass
-        for key, attr in (("session_id", "neatlogs.conversation.id"),
-                          ("tool_call_id", "neatlogs.tool_call.id"),
-                          ("turn_id", "neatlogs.turn.id")):
+        for key, attr in (
+            ("session_id", "neatlogs.conversation.id"),
+            ("tool_call_id", "neatlogs.tool_call.id"),
+            ("turn_id", "neatlogs.turn.id"),
+        ):
             val = kwargs.get(key)
             if val:
                 span.set_attribute(attr, str(val))

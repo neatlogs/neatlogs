@@ -16,7 +16,6 @@ from opentelemetry.trace import StatusCode
 
 from ._wrap_utils import attach_as_current, detach, get_tracer, serialize
 
-
 _ADK_HOOKS_INSTALLED = False
 
 # The inner `generate_content` span (trace_inference_result) only receives the
@@ -73,13 +72,16 @@ def _install_adk_telemetry_hooks() -> None:
     # --- LLM calls: trace_call_llm(invocation_context, event_id, llm_request, llm_response, span=None)
     orig_call_llm = getattr(adk_tracing, "trace_call_llm", None)
     if orig_call_llm is not None and not getattr(orig_call_llm, "_neatlogs_wrapped", False):
+
         def patched_trace_call_llm(*args, **kwargs):
             orig_call_llm(*args, **kwargs)
             try:
                 # positional: (invocation_context, event_id, llm_request, llm_response, span?)
                 llm_request = args[2] if len(args) > 2 else kwargs.get("llm_request")
                 llm_response = args[3] if len(args) > 3 else kwargs.get("llm_response")
-                span = (args[4] if len(args) > 4 else kwargs.get("span")) or otel_trace.get_current_span()
+                span = (
+                    args[4] if len(args) > 4 else kwargs.get("span")
+                ) or otel_trace.get_current_span()
                 if span is not None:
                     span.set_attribute("neatlogs.span.kind", "llm")
                     # Emit PROPERLY-ROLED indexed messages (system / user / assistant /
@@ -102,6 +104,7 @@ def _install_adk_telemetry_hooks() -> None:
                         span.set_attribute("neatlogs.llm.output_messages.0.content", out_text)
             except Exception:
                 pass
+
         patched_trace_call_llm._neatlogs_wrapped = True
         _rebind_adk_symbol("trace_call_llm", patched_trace_call_llm, adk_tracing)
 
@@ -111,6 +114,7 @@ def _install_adk_telemetry_hooks() -> None:
     #     first-turn race where the inner span has no input yet.
     orig_use_inf = getattr(adk_tracing, "use_inference_span", None)
     if orig_use_inf is not None and not getattr(orig_use_inf, "_neatlogs_wrapped", False):
+
         def patched_use_inference_span(*args, **kwargs):
             try:
                 llm_request = args[0] if args else kwargs.get("llm_request")
@@ -121,6 +125,7 @@ def _install_adk_telemetry_hooks() -> None:
             except Exception:
                 pass
             return orig_use_inf(*args, **kwargs)
+
         patched_use_inference_span._neatlogs_wrapped = True
         _rebind_adk_symbol("use_inference_span", patched_use_inference_span, adk_tracing)
 
@@ -131,6 +136,7 @@ def _install_adk_telemetry_hooks() -> None:
     #     render empty. Enrich it with the same neatlogs I/O so neither LLM span is blank.
     orig_inf_result = getattr(adk_tracing, "trace_inference_result", None)
     if orig_inf_result is not None and not getattr(orig_inf_result, "_neatlogs_wrapped", False):
+
         def patched_trace_inference_result(*args, **kwargs):
             orig_inf_result(*args, **kwargs)
             try:
@@ -151,7 +157,9 @@ def _install_adk_telemetry_hooks() -> None:
                     if in_msgs:
                         for i, m in enumerate(in_msgs):
                             span.set_attribute(f"neatlogs.llm.input_messages.{i}.role", m["role"])
-                            span.set_attribute(f"neatlogs.llm.input_messages.{i}.content", m["content"])
+                            span.set_attribute(
+                                f"neatlogs.llm.input_messages.{i}.content", m["content"]
+                            )
                         span.set_attribute("input.value", serialize({"messages": in_msgs}))
                     out_text = _adk_llm_response_text(llm_response)
                     if out_text:
@@ -160,12 +168,14 @@ def _install_adk_telemetry_hooks() -> None:
                         span.set_attribute("neatlogs.llm.output_messages.0.content", out_text)
             except Exception:
                 pass
+
         patched_trace_inference_result._neatlogs_wrapped = True
         _rebind_adk_symbol("trace_inference_result", patched_trace_inference_result, adk_tracing)
 
     # --- Tool calls: trace_tool_call(tool, args, function_response_event)
     orig_tool_call = getattr(adk_tracing, "trace_tool_call", None)
     if orig_tool_call is not None and not getattr(orig_tool_call, "_neatlogs_wrapped", False):
+
         def patched_trace_tool_call(*args, **kwargs):
             orig_tool_call(*args, **kwargs)
             try:
@@ -181,12 +191,14 @@ def _install_adk_telemetry_hooks() -> None:
                         span.set_attribute("output.value", out_text)
             except Exception:
                 pass
+
         patched_trace_tool_call._neatlogs_wrapped = True
         _rebind_adk_symbol("trace_tool_call", patched_trace_tool_call, adk_tracing)
 
     # --- Agent invocation: trace_agent_invocation(span, agent, ctx)
     orig_agent_inv = getattr(adk_tracing, "trace_agent_invocation", None)
     if orig_agent_inv is not None and not getattr(orig_agent_inv, "_neatlogs_wrapped", False):
+
         def patched_trace_agent_invocation(*args, **kwargs):
             orig_agent_inv(*args, **kwargs)
             try:
@@ -201,7 +213,11 @@ def _install_adk_telemetry_hooks() -> None:
                         span.set_attribute("neatlogs.llm.input_messages.0.role", "system")
                         span.set_attribute("neatlogs.llm.input_messages.0.content", instruction)
                     # User input for this invocation.
-                    user_text = _content_to_text(getattr(ctx, "user_content", None)) if ctx is not None else ""
+                    user_text = (
+                        _content_to_text(getattr(ctx, "user_content", None))
+                        if ctx is not None
+                        else ""
+                    )
                     if user_text:
                         span.set_attribute("input.value", user_text)
                     name = getattr(agent, "name", None)
@@ -209,6 +225,7 @@ def _install_adk_telemetry_hooks() -> None:
                         span.set_attribute("neatlogs.agent.name", str(name))
             except Exception:
                 pass
+
         patched_trace_agent_invocation._neatlogs_wrapped = True
         _rebind_adk_symbol("trace_agent_invocation", patched_trace_agent_invocation, adk_tracing)
 
@@ -254,7 +271,9 @@ def _content_to_text(content: Any) -> str:
                 continue
             fc = getattr(p, "function_call", None)
             if fc is not None:
-                out.append(f"{getattr(fc, 'name', '')}({serialize(dict(getattr(fc, 'args', {}) or {}))})")
+                out.append(
+                    f"{getattr(fc, 'name', '')}({serialize(dict(getattr(fc, 'args', {}) or {}))})"
+                )
                 continue
             fr = getattr(p, "function_response", None)
             if fr is not None:
@@ -359,8 +378,12 @@ def _collect_events(events) -> tuple:
             for action in (actions if isinstance(actions, list) else [actions]):
                 usage = getattr(action, "usage_metadata", None) or getattr(action, "usage", None)
                 if usage:
-                    input_t = getattr(usage, "prompt_token_count", None) or getattr(usage, "input_tokens", 0)
-                    output_t = getattr(usage, "candidates_token_count", None) or getattr(usage, "output_tokens", 0)
+                    input_t = getattr(usage, "prompt_token_count", None) or getattr(
+                        usage, "input_tokens", 0
+                    )
+                    output_t = getattr(usage, "candidates_token_count", None) or getattr(
+                        usage, "output_tokens", 0
+                    )
                     if input_t:
                         total_input_tokens += input_t
                     if output_t:
@@ -377,10 +400,12 @@ def _collect_events(events) -> tuple:
             for part in parts:
                 fn_call = getattr(part, "function_call", None)
                 if fn_call:
-                    tool_calls.append({
-                        "name": getattr(fn_call, "name", ""),
-                        "arguments": serialize(getattr(fn_call, "args", {})),
-                    })
+                    tool_calls.append(
+                        {
+                            "name": getattr(fn_call, "name", ""),
+                            "arguments": serialize(getattr(fn_call, "args", {})),
+                        }
+                    )
 
     attrs = {}
     if total_input_tokens:
@@ -435,8 +460,12 @@ async def _collect_events_async(events) -> tuple:
             for action in (actions if isinstance(actions, list) else [actions]):
                 usage = getattr(action, "usage_metadata", None) or getattr(action, "usage", None)
                 if usage:
-                    input_t = getattr(usage, "prompt_token_count", None) or getattr(usage, "input_tokens", 0)
-                    output_t = getattr(usage, "candidates_token_count", None) or getattr(usage, "output_tokens", 0)
+                    input_t = getattr(usage, "prompt_token_count", None) or getattr(
+                        usage, "input_tokens", 0
+                    )
+                    output_t = getattr(usage, "candidates_token_count", None) or getattr(
+                        usage, "output_tokens", 0
+                    )
                     if input_t:
                         total_input_tokens += input_t
                     if output_t:
@@ -452,10 +481,12 @@ async def _collect_events_async(events) -> tuple:
             for part in parts:
                 fn_call = getattr(part, "function_call", None)
                 if fn_call:
-                    tool_calls.append({
-                        "name": getattr(fn_call, "name", ""),
-                        "arguments": serialize(getattr(fn_call, "args", {})),
-                    })
+                    tool_calls.append(
+                        {
+                            "name": getattr(fn_call, "name", ""),
+                            "arguments": serialize(getattr(fn_call, "args", {})),
+                        }
+                    )
 
     attrs = {}
     if total_input_tokens:
@@ -506,7 +537,9 @@ def _patch_run(runner: Any) -> None:
         new_message = kwargs.get("new_message")
         if new_message:
             if hasattr(new_message, "parts"):
-                text_parts = [getattr(p, "text", "") for p in new_message.parts if getattr(p, "text", None)]
+                text_parts = [
+                    getattr(p, "text", "") for p in new_message.parts if getattr(p, "text", None)
+                ]
                 if text_parts:
                     attrs["input.value"] = "\n".join(text_parts)
             else:
@@ -564,7 +597,9 @@ def _patch_run_async(runner: Any) -> None:
         new_message = kwargs.get("new_message")
         if new_message:
             if hasattr(new_message, "parts"):
-                text_parts = [getattr(p, "text", "") for p in new_message.parts if getattr(p, "text", None)]
+                text_parts = [
+                    getattr(p, "text", "") for p in new_message.parts if getattr(p, "text", None)
+                ]
                 if text_parts:
                     attrs["input.value"] = "\n".join(text_parts)
             else:

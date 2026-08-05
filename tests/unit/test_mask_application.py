@@ -24,6 +24,7 @@ from neatlogs.core.span_processor import NeatlogsSpanProcessor
 
 class _MutableAttrs(dict):
     """Stand-in for OTel BoundedAttributes: a mutable mapping."""
+
     _immutable = False
 
 
@@ -31,9 +32,7 @@ def _make_span(attrs, name="child", trace_id=0x1, span_id=0x2, parent_id=None):
     """Minimal ReadableSpan-like object the processor's on_end reads from."""
     ctx = SimpleNamespace(trace_id=trace_id, span_id=span_id)
     parent = SimpleNamespace(span_id=parent_id) if parent_id is not None else None
-    status = SimpleNamespace(
-        status_code=SimpleNamespace(name="OK"), description=None
-    )
+    status = SimpleNamespace(status_code=SimpleNamespace(name="OK"), description=None)
     scope = SimpleNamespace(name="neatlogs.test")
     a = _MutableAttrs(attrs)
     return SimpleNamespace(
@@ -61,17 +60,20 @@ def _counting_mask(counter, tag):
             if isinstance(v, str) and any(h in k.lower() for h in ("input", "output", "value")):
                 attrs[k] = f"[{tag}#{counter['n']}]" + v
         return span
+
     return mask
 
 
 def test_global_mask_applied_once_and_exported():
     counter = {"n": 0}
     proc = NeatlogsSpanProcessor(mask=_counting_mask(counter, "G"))
-    span = _make_span({
-        "openinference.span.kind": "CHAIN",
-        "input.value": "IN",
-        "output.value": "OUT",
-    })
+    span = _make_span(
+        {
+            "openinference.span.kind": "CHAIN",
+            "input.value": "IN",
+            "output.value": "OUT",
+        }
+    )
     proc.on_end(span)
 
     assert counter["n"] == 1, f"global mask applied {counter['n']}x, expected 1"
@@ -85,17 +87,20 @@ def test_per_span_mask_without_global_reaches_export():
     counter = {"n": 0}
     proc = NeatlogsSpanProcessor(mask=None)  # no global mask
     mask_id = register_mask(_counting_mask(counter, "S"))
-    span = _make_span({
-        "openinference.span.kind": "CHAIN",
-        "neatlogs.mask_id": mask_id,
-        "input.value": "IN",
-        "output.value": "OUT",
-    })
+    span = _make_span(
+        {
+            "openinference.span.kind": "CHAIN",
+            "neatlogs.mask_id": mask_id,
+            "input.value": "IN",
+            "output.value": "OUT",
+        }
+    )
     proc.on_end(span)
 
     assert counter["n"] == 1, f"per-span mask applied {counter['n']}x, expected 1"
-    assert span._attributes["input.value"] == "[S#1]IN", \
-        "per-span mask did not reach the exported span"
+    assert (
+        span._attributes["input.value"] == "[S#1]IN"
+    ), "per-span mask did not reach the exported span"
     assert span._attributes["output.value"] == "[S#1]OUT"
 
 
@@ -103,11 +108,13 @@ def test_per_span_mask_takes_precedence_over_global():
     gcount, scount = {"n": 0}, {"n": 0}
     proc = NeatlogsSpanProcessor(mask=_counting_mask(gcount, "G"))
     mask_id = register_mask(_counting_mask(scount, "S"))
-    span = _make_span({
-        "openinference.span.kind": "CHAIN",
-        "neatlogs.mask_id": mask_id,
-        "input.value": "IN",
-    })
+    span = _make_span(
+        {
+            "openinference.span.kind": "CHAIN",
+            "neatlogs.mask_id": mask_id,
+            "input.value": "IN",
+        }
+    )
     proc.on_end(span)
 
     assert scount["n"] == 1, "per-span mask should run exactly once"
@@ -117,14 +124,17 @@ def test_per_span_mask_takes_precedence_over_global():
 
 def test_no_mask_leaves_values_untouched():
     proc = NeatlogsSpanProcessor(mask=None)
-    span = _make_span({
-        "openinference.span.kind": "CHAIN",
-        "input.value": "IN",
-    })
+    span = _make_span(
+        {
+            "openinference.span.kind": "CHAIN",
+            "input.value": "IN",
+        }
+    )
     proc.on_end(span)
     assert span._attributes["input.value"] == "IN"
 
 
 if __name__ == "__main__":
     import sys
+
     sys.exit(pytest.main([__file__, "-v", "-p", "no:logfire"]))

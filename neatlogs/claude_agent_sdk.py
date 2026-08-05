@@ -38,7 +38,9 @@ from opentelemetry import context as otel_context
 from opentelemetry import trace as otel_trace
 from opentelemetry.trace import StatusCode
 
-from ._wrap_utils import attach_as_current, detach as _nl_detach, get_tracer, is_suppressed
+from ._wrap_utils import attach_as_current
+from ._wrap_utils import detach as _nl_detach
+from ._wrap_utils import get_tracer, is_suppressed
 
 _PROVIDER = "claude_agent_sdk"
 _ROOT_SCOPE = "__root__"
@@ -192,12 +194,20 @@ def _wrap_client_method(original, label: str):
 # Per-agent scope + run state
 # ---------------------------------------------------------------------------
 
+
 class _Scope:
     """One agent's tracing scope. The root scope is the orchestrator (keyed _ROOT_SCOPE); each
     subagent (identified by the parent_tool_use_id of the Task call that spawned it) gets its own
     scope lazily, with its AGENT span nested under that Task TOOL span."""
 
-    __slots__ = ("span", "ctx", "input_messages", "assistant_buffer", "final_text", "input_captured")
+    __slots__ = (
+        "span",
+        "ctx",
+        "input_messages",
+        "assistant_buffer",
+        "final_text",
+        "input_captured",
+    )
 
     def __init__(self, span, ctx, input_messages, input_captured):
         self.span = span
@@ -219,8 +229,11 @@ class _TracingQuery:
         self._agent_ctx = agent_ctx
         self._prompt_ref = prompt_ref
         root = _Scope(
-            span=agent_span, ctx=agent_ctx,
-            input_messages=([{"role": "user", "content": prompt_ref["text"]}] if prompt_ref["text"] else []),
+            span=agent_span,
+            ctx=agent_ctx,
+            input_messages=(
+                [{"role": "user", "content": prompt_ref["text"]}] if prompt_ref["text"] else []
+            ),
             input_captured=bool(prompt_ref["text"]),
         )
         self._tool_spans: Dict[str, Any] = {}
@@ -228,7 +241,7 @@ class _TracingQuery:
         self._session_id: Optional[str] = None
         self._model: Optional[str] = None
         self._finished = False
-        self._inner_iter = None    # set on first __anext__ (NOT via __getattr__ — see below)
+        self._inner_iter = None  # set on first __anext__ (NOT via __getattr__ — see below)
 
     # pass through the wrapped Query object's OWN methods (interrupt, set_model, …). CRITICAL: never
     # delegate our internal/dunder attrs (leading underscore) — otherwise `self._inner_iter` etc.
@@ -349,18 +362,23 @@ class _TracingQuery:
             self._flush_turn(root)
 
         parent_tool_span = self._tool_spans.get(parent_id)
-        parent_ctx = (otel_trace.set_span_in_context(parent_tool_span)
-                      if parent_tool_span is not None else root.ctx)
+        parent_ctx = (
+            otel_trace.set_span_in_context(parent_tool_span)
+            if parent_tool_span is not None
+            else root.ctx
+        )
 
         sub_type = str(_get(msg, "subagent_type") or "subagent")
         attrs: Dict[str, Any] = {"neatlogs.span.kind": "agent", "neatlogs.agent.name": sub_type}
         task_desc = _get(msg, "task_description")
         if task_desc:
             attrs["input.value"] = str(task_desc)
-        span = self._tracer.start_span(f"claude_agent.subagent.{sub_type}",
-                                       attributes=attrs, context=parent_ctx)
+        span = self._tracer.start_span(
+            f"claude_agent.subagent.{sub_type}", attributes=attrs, context=parent_ctx
+        )
         scope = _Scope(
-            span=span, ctx=otel_trace.set_span_in_context(span),
+            span=span,
+            ctx=otel_trace.set_span_in_context(span),
             input_messages=([{"role": "user", "content": str(task_desc)}] if task_desc else []),
             input_captured=bool(task_desc),
         )
@@ -443,8 +461,14 @@ class _TracingQuery:
         if content is None:
             content = _get(msg, "content") or []
         if scope.assistant_buffer is None:
-            scope.assistant_buffer = {"text": [], "thinking": [], "tool_calls": [],
-                                      "usage": None, "model": None, "stop_reason": None}
+            scope.assistant_buffer = {
+                "text": [],
+                "thinking": [],
+                "tool_calls": [],
+                "usage": None,
+                "model": None,
+                "stop_reason": None,
+            }
         buf = scope.assistant_buffer
         model = _get(message, "model") or _get(msg, "model")
         if model:
@@ -462,9 +486,13 @@ class _TracingQuery:
             elif bt == "thinking" and isinstance(_get(block, "thinking"), str):
                 buf["thinking"].append(_get(block, "thinking"))
             elif bt == "tool_use":
-                buf["tool_calls"].append({"id": _get(block, "id") or "",
-                                          "name": _get(block, "name") or "",
-                                          "input": _get(block, "input")})
+                buf["tool_calls"].append(
+                    {
+                        "id": _get(block, "id") or "",
+                        "name": _get(block, "name") or "",
+                        "input": _get(block, "input"),
+                    }
+                )
 
     def _flush_turn(self, scope: _Scope) -> None:
         """Emit the buffered model turn as ONE LLM span (nested under this scope's AGENT span), then
@@ -511,8 +539,9 @@ class _TracingQuery:
         if buf["stop_reason"]:
             attrs["neatlogs.llm.finish_reason"] = str(buf["stop_reason"])
 
-        span = self._tracer.start_span(f"claude_agent.llm.{model or 'model'}",
-                                       attributes=attrs, context=scope.ctx)
+        span = self._tracer.start_span(
+            f"claude_agent.llm.{model or 'model'}", attributes=attrs, context=scope.ctx
+        )
         if buf["usage"]:
             _set_usage(span, buf["usage"])
         span.set_status(StatusCode.OK)
@@ -532,12 +561,16 @@ class _TracingQuery:
 
         # open TOOL spans (closed by their tool_result); a Task tool's id becomes a subagent key
         for tc in buf["tool_calls"]:
-            t_attrs = {"neatlogs.span.kind": "tool", "neatlogs.tool.name": str(tc["name"] or ""),
-                       "input.value": _safe_json(tc["input"] or {})}
+            t_attrs = {
+                "neatlogs.span.kind": "tool",
+                "neatlogs.tool.name": str(tc["name"] or ""),
+                "input.value": _safe_json(tc["input"] or {}),
+            }
             if tc["id"]:
                 t_attrs["neatlogs.tool_call.id"] = str(tc["id"])
-            tool_span = self._tracer.start_span(f"claude_agent.tool.{tc['name'] or 'tool'}",
-                                                attributes=t_attrs, context=scope.ctx)
+            tool_span = self._tracer.start_span(
+                f"claude_agent.tool.{tc['name'] or 'tool'}", attributes=t_attrs, context=scope.ctx
+            )
             if tc["id"]:
                 self._tool_spans[tc["id"]] = tool_span
 
@@ -600,8 +633,12 @@ def _block_type(block: Any) -> str:
     if isinstance(block, dict):
         return block.get("type") or ""
     name = type(block).__name__
-    return {"TextBlock": "text", "ThinkingBlock": "thinking",
-            "ToolUseBlock": "tool_use", "ToolResultBlock": "tool_result"}.get(name, "")
+    return {
+        "TextBlock": "text",
+        "ThinkingBlock": "thinking",
+        "ToolUseBlock": "tool_use",
+        "ToolResultBlock": "tool_result",
+    }.get(name, "")
 
 
 def _is_async_iterable(obj: Any) -> bool:

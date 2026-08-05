@@ -1,10 +1,10 @@
+from openinference.instrumentation import OITracer, TraceConfig
 from opentelemetry import context as context_api
 from opentelemetry import trace as trace_api
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.trace.propagation import _SPAN_KEY
-from openinference.instrumentation import OITracer, TraceConfig
 
 from neatlogs._wrap_utils import set_neatlogs_provider
 from neatlogs.instrumentation.openinference_isolation import (

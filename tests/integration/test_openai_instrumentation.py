@@ -44,6 +44,7 @@ class TestOpenAIInstrumentation:
         # The neatlogs wrapper caches its Tracer process-globally; clear it so it
         # rebinds to THIS test's provider (parity with the other wrapper tests).
         import neatlogs._wrap_utils as _wu
+
         _wu._wrapper_tracer = None
 
         # 2. Initialize neatlogs (mocking preventing real network calls)

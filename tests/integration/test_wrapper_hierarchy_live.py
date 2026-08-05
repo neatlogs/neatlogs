@@ -21,7 +21,6 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-
 # ---------------------------------------------------------------------------
 # Key loading + fixtures
 # ---------------------------------------------------------------------------
@@ -41,7 +40,13 @@ def _load_keys() -> None:
                     continue
                 k, _, v = line.partition("=")
                 k, v = k.strip(), v.strip().strip('"').strip("'")
-                if k in _WANT_KEYS and k not in os.environ and v and "your-" not in v and "xxx" not in v.lower():
+                if (
+                    k in _WANT_KEYS
+                    and k not in os.environ
+                    and v
+                    and "your-" not in v
+                    and "xxx" not in v.lower()
+                ):
                     os.environ[k] = v
         except OSError:
             continue
@@ -60,6 +65,7 @@ def _exporter():
     # The neatlogs wrapper caches a tracer from the first provider it sees; reset
     # it so each test's spans flow into this test's exporter.
     import neatlogs._wrap_utils as wu
+
     wu._wrapper_tracer = None
     return exp, prov
 
@@ -77,17 +83,31 @@ def _kinds(exp):
 
 def _names(exp):
     from collections import Counter
-    return Counter(s.name for s in exp.get_finished_spans() if s.attributes.get("neatlogs.span.kind"))
+
+    return Counter(
+        s.name for s in exp.get_finished_spans() if s.attributes.get("neatlogs.span.kind")
+    )
 
 
 def _trace_count(exp):
-    return len({s.context.trace_id for s in exp.get_finished_spans() if s.attributes.get("neatlogs.span.kind")})
+    return len(
+        {
+            s.context.trace_id
+            for s in exp.get_finished_spans()
+            if s.attributes.get("neatlogs.span.kind")
+        }
+    )
 
 
-needs_openai = pytest.mark.skipif(not os.environ.get("OPENAI_API_KEY"), reason="OPENAI_API_KEY not set")
-needs_anthropic = pytest.mark.skipif(not os.environ.get("ANTHROPIC_API_KEY"), reason="ANTHROPIC_API_KEY not set")
+needs_openai = pytest.mark.skipif(
+    not os.environ.get("OPENAI_API_KEY"), reason="OPENAI_API_KEY not set"
+)
+needs_anthropic = pytest.mark.skipif(
+    not os.environ.get("ANTHROPIC_API_KEY"), reason="ANTHROPIC_API_KEY not set"
+)
 needs_google = pytest.mark.skipif(
-    not (os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")), reason="GOOGLE/GEMINI key not set"
+    not (os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")),
+    reason="GOOGLE/GEMINI key not set",
 )
 
 OPENAI_MODEL = "gpt-4o-mini"
@@ -102,12 +122,20 @@ GEMINI_MODEL = "gemini-2.5-flash"
 @needs_openai
 def test_openai_resources():
     exp, _ = _exporter()
-    import neatlogs
     import openai
 
+    import neatlogs
+
     c = neatlogs.wrap(openai.OpenAI())
-    c.chat.completions.create(model=OPENAI_MODEL, messages=[{"role": "user", "content": "hi"}], max_tokens=5)
-    for _ in c.chat.completions.create(model=OPENAI_MODEL, messages=[{"role": "user", "content": "count to 3"}], max_tokens=10, stream=True):
+    c.chat.completions.create(
+        model=OPENAI_MODEL, messages=[{"role": "user", "content": "hi"}], max_tokens=5
+    )
+    for _ in c.chat.completions.create(
+        model=OPENAI_MODEL,
+        messages=[{"role": "user", "content": "count to 3"}],
+        max_tokens=10,
+        stream=True,
+    ):
         pass
     c.embeddings.create(model="text-embedding-3-small", input="hello")
 
@@ -120,13 +148,19 @@ def test_openai_resources():
 @needs_anthropic
 def test_anthropic_resources():
     exp, _ = _exporter()
-    import neatlogs
     import anthropic
+
+    import neatlogs
 
     model = "claude-haiku-4-5-20251001"
     c = neatlogs.wrap(anthropic.Anthropic())
     c.messages.create(model=model, max_tokens=10, messages=[{"role": "user", "content": "hi"}])
-    for _ in c.messages.create(model=model, max_tokens=10, messages=[{"role": "user", "content": "count to 3"}], stream=True):
+    for _ in c.messages.create(
+        model=model,
+        max_tokens=10,
+        messages=[{"role": "user", "content": "count to 3"}],
+        stream=True,
+    ):
         pass
     c.messages.count_tokens(model=model, messages=[{"role": "user", "content": "hello there"}])
 
@@ -138,8 +172,9 @@ def test_anthropic_resources():
 @needs_google
 def test_google_genai_resources():
     exp, _ = _exporter()
-    import neatlogs
     from google import genai
+
+    import neatlogs
 
     c = neatlogs.wrap(genai.Client())
     c.models.generate_content(model=GEMINI_MODEL, contents="say hi")
@@ -161,8 +196,9 @@ def test_google_genai_resources():
 @needs_openai
 def test_dspy_hierarchy():
     exp, _ = _exporter()
-    import neatlogs
     import dspy
+
+    import neatlogs
 
     neatlogs.wrap(dspy.Predict("question -> answer"))
     dspy.configure(lm=dspy.LM(f"openai/{OPENAI_MODEL}", max_tokens=100))
@@ -177,8 +213,9 @@ def test_dspy_hierarchy():
 @needs_openai
 def test_pydantic_ai_hierarchy():
     exp, _ = _exporter()
-    import neatlogs
     from pydantic_ai import Agent
+
+    import neatlogs
 
     agent = Agent(f"openai:{OPENAI_MODEL}")
 
@@ -188,7 +225,9 @@ def test_pydantic_ai_hierarchy():
         return "ZX-9981-QQ"
 
     neatlogs.wrap(agent)
-    agent.run_sync("Get the secret access code for 'mainframe' using the tool. Return only the code.")
+    agent.run_sync(
+        "Get the secret access code for 'mainframe' using the tool. Return only the code."
+    )
 
     kinds = set(_kinds(exp))
     assert {"AGENT", "LLM", "TOOL"} <= kinds
@@ -200,19 +239,29 @@ def test_pydantic_ai_hierarchy():
 def test_crewai_hierarchy():
     exp, _ = _exporter()
     os.environ["CREWAI_TRACING_ENABLED"] = "false"
-    import neatlogs
-    from crewai import Agent, Task, Crew
+    from crewai import Agent, Crew, Task
     from crewai.tools import tool
+
+    import neatlogs
 
     @tool("get_secret_code")
     def get_secret_code(item: str) -> str:
         "Returns the secret access code for a given item."
         return "ZX-9981-QQ"
 
-    ag = Agent(role="lookup", goal="find codes via tools", backstory="x",
-               tools=[get_secret_code], llm=OPENAI_MODEL, verbose=False)
-    tk = Task(description="Find the secret access code for 'mainframe' using the tool. Return only the code.",
-              expected_output="code", agent=ag)
+    ag = Agent(
+        role="lookup",
+        goal="find codes via tools",
+        backstory="x",
+        tools=[get_secret_code],
+        llm=OPENAI_MODEL,
+        verbose=False,
+    )
+    tk = Task(
+        description="Find the secret access code for 'mainframe' using the tool. Return only the code.",
+        expected_output="code",
+        agent=ag,
+    )
     crew = Crew(agents=[ag], tasks=[tk], verbose=False)
     neatlogs.wrap(crew)
     crew.kickoff()
@@ -225,8 +274,9 @@ def test_crewai_hierarchy():
 @needs_openai
 def test_openai_agents_hierarchy():
     exp, _ = _exporter()
-    import neatlogs
     from agents import Agent, Runner, function_tool, set_trace_processors
+
+    import neatlogs
 
     set_trace_processors([neatlogs.openai_agents_processor()])
 
@@ -235,8 +285,15 @@ def test_openai_agents_hierarchy():
         "Return the secret access code for an item."
         return "ZX-9981-QQ"
 
-    agent = Agent(name="lookup", instructions="Use tools to answer.", tools=[get_secret_code], model=OPENAI_MODEL)
-    Runner.run_sync(agent, "Secret access code for 'mainframe'? Use the tool, return only the code.")
+    agent = Agent(
+        name="lookup",
+        instructions="Use tools to answer.",
+        tools=[get_secret_code],
+        model=OPENAI_MODEL,
+    )
+    Runner.run_sync(
+        agent, "Secret access code for 'mainframe'? Use the tool, return only the code."
+    )
 
     kinds = set(_kinds(exp))
     assert {"WORKFLOW", "AGENT", "LLM", "TOOL"} <= kinds
@@ -246,10 +303,11 @@ def test_openai_agents_hierarchy():
 @needs_openai
 def test_langchain_hierarchy():
     exp, _ = _exporter()
-    import neatlogs
-    from langchain_openai import ChatOpenAI
     from langchain_core.tools import tool
+    from langchain_openai import ChatOpenAI
     from langgraph.prebuilt import create_react_agent
+
+    import neatlogs
 
     @tool
     def get_secret_code(item: str) -> str:
@@ -259,7 +317,11 @@ def test_langchain_hierarchy():
     agent = create_react_agent(ChatOpenAI(model=OPENAI_MODEL, temperature=0), [get_secret_code])
     handler = neatlogs.langchain_handler()
     agent.invoke(
-        {"messages": [("user", "Secret access code for 'mainframe'? Use the tool, return only the code.")]},
+        {
+            "messages": [
+                ("user", "Secret access code for 'mainframe'? Use the tool, return only the code.")
+            ]
+        },
         config={"callbacks": [handler]},
     )
 
@@ -270,5 +332,6 @@ def test_langchain_hierarchy():
     # the dominant trace holds the chain root + most spans rather than ==1.
     spans = [s for s in exp.get_finished_spans() if s.attributes.get("neatlogs.span.kind")]
     from collections import Counter
+
     dominant = Counter(s.context.trace_id for s in spans).most_common(1)[0][1]
     assert dominant >= len(spans) - 2

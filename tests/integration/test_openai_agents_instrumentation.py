@@ -56,9 +56,7 @@ def create_mock_response(content=None, tool_calls=None):
                 "id": "msg_mock",
                 "role": "assistant",
                 "status": "completed",
-                "content": [
-                    {"type": "output_text", "text": content, "annotations": []}
-                ],
+                "content": [{"type": "output_text", "text": content, "annotations": []}],
             }
         )
 
@@ -286,8 +284,7 @@ class TestOpenAIAgentsInstrumentation:
         # Check for the dedicated handoff span (kind=agent, name contains 'handoff',
         # or carries the handoff_from attribute).
         assert any(
-            "handoff" in s.name.lower()
-            or any("handoff" in k.lower() for k in s.attributes)
+            "handoff" in s.name.lower() or any("handoff" in k.lower() for k in s.attributes)
             for s in spans
         ), "Handoff span missing"
 

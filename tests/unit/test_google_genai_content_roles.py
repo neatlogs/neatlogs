@@ -12,7 +12,6 @@ import json
 
 from neatlogs.google_genai import _normalize_content_item, _text_from_parts
 
-
 # --- lightweight stand-ins for typed genai objects (no SDK needed) ----------
 
 
@@ -46,9 +45,7 @@ def test_plain_string_is_user():
 
 
 def test_dict_content_keeps_role_and_text():
-    assert _normalize_content_item(
-        {"role": "model", "parts": [{"text": "hi"}]}
-    ) == ("model", "hi")
+    assert _normalize_content_item({"role": "model", "parts": [{"text": "hi"}]}) == ("model", "hi")
 
 
 def test_typed_content_user_role_and_text():

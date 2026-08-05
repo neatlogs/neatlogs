@@ -241,7 +241,9 @@ class PromptClient:
             if not entry.is_expired():
                 return entry.value
             # Stale — return immediately, refresh in background
-            self._background_refresh(cache_key, name, label=label, version=version, ttl=cache_ttl_seconds)
+            self._background_refresh(
+                cache_key, name, label=label, version=version, ttl=cache_ttl_seconds
+            )
             return entry.value
 
         # Cold miss — must fetch synchronously
@@ -797,7 +799,9 @@ class AsyncPromptClient:
             if not entry.is_expired():
                 return entry.value
             # Stale — return immediately, refresh in background task
-            self._background_refresh(cache_key, name, label=label, version=version, ttl=cache_ttl_seconds)
+            self._background_refresh(
+                cache_key, name, label=label, version=version, ttl=cache_ttl_seconds
+            )
             return entry.value
 
         # Cold miss — must fetch

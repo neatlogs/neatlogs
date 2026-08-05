@@ -91,7 +91,9 @@ def _set_invocation_params(span: Any, kwargs: Dict[str, Any]) -> None:
 
     stop = invocation_params.get("stop")
     if stop is not None:
-        span.set_attribute("neatlogs.llm.stop_sequences", serialize(stop) if isinstance(stop, list) else str(stop))
+        span.set_attribute(
+            "neatlogs.llm.stop_sequences", serialize(stop) if isinstance(stop, list) else str(stop)
+        )
 
     if invocation_params.get("stream") or invocation_params.get("streaming"):
         span.set_attribute("neatlogs.llm.is_streaming", True)
@@ -327,7 +329,9 @@ class NeatlogsCallbackHandler(AsyncCallbackHandler, BaseCallbackHandler):
                 if isinstance(content, str):
                     span.set_attribute(f"neatlogs.llm.input_messages.{idx}.content", content)
                 else:
-                    span.set_attribute(f"neatlogs.llm.input_messages.{idx}.content", serialize(content))
+                    span.set_attribute(
+                        f"neatlogs.llm.input_messages.{idx}.content", serialize(content)
+                    )
                 idx += 1
 
         self._spans[run_id] = span
@@ -419,13 +423,21 @@ class NeatlogsCallbackHandler(AsyncCallbackHandler, BaseCallbackHandler):
                         content = getattr(message, "content", "")
                         if content and not text:
                             span.set_attribute("neatlogs.llm.output_messages.0.role", "assistant")
-                            span.set_attribute("neatlogs.llm.output_messages.0.content", content if isinstance(content, str) else serialize(content))
+                            span.set_attribute(
+                                "neatlogs.llm.output_messages.0.content",
+                                content if isinstance(content, str) else serialize(content),
+                            )
 
                         tool_calls = getattr(message, "tool_calls", None)
                         if tool_calls:
                             for j, tc in enumerate(tool_calls):
-                                span.set_attribute(f"neatlogs.llm.tool_calls.{j}.name", tc.get("name", ""))
-                                span.set_attribute(f"neatlogs.llm.tool_calls.{j}.arguments", serialize(tc.get("args", {})))
+                                span.set_attribute(
+                                    f"neatlogs.llm.tool_calls.{j}.name", tc.get("name", "")
+                                )
+                                span.set_attribute(
+                                    f"neatlogs.llm.tool_calls.{j}.arguments",
+                                    serialize(tc.get("args", {})),
+                                )
                                 if tc.get("id"):
                                     span.set_attribute(f"neatlogs.llm.tool_calls.{j}.id", tc["id"])
 
@@ -438,16 +450,24 @@ class NeatlogsCallbackHandler(AsyncCallbackHandler, BaseCallbackHandler):
                                     f"{tc.get('name', '')}({serialize(tc.get('args', {}))})"
                                     for tc in tool_calls
                                 )
-                                span.set_attribute("neatlogs.llm.output_messages.0.role", "assistant")
-                                span.set_attribute("neatlogs.llm.output_messages.0.content", rendered)
+                                span.set_attribute(
+                                    "neatlogs.llm.output_messages.0.role", "assistant"
+                                )
+                                span.set_attribute(
+                                    "neatlogs.llm.output_messages.0.content", rendered
+                                )
 
                         thinking_blocks = getattr(message, "thinking_blocks", None)
                         if thinking_blocks:
                             thinking_text = "".join(
-                                block.get("thinking", "") for block in thinking_blocks if isinstance(block, dict)
+                                block.get("thinking", "")
+                                for block in thinking_blocks
+                                if isinstance(block, dict)
                             )
                             if thinking_text:
-                                span.set_attribute("neatlogs.llm.output_messages.0.thinking", thinking_text)
+                                span.set_attribute(
+                                    "neatlogs.llm.output_messages.0.thinking", thinking_text
+                                )
 
                     gen_info = getattr(gen, "generation_info", None) or {}
                     finish_reason = gen_info.get("finish_reason")
@@ -461,15 +481,24 @@ class NeatlogsCallbackHandler(AsyncCallbackHandler, BaseCallbackHandler):
             if "prompt_tokens" in token_usage:
                 span.set_attribute("neatlogs.llm.token_count.prompt", token_usage["prompt_tokens"])
             if "completion_tokens" in token_usage:
-                span.set_attribute("neatlogs.llm.token_count.completion", token_usage["completion_tokens"])
+                span.set_attribute(
+                    "neatlogs.llm.token_count.completion", token_usage["completion_tokens"]
+                )
             if "total_tokens" in token_usage:
                 span.set_attribute("neatlogs.llm.token_count.total", token_usage["total_tokens"])
             if "cache_read_input_tokens" in token_usage:
-                span.set_attribute("neatlogs.llm.token_count.cache_read", token_usage["cache_read_input_tokens"])
+                span.set_attribute(
+                    "neatlogs.llm.token_count.cache_read", token_usage["cache_read_input_tokens"]
+                )
             if "cache_creation_input_tokens" in token_usage:
-                span.set_attribute("neatlogs.llm.token_count.cache_write", token_usage["cache_creation_input_tokens"])
+                span.set_attribute(
+                    "neatlogs.llm.token_count.cache_write",
+                    token_usage["cache_creation_input_tokens"],
+                )
             if "reasoning_tokens" in token_usage:
-                span.set_attribute("neatlogs.llm.token_count.reasoning", token_usage["reasoning_tokens"])
+                span.set_attribute(
+                    "neatlogs.llm.token_count.reasoning", token_usage["reasoning_tokens"]
+                )
 
         model_name = llm_output.get("model_name") or llm_output.get("model")
         if model_name:
@@ -624,7 +653,9 @@ class NeatlogsCallbackHandler(AsyncCallbackHandler, BaseCallbackHandler):
         **kwargs: Any,
     ) -> None:
         tracer = get_tracer()
-        name = (serialized or {}).get("name") or ((serialized or {}).get("id", [""])[-1] if (serialized or {}).get("id") else "retriever")
+        name = (serialized or {}).get("name") or (
+            (serialized or {}).get("id", [""])[-1] if (serialized or {}).get("id") else "retriever"
+        )
         ctx = self._start_ctx(parent_run_id, run_id, "retriever")
 
         span = tracer.start_span(
@@ -659,7 +690,9 @@ class NeatlogsCallbackHandler(AsyncCallbackHandler, BaseCallbackHandler):
             for i, doc in enumerate(documents[:10]):
                 content = getattr(doc, "page_content", None)
                 if content:
-                    span.set_attribute(f"neatlogs.retrieval.documents.{i}.content", str(content)[:2000])
+                    span.set_attribute(
+                        f"neatlogs.retrieval.documents.{i}.content", str(content)[:2000]
+                    )
         span.set_status(StatusCode.OK)
         span.end()
         self._end_auto_root(run_id)
@@ -691,7 +724,9 @@ class NeatlogsCallbackHandler(AsyncCallbackHandler, BaseCallbackHandler):
         parent_run_id: Optional[UUID] = None,
         **kwargs: Any,
     ) -> None:
-        span = self._spans.get(run_id) or (self._spans.get(parent_run_id) if parent_run_id else None)
+        span = self._spans.get(run_id) or (
+            self._spans.get(parent_run_id) if parent_run_id else None
+        )
         if not span:
             return
         tool = getattr(action, "tool", None)
@@ -712,7 +747,9 @@ class NeatlogsCallbackHandler(AsyncCallbackHandler, BaseCallbackHandler):
         parent_run_id: Optional[UUID] = None,
         **kwargs: Any,
     ) -> None:
-        span = self._spans.get(run_id) or (self._spans.get(parent_run_id) if parent_run_id else None)
+        span = self._spans.get(run_id) or (
+            self._spans.get(parent_run_id) if parent_run_id else None
+        )
         if not span:
             return
         return_values = getattr(finish, "return_values", None)
@@ -732,7 +769,9 @@ class NeatlogsCallbackHandler(AsyncCallbackHandler, BaseCallbackHandler):
     ) -> None:
         tracer = get_tracer()
         serialized = serialized or {}
-        name = serialized.get("name", "") or (serialized.get("id", [""])[-1] if serialized.get("id") else "tool")
+        name = serialized.get("name", "") or (
+            serialized.get("id", [""])[-1] if serialized.get("id") else "tool"
+        )
 
         ctx = self._start_ctx(parent_run_id, run_id, "tool")
 

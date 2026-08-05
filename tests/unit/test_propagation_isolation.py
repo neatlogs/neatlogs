@@ -6,17 +6,18 @@ The private-provider design promises two things at a service boundary:
   2. Neatlogs NEVER injects a co-tenant's span (Datadog/openlit/langfuse). When
      only a foreign span is active, inject is a no-op and the carrier is clean.
 """
+
 from opentelemetry import trace as trace_api
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from neatlogs._wrap_utils import (
+    _has_active_recording_parent,
+    _neatlogs_root_kwargs,
     attach_as_current,
     detach,
     set_neatlogs_provider,
-    _has_active_recording_parent,
-    _neatlogs_root_kwargs,
 )
 from neatlogs.core.propagation import extract_trace_context, inject_trace_context
 

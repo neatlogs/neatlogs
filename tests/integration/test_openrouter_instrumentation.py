@@ -10,7 +10,6 @@ reads for model settings.
 from types import SimpleNamespace
 
 import pytest
-
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
@@ -21,6 +20,7 @@ def _setup_tracer(exporter):
     provider.add_span_processor(SimpleSpanProcessor(exporter))
     trace.set_tracer_provider(provider)
     import neatlogs._wrap_utils as _wu
+
     _wu._wrapper_tracer = None
     return provider
 
@@ -49,7 +49,9 @@ class TestOpenRouterChat:
                     SimpleNamespace(
                         index=0,
                         finish_reason="stop",
-                        message=SimpleNamespace(role="assistant", content="Hello from OpenRouter", tool_calls=None),
+                        message=SimpleNamespace(
+                            role="assistant", content="Hello from OpenRouter", tool_calls=None
+                        ),
                     )
                 ],
                 usage=SimpleNamespace(prompt_tokens=16, completion_tokens=8, total_tokens=24),
@@ -87,6 +89,7 @@ class TestOpenRouterChat:
         assert attrs.get("neatlogs.llm.top_p") == 0.9
         assert attrs.get("neatlogs.llm.max_tokens") == 256
         import json
+
         blob = json.loads(attrs.get("neatlogs.llm.invocation_parameters"))
         assert blob == {"temperature": 0.3, "top_p": 0.9, "max_tokens": 256}
 
@@ -100,11 +103,16 @@ class TestOpenRouterChat:
             return SimpleNamespace(model="openai/gpt-4o-mini", choices=[choice], usage=usage)
 
         def send(**kwargs):
-            return iter([
-                _chunk("Hello"),
-                _chunk(" world"),
-                _chunk(finish="stop", usage=SimpleNamespace(prompt_tokens=5, completion_tokens=3, total_tokens=8)),
-            ])
+            return iter(
+                [
+                    _chunk("Hello"),
+                    _chunk(" world"),
+                    _chunk(
+                        finish="stop",
+                        usage=SimpleNamespace(prompt_tokens=5, completion_tokens=3, total_tokens=8),
+                    ),
+                ]
+            )
 
         client = _fake_client(chat=send)
         wrap_openrouter_client(client)
@@ -127,6 +135,7 @@ class TestOpenRouterChat:
         assert attrs.get("neatlogs.llm.token_count.completion") == 3
         assert attrs.get("neatlogs.llm.finish_reason") == "stop"
         import json
+
         assert json.loads(attrs.get("neatlogs.llm.invocation_parameters")) == {"temperature": 0.5}
 
 
@@ -159,7 +168,10 @@ class TestOpenRouterResponses:
         # max_output_tokens normalizes to the max_tokens individual attr + blob.
         assert attrs.get("neatlogs.llm.max_tokens") == 128
         import json
-        assert json.loads(attrs.get("neatlogs.llm.invocation_parameters")) == {"max_output_tokens": 128}
+
+        assert json.loads(attrs.get("neatlogs.llm.invocation_parameters")) == {
+            "max_output_tokens": 128
+        }
 
 
 class TestOpenRouterEmbeddingsRerank:
@@ -191,8 +203,12 @@ class TestOpenRouterEmbeddingsRerank:
             return SimpleNamespace(
                 model="cohere/rerank-v3.5",
                 results=[
-                    SimpleNamespace(index=1, relevance_score=0.9, document=SimpleNamespace(text="doc B")),
-                    SimpleNamespace(index=0, relevance_score=0.2, document=SimpleNamespace(text="doc A")),
+                    SimpleNamespace(
+                        index=1, relevance_score=0.9, document=SimpleNamespace(text="doc B")
+                    ),
+                    SimpleNamespace(
+                        index=0, relevance_score=0.2, document=SimpleNamespace(text="doc A")
+                    ),
                 ],
             )
 

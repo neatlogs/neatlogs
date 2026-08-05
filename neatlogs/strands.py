@@ -77,13 +77,15 @@ def _install_event_hook() -> None:
                 op = str((span.attributes or {}).get("gen_ai.operation.name", "")).lower()
             except Exception:
                 op = ""
-            is_tool = op == "execute_tool" or "gen_ai.tool.name" in (getattr(span, "attributes", {}) or {})
+            is_tool = op == "execute_tool" or "gen_ai.tool.name" in (
+                getattr(span, "attributes", {}) or {}
+            )
             in_key = "neatlogs.tool.input" if is_tool else None
             out_key = "neatlogs.tool.output" if is_tool else None
 
             # Input-side messages: gen_ai.{system,user,assistant,tool}.message
             if event_name.startswith("gen_ai.") and event_name.endswith(".message"):
-                role = event_name[len("gen_ai."):-len(".message")]
+                role = event_name[len("gen_ai.") : -len(".message")]
                 content = _strands_event_text(ev_attrs.get("content"))
                 if content:
                     if is_tool:
@@ -102,7 +104,9 @@ def _install_event_hook() -> None:
                     else:
                         span.set_attribute("neatlogs.llm.output_messages.0.role", "assistant")
                         span.set_attribute("neatlogs.llm.output_messages.0.content", out)
-                        span.set_attribute("neatlogs.llm.output", serialize({"role": "assistant", "content": out}))
+                        span.set_attribute(
+                            "neatlogs.llm.output", serialize({"role": "assistant", "content": out})
+                        )
         except Exception:
             pass
 

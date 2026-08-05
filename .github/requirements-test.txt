@@ -1,0 +1,9 @@
+# Direct unit-test dependencies, pinned to the versions resolved in poetry.lock.
+google-genai==1.57.0
+langchain-core==1.2.7
+openai==2.15.0
+pytest==9.0.2
+pytest-asyncio==1.3.0
+pytest-mock==3.15.1
+python-dotenv==1.2.1
+respx==0.22.0

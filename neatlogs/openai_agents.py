@@ -82,7 +82,9 @@ class _NeatlogsTraceProcessor:
         if token:
             detach(token)
         if start:
-            span.set_attribute("neatlogs.llm.metrics.duration_ms", round((time.perf_counter() - start) * 1000, 3))
+            span.set_attribute(
+                "neatlogs.llm.metrics.duration_ms", round((time.perf_counter() - start) * 1000, 3)
+            )
         self._root_input_done.discard(key)
         span.set_status(StatusCode.OK)
         span.end()
@@ -101,9 +103,12 @@ class _NeatlogsTraceProcessor:
         attrs, name = _build_start_attrs(span_type, data)
 
         if parent_span is not None:
-            from opentelemetry import trace as _ot
             from opentelemetry import context as _ctx
-            otel_span = tracer.start_span(name=name, attributes=attrs, context=_ot.set_span_in_context(parent_span))
+            from opentelemetry import trace as _ot
+
+            otel_span = tracer.start_span(
+                name=name, attributes=attrs, context=_ot.set_span_in_context(parent_span)
+            )
         else:
             otel_span = tracer.start_span(name=name, attributes=attrs)
 
@@ -156,7 +161,9 @@ class _NeatlogsTraceProcessor:
             otel_span.set_status(StatusCode.OK)
 
         if start:
-            otel_span.set_attribute("neatlogs.llm.metrics.duration_ms", round((time.perf_counter() - start) * 1000, 3))
+            otel_span.set_attribute(
+                "neatlogs.llm.metrics.duration_ms", round((time.perf_counter() - start) * 1000, 3)
+            )
         otel_span.end()
 
     def shutdown(self) -> None:
@@ -209,7 +216,9 @@ def _build_start_attrs(span_type: str, data: Any):
         attrs = {"neatlogs.span.kind": "tool", "neatlogs.tool.name": str(name)}
         tool_input = getattr(data, "input", None)
         if tool_input is not None:
-            attrs["input.value"] = tool_input if isinstance(tool_input, str) else serialize(tool_input)
+            attrs["input.value"] = (
+                tool_input if isinstance(tool_input, str) else serialize(tool_input)
+            )
         return attrs, f"openai_agents.tool.{name}"
 
     if span_type == "handoff":
@@ -331,7 +340,9 @@ def _latest_user_turn(input_msgs: Any) -> str:
     for msg in reversed(input_msgs):
         role = msg.get("role", "") if isinstance(msg, dict) else getattr(msg, "role", "")
         if role == "user":
-            content = msg.get("content", "") if isinstance(msg, dict) else getattr(msg, "content", "")
+            content = (
+                msg.get("content", "") if isinstance(msg, dict) else getattr(msg, "content", "")
+            )
             if content:
                 return content if isinstance(content, str) else serialize(content)
     return ""
@@ -342,7 +353,9 @@ def _set_input_messages(attrs: dict, input_msgs: Any) -> None:
         if isinstance(input_msgs, str):
             attrs["neatlogs.llm.input_messages.0.role"] = "user"
             attrs["neatlogs.llm.input_messages.0.content"] = input_msgs[:10000]
-            attrs["input.value"] = serialize({"messages": [{"role": "user", "content": input_msgs[:10000]}]})
+            attrs["input.value"] = serialize(
+                {"messages": [{"role": "user", "content": input_msgs[:10000]}]}
+            )
         return
     msgs: list = []
     for i, msg in enumerate(input_msgs):
@@ -368,14 +381,22 @@ def _set_output_messages(otel_span: Any, output: Any) -> None:
     if isinstance(output, list):
         for i, msg in enumerate(output):
             role = msg.get("role", "assistant") if isinstance(msg, dict) else "assistant"
-            content = msg.get("content", "") if isinstance(msg, dict) else getattr(msg, "content", "")
+            content = (
+                msg.get("content", "") if isinstance(msg, dict) else getattr(msg, "content", "")
+            )
             otel_span.set_attribute(f"neatlogs.llm.output_messages.{i}.role", role)
             if content:
-                otel_span.set_attribute(f"neatlogs.llm.output_messages.{i}.content", (content if isinstance(content, str) else serialize(content))[:10000])
+                otel_span.set_attribute(
+                    f"neatlogs.llm.output_messages.{i}.content",
+                    (content if isinstance(content, str) else serialize(content))[:10000],
+                )
     elif hasattr(output, "content"):
         otel_span.set_attribute("neatlogs.llm.output_messages.0.role", "assistant")
         c = output.content
-        otel_span.set_attribute("neatlogs.llm.output_messages.0.content", (c if isinstance(c, str) else serialize(c))[:10000])
+        otel_span.set_attribute(
+            "neatlogs.llm.output_messages.0.content",
+            (c if isinstance(c, str) else serialize(c))[:10000],
+        )
     elif isinstance(output, str):
         otel_span.set_attribute("neatlogs.llm.output_messages.0.role", "assistant")
         otel_span.set_attribute("neatlogs.llm.output_messages.0.content", output[:10000])
@@ -398,10 +419,16 @@ def _assistant_output_text(span_type: str, data: Any) -> str:
     if isinstance(output, list):
         parts: list = []
         for msg in output:
-            role = msg.get("role", "assistant") if isinstance(msg, dict) else getattr(msg, "role", "assistant")
+            role = (
+                msg.get("role", "assistant")
+                if isinstance(msg, dict)
+                else getattr(msg, "role", "assistant")
+            )
             if role != "assistant":
                 continue
-            content = msg.get("content", "") if isinstance(msg, dict) else getattr(msg, "content", "")
+            content = (
+                msg.get("content", "") if isinstance(msg, dict) else getattr(msg, "content", "")
+            )
             if content:
                 parts.append(content if isinstance(content, str) else serialize(content))
         return "\n".join(parts)
@@ -420,7 +447,9 @@ def _set_usage(otel_span: Any, usage: Any) -> None:
         total = usage.get("total_tokens")
     else:
         input_tokens = getattr(usage, "input_tokens", None) or getattr(usage, "prompt_tokens", None)
-        output_tokens = getattr(usage, "output_tokens", None) or getattr(usage, "completion_tokens", None)
+        output_tokens = getattr(usage, "output_tokens", None) or getattr(
+            usage, "completion_tokens", None
+        )
         total = getattr(usage, "total_tokens", None)
     if input_tokens:
         otel_span.set_attribute("neatlogs.llm.token_count.prompt", input_tokens)

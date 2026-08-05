@@ -65,6 +65,7 @@ def _isolation_active() -> bool:
     """Auto-detect gate: True in isolated mode (private provider != OTel global)."""
     return _isolated
 
+
 _wrapper_config: Dict[str, Any] = {}
 _wrap_context: ContextVar[Optional[Dict[str, Any]]] = ContextVar(
     "neatlogs.wrap_context", default=None
@@ -392,9 +393,8 @@ def _bootstrap_from_env(api_key: str) -> None:
     from opentelemetry.sdk.trace import SpanLimits
     from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
-    endpoint = (
-        _wrapper_config.get("endpoint")
-        or os.environ.get("NEATLOGS_ENDPOINT", "https://ingest.neatlogs.com")
+    endpoint = _wrapper_config.get("endpoint") or os.environ.get(
+        "NEATLOGS_ENDPOINT", "https://ingest.neatlogs.com"
     )
     endpoint = _normalize_traces_endpoint(endpoint)
 
@@ -751,7 +751,7 @@ class _AutoRootTracer:
         needs_root = (
             _auto_root_enabled()
             and kind not in _ROOT_KINDS
-            and "context" not in kwargs          # explicit-context callers opt out
+            and "context" not in kwargs  # explicit-context callers opt out
             and not _has_active_recording_parent()
         )
         if not needs_root:
@@ -882,6 +882,7 @@ class SyncStreamWrapper:
             return
         self._finalized = True
         from opentelemetry.trace import StatusCode
+
         self._span.set_status(StatusCode.ERROR, str(error))
         self._span.record_exception(error)
         self._span.end()
@@ -947,6 +948,7 @@ class AsyncStreamWrapper:
             return
         self._finalized = True
         from opentelemetry.trace import StatusCode
+
         self._span.set_status(StatusCode.ERROR, str(error))
         self._span.record_exception(error)
         self._span.end()

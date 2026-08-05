@@ -60,6 +60,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
 from opentelemetry import trace as otel_trace
+from opentelemetry.sdk.trace.id_generator import RandomIdGenerator
 from opentelemetry.trace import (
     NonRecordingSpan,
     SpanContext,
@@ -67,8 +68,6 @@ from opentelemetry.trace import (
     TraceFlags,
     set_span_in_context,
 )
-
-from opentelemetry.sdk.trace.id_generator import RandomIdGenerator
 
 from ._wrap_utils import configure, get_tracer, serialize
 from .core.logger import get_logger
@@ -89,10 +88,11 @@ class _FixedIdGen(RandomIdGenerator):
     def generate_trace_id(self) -> int:
         return self._trace_id
 
+
 logger = get_logger()
 
 _PROVIDER = "hermes"
-_MAX_TURN_STATE = 256       # bound the leak from turns that never finalize cleanly
+_MAX_TURN_STATE = 256  # bound the leak from turns that never finalize cleanly
 
 
 # ---------------------------------------------------------------------------
@@ -111,11 +111,11 @@ class _TurnState:
     children currently open under it."""
 
     span: Any
-    turn_key: str                     # deterministic-id key for this turn's trace
+    turn_key: str  # deterministic-id key for this turn's trace
     session_id: Optional[str] = None  # owning session — lets cleanup find turns
-    model: Any = None                 # remembered for the root at close
-    input_value: Any = None           # user message, stamped on the root at close
-    llm_spans: Dict[str, Any] = field(default_factory=dict)   # keyed by api_request_id
+    model: Any = None  # remembered for the root at close
+    input_value: Any = None  # user message, stamped on the root at close
+    llm_spans: Dict[str, Any] = field(default_factory=dict)  # keyed by api_request_id
     tool_spans: Dict[str, Any] = field(default_factory=dict)  # keyed by tool span key
     last_updated_at: float = field(default_factory=time.time)
 
@@ -134,8 +134,8 @@ _OPEN_TOOL_SPANS: Dict[str, Any] = {}
 # Delegated-child AGENT spans. A subagent parents under the spawning TURN; the
 # child's own turns (which fire with the CHILD's session_id) parent under the
 # subagent span via _SUBAGENT_BY_SESSION.
-_SUBAGENT_STATE: Dict[str, Any] = {}        # subagent key -> subagent AGENT span
-_SUBAGENT_BY_SESSION: Dict[str, Any] = {}   # child_session_id -> subagent AGENT span
+_SUBAGENT_STATE: Dict[str, Any] = {}  # subagent key -> subagent AGENT span
+_SUBAGENT_BY_SESSION: Dict[str, Any] = {}  # child_session_id -> subagent AGENT span
 # Dangerous-command approval GUARDRAIL spans, keyed by approval key, open between
 # pre_approval_request and post_approval_response.
 _APPROVAL_SPANS: Dict[str, Any] = {}
@@ -178,10 +178,7 @@ def _ensure_configured() -> bool:
 
     # Resolve the endpoint to the SAME canonical default as neatlogs.init()
     # (ingest.neatlogs.com) and honor NEATLOGS_ENDPOINT when set.
-    endpoint = (
-        os.environ.get("NEATLOGS_ENDPOINT", "").strip()
-        or "https://ingest.neatlogs.com"
-    )
+    endpoint = os.environ.get("NEATLOGS_ENDPOINT", "").strip() or "https://ingest.neatlogs.com"
     # workflow_name is an init()/configure() argument, not an env var, so we pass
     # our default directly. configure() only sets wrapper-mode defaults; if
     # neatlogs.init() already ran in this process (mixed library+plugin use),
@@ -257,7 +254,8 @@ def _open_session_db():
     live Hermes writer). Returns None if Hermes isn't importable or the DB is
     absent — callers then fall back to the raw session id."""
     try:
-        from hermes_state import SessionDB, DEFAULT_DB_PATH
+        from hermes_state import DEFAULT_DB_PATH, SessionDB
+
         if not DEFAULT_DB_PATH.exists():
             return None
         return SessionDB(read_only=True)
@@ -337,8 +335,7 @@ def _resolve_session_root(session_id: Any) -> Optional[str]:
     return root
 
 
-def _start_root_span(key: str, name: str, kind: str, *, session_id: Any = None,
-                     model: Any = None):
+def _start_root_span(key: str, name: str, kind: str, *, session_id: Any = None, model: Any = None):
     """Start a span forced to ``key``'s deterministic trace_id + root span_id, so
     it IS the root of that trace. Used for the WORKFLOW turn root and standalone
     kanban task traces. Caller ends it (turn roots stay open across the turn;
@@ -409,8 +406,9 @@ def _emit_completion_marker(key: Any) -> None:
 # ---------------------------------------------------------------------------
 # Turn  (WORKFLOW root) — one per run_conversation / user message = one TRACE
 # ---------------------------------------------------------------------------
-def _ensure_turn(key: str, *, session_id: Any = None, model: Any = None,
-                 user_message: Any = None) -> Optional[_TurnState]:
+def _ensure_turn(
+    key: str, *, session_id: Any = None, model: Any = None, user_message: Any = None
+) -> Optional[_TurnState]:
     """Get-or-create the WORKFLOW turn span that ROOTS this turn's trace. Its
     trace_id + span_id are the deterministic ids for ``key`` (so children and the
     completion marker line up), and it carries ``neatlogs.session.id`` so the
@@ -451,8 +449,9 @@ def _ensure_turn(key: str, *, session_id: Any = None, model: Any = None,
         else:
             # Top-level turn: the WORKFLOW root of its own per-turn trace. Left
             # OPEN across the turn; input/output stamped and ended at turn close.
-            span = _start_root_span(key, "hermes.turn", "workflow",
-                                    session_id=session_id, model=model)
+            span = _start_root_span(
+                key, "hermes.turn", "workflow", session_id=session_id, model=model
+            )
             # A kanban worker (`hermes chat -q "work kanban task <id>"`) is a
             # subprocess dedicated to ONE task, pinned via env. Tag its turn roots
             # with the task identity so they're attributable to the task — the
@@ -497,12 +496,20 @@ def on_session_start(**kwargs: Any) -> None:
 def on_pre_llm_call(**kwargs: Any) -> None:
     """Turn begins — open the WORKFLOW turn trace and remember the user input."""
     try:
-        key = _turn_key(kwargs.get("turn_id"), kwargs.get("api_request_id"),
-                        kwargs.get("session_id"), kwargs.get("task_id"))
+        key = _turn_key(
+            kwargs.get("turn_id"),
+            kwargs.get("api_request_id"),
+            kwargs.get("session_id"),
+            kwargs.get("task_id"),
+        )
         if not key:
             return
-        state = _ensure_turn(key, session_id=kwargs.get("session_id"),
-                             model=kwargs.get("model"), user_message=kwargs.get("user_message"))
+        state = _ensure_turn(
+            key,
+            session_id=kwargs.get("session_id"),
+            model=kwargs.get("model"),
+            user_message=kwargs.get("user_message"),
+        )
         # If the API layer opened the turn first (no user_message then), backfill
         # the input/model now so the root carries them at close.
         if state is not None:
@@ -519,8 +526,12 @@ def on_post_llm_call(**kwargs: Any) -> None:
     """Turn ends — stamp input+output on the WORKFLOW root, close it, and finalize
     this turn's trace with a completion marker."""
     try:
-        key = _turn_key(kwargs.get("turn_id"), kwargs.get("api_request_id"),
-                        kwargs.get("session_id"), kwargs.get("task_id"))
+        key = _turn_key(
+            kwargs.get("turn_id"),
+            kwargs.get("api_request_id"),
+            kwargs.get("session_id"),
+            kwargs.get("task_id"),
+        )
         if not key:
             return
         with _STATE_LOCK:
@@ -561,8 +572,12 @@ def _finalize_turn_trace(state: _TurnState) -> None:
 def on_pre_api_request(**kwargs: Any) -> None:
     """Provider attempt begins — open an LLM child under the turn span."""
     try:
-        key = _turn_key(kwargs.get("turn_id"), kwargs.get("api_request_id"),
-                        kwargs.get("session_id"), kwargs.get("task_id"))
+        key = _turn_key(
+            kwargs.get("turn_id"),
+            kwargs.get("api_request_id"),
+            kwargs.get("session_id"),
+            kwargs.get("task_id"),
+        )
         if not key:
             return
         # A turn may begin at the API layer (legacy paths skip pre_llm_call).
@@ -606,8 +621,12 @@ def on_api_request_error(**kwargs: Any) -> None:
 
 def _finish_api_span(kwargs: Dict[str, Any], *, error: bool) -> None:
     try:
-        key = _turn_key(kwargs.get("turn_id"), kwargs.get("api_request_id"),
-                        kwargs.get("session_id"), kwargs.get("task_id"))
+        key = _turn_key(
+            kwargs.get("turn_id"),
+            kwargs.get("api_request_id"),
+            kwargs.get("session_id"),
+            kwargs.get("task_id"),
+        )
         if not key:
             return
         with _STATE_LOCK:
@@ -743,8 +762,12 @@ def _resolve_open_turn(kwargs: Dict[str, Any]) -> Optional[_TurnState]:
     session's most-recent open turn, then (single live turn) that one. Returns
     None if truly no turn is open — the caller then skips rather than orphaning."""
     with _STATE_LOCK:
-        key = _turn_key(kwargs.get("turn_id"), kwargs.get("api_request_id"),
-                        kwargs.get("session_id"), kwargs.get("task_id"))
+        key = _turn_key(
+            kwargs.get("turn_id"),
+            kwargs.get("api_request_id"),
+            kwargs.get("session_id"),
+            kwargs.get("task_id"),
+        )
         state = _TURN_STATE.get(key) if key else None
         if state is not None:
             return state

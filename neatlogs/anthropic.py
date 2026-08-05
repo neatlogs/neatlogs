@@ -119,6 +119,7 @@ def _patch_messages(messages: Any) -> None:
     messages.create = patched_create
 
     if orig_stream:
+
         def patched_stream(*args, **kwargs):
             if is_suppressed():
                 return orig_stream(*args, **kwargs)
@@ -199,6 +200,7 @@ def _patch_async_messages(messages: Any) -> None:
     messages.create = patched_create
 
     if orig_stream:
+
         def patched_stream(*args, **kwargs):
             if is_suppressed():
                 return orig_stream(*args, **kwargs)
@@ -250,7 +252,9 @@ def _set_input_attributes(span: Any, messages: list, system: Any, kwargs: dict) 
         else:
             span.set_attribute(f"neatlogs.llm.input_messages.{idx}.content", serialize(content))
         if msg.get("tool_call_id"):
-            span.set_attribute(f"neatlogs.llm.input_messages.{idx}.tool_call_id", msg["tool_call_id"])
+            span.set_attribute(
+                f"neatlogs.llm.input_messages.{idx}.tool_call_id", msg["tool_call_id"]
+            )
         idx += 1
 
     tools = kwargs.get("tools")
@@ -260,7 +264,9 @@ def _set_input_attributes(span: Any, messages: list, system: Any, kwargs: dict) 
             if tool.get("description"):
                 span.set_attribute(f"neatlogs.llm.tools.{i}.description", tool["description"])
             if tool.get("input_schema"):
-                span.set_attribute(f"neatlogs.llm.tools.{i}.input_schema", serialize(tool["input_schema"]))
+                span.set_attribute(
+                    f"neatlogs.llm.tools.{i}.input_schema", serialize(tool["input_schema"])
+                )
 
     for param in ("temperature", "top_p", "top_k", "max_tokens"):
         if param in kwargs and kwargs[param] is not None:
@@ -278,9 +284,16 @@ def _finalize_response(span: Any, response: Any, duration_ms: float) -> None:
         if block_type == "text":
             text_parts.append(getattr(block, "text", ""))
         elif block_type == "tool_use":
-            span.set_attribute(f"neatlogs.llm.tool_calls.{tool_call_idx}.id", getattr(block, "id", ""))
-            span.set_attribute(f"neatlogs.llm.tool_calls.{tool_call_idx}.name", getattr(block, "name", ""))
-            span.set_attribute(f"neatlogs.llm.tool_calls.{tool_call_idx}.arguments", serialize(getattr(block, "input", {})))
+            span.set_attribute(
+                f"neatlogs.llm.tool_calls.{tool_call_idx}.id", getattr(block, "id", "")
+            )
+            span.set_attribute(
+                f"neatlogs.llm.tool_calls.{tool_call_idx}.name", getattr(block, "name", "")
+            )
+            span.set_attribute(
+                f"neatlogs.llm.tool_calls.{tool_call_idx}.arguments",
+                serialize(getattr(block, "input", {})),
+            )
             tool_call_idx += 1
         elif block_type == "thinking":
             thinking_text = getattr(block, "thinking", "")
@@ -330,7 +343,9 @@ def _set_usage_attributes(span: Any, usage: Any) -> None:
         span.set_attribute("neatlogs.llm.token_count.cache_write", cache_write)
 
 
-def _finalize_stream(span: Any, chunks: List[Any], duration_ms: float, ttft_ms: Optional[float]) -> None:
+def _finalize_stream(
+    span: Any, chunks: List[Any], duration_ms: float, ttft_ms: Optional[float]
+) -> None:
     """Finalize a streaming response span from accumulated Anthropic stream events."""
     text_parts: List[str] = []
     tool_calls_acc: dict = {}
@@ -556,6 +571,7 @@ def _extra_message_methods(messages: Any, is_async: bool) -> None:
     if hasattr(messages, "parse") and not getattr(messages, "_neatlogs_parse_patched", False):
         orig_parse = messages.parse
         if is_async:
+
             async def patched_parse(*args, **kwargs):
                 if is_suppressed():
                     return await orig_parse(*args, **kwargs)
@@ -564,10 +580,13 @@ def _extra_message_methods(messages: Any, is_async: bool) -> None:
                 try:
                     resp = await orig_parse(*args, **kwargs)
                 except Exception as e:
-                    _err(span, e); raise
+                    _err(span, e)
+                    raise
                 _finalize_response(span, resp, (time.perf_counter() - start) * 1000)
                 return resp
+
         else:
+
             def patched_parse(*args, **kwargs):
                 if is_suppressed():
                     return orig_parse(*args, **kwargs)
@@ -576,45 +595,63 @@ def _extra_message_methods(messages: Any, is_async: bool) -> None:
                 try:
                     resp = orig_parse(*args, **kwargs)
                 except Exception as e:
-                    _err(span, e); raise
+                    _err(span, e)
+                    raise
                 _finalize_response(span, resp, (time.perf_counter() - start) * 1000)
                 return resp
+
         messages.parse = patched_parse
         messages._neatlogs_parse_patched = True
 
     # count_tokens → small utility call
-    if hasattr(messages, "count_tokens") and not getattr(messages, "_neatlogs_count_patched", False):
+    if hasattr(messages, "count_tokens") and not getattr(
+        messages, "_neatlogs_count_patched", False
+    ):
         orig_count = messages.count_tokens
         if is_async:
+
             async def patched_count(*args, **kwargs):
                 if is_suppressed():
                     return await orig_count(*args, **kwargs)
                 span = get_provider_tracer().start_span(
                     name="anthropic.messages.count_tokens",
-                    attributes={"neatlogs.span.kind": "llm", "neatlogs.llm.provider": "anthropic",
-                                "neatlogs.llm.task": "count_tokens", "neatlogs.llm.model_name": kwargs.get("model", "")},
+                    attributes={
+                        "neatlogs.span.kind": "llm",
+                        "neatlogs.llm.provider": "anthropic",
+                        "neatlogs.llm.task": "count_tokens",
+                        "neatlogs.llm.model_name": kwargs.get("model", ""),
+                    },
                 )
                 try:
                     resp = await orig_count(*args, **kwargs)
                 except Exception as e:
-                    _err(span, e); raise
+                    _err(span, e)
+                    raise
                 _finalize_count_tokens(span, resp)
                 return resp
+
         else:
+
             def patched_count(*args, **kwargs):
                 if is_suppressed():
                     return orig_count(*args, **kwargs)
                 span = get_provider_tracer().start_span(
                     name="anthropic.messages.count_tokens",
-                    attributes={"neatlogs.span.kind": "llm", "neatlogs.llm.provider": "anthropic",
-                                "neatlogs.llm.task": "count_tokens", "neatlogs.llm.model_name": kwargs.get("model", "")},
+                    attributes={
+                        "neatlogs.span.kind": "llm",
+                        "neatlogs.llm.provider": "anthropic",
+                        "neatlogs.llm.task": "count_tokens",
+                        "neatlogs.llm.model_name": kwargs.get("model", ""),
+                    },
                 )
                 try:
                     resp = orig_count(*args, **kwargs)
                 except Exception as e:
-                    _err(span, e); raise
+                    _err(span, e)
+                    raise
                 _finalize_count_tokens(span, resp)
                 return resp
+
         messages.count_tokens = patched_count
         messages._neatlogs_count_patched = True
 
@@ -675,27 +712,36 @@ def _patch_legacy_completions(completions: Any, is_async: bool) -> None:
         span.end()
 
     if is_async:
+
         async def patched(*args, **kwargs):
             if is_suppressed():
                 return await orig(*args, **kwargs)
-            span = get_provider_tracer().start_span(name="anthropic.completions.create", attributes=_attrs(kwargs))
+            span = get_provider_tracer().start_span(
+                name="anthropic.completions.create", attributes=_attrs(kwargs)
+            )
             start = time.perf_counter()
             try:
                 resp = await orig(*args, **kwargs)
             except Exception as e:
-                _err(span, e); raise
+                _err(span, e)
+                raise
             _finalize(span, resp, (time.perf_counter() - start) * 1000)
             return resp
+
     else:
+
         def patched(*args, **kwargs):
             if is_suppressed():
                 return orig(*args, **kwargs)
-            span = get_provider_tracer().start_span(name="anthropic.completions.create", attributes=_attrs(kwargs))
+            span = get_provider_tracer().start_span(
+                name="anthropic.completions.create", attributes=_attrs(kwargs)
+            )
             start = time.perf_counter()
             try:
                 resp = orig(*args, **kwargs)
             except Exception as e:
-                _err(span, e); raise
+                _err(span, e)
+                raise
             _finalize(span, resp, (time.perf_counter() - start) * 1000)
             return resp
 
@@ -713,6 +759,7 @@ def _err(span: Any, e: Exception) -> None:
 # Import-replacement: `from neatlogs.anthropic import anthropic`
 # Patches Anthropic/AsyncAnthropic.__init__ so every client is auto-wrapped.
 # ---------------------------------------------------------------------------
+
 
 def _patch_anthropic_module() -> None:
     global _PATCHED, _ORIG_INIT, _ORIG_ASYNC_INIT

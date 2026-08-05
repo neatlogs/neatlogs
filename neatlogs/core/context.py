@@ -133,7 +133,9 @@ def trace(
     from .._wrap_utils import (
         _neatlogs_root_kwargs,
         attach_as_current,
-        detach as _nl_detach,
+    )
+    from .._wrap_utils import detach as _nl_detach
+    from .._wrap_utils import (
         get_internal_tracer,
     )
 
@@ -239,9 +241,7 @@ def trace(
     span = tracer.start_span(name, context=parent_ctx)
     span_token = attach_as_current(span)
     try:
-        logger.debug(
-            f"[trace] Creating {'root' if is_root else 'child'} span '{name}'"
-        )
+        logger.debug(f"[trace] Creating {'root' if is_root else 'child'} span '{name}'")
         _set_span_attributes(span, kind, template_string, prompt_variables, version, attributes)
         # Session/end-user belong to the trace root only.
         apply_session_attributes(span, session_id, is_root=is_root)

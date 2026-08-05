@@ -1,0 +1,3 @@
+# Keep CI formatting deterministic across runs and Python matrix updates.
+black==26.1.0
+isort==7.0.0

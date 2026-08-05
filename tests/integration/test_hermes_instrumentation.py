@@ -11,7 +11,6 @@ import sys
 import types
 
 import pytest
-
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
@@ -24,6 +23,7 @@ def _setup_tracer(exporter):
     # Reset the process-global wrapper-tracer cache so each test binds to its
     # own provider (correct in production; leaks across tests otherwise).
     import neatlogs._wrap_utils as _wu
+
     _wu._wrapper_tracer = None
     return provider
 
@@ -63,6 +63,7 @@ def fake_hermes(monkeypatch):
 
     # Reset the neatlogs.hermes patch flag so each test patches fresh classes.
     import neatlogs.hermes as h
+
     h._PATCHED = False
     yield {"AIAgent": AIAgent, "ToolRegistry": ToolRegistry}
     h._PATCHED = False

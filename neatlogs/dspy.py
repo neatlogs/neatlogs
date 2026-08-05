@@ -87,7 +87,8 @@ def _patch_module_class() -> None:
         try:
             result = orig_call(self, *args, **kwargs)
         except Exception as e:
-            _err(span, e); raise
+            _err(span, e)
+            raise
         finally:
             detach(token)
 
@@ -147,7 +148,9 @@ def _patch_lm_class() -> None:
         if messages and isinstance(messages, list):
             for i, msg in enumerate(messages):
                 role = msg.get("role", "") if isinstance(msg, dict) else getattr(msg, "role", "")
-                content = msg.get("content", "") if isinstance(msg, dict) else getattr(msg, "content", "")
+                content = (
+                    msg.get("content", "") if isinstance(msg, dict) else getattr(msg, "content", "")
+                )
                 content_str = content if isinstance(content, str) else serialize(content)
                 if role:
                     attrs[f"neatlogs.llm.input_messages.{i}.role"] = role
@@ -173,7 +176,8 @@ def _patch_lm_class() -> None:
         try:
             result = orig_call(self, prompt=prompt, messages=messages, **kwargs)
         except Exception as e:
-            _err(span, e); raise
+            _err(span, e)
+            raise
         finally:
             detach(token)
 
@@ -279,7 +283,9 @@ def _patch_retrieve_class() -> None:
         attrs = {"neatlogs.span.kind": "retriever"}
         if query_or_queries is not None:
             attrs["neatlogs.retrieval.query"] = (
-                query_or_queries if isinstance(query_or_queries, str) else serialize(query_or_queries)
+                query_or_queries
+                if isinstance(query_or_queries, str)
+                else serialize(query_or_queries)
             )[:10000]
         effective_k = k if k is not None else getattr(self, "k", None)
         if effective_k is not None:
@@ -291,7 +297,8 @@ def _patch_retrieve_class() -> None:
         try:
             result = orig_forward(self, query_or_queries, k, *args, **kwargs)
         except Exception as e:
-            _err(span, e); raise
+            _err(span, e)
+            raise
         finally:
             detach(token)
 
@@ -304,7 +311,9 @@ def _patch_retrieve_class() -> None:
             except TypeError:
                 pass
             span.set_attribute("neatlogs.retrieval.documents", serialize(passages)[:10000])
-        span.set_attribute("neatlogs.llm.metrics.duration_ms", round((time.perf_counter() - start) * 1000, 3))
+        span.set_attribute(
+            "neatlogs.llm.metrics.duration_ms", round((time.perf_counter() - start) * 1000, 3)
+        )
         span.set_status(StatusCode.OK)
         span.end()
         return result

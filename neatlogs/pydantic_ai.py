@@ -54,7 +54,9 @@ def _get_agent_attributes(agent: Any) -> dict:
 
     model = getattr(agent, "model", None)
     if model is not None:
-        model_name = getattr(model, "model_name", None) or getattr(model, "name", None) or str(model)
+        model_name = (
+            getattr(model, "model_name", None) or getattr(model, "name", None) or str(model)
+        )
         attrs["neatlogs.llm.model_name"] = str(model_name)
 
     name = getattr(agent, "name", None)
@@ -91,10 +93,14 @@ def _extract_usage(result: Any) -> dict:
 
     prompt = getattr(usage_obj, "input_tokens", None)
     if prompt is None:
-        prompt = getattr(usage_obj, "request_tokens", None) or getattr(usage_obj, "prompt_tokens", None)
+        prompt = getattr(usage_obj, "request_tokens", None) or getattr(
+            usage_obj, "prompt_tokens", None
+        )
     completion = getattr(usage_obj, "output_tokens", None)
     if completion is None:
-        completion = getattr(usage_obj, "response_tokens", None) or getattr(usage_obj, "completion_tokens", None)
+        completion = getattr(usage_obj, "response_tokens", None) or getattr(
+            usage_obj, "completion_tokens", None
+        )
     total = getattr(usage_obj, "total_tokens", None)
     cache_read = getattr(usage_obj, "cache_read_tokens", None)
     cache_write = getattr(usage_obj, "cache_write_tokens", None)
@@ -129,7 +135,9 @@ def _finalize_run_span(span: Any, result: Any, duration_ms: float) -> None:
 
     output = _result_output(result)
     if output is not None:
-        span.set_attribute("output.value", (output if isinstance(output, str) else serialize(output)))
+        span.set_attribute(
+            "output.value", (output if isinstance(output, str) else serialize(output))
+        )
 
     for attr_name, value in _extract_usage(result).items():
         span.set_attribute(attr_name, value)
@@ -172,7 +180,8 @@ def _patch_run(agent: Any) -> None:
         try:
             result = await orig_run(*args, **kwargs)
         except Exception as e:
-            _err(span, e); raise
+            _err(span, e)
+            raise
         finally:
             _agent_span_active.reset(guard)
             detach(token)
@@ -209,7 +218,8 @@ def _patch_run_sync(agent: Any) -> None:
         try:
             result = orig_run_sync(*args, **kwargs)
         except Exception as e:
-            _err(span, e); raise
+            _err(span, e)
+            raise
         finally:
             _agent_span_active.reset(guard)
             detach(token)
@@ -397,7 +407,11 @@ def _patch_model_class(model_cls=None) -> None:
         return
     # Only patch a subclass if it actually defines its own request method;
     # otherwise it inherits an already-patched base.
-    if model_cls is not None and "request" not in target.__dict__ and "request_stream" not in target.__dict__:
+    if (
+        model_cls is not None
+        and "request" not in target.__dict__
+        and "request_stream" not in target.__dict__
+    ):
         return
 
     def _set_request_inputs(span, messages):
@@ -455,7 +469,10 @@ def _patch_model_class(model_cls=None) -> None:
                     if name:
                         span.set_attribute(f"neatlogs.llm.tool_calls.{j}.name", name)
                     if args is not None:
-                        span.set_attribute(f"neatlogs.llm.tool_calls.{j}.arguments", args if isinstance(args, str) else serialize(args))
+                        span.set_attribute(
+                            f"neatlogs.llm.tool_calls.{j}.arguments",
+                            args if isinstance(args, str) else serialize(args),
+                        )
                     if tc_id:
                         span.set_attribute(f"neatlogs.llm.tool_calls.{j}.id", str(tc_id))
                     tool_calls.append({"name": name, "arguments": args})
@@ -507,7 +524,11 @@ def _patch_model_class(model_cls=None) -> None:
     def _model_name(self):
         return getattr(self, "model_name", None) or str(self)
 
-    if hasattr(target, "request") and "request" in target.__dict__ or (model_cls is None and hasattr(target, "request")):
+    if (
+        hasattr(target, "request")
+        and "request" in target.__dict__
+        or (model_cls is None and hasattr(target, "request"))
+    ):
         orig_request = target.request
 
         async def patched_request(self, messages, *a, **k):
@@ -519,7 +540,8 @@ def _patch_model_class(model_cls=None) -> None:
             try:
                 response = await orig_request(self, messages, *a, **k)
             except Exception as e:
-                _err(span, e); raise
+                _err(span, e)
+                raise
             finally:
                 detach(token)
             _finalize_request(span, response)
@@ -527,7 +549,9 @@ def _patch_model_class(model_cls=None) -> None:
 
         target.request = patched_request
 
-    if (hasattr(target, "request_stream") and "request_stream" in target.__dict__) or (model_cls is None and hasattr(target, "request_stream")):
+    if (hasattr(target, "request_stream") and "request_stream" in target.__dict__) or (
+        model_cls is None and hasattr(target, "request_stream")
+    ):
         orig_request_stream = target.request_stream
 
         def patched_request_stream(self, messages, *a, **k):
@@ -557,7 +581,9 @@ class _ModelStreamCtx:
         self._streamed = None
 
     async def __aenter__(self):
-        self._span = get_tracer().start_span(name="pydantic_ai.model.request_stream", attributes=self._attrs)
+        self._span = get_tracer().start_span(
+            name="pydantic_ai.model.request_stream", attributes=self._attrs
+        )
         self._set_inputs(self._span, self._messages)
         self._token = attach_as_current(self._span)
         self._streamed = await self._cm.__aenter__()
@@ -579,7 +605,9 @@ class _ModelStreamCtx:
                     text = self._streamed.get() if hasattr(self._streamed, "get") else None
                     if text:
                         self._span.set_attribute("neatlogs.llm.output_messages.0.role", "assistant")
-                        self._span.set_attribute("neatlogs.llm.output_messages.0.content", str(text))
+                        self._span.set_attribute(
+                            "neatlogs.llm.output_messages.0.content", str(text)
+                        )
                 except Exception:
                     pass
                 usage = getattr(self._streamed, "usage", None)
@@ -590,9 +618,13 @@ class _ModelStreamCtx:
                         usage = None
                 if usage:
                     if getattr(usage, "input_tokens", None):
-                        self._span.set_attribute("neatlogs.llm.token_count.prompt", usage.input_tokens)
+                        self._span.set_attribute(
+                            "neatlogs.llm.token_count.prompt", usage.input_tokens
+                        )
                     if getattr(usage, "output_tokens", None):
-                        self._span.set_attribute("neatlogs.llm.token_count.completion", usage.output_tokens)
+                        self._span.set_attribute(
+                            "neatlogs.llm.token_count.completion", usage.output_tokens
+                        )
                 self._span.set_status(StatusCode.OK)
             self._span.end()
 
@@ -623,7 +655,8 @@ def _patch_toolset_class() -> None:
         try:
             result = await orig_call_tool(self, name, tool_args, ctx, tool, *a, **k)
         except Exception as e:
-            _err(span, e); raise
+            _err(span, e)
+            raise
         finally:
             detach(token)
         if result is not None:

@@ -42,7 +42,7 @@ def _is_neatlogs_scope_span(span: Any) -> bool:
 # forever. We treat HTTP auto-instrumentation as propagation-only and DROP a span
 # that is BOTH rootless AND an HTTP-scope span (keeping nested HTTP spans intact).
 _HTTP_INSTRUMENTATION_SCOPES = (
-    "opentelemetry.instrumentation.urllib",       # covers urllib and urllib3
+    "opentelemetry.instrumentation.urllib",  # covers urllib and urllib3
     "opentelemetry.instrumentation.requests",
     "opentelemetry.instrumentation.httpx",
     "opentelemetry.instrumentation.aiohttp_client",
@@ -50,8 +50,15 @@ _HTTP_INSTRUMENTATION_SCOPES = (
 )
 
 _AGENTIC_KINDS = {
-    "WORKFLOW", "AGENT", "CHAIN", "TOOL", "RETRIEVER",
-    "EMBEDDING", "GUARDRAIL", "LLM", "MCP_TOOL",
+    "WORKFLOW",
+    "AGENT",
+    "CHAIN",
+    "TOOL",
+    "RETRIEVER",
+    "EMBEDDING",
+    "GUARDRAIL",
+    "LLM",
+    "MCP_TOOL",
 }
 
 # Hosts for third-party framework telemetry that our HTTP auto-instrumentation
@@ -100,7 +107,7 @@ def is_rootless_infra_http(span) -> bool:
         if not scope_name.startswith(_HTTP_INSTRUMENTATION_SCOPES):
             return False
         attrs = span.attributes or {}
-        kind = (attrs.get("openinference.span.kind") or attrs.get("neatlogs.span.kind") or "")
+        kind = attrs.get("openinference.span.kind") or attrs.get("neatlogs.span.kind") or ""
         if str(kind).upper() in _AGENTIC_KINDS:
             return False  # explicitly an agentic root — keep
         return True

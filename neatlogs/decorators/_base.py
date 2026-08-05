@@ -218,14 +218,12 @@ def _decorate_span(
             @functools.wraps(func)
             async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
                 from ..core.end_user import apply_end_user_attributes
-                from ..core.session import apply_session_attributes
                 from ..core.log import _CaptureStdoutContext
                 from ..core.mask import register_mask
+                from ..core.session import apply_session_attributes
 
                 is_root = _is_root_span()
-                with neatlogs_span(
-                    __name__, span_name, kind=otel_trace.SpanKind.INTERNAL
-                ) as span:
+                with neatlogs_span(__name__, span_name, kind=otel_trace.SpanKind.INTERNAL) as span:
                     _set_common_span_attrs(
                         span,
                         openinference_kind=openinference_kind,
@@ -237,9 +235,7 @@ def _decorate_span(
                     )
                     # Session/end-user belong to the trace root only.
                     apply_session_attributes(span, session_id, is_root=is_root)
-                    apply_end_user_attributes(
-                        span, end_user_id, end_user_metadata, is_root=is_root
-                    )
+                    apply_end_user_attributes(span, end_user_id, end_user_metadata, is_root=is_root)
                     if mask is not None:
                         span.set_attribute("neatlogs.mask_id", register_mask(mask))
                     if description:
@@ -282,14 +278,12 @@ def _decorate_span(
         @functools.wraps(func)
         def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
             from ..core.end_user import apply_end_user_attributes
-            from ..core.session import apply_session_attributes
             from ..core.log import _CaptureStdoutContext
             from ..core.mask import register_mask
+            from ..core.session import apply_session_attributes
 
             is_root = _is_root_span()
-            with neatlogs_span(
-                __name__, span_name, kind=otel_trace.SpanKind.INTERNAL
-            ) as span:
+            with neatlogs_span(__name__, span_name, kind=otel_trace.SpanKind.INTERNAL) as span:
                 _set_common_span_attrs(
                     span,
                     openinference_kind=openinference_kind,

@@ -35,9 +35,7 @@ def test_apply_session_attributes_root(tracer_provider, in_memory_span_exporter)
     assert spans[0].attributes.get(SESSION_ID_KEY) == "chat_123"
 
 
-def test_apply_session_attributes_non_root_ignored(
-    tracer_provider, in_memory_span_exporter
-):
+def test_apply_session_attributes_non_root_ignored(tracer_provider, in_memory_span_exporter):
     _install(tracer_provider)
     tracer = trace.get_tracer(__name__)
     with tracer.start_as_current_span("child") as span:
@@ -47,9 +45,7 @@ def test_apply_session_attributes_non_root_ignored(
     assert SESSION_ID_KEY not in spans[0].attributes
 
 
-def test_apply_session_attributes_empty_noop(
-    tracer_provider, in_memory_span_exporter
-):
+def test_apply_session_attributes_empty_noop(tracer_provider, in_memory_span_exporter):
     _install(tracer_provider)
     tracer = trace.get_tracer(__name__)
     with tracer.start_as_current_span("root") as span:
@@ -64,9 +60,7 @@ def test_apply_session_attributes_empty_noop(
 # ---------------------------------------------------------------------------
 
 
-def test_span_decorator_sets_session_on_root(
-    tracer_provider, in_memory_span_exporter
-):
+def test_span_decorator_sets_session_on_root(tracer_provider, in_memory_span_exporter):
     _install(tracer_provider)
 
     @neatlogs_span(kind="WORKFLOW", session_id="chat_123")
@@ -80,9 +74,7 @@ def test_span_decorator_sets_session_on_root(
     assert root.attributes.get(SESSION_ID_KEY) == "chat_123"
 
 
-def test_span_decorator_child_does_not_inherit_session(
-    tracer_provider, in_memory_span_exporter
-):
+def test_span_decorator_child_does_not_inherit_session(tracer_provider, in_memory_span_exporter):
     _install(tracer_provider)
 
     @neatlogs_span(kind="CHAIN")
@@ -144,9 +136,7 @@ def test_wrap_context_stamps_workflow_metadata_on_auto_root(
 
     class OpenAI:
         def __init__(self):
-            self.chat = SimpleNamespace(
-                completions=SimpleNamespace(create=self._create)
-            )
+            self.chat = SimpleNamespace(completions=SimpleNamespace(create=self._create))
 
         def _create(self, **kwargs):
             return SimpleNamespace(
@@ -256,9 +246,7 @@ def test_processor_stamps_identify_on_bare_framework_root():
 
     with identify(session_id="conv_fw", end_user_id="u_fw"):
         # Mimic a framework auto-root: a plain root span, no apply_* call.
-        root = tracer.start_span(
-            "LangGraph", attributes={"neatlogs.span.kind": "workflow"}
-        )
+        root = tracer.start_span("LangGraph", attributes={"neatlogs.span.kind": "workflow"})
         root.end()
 
     root = next(s for s in exporter.get_finished_spans() if s.name == "LangGraph")
@@ -275,9 +263,7 @@ def test_processor_stamps_wrap_context_metadata_on_framework_root():
 
     class Framework:
         def run(self):
-            root = tracer.start_span(
-                "LangGraph", attributes={"neatlogs.span.kind": "workflow"}
-            )
+            root = tracer.start_span("LangGraph", attributes={"neatlogs.span.kind": "workflow"})
             root.end()
 
     wrapped = with_wrap_context(
@@ -314,12 +300,8 @@ def test_processor_skips_child_spans():
     tracer = trace.get_tracer(__name__)
 
     with identify(session_id="conv_fw"):
-        with tracer.start_as_current_span(
-            "root", attributes={"neatlogs.span.kind": "workflow"}
-        ):
-            with tracer.start_as_current_span(
-                "child", attributes={"neatlogs.span.kind": "LLM"}
-            ):
+        with tracer.start_as_current_span("root", attributes={"neatlogs.span.kind": "workflow"}):
+            with tracer.start_as_current_span("child", attributes={"neatlogs.span.kind": "LLM"}):
                 pass
 
     child = next(s for s in exporter.get_finished_spans() if s.name == "child")
@@ -332,9 +314,7 @@ def test_processor_noop_without_identify():
     _install(provider)
     tracer = trace.get_tracer(__name__)
 
-    with tracer.start_as_current_span(
-        "bare", attributes={"neatlogs.span.kind": "workflow"}
-    ):
+    with tracer.start_as_current_span("bare", attributes={"neatlogs.span.kind": "workflow"}):
         pass
 
     root = next(s for s in exporter.get_finished_spans() if s.name == "bare")

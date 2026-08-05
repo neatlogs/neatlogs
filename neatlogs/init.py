@@ -106,6 +106,8 @@ def _foreign_llm_instrumentor_installed():
             # find_spec can raise for namespace-package edge cases; treat as absent.
             continue
     return None
+
+
 _meter_provider = None
 _log_provider = None
 _span_processor = None
@@ -451,9 +453,7 @@ def init(
         # is merely INSTALLED (importable), we pre-emptively keep a private provider
         # and leave the global slot free for the co-tenant to own — no isolate=True
         # required from the customer.
-        _foreign_installed = (
-            None if isolate is False else _foreign_llm_instrumentor_installed()
-        )
+        _foreign_installed = None if isolate is False else _foreign_llm_instrumentor_installed()
         if isolate is True or _foreign_installed is not None:
             _isolated_provider = True
             if debug:

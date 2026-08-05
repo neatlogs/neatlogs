@@ -102,9 +102,7 @@ class InstrumentationManager:
         try:
             from openinference.instrumentation.mcp import MCPInstrumentor
 
-            MCPInstrumentor().instrument(
-                tracer_provider=provider_for_openinference(self.provider)
-            )
+            MCPInstrumentor().instrument(tracer_provider=provider_for_openinference(self.provider))
             self.instrumented.add("mcp")
             if self.debug:
                 logger.info("✅ MCP (OpenInference)")
@@ -499,6 +497,7 @@ class InstrumentationManager:
                 if isinstance(value, str):
                     return value
                 import json as _json
+
                 return _json.dumps(value, default=str)[:4000]
             except Exception:
                 return str(value)[:4000]
@@ -512,6 +511,7 @@ class InstrumentationManager:
         orig_output = getattr(_gr, "run_single_output_guardrail", None)
 
         if orig_input is not None:
+
             @wraps(orig_input)
             async def _wrapped_input(agent, guardrail, input, context, *a, **k):
                 token = _gc.GUARDRAIL_INPUT_VAR.set(_to_text(input))
@@ -519,9 +519,11 @@ class InstrumentationManager:
                     return await orig_input(agent, guardrail, input, context, *a, **k)
                 finally:
                     _gc.GUARDRAIL_INPUT_VAR.reset(token)
+
             _gr.run_single_input_guardrail = _wrapped_input
 
         if orig_output is not None:
+
             @wraps(orig_output)
             async def _wrapped_output(guardrail, agent, agent_output, context, *a, **k):
                 token = _gc.GUARDRAIL_INPUT_VAR.set(_to_text(agent_output))
@@ -529,6 +531,7 @@ class InstrumentationManager:
                     return await orig_output(guardrail, agent, agent_output, context, *a, **k)
                 finally:
                     _gc.GUARDRAIL_INPUT_VAR.reset(token)
+
             _gr.run_single_output_guardrail = _wrapped_output
 
         _gr._NEATLOGS_PATCHED_GUARDRAIL_INPUT = True
@@ -551,10 +554,10 @@ class InstrumentationManager:
         This stays correct even if OI renames its internal span bookkeeping.
         """
         try:
+            from agents.tracing.span_data import GuardrailSpanData
             from openinference.instrumentation.openai_agents._processor import (
                 OpenInferenceTracingProcessor,
             )
-            from agents.tracing.span_data import GuardrailSpanData
         except Exception:
             return
 
@@ -576,6 +579,7 @@ class InstrumentationManager:
                 if isinstance(getattr(span, "span_data", None), GuardrailSpanData):
                     # OI created its otel span during orig_start; grab the active one.
                     from opentelemetry import trace as _trace
+
                     current = _trace.get_current_span()
                     if current is not None:
                         guardrail_spans[span.span_id] = current
@@ -590,12 +594,15 @@ class InstrumentationManager:
                     if otel_span is not None:
                         otel_span.set_attribute("guardrail.name", data.name)
                         otel_span.set_attribute("guardrail.triggered", bool(data.triggered))
-                        otel_span.set_attribute("neatlogs.guardrail.passed", not bool(data.triggered))
+                        otel_span.set_attribute(
+                            "neatlogs.guardrail.passed", not bool(data.triggered)
+                        )
                         otel_span.set_attribute(
                             "neatlogs.guardrail.output",
                             "tripwire triggered (blocked)" if data.triggered else "passed",
                         )
                         from neatlogs.instrumentation._guardrail_ctx import GUARDRAIL_INPUT_VAR
+
                         _gr_input = GUARDRAIL_INPUT_VAR.get()
                         if _gr_input:
                             otel_span.set_attribute("neatlogs.guardrail.input", _gr_input)
@@ -914,8 +921,14 @@ class InstrumentationManager:
             def _run_type_kind(run):
                 rt = str(getattr(run, "run_type", "") or "").lower()
                 # OpenInference run_type -> neatlogs kind (only the mapping we gate on)
-                return {"llm": "llm", "tool": "tool", "retriever": "retriever",
-                        "embedding": "embedding", "chain": "chain", "agent": "agent"}.get(rt, rt)
+                return {
+                    "llm": "llm",
+                    "tool": "tool",
+                    "retriever": "retriever",
+                    "embedding": "embedding",
+                    "chain": "chain",
+                    "agent": "agent",
+                }.get(rt, rt)
 
             def _maybe_open_auto_root(self, run):
                 if getattr(run, "parent_run_id", None):
@@ -1155,6 +1168,7 @@ class InstrumentationManager:
         """
         try:
             from crewai.agents.crew_agent_executor import CrewAgentExecutor
+
             from .._wrap_utils import neatlogs_span
 
             original = CrewAgentExecutor._handle_native_tool_calls

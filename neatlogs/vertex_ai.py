@@ -120,6 +120,7 @@ def _patch_models(models: Any) -> None:
     models.generate_content = patched_generate_content
 
     if orig_stream:
+
         def patched_generate_content_stream(*args, **kwargs):
             if is_suppressed():
                 return orig_stream(*args, **kwargs)
@@ -210,7 +211,9 @@ def _set_input_attributes(span: Any, contents: Any, kwargs: dict) -> None:
             if isinstance(system_instruction, str):
                 span.set_attribute(f"neatlogs.llm.input_messages.{idx}.content", system_instruction)
             else:
-                span.set_attribute(f"neatlogs.llm.input_messages.{idx}.content", serialize(system_instruction))
+                span.set_attribute(
+                    f"neatlogs.llm.input_messages.{idx}.content", serialize(system_instruction)
+                )
             idx += 1
 
     if isinstance(contents, str):
@@ -233,9 +236,13 @@ def _set_input_attributes(span: Any, contents: Any, kwargs: dict) -> None:
                     elif isinstance(part, dict) and part.get("text"):
                         text_parts.append(part["text"])
                 if text_parts:
-                    span.set_attribute(f"neatlogs.llm.input_messages.{idx}.content", "\n".join(text_parts))
+                    span.set_attribute(
+                        f"neatlogs.llm.input_messages.{idx}.content", "\n".join(text_parts)
+                    )
                 else:
-                    span.set_attribute(f"neatlogs.llm.input_messages.{idx}.content", serialize(parts))
+                    span.set_attribute(
+                        f"neatlogs.llm.input_messages.{idx}.content", serialize(parts)
+                    )
                 idx += 1
             else:
                 span.set_attribute(f"neatlogs.llm.input_messages.{idx}.role", "user")
@@ -247,7 +254,9 @@ def _set_input_attributes(span: Any, contents: Any, kwargs: dict) -> None:
 
     tools = None
     if config:
-        tools = getattr(config, "tools", None) if not isinstance(config, dict) else config.get("tools")
+        tools = (
+            getattr(config, "tools", None) if not isinstance(config, dict) else config.get("tools")
+        )
     if tools:
         for i, tool in enumerate(tools):
             if isinstance(tool, dict):
@@ -255,18 +264,32 @@ def _set_input_attributes(span: Any, contents: Any, kwargs: dict) -> None:
                 for j, fn in enumerate(fn_decls):
                     span.set_attribute(f"neatlogs.llm.tools.{i + j}.name", fn.get("name", ""))
                     if fn.get("description"):
-                        span.set_attribute(f"neatlogs.llm.tools.{i + j}.description", fn["description"])
+                        span.set_attribute(
+                            f"neatlogs.llm.tools.{i + j}.description", fn["description"]
+                        )
                     if fn.get("parameters"):
-                        span.set_attribute(f"neatlogs.llm.tools.{i + j}.input_schema", serialize(fn["parameters"]))
+                        span.set_attribute(
+                            f"neatlogs.llm.tools.{i + j}.input_schema", serialize(fn["parameters"])
+                        )
 
     if config:
-        cfg = config if isinstance(config, dict) else config.__dict__ if hasattr(config, "__dict__") else {}
+        cfg = (
+            config
+            if isinstance(config, dict)
+            else config.__dict__ if hasattr(config, "__dict__") else {}
+        )
         if isinstance(cfg, dict):
             # Set individual attrs AND the invocation_parameters blob: the backend
             # surfaces model settings to the UI ONLY from the JSON blob.
             params = {}
-            for param in ("temperature", "top_p", "top_k", "max_output_tokens",
-                          "frequency_penalty", "presence_penalty"):
+            for param in (
+                "temperature",
+                "top_p",
+                "top_k",
+                "max_output_tokens",
+                "frequency_penalty",
+                "presence_penalty",
+            ):
                 val = cfg.get(param)
                 if val is not None:
                     attr_name = "max_tokens" if param == "max_output_tokens" else param
@@ -294,9 +317,14 @@ def _finalize_response(span: Any, response: Any, duration_ms: float) -> None:
                 span.set_attribute("neatlogs.llm.output_messages.0.thinking", part.text)
             elif getattr(part, "function_call", None):
                 fc = part.function_call
-                span.set_attribute(f"neatlogs.llm.tool_calls.{tool_call_idx}.name", getattr(fc, "name", ""))
+                span.set_attribute(
+                    f"neatlogs.llm.tool_calls.{tool_call_idx}.name", getattr(fc, "name", "")
+                )
                 args = getattr(fc, "args", None)
-                span.set_attribute(f"neatlogs.llm.tool_calls.{tool_call_idx}.arguments", serialize(args) if args else "{}")
+                span.set_attribute(
+                    f"neatlogs.llm.tool_calls.{tool_call_idx}.arguments",
+                    serialize(args) if args else "{}",
+                )
                 tool_call_idx += 1
 
         finish_reason = getattr(candidate, "finish_reason", None)
@@ -339,7 +367,9 @@ def _set_usage_attributes(span: Any, usage: Any) -> None:
         span.set_attribute("neatlogs.llm.token_count.reasoning", reasoning_tokens)
 
 
-def _finalize_stream(span: Any, chunks: List[Any], duration_ms: float, ttft_ms: Optional[float]) -> None:
+def _finalize_stream(
+    span: Any, chunks: List[Any], duration_ms: float, ttft_ms: Optional[float]
+) -> None:
     """Finalize a streaming response span from accumulated chunks."""
     text_parts: List[str] = []
     thinking_parts: List[str] = []
@@ -361,10 +391,12 @@ def _finalize_stream(span: Any, chunks: List[Any], duration_ms: float, ttft_ms: 
                     thinking_parts.append(part.text)
                 elif getattr(part, "function_call", None):
                     fc = part.function_call
-                    tool_calls_acc.append({
-                        "name": getattr(fc, "name", ""),
-                        "arguments": serialize(getattr(fc, "args", None) or {}),
-                    })
+                    tool_calls_acc.append(
+                        {
+                            "name": getattr(fc, "name", ""),
+                            "arguments": serialize(getattr(fc, "args", None) or {}),
+                        }
+                    )
 
             fr = getattr(candidate, "finish_reason", None)
             if fr:
@@ -413,7 +445,9 @@ def _finalize_stream(span: Any, chunks: List[Any], duration_ms: float, ttft_ms: 
 
 def _patch_models_extra(models: Any, is_async: bool) -> None:
     # embed_content
-    if hasattr(models, "embed_content") and not getattr(models, "_neatlogs_vertex_embed_patched", False):
+    if hasattr(models, "embed_content") and not getattr(
+        models, "_neatlogs_vertex_embed_patched", False
+    ):
         orig = models.embed_content
 
         def _embed_attrs(kwargs):
@@ -424,7 +458,9 @@ def _patch_models_extra(models: Any, is_async: bool) -> None:
             }
             contents = kwargs.get("contents")
             if contents is not None:
-                attrs["neatlogs.embedding.text"] = (contents if isinstance(contents, str) else serialize(contents))[:10000]
+                attrs["neatlogs.embedding.text"] = (
+                    contents if isinstance(contents, str) else serialize(contents)
+                )[:10000]
             return attrs
 
         def _embed_finalize(span, resp):
@@ -441,35 +477,53 @@ def _patch_models_extra(models: Any, is_async: bool) -> None:
             span.end()
 
         if is_async:
+
             async def patched_embed(*args, **kwargs):
                 if is_suppressed():
                     return await orig(*args, **kwargs)
-                span = get_provider_tracer().start_span(name="vertex_ai.models.embed_content", attributes=_embed_attrs(kwargs))
+                span = get_provider_tracer().start_span(
+                    name="vertex_ai.models.embed_content", attributes=_embed_attrs(kwargs)
+                )
                 try:
                     resp = await orig(*args, **kwargs)
                 except Exception as e:
-                    _err(span, e); raise
-                _embed_finalize(span, resp); return resp
+                    _err(span, e)
+                    raise
+                _embed_finalize(span, resp)
+                return resp
+
         else:
+
             def patched_embed(*args, **kwargs):
                 if is_suppressed():
                     return orig(*args, **kwargs)
-                span = get_provider_tracer().start_span(name="vertex_ai.models.embed_content", attributes=_embed_attrs(kwargs))
+                span = get_provider_tracer().start_span(
+                    name="vertex_ai.models.embed_content", attributes=_embed_attrs(kwargs)
+                )
                 try:
                     resp = orig(*args, **kwargs)
                 except Exception as e:
-                    _err(span, e); raise
-                _embed_finalize(span, resp); return resp
+                    _err(span, e)
+                    raise
+                _embed_finalize(span, resp)
+                return resp
+
         models.embed_content = patched_embed
         models._neatlogs_vertex_embed_patched = True
 
     # count_tokens
-    if hasattr(models, "count_tokens") and not getattr(models, "_neatlogs_vertex_count_patched", False):
+    if hasattr(models, "count_tokens") and not getattr(
+        models, "_neatlogs_vertex_count_patched", False
+    ):
         orig_ct = models.count_tokens
 
         def _ct_attrs(kwargs):
-            return {"neatlogs.span.kind": "llm", "neatlogs.llm.provider": _PROVIDER,
-                    "neatlogs.llm.task": "count_tokens", "neatlogs.llm.model_name": str(kwargs.get("model", ""))}
+            return {
+                "neatlogs.span.kind": "llm",
+                "neatlogs.llm.provider": _PROVIDER,
+                "neatlogs.llm.task": "count_tokens",
+                "neatlogs.llm.model_name": str(kwargs.get("model", "")),
+            }
 
         def _ct_finalize(span, resp):
             total = getattr(resp, "total_tokens", None)
@@ -479,25 +533,37 @@ def _patch_models_extra(models: Any, is_async: bool) -> None:
             span.end()
 
         if is_async:
+
             async def patched_ct(*args, **kwargs):
                 if is_suppressed():
                     return await orig_ct(*args, **kwargs)
-                span = get_provider_tracer().start_span(name="vertex_ai.models.count_tokens", attributes=_ct_attrs(kwargs))
+                span = get_provider_tracer().start_span(
+                    name="vertex_ai.models.count_tokens", attributes=_ct_attrs(kwargs)
+                )
                 try:
                     resp = await orig_ct(*args, **kwargs)
                 except Exception as e:
-                    _err(span, e); raise
-                _ct_finalize(span, resp); return resp
+                    _err(span, e)
+                    raise
+                _ct_finalize(span, resp)
+                return resp
+
         else:
+
             def patched_ct(*args, **kwargs):
                 if is_suppressed():
                     return orig_ct(*args, **kwargs)
-                span = get_provider_tracer().start_span(name="vertex_ai.models.count_tokens", attributes=_ct_attrs(kwargs))
+                span = get_provider_tracer().start_span(
+                    name="vertex_ai.models.count_tokens", attributes=_ct_attrs(kwargs)
+                )
                 try:
                     resp = orig_ct(*args, **kwargs)
                 except Exception as e:
-                    _err(span, e); raise
-                _ct_finalize(span, resp); return resp
+                    _err(span, e)
+                    raise
+                _ct_finalize(span, resp)
+                return resp
+
         models.count_tokens = patched_ct
         models._neatlogs_vertex_count_patched = True
 
@@ -612,6 +678,7 @@ def _err(span: Any, e: Exception) -> None:
 # Import-replacement: `from neatlogs.vertex_ai import genai`
 # Patches Client.__init__ so every Vertex-mode client is auto-wrapped.
 # ---------------------------------------------------------------------------
+
 
 def _patch_vertex_ai_module() -> None:
     global _PATCHED, _ORIG_INIT

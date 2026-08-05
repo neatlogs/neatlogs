@@ -188,10 +188,7 @@ class TestLangChainInstrumentation:
 
         # The traced LLM call should carry the response output.
         llm_output = " ".join(
-            str(v)
-            for s in llm_spans
-            for k, v in s.attributes.items()
-            if "output" in k.lower()
+            str(v) for s in llm_spans for k, v in s.attributes.items() if "output" in k.lower()
         ).lower()
         assert "test response" in llm_output
 
@@ -394,13 +391,12 @@ class TestLangChainInstrumentation:
             except ImportError:
                 pytest.skip("RetrievalQA not available")
 
-        from langchain_openai import ChatOpenAI, OpenAIEmbeddings
-
         # A real (tiny) BaseRetriever returning fixed docs. RetrievalQA validates
         # that `retriever` is a BaseRetriever instance (pydantic), so a bare Mock is
         # rejected — use a real subclass that avoids any actual vector DB dependency.
         from langchain_core.documents import Document
         from langchain_core.retrievers import BaseRetriever
+        from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 
         fixed_docs = [
             Document(

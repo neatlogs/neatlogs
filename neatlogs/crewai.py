@@ -171,7 +171,12 @@ def wrap_crewai(obj: Any) -> Any:
     )
 
     # Flow detection — Flows are their own class hierarchy; patch at the class level.
-    if "flow" in module or hasattr(obj, "_methods") and hasattr(obj, "kickoff") and not hasattr(obj, "tasks"):
+    if (
+        "flow" in module
+        or hasattr(obj, "_methods")
+        and hasattr(obj, "kickoff")
+        and not hasattr(obj, "tasks")
+    ):
         _dbg(f"→ routed to FLOW branch; patching flow class {cls_name} (id={obj_id})")
         _patch_flow_class(type(obj))
         return obj
@@ -185,7 +190,9 @@ def wrap_crewai(obj: Any) -> Any:
         and not hasattr(obj, "tasks")
         and not hasattr(obj, "agents")
     ):
-        _dbg(f"→ routed to STANDALONE AGENT branch (role={getattr(obj, 'role', None)!r}, id={obj_id})")
+        _dbg(
+            f"→ routed to STANDALONE AGENT branch (role={getattr(obj, 'role', None)!r}, id={obj_id})"
+        )
         _patch_agent_kickoff(obj)
         return obj
 
@@ -220,7 +227,9 @@ def _get_crew_attributes(crew: Any) -> dict:
 
     process = getattr(crew, "process", None)
     if process:
-        attrs["neatlogs.crewai.process"] = str(process.value) if hasattr(process, "value") else str(process)
+        attrs["neatlogs.crewai.process"] = (
+            str(process.value) if hasattr(process, "value") else str(process)
+        )
 
     agents = getattr(crew, "agents", None)
     if agents:
@@ -232,6 +241,7 @@ def _get_crew_attributes(crew: Any) -> dict:
 
     try:
         import crewai
+
         attrs["neatlogs.crewai.version"] = getattr(crewai, "__version__", "")
     except (ImportError, AttributeError):
         pass
@@ -270,7 +280,11 @@ def _extract_token_usage(result: Any) -> dict:
     token_usage = getattr(result, "token_usage", None)
     if not token_usage:
         return attrs
-    usage = token_usage if isinstance(token_usage, dict) else (token_usage.__dict__ if hasattr(token_usage, "__dict__") else {})
+    usage = (
+        token_usage
+        if isinstance(token_usage, dict)
+        else (token_usage.__dict__ if hasattr(token_usage, "__dict__") else {})
+    )
     if usage.get("prompt_tokens"):
         attrs["neatlogs.llm.token_count.prompt"] = usage["prompt_tokens"]
     if usage.get("completion_tokens"):
@@ -345,7 +359,8 @@ def _patch_crew_class(CrewCls: Any) -> None:
             _patch_tasks_and_agents(self)
             tracer = get_tracer()
             span = tracer.start_span(
-                name="crewai.crew.kickoff", attributes=_get_crew_attributes(self),
+                name="crewai.crew.kickoff",
+                attributes=_get_crew_attributes(self),
                 **_shared_trace_kwargs(),
             )
             _dbg(f"opened 'crewai.crew.kickoff' WORKFLOW span for crew id={hex(id(self))}")
@@ -356,7 +371,8 @@ def _patch_crew_class(CrewCls: Any) -> None:
             try:
                 result = orig_kickoff(self, *args, **kwargs)
             except Exception as e:
-                _err(span, e); raise
+                _err(span, e)
+                raise
             finally:
                 _mark_kickoff(self, False)
                 detach(token)
@@ -383,15 +399,21 @@ def _patch_crew_class(CrewCls: Any) -> None:
             try:
                 results = orig_kfe(self, *args, **kwargs)
             except Exception as e:
-                _err(span, e); raise
+                _err(span, e)
+                raise
             finally:
                 detach(token)
             if results is not None:
                 try:
-                    span.set_attribute("output.value", serialize([getattr(r, "raw", str(r)) for r in results])[:10000])
+                    span.set_attribute(
+                        "output.value",
+                        serialize([getattr(r, "raw", str(r)) for r in results])[:10000],
+                    )
                 except TypeError:
                     pass
-            span.set_attribute("neatlogs.llm.metrics.duration_ms", round((time.perf_counter() - start) * 1000, 3))
+            span.set_attribute(
+                "neatlogs.llm.metrics.duration_ms", round((time.perf_counter() - start) * 1000, 3)
+            )
             span.set_status(StatusCode.OK)
             span.end()
             return results
@@ -415,10 +437,13 @@ def _patch_crew_class(CrewCls: Any) -> None:
             try:
                 results = await orig_kfea(self, *args, **kwargs)
             except Exception as e:
-                _err(span, e); raise
+                _err(span, e)
+                raise
             finally:
                 detach(token)
-            span.set_attribute("neatlogs.llm.metrics.duration_ms", round((time.perf_counter() - start) * 1000, 3))
+            span.set_attribute(
+                "neatlogs.llm.metrics.duration_ms", round((time.perf_counter() - start) * 1000, 3)
+            )
             span.set_status(StatusCode.OK)
             span.end()
             return results
@@ -459,6 +484,7 @@ def _patch_extra_crew_class_entrypoints(CrewCls: Any) -> None:
                 return span
 
             if is_async:
+
                 async def patched(self, *args, **kwargs):
                     span = _open(self, kwargs)
                     token = attach_as_current(span)
@@ -466,11 +492,13 @@ def _patch_extra_crew_class_entrypoints(CrewCls: Any) -> None:
                     try:
                         result = await orig(self, *args, **kwargs)
                     except Exception as e:
-                        _err(span, e); raise
+                        _err(span, e)
+                        raise
                     finally:
                         detach(token)
                     _finalize_crew_span(span, result, (time.perf_counter() - start) * 1000)
                     return result
+
                 return patched
 
             def patched(self, *args, **kwargs):
@@ -480,11 +508,13 @@ def _patch_extra_crew_class_entrypoints(CrewCls: Any) -> None:
                 try:
                     result = orig(self, *args, **kwargs)
                 except Exception as e:
-                    _err(span, e); raise
+                    _err(span, e)
+                    raise
                 finally:
                     detach(token)
                 _finalize_crew_span(span, result, (time.perf_counter() - start) * 1000)
                 return result
+
             return patched
 
         setattr(CrewCls, method_name, _make())
@@ -542,12 +572,18 @@ def _patch_task_execute(task: Any) -> None:
             raw = getattr(result, "raw", None) if hasattr(result, "raw") else str(result)
             if raw:
                 span.set_attribute("output.value", str(raw)[:10000])
-        span.set_attribute("neatlogs.llm.metrics.duration_ms", round((time.perf_counter() - start) * 1000, 3))
+        span.set_attribute(
+            "neatlogs.llm.metrics.duration_ms", round((time.perf_counter() - start) * 1000, 3)
+        )
         span.set_status(StatusCode.OK)
         span.end()
 
     # Sync core (covers execute_sync path)
-    sync_method = "_execute_core" if hasattr(task, "_execute_core") else ("execute_sync" if hasattr(task, "execute_sync") else None)
+    sync_method = (
+        "_execute_core"
+        if hasattr(task, "_execute_core")
+        else ("execute_sync" if hasattr(task, "execute_sync") else None)
+    )
     if sync_method:
         orig_sync = getattr(task, sync_method)
 
@@ -559,7 +595,8 @@ def _patch_task_execute(task: Any) -> None:
             try:
                 result = orig_sync(*args, **kwargs)
             except Exception as e:
-                _err(span, e); raise
+                _err(span, e)
+                raise
             finally:
                 detach(token)
             _finalize(span, result, start)
@@ -580,7 +617,9 @@ def _patch_task_execute(task: Any) -> None:
             try:
                 future = orig_async(*args, **kwargs)
             except Exception as e:
-                _err(span, e); detach(token); raise
+                _err(span, e)
+                detach(token)
+                raise
             detach(token)
 
             # Attach a done-callback to finalize when the future completes.
@@ -626,18 +665,23 @@ def _patch_agent_execute(agent: Any) -> None:
                 if tool_desc:
                     attrs[f"neatlogs.llm.tools.{i}.description"] = str(tool_desc)[:500]
 
-        span = tracer.start_span(name=f"crewai.agent.{role}" if role else "crewai.agent", attributes=attrs)
+        span = tracer.start_span(
+            name=f"crewai.agent.{role}" if role else "crewai.agent", attributes=attrs
+        )
         token = attach_as_current(span)
         start = time.perf_counter()
         try:
             result = orig(*args, **kwargs)
         except Exception as e:
-            _err(span, e); raise
+            _err(span, e)
+            raise
         finally:
             detach(token)
         if result is not None:
             span.set_attribute("output.value", str(result)[:10000])
-        span.set_attribute("neatlogs.llm.metrics.duration_ms", round((time.perf_counter() - start) * 1000, 3))
+        span.set_attribute(
+            "neatlogs.llm.metrics.duration_ms", round((time.perf_counter() - start) * 1000, 3)
+        )
         span.set_status(StatusCode.OK)
         span.end()
         return result
@@ -684,7 +728,9 @@ def _patch_agent_kickoff(agent: Any) -> None:
         if result is not None:
             raw = getattr(result, "raw", None)
             span.set_attribute("output.value", str(raw if raw is not None else result)[:10000])
-        span.set_attribute("neatlogs.llm.metrics.duration_ms", round((time.perf_counter() - start) * 1000, 3))
+        span.set_attribute(
+            "neatlogs.llm.metrics.duration_ms", round((time.perf_counter() - start) * 1000, 3)
+        )
         span.set_status(StatusCode.OK)
         span.end()
 
@@ -699,7 +745,8 @@ def _patch_agent_kickoff(agent: Any) -> None:
             try:
                 result = orig(*args, **kwargs)
             except Exception as e:
-                _err(span, e); raise
+                _err(span, e)
+                raise
             finally:
                 detach(token)
             _finish(span, result, start)
@@ -725,11 +772,13 @@ def _patch_agent_kickoff(agent: Any) -> None:
                 try:
                     result = await orig_async(*args, **kwargs)
                 except Exception as e:
-                    _err(span, e); raise
+                    _err(span, e)
+                    raise
                 finally:
                     detach(token)
                 _finish(span, result, start)
                 return result
+
             return patched_async
 
         _safe_setattr(agent, method_name, _make())
@@ -791,13 +840,16 @@ def _patch_flow_class(FlowCls: Any) -> None:
             try:
                 result = orig(self, *args, **kwargs)
             except Exception as e:
-                _err(span, e); raise
+                _err(span, e)
+                raise
             finally:
                 _mark_kickoff(self, False)
                 detach(token)
             if result is not None:
                 span.set_attribute("output.value", str(result)[:10000])
-            span.set_attribute("neatlogs.llm.metrics.duration_ms", round((time.perf_counter() - start) * 1000, 3))
+            span.set_attribute(
+                "neatlogs.llm.metrics.duration_ms", round((time.perf_counter() - start) * 1000, 3)
+            )
             span.set_status(StatusCode.OK)
             span.end()
             return result
@@ -819,13 +871,16 @@ def _patch_flow_class(FlowCls: Any) -> None:
             try:
                 result = await orig_async(self, *args, **kwargs)
             except Exception as e:
-                _err(span, e); raise
+                _err(span, e)
+                raise
             finally:
                 _mark_kickoff(self, False)
                 detach(token)
             if result is not None:
                 span.set_attribute("output.value", str(result)[:10000])
-            span.set_attribute("neatlogs.llm.metrics.duration_ms", round((time.perf_counter() - start) * 1000, 3))
+            span.set_attribute(
+                "neatlogs.llm.metrics.duration_ms", round((time.perf_counter() - start) * 1000, 3)
+            )
             span.set_status(StatusCode.OK)
             span.end()
             return result
@@ -857,6 +912,7 @@ def _patch_crew_classes() -> None:
     so they're covered for wrapped and bare crews alike."""
     try:
         from crewai.crew import Crew
+
         _patch_crew_class(Crew)
     except Exception as e:
         _dbg(f"could not class-patch Crew: {e}")
@@ -897,7 +953,8 @@ def _patch_tool_run(ToolCls) -> None:
         try:
             result = orig_run(self, *args, **kwargs)
         except Exception as e:
-            _err(span, e); raise
+            _err(span, e)
+            raise
         finally:
             detach(token)
         if result is not None:
@@ -919,7 +976,11 @@ def _patch_structured_tool() -> None:
     if getattr(CrewStructuredTool, "_neatlogs_patched", False):
         return
 
-    target_method = "invoke" if "invoke" in CrewStructuredTool.__dict__ else ("_run" if "_run" in CrewStructuredTool.__dict__ else None)
+    target_method = (
+        "invoke"
+        if "invoke" in CrewStructuredTool.__dict__
+        else ("_run" if "_run" in CrewStructuredTool.__dict__ else None)
+    )
     if not target_method:
         return
     orig = getattr(CrewStructuredTool, target_method)
@@ -939,7 +1000,8 @@ def _patch_structured_tool() -> None:
         try:
             result = orig(self, *args, **kwargs)
         except Exception as e:
-            _err(span, e); raise
+            _err(span, e)
+            raise
         finally:
             detach(token)
         if result is not None:
@@ -960,12 +1022,14 @@ def _patch_llm() -> None:
     targets = []
     try:
         from crewai.llms.base_llm import BaseLLM
+
         targets.append(BaseLLM)
         targets.extend(_all_subclasses(BaseLLM))
     except Exception:
         pass
     try:
         from crewai.llm import LLM
+
         if LLM not in targets:
             targets.append(LLM)
     except Exception:
@@ -1039,7 +1103,13 @@ def _install_litellm_capture() -> None:
                     rec["provider"] = str(hp["custom_llm_provider"])
             # Request params AS SENT (crewai maps max_completion_tokens→max_tokens here).
             params = {}
-            for p in ("temperature", "top_p", "max_tokens", "frequency_penalty", "presence_penalty"):
+            for p in (
+                "temperature",
+                "top_p",
+                "max_tokens",
+                "frequency_penalty",
+                "presence_penalty",
+            ):
                 v = kwargs.get(p)
                 if v is not None:
                     params[p] = v
@@ -1108,10 +1178,14 @@ def _patch_llm_call(LLM) -> None:
         # alias for max_tokens). The litellm capture below overrides these with the
         # params AS SENT when available — this is the fallback for streaming/mocks.
         req_params = {}
-        for src, dst in (("temperature", "temperature"), ("top_p", "top_p"),
-                         ("max_tokens", "max_tokens"), ("max_completion_tokens", "max_tokens"),
-                         ("frequency_penalty", "frequency_penalty"),
-                         ("presence_penalty", "presence_penalty")):
+        for src, dst in (
+            ("temperature", "temperature"),
+            ("top_p", "top_p"),
+            ("max_tokens", "max_tokens"),
+            ("max_completion_tokens", "max_tokens"),
+            ("frequency_penalty", "frequency_penalty"),
+            ("presence_penalty", "presence_penalty"),
+        ):
             v = getattr(self, src, None)
             if v is not None and dst not in req_params:
                 req_params[dst] = v
@@ -1124,7 +1198,8 @@ def _patch_llm_call(LLM) -> None:
         try:
             result = orig_call(self, messages, *args, **kwargs)
         except Exception as e:
-            _err(span, e); raise
+            _err(span, e)
+            raise
         finally:
             detach(token)
         if result is not None:
@@ -1151,14 +1226,20 @@ def _patch_llm_call(LLM) -> None:
             for k, v in req_params.items():
                 span.set_attribute(f"neatlogs.llm.{k}", v)
 
-        for dst, key in (("prompt", "prompt_tokens"), ("completion", "completion_tokens"),
-                         ("total", "total_tokens"), ("cache_read", "cached_tokens"),
-                         ("reasoning", "reasoning_tokens")):
+        for dst, key in (
+            ("prompt", "prompt_tokens"),
+            ("completion", "completion_tokens"),
+            ("total", "total_tokens"),
+            ("cache_read", "cached_tokens"),
+            ("reasoning", "reasoning_tokens"),
+        ):
             v = rec.get(key)
             if isinstance(v, (int, float)) and v > 0:
                 span.set_attribute(f"neatlogs.llm.token_count.{dst}", v)
 
-        span.set_attribute("neatlogs.llm.metrics.duration_ms", round((time.perf_counter() - start) * 1000, 3))
+        span.set_attribute(
+            "neatlogs.llm.metrics.duration_ms", round((time.perf_counter() - start) * 1000, 3)
+        )
         span.set_status(StatusCode.OK)
         span.end()
         return result

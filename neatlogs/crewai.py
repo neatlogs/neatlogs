@@ -42,6 +42,7 @@ from opentelemetry.trace import StatusCode
 from ._wrap_utils import attach_as_current, detach, get_tracer, serialize
 
 _CLASS_HOOKS_INSTALLED = False
+_LLM_INPUT_CAPTURE_LIMIT = 1 * 1024 * 1024
 
 
 def _shared_trace_kwargs() -> dict:
@@ -1073,17 +1074,35 @@ def _patch_llm_call(LLM) -> None:
         if model:
             attrs["neatlogs.llm.model_name"] = str(model)
 
+        input_messages: list[dict[str, str]] = []
         if isinstance(messages, str):
-            attrs["neatlogs.llm.input_messages.0.role"] = "user"
-            attrs["neatlogs.llm.input_messages.0.content"] = messages[:10000]
+            input_messages.append(
+                {
+                    "role": "user",
+                    "content": messages[:_LLM_INPUT_CAPTURE_LIMIT],
+                }
+            )
         elif isinstance(messages, list):
-            for i, msg in enumerate(messages):
+            for msg in messages:
                 role = msg.get("role", "") if isinstance(msg, dict) else getattr(msg, "role", "")
-                content = msg.get("content", "") if isinstance(msg, dict) else getattr(msg, "content", "")
-                if role:
-                    attrs[f"neatlogs.llm.input_messages.{i}.role"] = role
-                if content:
-                    attrs[f"neatlogs.llm.input_messages.{i}.content"] = (content if isinstance(content, str) else serialize(content))[:10000]
+                content = (
+                    msg.get("content", "") if isinstance(msg, dict) else getattr(msg, "content", "")
+                )
+                content_text = content if isinstance(content, str) else serialize(content)
+                input_messages.append(
+                    {
+                        "role": str(role) if role else "",
+                        "content": content_text[:_LLM_INPUT_CAPTURE_LIMIT],
+                    }
+                )
+
+        for i, message in enumerate(input_messages):
+            if message["role"]:
+                attrs[f"neatlogs.llm.input_messages.{i}.role"] = message["role"]
+            if message["content"]:
+                attrs[f"neatlogs.llm.input_messages.{i}.content"] = message["content"]
+        if input_messages:
+            attrs["input.value"] = serialize({"messages": input_messages})
 
         # Invocation params from the LLM object (max_completion_tokens is crewai's
         # alias for max_tokens). The litellm capture below overrides these with the

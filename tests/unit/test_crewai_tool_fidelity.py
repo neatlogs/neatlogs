@@ -67,6 +67,28 @@ def test_base_tool_preserves_long_structured_input_output_and_return_value(
     assert tool_span.attributes["neatlogs.span.kind"] == "tool"
 
 
+def test_base_tool_preserves_plain_string_output_without_json_quotes(
+    in_memory_span_exporter,
+) -> None:
+    _install_test_tracer(in_memory_span_exporter)
+    crewai_instrumentation = _crewai_module()
+
+    class PlainStringTool:
+        name = "plain_string_tool"
+
+        def run(self):
+            return "plain tool result"
+
+    crewai_instrumentation._patch_tool_run(PlainStringTool)
+    returned = PlainStringTool().run()
+
+    assert returned == "plain tool result"
+    tool_span = _finished_span(
+        in_memory_span_exporter, "crewai.tool.plain_string_tool"
+    )
+    assert tool_span.attributes["output.value"] == "plain tool result"
+
+
 def test_structured_tool_matches_base_tool_fidelity(in_memory_span_exporter, monkeypatch) -> None:
     _install_test_tracer(in_memory_span_exporter)
     crewai_instrumentation = _crewai_module()
@@ -125,7 +147,8 @@ def test_base_tool_captures_empty_non_none_results(in_memory_span_exporter, resu
     assert returned is result
     tool_span = _finished_span(in_memory_span_exporter, f"crewai.tool.{EmptyResultTool.name}")
     assert "output.value" in tool_span.attributes
-    assert tool_span.attributes["output.value"] == json.dumps(result, ensure_ascii=False)
+    expected = result if isinstance(result, str) else json.dumps(result, ensure_ascii=False)
+    assert tool_span.attributes["output.value"] == expected
 
 
 def test_base_tool_serializes_non_json_native_values_without_changing_return(

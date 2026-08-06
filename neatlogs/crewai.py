@@ -54,6 +54,8 @@ def _crewai_span_attributes(kind: str) -> dict[str, Any]:
 
 def _serialize_crewai_io(value: Any) -> str:
     """Serialize CrewAI tool I/O without discarding data before export."""
+    if isinstance(value, str):
+        return value
     try:
         return json.dumps(value, default=str, ensure_ascii=False)
     except Exception:

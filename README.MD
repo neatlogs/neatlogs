@@ -195,6 +195,27 @@ Get your API key from the [NeatLogs dashboard](https://app.neatlogs.com). Full `
 
 ---
 
+## Trace Doctor
+
+Use `neatlogs-doctor` when traces are missing, empty, or hard to inspect. It reads the processed span log written by `NEATLOGS_LOG_SPANS` and reports likely instrumentation issues with fixes.
+
+```bash
+NEATLOGS_LOG_SPANS=true python app.py
+neatlogs-doctor spans_optimized.log
+```
+
+Python code can call the same diagnostic engine:
+
+```python
+from neatlogs.doctor import diagnose
+
+report = diagnose("spans_optimized.log")
+for finding in report.findings:
+    print(f"{finding.severity}: {finding.title}")
+```
+
+---
+
 ## Examples
 
 Runnable reference apps live in [`examples/sdk_examples/`](examples/sdk_examples/). Each folder has a `requirements.txt` (PyPI install) and `.env.example`.

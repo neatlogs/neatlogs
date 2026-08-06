@@ -35,6 +35,14 @@ AGENT_BACKSTORY = (
 PROMPT_START_MARKER = "PROMPT_FIDELITY_TASK_START"
 NEAR_10000_MARKER = "PROMPT_FIDELITY_NEAR_10000"
 TAIL_AFTER_12000_MARKER = "PROMPT_FIDELITY_TAIL_AFTER_12000"
+PROMPT_TARGET_TAIL_MARKER = "PROMPT_FIDELITY_TARGET_TAIL"
+
+TOOL_OUTPUT_START_MARKER = "TOOL_FIDELITY_OUTPUT_START"
+TOOL_NEAR_10000_MARKER = "TOOL_FIDELITY_NEAR_10000"
+TOOL_TAIL_AFTER_10000_MARKER = "TOOL_FIDELITY_TAIL_AFTER_10000"
+
+DEFAULT_PROMPT_TAIL_OFFSET = 12_000
+DEFAULT_TOOL_OUTPUT_CHARS = 12_500
 
 EXPECTED_OUTPUT = dedent("""
     {
@@ -83,7 +91,9 @@ def _render_task_description(document_json: str) -> str:
         """).strip()
 
 
-def build_long_task_description() -> str:
+def build_long_task_description(
+    target_tail_offset: int = DEFAULT_PROMPT_TAIL_OFFSET,
+) -> str:
     """Build a deterministic task with markers around the capture boundary."""
     probe_body = f"{PROMPT_START_MARKER}\n{NEAR_10000_MARKER}"
     probe_json = json.dumps(_synthetic_document(probe_body), sort_keys=True)
@@ -92,19 +102,60 @@ def build_long_task_description() -> str:
     if padding_length <= 0:
         raise AssertionError("The fixed task text already reaches the near marker")
 
-    long_body = (
+    base_long_body = (
         f"{PROMPT_START_MARKER}\n"
         f"{'x' * padding_length}{NEAR_10000_MARKER}\n"
         f"{'y' * 2_500}{TAIL_AFTER_12000_MARKER}"
+    )
+    target_probe_json = json.dumps(
+        _synthetic_document(f"{base_long_body}\n{PROMPT_TARGET_TAIL_MARKER}"),
+        sort_keys=True,
+    )
+    target_probe_prompt = _render_task_description(target_probe_json)
+    target_padding_length = max(
+        0,
+        target_tail_offset
+        - target_probe_prompt.index(PROMPT_TARGET_TAIL_MARKER),
+    )
+    long_body = (
+        f"{base_long_body}\n"
+        f"{'z' * target_padding_length}{PROMPT_TARGET_TAIL_MARKER}"
     )
     document_json = json.dumps(_synthetic_document(long_body), sort_keys=True)
     description = _render_task_description(document_json)
 
     near_offset = description.index(NEAR_10000_MARKER)
     tail_offset = description.index(TAIL_AFTER_12000_MARKER)
+    target_tail_actual_offset = description.index(PROMPT_TARGET_TAIL_MARKER)
     assert 9_500 < near_offset < 10_000
     assert tail_offset > 12_000
+    assert target_tail_actual_offset >= target_tail_offset
     return description
+
+
+def build_tool_fidelity_output(
+    target_chars: int = DEFAULT_TOOL_OUTPUT_CHARS,
+) -> str:
+    """Build a plain string whose final marker is beyond 10,000 characters."""
+    prefix = f"{TOOL_OUTPUT_START_MARKER}\n"
+    near_padding_length = 9_800 - len(prefix)
+    if near_padding_length <= 0:
+        raise AssertionError("The tool-output prefix already reaches the near marker")
+
+    through_near_marker = (
+        f"{prefix}{'u' * near_padding_length}{TOOL_NEAR_10000_MARKER}\n"
+    )
+    tail_padding_length = max(0, 10_050 - len(through_near_marker))
+    output = (
+        f"{through_near_marker}"
+        f"{'v' * tail_padding_length}{TOOL_TAIL_AFTER_10000_MARKER}"
+    )
+    if len(output) < target_chars:
+        output = f"{output}{'w' * (target_chars - len(output))}"
+
+    assert output.index(TOOL_NEAR_10000_MARKER) < 10_000
+    assert output.index(TOOL_TAIL_AFTER_10000_MARKER) > 10_000
+    return output
 
 
 def _load_runtime_environment() -> None:
@@ -121,6 +172,19 @@ def _first_env(*names: str) -> str:
         if value:
             return value
     raise SystemExit(f"Missing required environment variable; expected one of: {', '.join(names)}")
+
+
+def _positive_int_env(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise SystemExit(f"{name} must be a positive integer") from exc
+    if value <= 0:
+        raise SystemExit(f"{name} must be a positive integer")
+    return value
 
 
 def setup_neatlogs() -> None:
@@ -149,11 +213,33 @@ def _build_llm():
 async def run_example() -> str:
     # These imports deliberately occur after setup_neatlogs().
     from crewai import Agent, Crew, Task
+    from crewai.tools import BaseTool
 
     run_id = os.getenv("CREWAI_PROMPT_RUN_ID", str(int(time.time())))
-    description = build_long_task_description()
+    run_label = os.getenv("CREWAI_FIDELITY_RUN_LABEL", "default")
+    prompt_target_offset = _positive_int_env(
+        "CREWAI_PROMPT_TARGET_CHARS",
+        DEFAULT_PROMPT_TAIL_OFFSET,
+    )
+    tool_output_chars = _positive_int_env(
+        "CREWAI_TOOL_OUTPUT_CHARS",
+        DEFAULT_TOOL_OUTPUT_CHARS,
+    )
+    description = build_long_task_description(prompt_target_offset)
     near_offset = description.index(NEAR_10000_MARKER)
     tail_offset = description.index(TAIL_AFTER_12000_MARKER)
+    target_tail_offset = description.index(PROMPT_TARGET_TAIL_MARKER)
+
+    class FidelityPayloadProbeTool(BaseTool):
+        name: str = "fidelity_payload_probe"
+        description: str = (
+            "Return a deterministic plain-text payload for telemetry fidelity checks."
+        )
+
+        def _run(self, target_chars: int = DEFAULT_TOOL_OUTPUT_CHARS) -> str:
+            return build_tool_fidelity_output(target_chars)
+
+    fidelity_tool = FidelityPayloadProbeTool()
 
     agent = Agent(
         role=AGENT_ROLE,
@@ -179,20 +265,32 @@ async def run_example() -> str:
             metadata={
                 "example": "crewai-long-prompt-fidelity",
                 "run_id": run_id,
+                "run_label": run_label,
                 "task_chars": len(description),
+                "tool_output_chars": tool_output_chars,
             },
         ) as trace_span:
             span_context = trace_span.get_span_context()
             trace_id = f"{span_context.trace_id:032x}"
+            tool_output = fidelity_tool.run(target_chars=tool_output_chars)
             result = await crew.kickoff_async()
     finally:
         neatlogs.flush()
         await asyncio.sleep(3)
 
     result_text = str(getattr(result, "raw", result))
+    tool_tail_offset = tool_output.index(TOOL_TAIL_AFTER_10000_MARKER)
+    print(f"run_label={run_label}")
     print(f"run_id={run_id}")
     print(f"trace_id={trace_id}")
-    print(f"task_chars={len(description)} near_offset={near_offset} " f"tail_offset={tail_offset}")
+    print(
+        f"task_chars={len(description)} near_offset={near_offset} "
+        f"tail_offset={tail_offset} target_tail_offset={target_tail_offset}"
+    )
+    print(
+        f"tool_output_chars={len(tool_output)} "
+        f"tool_tail_offset={tool_tail_offset}"
+    )
     print(f"result_preview={result_text[:120]!r}")
     return trace_id
 

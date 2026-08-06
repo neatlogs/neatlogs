@@ -1,19 +1,13 @@
 import importlib.util
 from pathlib import Path
 
-
 EXAMPLE_PATH = (
-    Path(__file__).resolve().parents[2]
-    / "examples"
-    / "sdk_examples"
-    / "crewai_prompt_fidelity.py"
+    Path(__file__).resolve().parents[2] / "examples" / "sdk_examples" / "crewai_prompt_fidelity.py"
 )
 
 
 def _load_example():
-    spec = importlib.util.spec_from_file_location(
-        "crewai_prompt_fidelity_example", EXAMPLE_PATH
-    )
+    spec = importlib.util.spec_from_file_location("crewai_prompt_fidelity_example", EXAMPLE_PATH)
     assert spec is not None
     assert spec.loader is not None
     module = importlib.util.module_from_spec(spec)

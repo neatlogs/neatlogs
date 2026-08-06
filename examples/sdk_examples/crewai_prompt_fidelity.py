@@ -114,13 +114,9 @@ def build_long_task_description(
     target_probe_prompt = _render_task_description(target_probe_json)
     target_padding_length = max(
         0,
-        target_tail_offset
-        - target_probe_prompt.index(PROMPT_TARGET_TAIL_MARKER),
+        target_tail_offset - target_probe_prompt.index(PROMPT_TARGET_TAIL_MARKER),
     )
-    long_body = (
-        f"{base_long_body}\n"
-        f"{'z' * target_padding_length}{PROMPT_TARGET_TAIL_MARKER}"
-    )
+    long_body = f"{base_long_body}\n" f"{'z' * target_padding_length}{PROMPT_TARGET_TAIL_MARKER}"
     document_json = json.dumps(_synthetic_document(long_body), sort_keys=True)
     description = _render_task_description(document_json)
 
@@ -142,14 +138,9 @@ def build_tool_fidelity_output(
     if near_padding_length <= 0:
         raise AssertionError("The tool-output prefix already reaches the near marker")
 
-    through_near_marker = (
-        f"{prefix}{'u' * near_padding_length}{TOOL_NEAR_10000_MARKER}\n"
-    )
+    through_near_marker = f"{prefix}{'u' * near_padding_length}{TOOL_NEAR_10000_MARKER}\n"
     tail_padding_length = max(0, 10_050 - len(through_near_marker))
-    output = (
-        f"{through_near_marker}"
-        f"{'v' * tail_padding_length}{TOOL_TAIL_AFTER_10000_MARKER}"
-    )
+    output = f"{through_near_marker}" f"{'v' * tail_padding_length}{TOOL_TAIL_AFTER_10000_MARKER}"
     if len(output) < target_chars:
         output = f"{output}{'w' * (target_chars - len(output))}"
 
@@ -287,10 +278,7 @@ async def run_example() -> str:
         f"task_chars={len(description)} near_offset={near_offset} "
         f"tail_offset={tail_offset} target_tail_offset={target_tail_offset}"
     )
-    print(
-        f"tool_output_chars={len(tool_output)} "
-        f"tool_tail_offset={tool_tail_offset}"
-    )
+    print(f"tool_output_chars={len(tool_output)} " f"tool_tail_offset={tool_tail_offset}")
     print(f"result_preview={result_text[:120]!r}")
     return trace_id
 

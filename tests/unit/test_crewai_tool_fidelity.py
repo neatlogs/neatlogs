@@ -83,9 +83,7 @@ def test_base_tool_preserves_plain_string_output_without_json_quotes(
     returned = PlainStringTool().run()
 
     assert returned == "plain tool result"
-    tool_span = _finished_span(
-        in_memory_span_exporter, "crewai.tool.plain_string_tool"
-    )
+    tool_span = _finished_span(in_memory_span_exporter, "crewai.tool.plain_string_tool")
     assert tool_span.attributes["output.value"] == "plain tool result"
 
 

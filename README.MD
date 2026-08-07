@@ -140,6 +140,18 @@ API reference: [docs.neatlogs.com](https://docs.neatlogs.com)
 
 Pass keys to `instrumentations` in `neatlogs.init()`. Install extras when noted.
 
+You can also pass preset tags when you want NeatLogs to instrument a whole category:
+
+```python
+neatlogs.init(
+    api_key="your-api-key",
+    workflow_name="my-agent",
+    instrumentations=["llm", "agent"],
+)
+```
+
+Preset tags: `llm`, `embedding`, `retrieval`, `agent`, `tool`, `http`, and `framework`.
+
 ### LLM providers
 
 | Provider | Key | Install |

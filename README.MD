@@ -195,6 +195,29 @@ Get your API key from the [NeatLogs dashboard](https://app.neatlogs.com). Full `
 
 ---
 
+## Prompt sync
+
+If your prompts live in Python as `SystemPromptTemplate` or `UserPromptTemplate`
+objects, push them to the Prompts dashboard with the CLI:
+
+```bash
+export NEATLOGS_API_KEY=your-api-key
+
+neatlogs-prompts push examples/sdk_examples/support_copilot_demo_triaged/prompts.py \
+  --label production \
+  --prefix support-copilot
+```
+
+Use `--dry-run` first to see which templates the CLI finds. The CLI derives names
+from module-level variables, for example `SUPPORT_DRAFTER_USER` becomes
+`support-drafter-user`. Existing prompts are skipped when their content already
+matches, and changed prompts are saved as new versions.
+
+For runtime workflows, the Python APIs (`create_prompt()`, `get_prompt()`, and
+`save_as_version()`) remain available.
+
+---
+
 ## Examples
 
 Runnable reference apps live in [`examples/sdk_examples/`](examples/sdk_examples/). Each folder has a `requirements.txt` (PyPI install) and `.env.example`.

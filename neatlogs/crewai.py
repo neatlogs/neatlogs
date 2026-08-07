@@ -45,6 +45,26 @@ _CLASS_HOOKS_INSTALLED = False
 _LLM_INPUT_CAPTURE_LIMIT = 1 * 1024 * 1024
 
 
+def _crewai_span_attributes(kind: str) -> dict[str, Any]:
+    return {
+        "neatlogs.span.kind": kind,
+        "neatlogs.framework": "crewai",
+    }
+
+
+def _serialize_crewai_io(value: Any) -> str:
+    """Serialize CrewAI tool I/O without discarding data before export."""
+    if isinstance(value, str):
+        return value
+    try:
+        return json.dumps(value, default=str, ensure_ascii=False)
+    except Exception:
+        try:
+            return str(value)
+        except Exception:
+            return f"<unserializable {type(value).__name__}>"
+
+
 def _shared_trace_kwargs() -> dict:
     """Context for the crewai.crew.kickoff root span.
 
@@ -211,7 +231,7 @@ def wrap_crewai(obj: Any) -> Any:
 
 
 def _get_crew_attributes(crew: Any) -> dict:
-    attrs = {"neatlogs.span.kind": "workflow"}
+    attrs = _crewai_span_attributes("workflow")
 
     name = getattr(crew, "name", None) or getattr(crew, "_name", None)
     if name:
@@ -550,7 +570,7 @@ def _patch_task_execute(task: Any) -> None:
         return
 
     def _attrs():
-        attrs = {"neatlogs.span.kind": "task"}
+        attrs = _crewai_span_attributes("task")
         task_id = getattr(task, "id", None)
         if task_id:
             attrs["neatlogs.task.id"] = str(task_id)
@@ -648,7 +668,7 @@ def _patch_agent_execute(agent: Any) -> None:
 
     def patched_execute_task(*args, **kwargs):
         tracer = get_tracer()
-        attrs = {"neatlogs.span.kind": "agent"}
+        attrs = _crewai_span_attributes("agent")
         role = getattr(agent, "role", "")
         if role:
             attrs["neatlogs.agent.role"] = role
@@ -691,7 +711,7 @@ def _patch_agent_execute(agent: Any) -> None:
 
 
 def _agent_span_attributes(agent: Any) -> dict:
-    attrs = {"neatlogs.span.kind": "agent"}
+    attrs = _crewai_span_attributes("agent")
     role = getattr(agent, "role", "")
     if role:
         attrs["neatlogs.agent.role"] = role
@@ -819,11 +839,14 @@ def _patch_flow_class(FlowCls: Any) -> None:
         return
 
     def _attrs(flow):
-        return {
-            "neatlogs.span.kind": "workflow",
-            "neatlogs.workflow.type": "flow",
-            "neatlogs.workflow.name": type(flow).__name__,
-        }
+        attrs = _crewai_span_attributes("workflow")
+        attrs.update(
+            {
+                "neatlogs.workflow.type": "flow",
+                "neatlogs.workflow.name": type(flow).__name__,
+            }
+        )
+        return attrs
 
     if "kickoff" in FlowCls.__dict__:
         orig = FlowCls.kickoff
@@ -937,16 +960,16 @@ def _patch_tool_run(ToolCls) -> None:
 
     def patched_run(self, *args, **kwargs):
         tracer = get_tracer()
-        attrs = {"neatlogs.span.kind": "tool"}
+        attrs = _crewai_span_attributes("tool")
         name = getattr(self, "name", None) or type(self).__name__
         attrs["neatlogs.tool.name"] = str(name)
         desc = getattr(self, "description", None)
         if desc:
             attrs["neatlogs.tool.description"] = str(desc)[:500]
         if kwargs:
-            attrs["input.value"] = serialize(kwargs)[:10000]
+            attrs["input.value"] = _serialize_crewai_io(kwargs)
         elif args:
-            attrs["input.value"] = serialize(args)[:10000]
+            attrs["input.value"] = _serialize_crewai_io(args)
 
         span = tracer.start_span(name=f"crewai.tool.{name}", attributes=attrs)
         token = attach_as_current(span)
@@ -958,7 +981,7 @@ def _patch_tool_run(ToolCls) -> None:
         finally:
             detach(token)
         if result is not None:
-            span.set_attribute("output.value", str(result)[:10000])
+            span.set_attribute("output.value", _serialize_crewai_io(result))
         span.set_status(StatusCode.OK)
         span.end()
         return result
@@ -988,13 +1011,14 @@ def _patch_structured_tool() -> None:
     def patched(self, *args, **kwargs):
         tracer = get_tracer()
         name = getattr(self, "name", None) or type(self).__name__
-        attrs = {"neatlogs.span.kind": "tool", "neatlogs.tool.name": str(name)}
+        attrs = _crewai_span_attributes("tool")
+        attrs["neatlogs.tool.name"] = str(name)
         desc = getattr(self, "description", None)
         if desc:
             attrs["neatlogs.tool.description"] = str(desc)[:500]
         payload = kwargs if kwargs else (args[0] if args else None)
         if payload is not None:
-            attrs["input.value"] = serialize(payload)[:10000]
+            attrs["input.value"] = _serialize_crewai_io(payload)
         span = tracer.start_span(name=f"crewai.tool.{name}", attributes=attrs)
         token = attach_as_current(span)
         try:
@@ -1005,7 +1029,7 @@ def _patch_structured_tool() -> None:
         finally:
             detach(token)
         if result is not None:
-            span.set_attribute("output.value", str(result)[:10000])
+            span.set_attribute("output.value", _serialize_crewai_io(result))
         span.set_status(StatusCode.OK)
         span.end()
         return result
@@ -1139,7 +1163,8 @@ def _patch_llm_call(LLM) -> None:
 
     def patched_call(self, messages, *args, **kwargs):
         tracer = get_tracer()
-        attrs = {"neatlogs.span.kind": "llm", "neatlogs.llm.provider": "crewai"}
+        attrs = _crewai_span_attributes("llm")
+        attrs["neatlogs.llm.provider"] = "crewai"
         model = getattr(self, "model", None)
         if model:
             attrs["neatlogs.llm.model_name"] = str(model)

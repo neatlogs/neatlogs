@@ -102,26 +102,6 @@ def _safe(fn, resource, **kw):
         pass
 
 
-def _record_error(span: Any, error: Exception) -> None:
-    try:
-        span.set_status(StatusCode.ERROR, str(error))
-        span.record_exception(error)
-        span.end()
-    except Exception:
-        pass
-
-
-def _finish_ok(span: Any, finalize) -> None:
-    try:
-        finalize()
-    except Exception:
-        try:
-            span.set_status(StatusCode.OK)
-            span.end()
-        except Exception:
-            pass
-
-
 def _patch_completions(completions: Any) -> None:
     if getattr(completions, "_neatlogs_patched", False):
         return
@@ -132,6 +112,7 @@ def _patch_completions(completions: Any) -> None:
         if is_suppressed():
             return orig_create(*args, **kwargs)
 
+        span = None
         try:
             model = kwargs.get("model", "")
             messages = kwargs.get("messages", [])
@@ -155,6 +136,7 @@ def _patch_completions(completions: Any) -> None:
                 },
             )
 
+            # Input messages
             for i, msg in enumerate(messages):
                 role = msg.get("role", "")
                 content = msg.get("content", "")
@@ -170,6 +152,7 @@ def _patch_completions(completions: Any) -> None:
                         f"neatlogs.llm.input_messages.{i}.tool_call_id", msg["tool_call_id"]
                     )
 
+            # Tools
             tools = kwargs.get("tools")
             if tools:
                 for i, tool in enumerate(tools):
@@ -182,6 +165,7 @@ def _patch_completions(completions: Any) -> None:
                             f"neatlogs.llm.tools.{i}.input_schema", serialize(fn["parameters"])
                         )
 
+            # Invocation parameters
             for param in (
                 "temperature",
                 "top_p",
@@ -192,23 +176,34 @@ def _patch_completions(completions: Any) -> None:
                 if param in kwargs and kwargs[param] is not None:
                     span.set_attribute(f"neatlogs.llm.{param}", kwargs[param])
 
+            # User-supplied metadata (top-level `metadata=` or `extra_body={"metadata": ...}`).
             _set_request_metadata(span, kwargs)
 
             start = time.perf_counter()
         except Exception:
+            if span is not None:
+                try:
+                    span.end()
+                except Exception:
+                    pass
             return orig_create(*args, **kwargs)
 
         try:
             response = orig_create(*args, **kwargs)
         except Exception as e:
-            _record_error(span, e)
+            try:
+                span.set_status(StatusCode.ERROR, str(e))
+                span.record_exception(e)
+                span.end()
+            except Exception:
+                pass
             raise
 
         if is_stream:
             return SyncStreamWrapper(response, span, _finalize_stream)
 
         duration_ms = (time.perf_counter() - start) * 1000
-        _finish_ok(span, lambda: _finalize_response(span, response, duration_ms))
+        _finalize_response(span, response, duration_ms)
         return response
 
     completions.create = patched_create
@@ -225,6 +220,7 @@ def _patch_async_completions(completions: Any) -> None:
         if is_suppressed():
             return await orig_create(*args, **kwargs)
 
+        span = None
         try:
             model = kwargs.get("model", "")
             messages = kwargs.get("messages", [])
@@ -281,23 +277,34 @@ def _patch_async_completions(completions: Any) -> None:
                 if param in kwargs and kwargs[param] is not None:
                     span.set_attribute(f"neatlogs.llm.{param}", kwargs[param])
 
+            # User-supplied metadata (top-level `metadata=` or `extra_body={"metadata": ...}`).
             _set_request_metadata(span, kwargs)
 
             start = time.perf_counter()
         except Exception:
+            if span is not None:
+                try:
+                    span.end()
+                except Exception:
+                    pass
             return await orig_create(*args, **kwargs)
 
         try:
             response = await orig_create(*args, **kwargs)
         except Exception as e:
-            _record_error(span, e)
+            try:
+                span.set_status(StatusCode.ERROR, str(e))
+                span.record_exception(e)
+                span.end()
+            except Exception:
+                pass
             raise
 
         if is_stream:
             return AsyncStreamWrapper(response, span, _finalize_stream)
 
         duration_ms = (time.perf_counter() - start) * 1000
-        _finish_ok(span, lambda: _finalize_response(span, response, duration_ms))
+        _finalize_response(span, response, duration_ms)
         return response
 
     completions.create = patched_create
@@ -314,6 +321,7 @@ def _patch_responses(responses: Any) -> None:
         if is_suppressed():
             return orig_create(*args, **kwargs)
 
+        span = None
         try:
             model = kwargs.get("model", "")
             is_stream = kwargs.get("stream", False)
@@ -333,18 +341,29 @@ def _patch_responses(responses: Any) -> None:
 
             start = time.perf_counter()
         except Exception:
+            if span is not None:
+                try:
+                    span.end()
+                except Exception:
+                    pass
             return orig_create(*args, **kwargs)
+
         try:
             response = orig_create(*args, **kwargs)
         except Exception as e:
-            _record_error(span, e)
+            try:
+                span.set_status(StatusCode.ERROR, str(e))
+                span.record_exception(e)
+                span.end()
+            except Exception:
+                pass
             raise
 
         if is_stream:
             return SyncStreamWrapper(response, span, _finalize_responses_stream)
 
         duration_ms = (time.perf_counter() - start) * 1000
-        _finish_ok(span, lambda: _finalize_responses_response(span, response, duration_ms))
+        _finalize_responses_response(span, response, duration_ms)
         return response
 
     responses.create = patched_create
@@ -552,18 +571,21 @@ def _patch_method(
         async def patched(*args, **kwargs):
             if is_suppressed():
                 return await orig(*args, **kwargs)
-            try:
-                tracer = get_provider_tracer()
-                span = tracer.start_span(name=start_attrs.__name__, attributes=start_attrs(kwargs))
-                start = time.perf_counter()
-            except Exception:
-                return await orig(*args, **kwargs)
+            tracer = get_provider_tracer()
+            span = tracer.start_span(name=start_attrs.__name__, attributes=start_attrs(kwargs))
+            start = time.perf_counter()
             try:
                 response = await orig(*args, **kwargs)
             except Exception as e:
-                _record_error(span, e)
+                span.set_status(StatusCode.ERROR, str(e))
+                span.record_exception(e)
+                span.end()
                 raise
-            _finish_ok(span, lambda: finalize(span, response, (time.perf_counter() - start) * 1000))
+            try:
+                finalize(span, response, (time.perf_counter() - start) * 1000)
+            except Exception:
+                span.set_status(StatusCode.OK)
+                span.end()
             return response
 
     else:
@@ -571,18 +593,21 @@ def _patch_method(
         def patched(*args, **kwargs):
             if is_suppressed():
                 return orig(*args, **kwargs)
-            try:
-                tracer = get_provider_tracer()
-                span = tracer.start_span(name=start_attrs.__name__, attributes=start_attrs(kwargs))
-                start = time.perf_counter()
-            except Exception:
-                return orig(*args, **kwargs)
+            tracer = get_provider_tracer()
+            span = tracer.start_span(name=start_attrs.__name__, attributes=start_attrs(kwargs))
+            start = time.perf_counter()
             try:
                 response = orig(*args, **kwargs)
             except Exception as e:
-                _record_error(span, e)
+                span.set_status(StatusCode.ERROR, str(e))
+                span.record_exception(e)
+                span.end()
                 raise
-            _finish_ok(span, lambda: finalize(span, response, (time.perf_counter() - start) * 1000))
+            try:
+                finalize(span, response, (time.perf_counter() - start) * 1000)
+            except Exception:
+                span.set_status(StatusCode.OK)
+                span.end()
             return response
 
     setattr(resource, method_name, patched)
@@ -608,6 +633,7 @@ def _patch_async_responses(responses: Any) -> None:
     async def patched_create(*args, **kwargs):
         if is_suppressed():
             return await orig_create(*args, **kwargs)
+        span = None
         try:
             model = kwargs.get("model", "")
             is_stream = kwargs.get("stream", False)
@@ -626,20 +652,25 @@ def _patch_async_responses(responses: Any) -> None:
             )
             start = time.perf_counter()
         except Exception:
+            if span is not None:
+                try:
+                    span.end()
+                except Exception:
+                    pass
             return await orig_create(*args, **kwargs)
         try:
             response = await orig_create(*args, **kwargs)
         except Exception as e:
-            _record_error(span, e)
+            try:
+                span.set_status(StatusCode.ERROR, str(e))
+                span.record_exception(e)
+                span.end()
+            except Exception:
+                pass
             raise
         if is_stream:
             return AsyncStreamWrapper(response, span, _finalize_responses_stream)
-        _finish_ok(
-            span,
-            lambda: _finalize_responses_response(
-                span, response, (time.perf_counter() - start) * 1000
-            ),
-        )
+        _finalize_responses_response(span, response, (time.perf_counter() - start) * 1000)
         return response
 
     responses.create = patched_create

@@ -276,7 +276,10 @@ def _set_converse_usage(span: Any, usage: Any) -> None:
 
 
 def _patch_converse(client: Any) -> None:
-    orig = client.converse
+    converse = getattr(client, "converse", None)
+    if converse is None or getattr(converse, "_neatlogs_patched", False):
+        return
+    orig = converse
 
     def patched(*args, **kwargs):
         if is_suppressed():
@@ -308,10 +311,14 @@ def _patch_converse(client: Any) -> None:
         return response
 
     client.converse = patched
+    client.converse._neatlogs_patched = True
 
 
 def _patch_converse_stream(client: Any) -> None:
-    orig = client.converse_stream
+    converse_stream = getattr(client, "converse_stream", None)
+    if converse_stream is None or getattr(converse_stream, "_neatlogs_patched", False):
+        return
+    orig = converse_stream
 
     def patched(*args, **kwargs):
         if is_suppressed():
@@ -347,6 +354,7 @@ def _patch_converse_stream(client: Any) -> None:
         return response
 
     client.converse_stream = patched
+    client.converse_stream._neatlogs_patched = True
 
 
 def _wrap_converse_stream(stream: Any, span: Any, start: float):
@@ -556,7 +564,10 @@ def _is_embedding_model(model_id: Any) -> bool:
 
 
 def _patch_invoke_model(client: Any) -> None:
-    orig = client.invoke_model
+    invoke = getattr(client, "invoke_model", None)
+    if invoke is None or getattr(invoke, "_neatlogs_patched", False):
+        return
+    orig = invoke
 
     def patched(*args, **kwargs):
         if is_suppressed():
@@ -618,6 +629,7 @@ def _patch_invoke_model(client: Any) -> None:
         return response
 
     client.invoke_model = patched
+    client.invoke_model._neatlogs_patched = True
 
 
 def _finalize_invoke_embedding(span: Any, body: dict, duration_ms: float) -> None:
@@ -639,7 +651,10 @@ def _finalize_invoke_embedding(span: Any, body: dict, duration_ms: float) -> Non
 
 
 def _patch_invoke_model_stream(client: Any) -> None:
-    orig = client.invoke_model_with_response_stream
+    invoke_stream = getattr(client, "invoke_model_with_response_stream", None)
+    if invoke_stream is None or getattr(invoke_stream, "_neatlogs_patched", False):
+        return
+    orig = invoke_stream
 
     def patched(*args, **kwargs):
         if is_suppressed():
@@ -676,6 +691,7 @@ def _patch_invoke_model_stream(client: Any) -> None:
         return response
 
     client.invoke_model_with_response_stream = patched
+    client.invoke_model_with_response_stream._neatlogs_patched = True
 
 
 def _wrap_invoke_stream(body: Any, span: Any, vendor: str, start: float):

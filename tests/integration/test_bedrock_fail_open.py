@@ -105,3 +105,27 @@ class TestBedrockFailOpen:
             result = wrap_bedrock_client(client)
 
         assert result is client
+
+    def test_double_wrap_does_not_double_patch(self, in_memory_span_exporter):
+        """Calling wrap_bedrock_client twice on the same client must NOT
+        double-patch the methods. Each patched method is idempotent via
+        its own _neatlogs_patched marker."""
+        from neatlogs.bedrock import wrap_bedrock_client
+
+        _setup_tracer(in_memory_span_exporter)
+
+        def converse(**kwargs):
+            return {"output": {"message": {"content": [{"text": "hi"}]}}}
+
+        def invoke(**kwargs):
+            return {"body": io.BytesIO(b'{"content": [{"text": "hi"}]}')}
+
+        client = _fake_bedrock_client(converse=converse, invoke_model=invoke)
+        wrap_bedrock_client(client)
+        # Capture the patched converse after the first wrap.
+        first_converse = client.converse
+        wrap_bedrock_client(client)
+        # The second wrap should be a no-op for converse (idempotency check
+        # on the patched method). If the check were missing, converse would
+        # be wrapped again → double spans.
+        assert client.converse is first_converse

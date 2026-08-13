@@ -232,15 +232,24 @@ def _patch_chat(chat: Any) -> None:
             if is_suppressed():
                 return orig_send(*args, **kwargs)
             is_stream = bool(kwargs.get("stream", False))
+            span = None
             try:
                 span = _start(kwargs, is_stream)
                 start = time.perf_counter()
             except Exception:
+                if span is not None:
+                    try:
+                        span.end()
+                    except Exception:
+                        pass
                 return orig_send(*args, **kwargs)
             try:
                 response = orig_send(*args, **kwargs)
             except Exception as e:
-                _err(span, e)
+                try:
+                    _err(span, e)
+                except Exception:
+                    pass
                 raise
             if is_stream:
                 return SyncStreamWrapper(response, span, _finalize_chat_stream)
@@ -255,15 +264,24 @@ def _patch_chat(chat: Any) -> None:
             if is_suppressed():
                 return await orig_send_async(*args, **kwargs)
             is_stream = bool(kwargs.get("stream", False))
+            span = None
             try:
                 span = _start(kwargs, is_stream)
                 start = time.perf_counter()
             except Exception:
+                if span is not None:
+                    try:
+                        span.end()
+                    except Exception:
+                        pass
                 return await orig_send_async(*args, **kwargs)
             try:
                 response = await orig_send_async(*args, **kwargs)
             except Exception as e:
-                _err(span, e)
+                try:
+                    _err(span, e)
+                except Exception:
+                    pass
                 raise
             if is_stream:
                 return AsyncStreamWrapper(response, span, _finalize_chat_stream)
@@ -444,15 +462,24 @@ def _patch_responses(responses: Any) -> None:
             if is_suppressed():
                 return orig_send(*args, **kwargs)
             is_stream = bool(kwargs.get("stream", False))
+            span = None
             try:
                 span = _start(kwargs, is_stream)
                 start = time.perf_counter()
             except Exception:
+                if span is not None:
+                    try:
+                        span.end()
+                    except Exception:
+                        pass
                 return orig_send(*args, **kwargs)
             try:
                 response = orig_send(*args, **kwargs)
             except Exception as e:
-                _err(span, e)
+                try:
+                    _err(span, e)
+                except Exception:
+                    pass
                 raise
             if is_stream:
                 return SyncStreamWrapper(response, span, _finalize_responses_stream)
@@ -467,15 +494,24 @@ def _patch_responses(responses: Any) -> None:
             if is_suppressed():
                 return await orig_send_async(*args, **kwargs)
             is_stream = bool(kwargs.get("stream", False))
+            span = None
             try:
                 span = _start(kwargs, is_stream)
                 start = time.perf_counter()
             except Exception:
+                if span is not None:
+                    try:
+                        span.end()
+                    except Exception:
+                        pass
                 return await orig_send_async(*args, **kwargs)
             try:
                 response = await orig_send_async(*args, **kwargs)
             except Exception as e:
-                _err(span, e)
+                try:
+                    _err(span, e)
+                except Exception:
+                    pass
                 raise
             if is_stream:
                 return AsyncStreamWrapper(response, span, _finalize_responses_stream)

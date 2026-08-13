@@ -35,6 +35,10 @@ _bootstrap_warned = False
 # private provider is passed to init(tracer_provider=...).
 _neatlogs_provider: Optional[TracerProvider] = None
 
+# Optional secondary Client selected only for the current async/thread context.
+# The process-wide provider configured by neatlogs.init() remains the default.
+_active_client: ContextVar[Optional[Any]] = ContextVar("neatlogs.active_client", default=None)
+
 # True when neatlogs emits into a PRIVATE provider distinct from the OTel global
 # (init(tracer_provider=<private>) → isolated mode). This is the auto-detect gate:
 # only in this mode does neatlogs thread its parent via a private context key
@@ -58,12 +62,29 @@ def set_neatlogs_provider(provider: Optional[TracerProvider]) -> None:
 
 def get_neatlogs_provider() -> Optional[TracerProvider]:
     """The provider neatlogs emits into, or None if init() hasn't set one."""
+    client = _active_client.get()
+    if client is not None:
+        return client.tracer_provider
     return _neatlogs_provider
+
+
+def get_active_client() -> Optional[Any]:
+    """Return the secondary Client active in this context, if any."""
+    return _active_client.get()
+
+
+def activate_client(client: Any):
+    """Select a secondary Client for this context and return its reset token."""
+    return _active_client.set(client)
+
+
+def reset_active_client(token: Any) -> None:
+    _active_client.reset(token)
 
 
 def _isolation_active() -> bool:
     """Auto-detect gate: True in isolated mode (private provider != OTel global)."""
-    return _isolated
+    return _active_client.get() is not None or _isolated
 
 
 _wrapper_config: Dict[str, Any] = {}
@@ -303,6 +324,10 @@ def get_tracer() -> otel_trace.Tracer:
     """
     global _wrapper_tracer, _wrapper_bootstrapped, _bootstrap_warned
 
+    client = _active_client.get()
+    if client is not None:
+        return client.get_tracer("neatlogs.wrapper")
+
     if _wrapper_tracer is not None:
         return _wrapper_tracer
 
@@ -341,6 +366,9 @@ def get_internal_tracer(scope: str) -> otel_trace.Tracer:
     ``get_tracer(__name__)`` — otherwise in isolated mode their spans export into a
     co-tenant's pipeline (a user's Langfuse provider). The guard wrapper also
     keeps them off a foreign active parent, identical to :func:`get_tracer`."""
+    client = _active_client.get()
+    if client is not None:
+        return client.get_tracer(scope)
     provider = _neatlogs_provider or otel_trace.get_tracer_provider()
     if isinstance(provider, TracerProvider):
         return _ForeignParentGuardTracer(provider.get_tracer(scope))
@@ -594,6 +622,9 @@ def _auto_root_enabled() -> bool:
 def _resolve_root_workflow_name() -> str:
     """The name for an auto-created root: init()'s workflow_name, else the
     wrapper-mode workflow_name, else a neutral default."""
+    client = _active_client.get()
+    if client is not None:
+        return client.workflow_name
     try:
         from .init import get_session_config
 

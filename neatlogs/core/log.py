@@ -130,16 +130,27 @@ def log(msg_template: str, /, level: str = "info", **data: Any) -> None:
     except ImportError:
         from opentelemetry import _logs as otel_logs  # type: ignore[no-redef]
 
-    otel_logger = otel_logs.get_logger(__name__)
-    otel_logger.emit(
-        LogRecord(
-            timestamp=time.time_ns(),
-            severity_number=_SEVERITY_MAP.get(level.lower(), SeverityNumber.INFO),
-            severity_text=level.upper(),
-            body=rendered,
-            attributes=attributes,
-        )
-    )
+    from .._wrap_utils import active_neatlogs_context, get_active_client
+
+    client = get_active_client()
+    if client is not None:
+        if client.log_provider is None:
+            return
+        otel_logger = client.log_provider.get_logger(__name__)
+        log_context = active_neatlogs_context()
+    else:
+        otel_logger = otel_logs.get_logger(__name__)
+        log_context = None
+    record_kwargs: dict[str, Any] = {
+        "timestamp": time.time_ns(),
+        "severity_number": _SEVERITY_MAP.get(level.lower(), SeverityNumber.INFO),
+        "severity_text": level.upper(),
+        "body": rendered,
+        "attributes": attributes,
+    }
+    if log_context is not None:
+        record_kwargs["context"] = log_context
+    otel_logger.emit(LogRecord(**record_kwargs))
 
 
 class _CaptureStdoutContext:

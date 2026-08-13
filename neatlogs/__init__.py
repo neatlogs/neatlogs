@@ -26,6 +26,7 @@ Available span kinds:
     - "MCP_TOOL" - MCP protocol tool (auto Pydantic handling)
 """
 
+from ._annotations import add_event, annotate
 from .client import Client
 from .core.context import trace
 from .core.crewai_task_registry import register_crewai_task
@@ -280,6 +281,8 @@ __all__ = [
     "shutdown",
     "span",
     "trace",
+    "annotate",
+    "add_event",
     "identify",
     "inject_trace_context",
     "extract_trace_context",

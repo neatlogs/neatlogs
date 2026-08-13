@@ -138,6 +138,7 @@ def _patch_models(models: Any) -> None:
         if is_suppressed():
             return orig_generate(*args, **kwargs)
 
+        span = None
         try:
             model = kwargs.get("model", args[0] if args else "")
             contents = kwargs.get("contents", args[1] if len(args) > 1 else "")
@@ -147,12 +148,20 @@ def _patch_models(models: Any) -> None:
 
             start = time.perf_counter()
         except Exception:
+            if span is not None:
+                try:
+                    span.end()
+                except Exception:
+                    pass
             return orig_generate(*args, **kwargs)
 
         try:
             response = orig_generate(*args, **kwargs)
         except Exception as e:
-            _record_error(span, e)
+            try:
+                _record_error(span, e)
+            except Exception:
+                pass
             raise
 
         duration_ms = (time.perf_counter() - start) * 1000
@@ -167,17 +176,30 @@ def _patch_models(models: Any) -> None:
             if is_suppressed():
                 return orig_stream(*args, **kwargs)
 
+            span = None
             try:
                 model = kwargs.get("model", args[0] if args else "")
                 contents = kwargs.get("contents", args[1] if len(args) > 1 else "")
 
                 span = _start_span(model, stream=True)
                 _set_input_attributes(span, contents, kwargs)
-
-                stream = orig_stream(*args, **kwargs)
-                return SyncStreamWrapper(stream, span, _finalize_stream)
             except Exception:
+                if span is not None:
+                    try:
+                        span.end()
+                    except Exception:
+                        pass
                 return orig_stream(*args, **kwargs)
+
+            try:
+                stream = orig_stream(*args, **kwargs)
+            except Exception:
+                try:
+                    span.end()
+                except Exception:
+                    pass
+                raise
+            return SyncStreamWrapper(stream, span, _finalize_stream)
 
         models.generate_content_stream = patched_generate_content_stream
 
@@ -195,6 +217,7 @@ def _patch_async_models(models: Any) -> None:
         if is_suppressed():
             return await orig_generate(*args, **kwargs)
 
+        span = None
         try:
             model = kwargs.get("model", args[0] if args else "")
             contents = kwargs.get("contents", args[1] if len(args) > 1 else "")
@@ -204,12 +227,20 @@ def _patch_async_models(models: Any) -> None:
 
             start = time.perf_counter()
         except Exception:
+            if span is not None:
+                try:
+                    span.end()
+                except Exception:
+                    pass
             return await orig_generate(*args, **kwargs)
 
         try:
             response = await orig_generate(*args, **kwargs)
         except Exception as e:
-            _record_error(span, e)
+            try:
+                _record_error(span, e)
+            except Exception:
+                pass
             raise
 
         duration_ms = (time.perf_counter() - start) * 1000
@@ -226,17 +257,30 @@ def _patch_async_models(models: Any) -> None:
             if is_suppressed():
                 return await orig_stream(*args, **kwargs)
 
+            span = None
             try:
                 model = kwargs.get("model", args[0] if args else "")
                 contents = kwargs.get("contents", args[1] if len(args) > 1 else "")
 
                 span = _start_span(model, stream=True)
                 _set_input_attributes(span, contents, kwargs)
-
-                stream = await orig_stream(*args, **kwargs)
-                return AsyncStreamWrapper(stream, span, _finalize_stream)
             except Exception:
+                if span is not None:
+                    try:
+                        span.end()
+                    except Exception:
+                        pass
                 return await orig_stream(*args, **kwargs)
+
+            try:
+                stream = await orig_stream(*args, **kwargs)
+            except Exception:
+                try:
+                    span.end()
+                except Exception:
+                    pass
+                raise
+            return AsyncStreamWrapper(stream, span, _finalize_stream)
 
         models.generate_content_stream = patched_generate_content_stream
 

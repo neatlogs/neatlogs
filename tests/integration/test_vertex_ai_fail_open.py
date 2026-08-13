@@ -92,3 +92,65 @@ class TestVertexAIFailOpen:
             result = wrap_vertex_ai_client(client)
 
         assert result is client
+
+    def test_sync_stream_called_once_when_setup_fails(self, in_memory_span_exporter):
+        """When telemetry setup fails, orig_generate_content_stream must be called exactly once."""
+        from neatlogs.vertex_ai import wrap_vertex_ai_client
+
+        _setup_tracer(in_memory_span_exporter)
+
+        call_count = {"n": 0}
+
+        def generate_content_stream(*args, **kwargs):
+            call_count["n"] += 1
+            return SimpleNamespace()
+
+        models = SimpleNamespace(
+            generate_content=lambda *a, **k: None,
+            generate_content_stream=generate_content_stream,
+        )
+        client = SimpleNamespace(models=models, aio=None)
+        wrap_vertex_ai_client(client)
+
+        with patch(
+            "neatlogs.vertex_ai.get_provider_tracer",
+            side_effect=RuntimeError("trace failed"),
+        ):
+            stream = client.models.generate_content_stream(model="gemini-1.5-pro", contents="hi")
+
+        assert call_count["n"] == 1, f"called {call_count['n']} times, expected 1"
+        assert stream is not None
+        assert len(in_memory_span_exporter.get_finished_spans()) == 0
+
+    @pytest.mark.asyncio
+    async def test_async_stream_called_once_when_setup_fails(self, in_memory_span_exporter):
+        """Async path: setup fail → orig_generate_content_stream called exactly once."""
+        from neatlogs.vertex_ai import wrap_vertex_ai_client
+
+        _setup_tracer(in_memory_span_exporter)
+
+        call_count = {"n": 0}
+
+        async def generate_content_stream(*args, **kwargs):
+            call_count["n"] += 1
+            return SimpleNamespace()
+
+        models = SimpleNamespace(
+            generate_content=lambda *a, **k: None,
+            generate_content_stream=generate_content_stream,
+        )
+        aio = SimpleNamespace(models=models)
+        client = SimpleNamespace(models=SimpleNamespace(), aio=aio)
+        wrap_vertex_ai_client(client)
+
+        with patch(
+            "neatlogs.vertex_ai.get_provider_tracer",
+            side_effect=RuntimeError("trace failed"),
+        ):
+            stream = await client.aio.models.generate_content_stream(
+                model="gemini-1.5-pro", contents="hi"
+            )
+
+        assert call_count["n"] == 1, f"called {call_count['n']} times, expected 1"
+        assert stream is not None
+        assert len(in_memory_span_exporter.get_finished_spans()) == 0

@@ -58,7 +58,7 @@ def _vendor_from_model(model_id: Any) -> str:
     tail = mid.split("/")[-1]
     for prefix in ("us.", "eu.", "apac.", "us-gov."):
         if tail.startswith(prefix):
-            tail = tail[len(prefix):]
+            tail = tail[len(prefix) :]
     vendor = tail.split(".")[0] if "." in tail else ""
     return vendor or "bedrock"
 
@@ -77,15 +77,27 @@ def _start_span(name: str, model_id: Any, is_stream: bool) -> Any:
 
 
 def _err(span: Any, e: Exception) -> None:
-    span.set_status(StatusCode.ERROR, str(e))
-    span.record_exception(e)
-    span.end()
+    """Mark a span as errored and end it. Never propagates."""
+    try:
+        span.set_status(StatusCode.ERROR, str(e))
+        span.record_exception(e)
+        span.end()
+    except Exception:
+        pass
 
 
 def _ok(span: Any, duration_ms: float) -> None:
-    span.set_attribute("neatlogs.llm.metrics.duration_ms", round(duration_ms, 3))
-    span.set_status(StatusCode.OK)
-    span.end()
+    """Mark a span as successful and end it. Never propagates.
+
+    A broken span here would otherwise turn a successful SDK response into
+    an application error, which is what the maintainer flagged on #43.
+    """
+    try:
+        span.set_attribute("neatlogs.llm.metrics.duration_ms", round(duration_ms, 3))
+        span.set_status(StatusCode.OK)
+        span.end()
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -131,9 +143,11 @@ def _set_converse_input(span: Any, kwargs: dict) -> None:
     idx = 0
     system = kwargs.get("system")
     if system:
-        text = " ".join(
-            blk.get("text", "") for blk in system if isinstance(blk, dict)
-        ).strip() if isinstance(system, list) else str(system)
+        text = (
+            " ".join(blk.get("text", "") for blk in system if isinstance(blk, dict)).strip()
+            if isinstance(system, list)
+            else str(system)
+        )
         if text:
             span.set_attribute(f"neatlogs.llm.input_messages.{idx}.role", "system")
             span.set_attribute(f"neatlogs.llm.input_messages.{idx}.content", text)
@@ -143,7 +157,9 @@ def _set_converse_input(span: Any, kwargs: dict) -> None:
         role = msg.get("role", "user")
         content = msg.get("content", [])
         span.set_attribute(f"neatlogs.llm.input_messages.{idx}.role", role)
-        span.set_attribute(f"neatlogs.llm.input_messages.{idx}.content", _converse_blocks_to_text(content))
+        span.set_attribute(
+            f"neatlogs.llm.input_messages.{idx}.content", _converse_blocks_to_text(content)
+        )
         idx += 1
 
     cfg = kwargs.get("inferenceConfig") or {}
@@ -203,9 +219,13 @@ def _finalize_converse(span: Any, response: dict, duration_ms: float) -> None:
             text_parts.append(str(block["text"]))
         elif "toolUse" in block:
             tu = block["toolUse"]
-            span.set_attribute(f"neatlogs.llm.tool_calls.{tool_idx}.id", str(tu.get("toolUseId", "")))
+            span.set_attribute(
+                f"neatlogs.llm.tool_calls.{tool_idx}.id", str(tu.get("toolUseId", ""))
+            )
             span.set_attribute(f"neatlogs.llm.tool_calls.{tool_idx}.name", str(tu.get("name", "")))
-            span.set_attribute(f"neatlogs.llm.tool_calls.{tool_idx}.arguments", serialize(tu.get("input", {})))
+            span.set_attribute(
+                f"neatlogs.llm.tool_calls.{tool_idx}.arguments", serialize(tu.get("input", {}))
+            )
             tool_idx += 1
 
     if text_parts:
@@ -322,7 +342,9 @@ def _wrap_converse_stream(stream: Any, span: Any, start: float):
                 if tc.get("id"):
                     span.set_attribute(f"neatlogs.llm.tool_calls.{j}.id", tc["id"])
                 span.set_attribute(f"neatlogs.llm.tool_calls.{j}.name", tc.get("name", ""))
-                span.set_attribute(f"neatlogs.llm.tool_calls.{j}.arguments", tc.get("arguments", ""))
+                span.set_attribute(
+                    f"neatlogs.llm.tool_calls.{j}.arguments", tc.get("arguments", "")
+                )
             if finish_reason:
                 span.set_attribute("neatlogs.llm.finish_reason", str(finish_reason))
             _set_converse_usage(span, usage)
@@ -368,14 +390,23 @@ def _set_invoke_input(span: Any, vendor: str, body: dict) -> None:
             idx += 1
     elif body.get("prompt"):  # Claude legacy / Llama
         span.set_attribute(f"neatlogs.llm.input_messages.{idx}.role", "user")
-        span.set_attribute(f"neatlogs.llm.input_messages.{idx}.content", str(body["prompt"])[:10000])
+        span.set_attribute(
+            f"neatlogs.llm.input_messages.{idx}.content", str(body["prompt"])[:10000]
+        )
     elif body.get("inputText"):  # Titan
         span.set_attribute(f"neatlogs.llm.input_messages.{idx}.role", "user")
-        span.set_attribute(f"neatlogs.llm.input_messages.{idx}.content", str(body["inputText"])[:10000])
+        span.set_attribute(
+            f"neatlogs.llm.input_messages.{idx}.content", str(body["inputText"])[:10000]
+        )
 
     # Invocation params (best-effort across vendors)
-    for key, attr in (("temperature", "temperature"), ("top_p", "top_p"), ("max_tokens", "max_tokens"),
-                      ("maxTokens", "max_tokens"), ("max_tokens_to_sample", "max_tokens")):
+    for key, attr in (
+        ("temperature", "temperature"),
+        ("top_p", "top_p"),
+        ("max_tokens", "max_tokens"),
+        ("maxTokens", "max_tokens"),
+        ("max_tokens_to_sample", "max_tokens"),
+    ):
         if body.get(key) is not None:
             span.set_attribute(f"neatlogs.llm.{attr}", body[key])
     cfg = body.get("textGenerationConfig")  # Titan
@@ -396,13 +427,24 @@ def _finalize_invoke(span: Any, vendor: str, body: dict, duration_ms: float) -> 
     if vendor == "anthropic":
         content = body.get("content")
         if isinstance(content, list):  # messages API
-            text = "".join(b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text")
+            text = "".join(
+                b.get("text", "")
+                for b in content
+                if isinstance(b, dict) and b.get("type") == "text"
+            )
             tool_idx = 0
             for b in content:
                 if isinstance(b, dict) and b.get("type") == "tool_use":
-                    span.set_attribute(f"neatlogs.llm.tool_calls.{tool_idx}.id", str(b.get("id", "")))
-                    span.set_attribute(f"neatlogs.llm.tool_calls.{tool_idx}.name", str(b.get("name", "")))
-                    span.set_attribute(f"neatlogs.llm.tool_calls.{tool_idx}.arguments", serialize(b.get("input", {})))
+                    span.set_attribute(
+                        f"neatlogs.llm.tool_calls.{tool_idx}.id", str(b.get("id", ""))
+                    )
+                    span.set_attribute(
+                        f"neatlogs.llm.tool_calls.{tool_idx}.name", str(b.get("name", ""))
+                    )
+                    span.set_attribute(
+                        f"neatlogs.llm.tool_calls.{tool_idx}.arguments",
+                        serialize(b.get("input", {})),
+                    )
                     tool_idx += 1
         elif body.get("completion") is not None:  # legacy text completion
             text = body["completion"]
@@ -470,11 +512,11 @@ def _patch_invoke_model(client: Any) -> None:
     def patched(*args, **kwargs):
         if is_suppressed():
             return orig(*args, **kwargs)
-        model_id = kwargs.get("modelId")
-        vendor = _vendor_from_model(model_id)
-        is_embedding = _is_embedding_model(model_id)
-
+        span = None
         try:
+            model_id = kwargs.get("modelId")
+            vendor = _vendor_from_model(model_id)
+            is_embedding = _is_embedding_model(model_id)
             body_in = _decode_body(kwargs.get("body"))
 
             if is_embedding:
@@ -498,6 +540,11 @@ def _patch_invoke_model(client: Any) -> None:
 
             start = time.perf_counter()
         except Exception:
+            if span is not None:
+                try:
+                    span.end()
+                except Exception:
+                    pass
             return orig(*args, **kwargs)
 
         try:
@@ -546,15 +593,21 @@ def _patch_invoke_model_stream(client: Any) -> None:
     def patched(*args, **kwargs):
         if is_suppressed():
             return orig(*args, **kwargs)
-        model_id = kwargs.get("modelId")
-        vendor = _vendor_from_model(model_id)
+        span = None
         try:
+            model_id = kwargs.get("modelId")
+            vendor = _vendor_from_model(model_id)
             span = _start_span(
                 "bedrock.invoke_model_with_response_stream", model_id, is_stream=True
             )
             _set_invoke_input(span, vendor, _decode_body(kwargs.get("body")))
             start = time.perf_counter()
         except Exception:
+            if span is not None:
+                try:
+                    span.end()
+                except Exception:
+                    pass
             return orig(*args, **kwargs)
 
         try:

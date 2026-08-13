@@ -118,6 +118,7 @@ def _patch_messages(messages: Any) -> None:
         if is_suppressed():
             return orig_create(*args, **kwargs)
 
+        span = None
         try:
             model = kwargs.get("model", "")
             input_messages = kwargs.get("messages", [])
@@ -140,12 +141,20 @@ def _patch_messages(messages: Any) -> None:
 
             start = time.perf_counter()
         except Exception:
+            if span is not None:
+                try:
+                    span.end()
+                except Exception:
+                    pass
             return orig_create(*args, **kwargs)
 
         try:
             response = orig_create(*args, **kwargs)
         except Exception as e:
-            _record_error(span, e)
+            try:
+                _record_error(span, e)
+            except Exception:
+                pass
             raise
 
         if is_stream:
@@ -158,10 +167,12 @@ def _patch_messages(messages: Any) -> None:
     messages.create = patched_create
 
     if orig_stream:
+
         def patched_stream(*args, **kwargs):
             if is_suppressed():
                 return orig_stream(*args, **kwargs)
 
+            span = None
             try:
                 model = kwargs.get("model", "")
                 input_messages = kwargs.get("messages", [])
@@ -180,11 +191,23 @@ def _patch_messages(messages: Any) -> None:
                 )
 
                 _set_input_attributes(span, input_messages, system, kwargs)
-
-                stream_mgr = orig_stream(*args, **kwargs)
-                return _SyncStreamManagerWrapper(stream_mgr, span)
             except Exception:
+                if span is not None:
+                    try:
+                        span.end()
+                    except Exception:
+                        pass
                 return orig_stream(*args, **kwargs)
+
+            try:
+                stream_mgr = orig_stream(*args, **kwargs)
+            except Exception:
+                try:
+                    span.end()
+                except Exception:
+                    pass
+                raise
+            return _SyncStreamManagerWrapper(stream_mgr, span)
 
         messages.stream = patched_stream
 
@@ -202,6 +225,7 @@ def _patch_async_messages(messages: Any) -> None:
         if is_suppressed():
             return await orig_create(*args, **kwargs)
 
+        span = None
         try:
             model = kwargs.get("model", "")
             input_messages = kwargs.get("messages", [])
@@ -224,12 +248,20 @@ def _patch_async_messages(messages: Any) -> None:
 
             start = time.perf_counter()
         except Exception:
+            if span is not None:
+                try:
+                    span.end()
+                except Exception:
+                    pass
             return await orig_create(*args, **kwargs)
 
         try:
             response = await orig_create(*args, **kwargs)
         except Exception as e:
-            _record_error(span, e)
+            try:
+                _record_error(span, e)
+            except Exception:
+                pass
             raise
 
         if is_stream:
@@ -242,10 +274,12 @@ def _patch_async_messages(messages: Any) -> None:
     messages.create = patched_create
 
     if orig_stream:
+
         def patched_stream(*args, **kwargs):
             if is_suppressed():
                 return orig_stream(*args, **kwargs)
 
+            span = None
             try:
                 model = kwargs.get("model", "")
                 input_messages = kwargs.get("messages", [])
@@ -264,11 +298,23 @@ def _patch_async_messages(messages: Any) -> None:
                 )
 
                 _set_input_attributes(span, input_messages, system, kwargs)
-
-                stream_mgr = orig_stream(*args, **kwargs)
-                return _AsyncStreamManagerWrapper(stream_mgr, span)
             except Exception:
+                if span is not None:
+                    try:
+                        span.end()
+                    except Exception:
+                        pass
                 return orig_stream(*args, **kwargs)
+
+            try:
+                stream_mgr = orig_stream(*args, **kwargs)
+            except Exception:
+                try:
+                    span.end()
+                except Exception:
+                    pass
+                raise
+            return _AsyncStreamManagerWrapper(stream_mgr, span)
 
         messages.stream = patched_stream
 
@@ -760,14 +806,26 @@ def _patch_legacy_completions(completions: Any, is_async: bool) -> None:
         async def patched(*args, **kwargs):
             if is_suppressed():
                 return await orig(*args, **kwargs)
-            span = get_provider_tracer().start_span(
-                name="anthropic.completions.create", attributes=_attrs(kwargs)
-            )
-            start = time.perf_counter()
+            span = None
+            try:
+                span = get_provider_tracer().start_span(
+                    name="anthropic.completions.create", attributes=_attrs(kwargs)
+                )
+                start = time.perf_counter()
+            except Exception:
+                if span is not None:
+                    try:
+                        span.end()
+                    except Exception:
+                        pass
+                return await orig(*args, **kwargs)
             try:
                 resp = await orig(*args, **kwargs)
             except Exception as e:
-                _err(span, e)
+                try:
+                    _err(span, e)
+                except Exception:
+                    pass
                 raise
             _finalize(span, resp, (time.perf_counter() - start) * 1000)
             return resp
@@ -777,14 +835,26 @@ def _patch_legacy_completions(completions: Any, is_async: bool) -> None:
         def patched(*args, **kwargs):
             if is_suppressed():
                 return orig(*args, **kwargs)
-            span = get_provider_tracer().start_span(
-                name="anthropic.completions.create", attributes=_attrs(kwargs)
-            )
-            start = time.perf_counter()
+            span = None
+            try:
+                span = get_provider_tracer().start_span(
+                    name="anthropic.completions.create", attributes=_attrs(kwargs)
+                )
+                start = time.perf_counter()
+            except Exception:
+                if span is not None:
+                    try:
+                        span.end()
+                    except Exception:
+                        pass
+                return orig(*args, **kwargs)
             try:
                 resp = orig(*args, **kwargs)
             except Exception as e:
-                _err(span, e)
+                try:
+                    _err(span, e)
+                except Exception:
+                    pass
                 raise
             _finalize(span, resp, (time.perf_counter() - start) * 1000)
             return resp

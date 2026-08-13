@@ -95,3 +95,86 @@ class TestAnthropicFailOpen:
                 model="claude-3-haiku-20240307",
                 messages=[{"role": "user", "content": "hi"}],
             )
+
+    def test_sync_stream_called_once_when_setup_fails(self, in_memory_span_exporter):
+        """When telemetry setup fails, orig_stream must be called exactly once (not double-called)."""
+        from neatlogs.anthropic import wrap_anthropic_client
+
+        _setup_tracer(in_memory_span_exporter)
+
+        call_count = {"n": 0}
+
+        def stream_fn(**kwargs):
+            call_count["n"] += 1
+            return SimpleNamespace()
+
+        messages = SimpleNamespace(create=lambda **k: None, stream=stream_fn)
+        client = SimpleNamespace(messages=messages, completions=None, beta=None)
+        wrap_anthropic_client(client)
+
+        with patch(
+            "neatlogs.anthropic.get_provider_tracer",
+            side_effect=RuntimeError("trace failed"),
+        ):
+            result = client.messages.stream(
+                model="claude-3-haiku-20240307",
+                messages=[{"role": "user", "content": "hi"}],
+            )
+
+        assert call_count["n"] == 1, f"orig_stream was called {call_count['n']} times, expected 1"
+        assert result is not None
+        assert len(in_memory_span_exporter.get_finished_spans()) == 0
+
+    @pytest.mark.asyncio
+    async def test_async_stream_called_once_when_setup_fails(self, in_memory_span_exporter):
+        """Async path: when telemetry setup fails, orig_stream must be called exactly once."""
+        from neatlogs.anthropic import wrap_async_anthropic_client
+
+        _setup_tracer(in_memory_span_exporter)
+
+        call_count = {"n": 0}
+
+        async def stream_fn(**kwargs):
+            call_count["n"] += 1
+            return SimpleNamespace()
+
+        messages = SimpleNamespace(create=lambda **k: None, stream=stream_fn)
+        client = SimpleNamespace(messages=messages, completions=None, beta=None)
+        wrap_async_anthropic_client(client)
+
+        with patch(
+            "neatlogs.anthropic.get_provider_tracer",
+            side_effect=RuntimeError("trace failed"),
+        ):
+            result = await client.messages.stream(
+                model="claude-3-haiku-20240307",
+                messages=[{"role": "user", "content": "hi"}],
+            )
+
+        assert call_count["n"] == 1, f"orig_stream was called {call_count['n']} times, expected 1"
+        assert result is not None
+        assert len(in_memory_span_exporter.get_finished_spans()) == 0
+
+    def test_sync_stream_called_once_when_orig_stream_raises(self, in_memory_span_exporter):
+        """When orig_stream raises, the fallback must NOT re-invoke it (no double-call)."""
+        from neatlogs.anthropic import wrap_anthropic_client
+
+        _setup_tracer(in_memory_span_exporter)
+
+        call_count = {"n": 0}
+
+        def stream_fn(**kwargs):
+            call_count["n"] += 1
+            raise RuntimeError("stream failed")
+
+        messages = SimpleNamespace(create=lambda **k: None, stream=stream_fn)
+        client = SimpleNamespace(messages=messages, completions=None, beta=None)
+        wrap_anthropic_client(client)
+
+        with pytest.raises(RuntimeError, match="stream failed"):
+            client.messages.stream(
+                model="claude-3-haiku-20240307",
+                messages=[{"role": "user", "content": "hi"}],
+            )
+
+        assert call_count["n"] == 1, f"orig_stream was called {call_count['n']} times, expected 1"

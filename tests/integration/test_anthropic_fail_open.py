@@ -178,3 +178,65 @@ class TestAnthropicFailOpen:
             )
 
         assert call_count["n"] == 1, f"orig_stream was called {call_count['n']} times, expected 1"
+
+    def test_parse_fails_open_on_tracer_error(self, in_memory_span_exporter):
+        """messages.parse has the same fail-open contract when telemetry setup fails."""
+        from neatlogs.anthropic import wrap_anthropic_client
+
+        _setup_tracer(in_memory_span_exporter)
+
+        call_count = {"n": 0}
+
+        def parse(**kwargs):
+            call_count["n"] += 1
+            return _message_response()
+
+        messages = SimpleNamespace(
+            create=lambda **k: None, stream=None, parse=parse, count_tokens=None
+        )
+        client = SimpleNamespace(messages=messages, completions=None, beta=None)
+        wrap_anthropic_client(client)
+
+        with patch(
+            "neatlogs.anthropic.get_provider_tracer",
+            side_effect=RuntimeError("trace failed"),
+        ):
+            response = client.messages.parse(
+                model="claude-3-haiku-20240307",
+                messages=[{"role": "user", "content": "hi"}],
+            )
+
+        assert call_count["n"] == 1, f"called {call_count['n']} times, expected 1"
+        assert getattr(response.content[0], "text", None) == "hello"
+        assert len(in_memory_span_exporter.get_finished_spans()) == 0
+
+    def test_count_tokens_fails_open_on_tracer_error(self, in_memory_span_exporter):
+        """messages.count_tokens has the same fail-open contract when telemetry setup fails."""
+        from neatlogs.anthropic import wrap_anthropic_client
+
+        _setup_tracer(in_memory_span_exporter)
+
+        call_count = {"n": 0}
+
+        def count_tokens(**kwargs):
+            call_count["n"] += 1
+            return SimpleNamespace(input_tokens=5)
+
+        messages = SimpleNamespace(
+            create=lambda **k: None, stream=None, parse=None, count_tokens=count_tokens
+        )
+        client = SimpleNamespace(messages=messages, completions=None, beta=None)
+        wrap_anthropic_client(client)
+
+        with patch(
+            "neatlogs.anthropic.get_provider_tracer",
+            side_effect=RuntimeError("trace failed"),
+        ):
+            response = client.messages.count_tokens(
+                model="claude-3-haiku-20240307",
+                messages=[{"role": "user", "content": "hi"}],
+            )
+
+        assert call_count["n"] == 1, f"called {call_count['n']} times, expected 1"
+        assert response.input_tokens == 5
+        assert len(in_memory_span_exporter.get_finished_spans()) == 0

@@ -149,3 +149,127 @@ def test_wrap_context_with_empty_context_is_noop():
     assert "neatlogs.workflow" not in {
         k.split(".")[1] for k in attrs if k.startswith("neatlogs.workflow.")
     }
+
+
+# ---------------------------------------------------------------------------
+# Additional edge cases surfaced by /code-review on PR #70
+# ---------------------------------------------------------------------------
+
+
+def test_wrap_context_decodes_utf8_bytes():
+    """Bytes values are utf-8 decoded (per the docstring)."""
+    attrs = _record_attributes({"raw": b"hello world"})
+    assert attrs["neatlogs.workflow.raw"] == "hello world"
+
+
+def test_wrap_context_handles_non_decodable_bytes():
+    """Non-utf-8 bytes fall back to repr() so the attribute still lands."""
+    attrs = _record_attributes({"raw": b"\xff\xfe\x00"})
+    # repr() of bytes gives an escape-sequence string.
+    assert attrs["neatlogs.workflow.raw"].startswith("b'")
+
+
+def test_wrap_context_handles_empty_bytes():
+    """Empty bytes: utf-8 decode returns ''. Stored as empty string."""
+    attrs = _record_attributes({"raw": b""})
+    assert attrs["neatlogs.workflow.raw"] == ""
+
+
+def test_wrap_context_serializes_tuple_as_json():
+    """Tuple goes through the dict/list/tuple branch → JSON array."""
+    attrs = _record_attributes({"coords": (1, 2, 3)})
+    assert json.loads(attrs["neatlogs.workflow.coords"]) == [1, 2, 3]
+
+
+def test_wrap_context_stamps_multiple_values_in_one_call():
+    """Many attrs in one call all land — verifies the loop, not just one."""
+    attrs = _record_attributes(
+        {
+            "a": 1,
+            "b": "two",
+            "c": True,
+            "d": 0.5,
+            "e": ["x", "y"],
+            "f": {"k": 1},
+        }
+    )
+    assert attrs["neatlogs.workflow.a"] == 1
+    assert attrs["neatlogs.workflow.b"] == "two"
+    assert attrs["neatlogs.workflow.c"] is True
+    assert attrs["neatlogs.workflow.d"] == 0.5
+    assert json.loads(attrs["neatlogs.workflow.e"]) == ["x", "y"]
+    assert json.loads(attrs["neatlogs.workflow.f"]) == {"k": 1}
+
+
+def test_wrap_context_stringifies_nested_nan_in_dict():
+    """Real bug (nested NaN/Inf must not emit bare JSON tokens — ClickHouse
+    would reject). Fixed by _sanitize_nan_inf preprocessing."""
+    import math
+
+    attrs = _record_attributes({"scores": {"a": math.nan, "b": math.inf, "c": -math.inf}})
+    raw = attrs["neatlogs.workflow.scores"]
+    # The raw string must contain quoted "NaN" / "Infinity" tokens,
+    # never the bare unquoted form json.dumps would emit by default.
+    assert '"NaN"' in raw
+    assert '"Infinity"' in raw
+    assert '"-Infinity"' in raw
+    # Belt-and-suspenders: a strict parser would round-trip cleanly.
+    parsed = json.loads(raw)
+    assert parsed == {"a": "NaN", "b": "Infinity", "c": "-Infinity"}
+
+
+def test_wrap_context_stringifies_nested_nan_in_list():
+    """Same fix applies inside list values, not just dicts."""
+    import math
+
+    attrs = _record_attributes({"xs": [math.nan, 1.0, math.inf]})
+    raw = attrs["neatlogs.workflow.xs"]
+    assert '"NaN"' in raw
+    assert '"Infinity"' in raw
+    assert json.loads(raw) == ["NaN", 1.0, "Infinity"]
+
+
+def test_wrap_context_handles_datetime_via_isoformat():
+    """datetime values are formatted via .isoformat() (parity with
+    neatlogs._annotations._coerce)."""
+    from datetime import datetime, timezone
+
+    attrs = _record_attributes({"at": datetime(2026, 8, 15, 2, 11, tzinfo=timezone.utc)})
+    assert attrs["neatlogs.workflow.at"] == "2026-08-15T02:11:00+00:00"
+
+
+def test_wrap_context_handles_pydantic_like_via_model_dump():
+    """Pydantic-v2-style objects (any .model_dump()) are JSON-serialized
+    via the dump, not via repr. Parity with _annotations._coerce."""
+
+    class _PydanticLike:
+        def model_dump(self):
+            return {"k": 1, "n": "two"}
+
+    attrs = _record_attributes({"blob": _PydanticLike()})
+    assert json.loads(attrs["neatlogs.workflow.blob"]) == {"k": 1, "n": "two"}
+
+
+def test_wrap_context_handles_unknown_object_via_str_fallback():
+    """A plain object with no isoformat / model_dump / JSON-serializable
+    shape falls back to str(). Documented behavior."""
+
+    class _Unknown:
+        def __repr__(self):
+            return "<Unknown 0xDEAD>"
+
+    attrs = _record_attributes({"obj": _Unknown()})
+    assert attrs["neatlogs.workflow.obj"] == "<Unknown 0xDEAD>"
+
+
+def test_wrap_context_skips_none_values():
+    """None is not crashed on: even though _filtered_mapping filters None
+    upstream, a directly-set None via _wrap_context must not raise. The
+    value lands as the str() fallback ("None"), which is acceptable —
+    the upstream filter is the real defense against None in the public
+    API."""
+    attrs = _record_attributes({"a": 1, "b": None, "c": "x"})
+    assert attrs.get("neatlogs.workflow.a") == 1
+    # The string "None" is fine — see comment above.
+    assert attrs.get("neatlogs.workflow.b") == "None"
+    assert attrs.get("neatlogs.workflow.c") == "x"

@@ -280,9 +280,14 @@ def _coerce_workflow_value(value: Any) -> Any:
     - Primitives (bool, int, str, float) pass through natively so backend
       numeric / boolean filters remain meaningful.
     - ``NaN`` / ``Inf`` floats are stringified so strict JSON parsers
-      (e.g. ClickHouse) do not reject the attribute.
+      (e.g. ClickHouse) do not reject the attribute. This applies
+      recursively inside dict / list / tuple as well.
     - Bytes are utf-8 decoded; unrepresentable bytes fall back to repr.
     - dict / list / tuple are JSON-serialized.
+    - Pydantic-v2-style objects (anything with ``model_dump()``) are
+      dumped then JSON-serialized.
+    - datetimes (anything with ``isoformat()``) are stringified via
+      ``isoformat()``.
     - Everything else falls back to ``str()``.
     """
     if isinstance(value, bool):
@@ -300,10 +305,44 @@ def _coerce_workflow_value(value: Any) -> Any:
             return repr(value)
     if isinstance(value, (dict, list, tuple)):
         try:
-            return json.dumps(value, default=str)
+            return json.dumps(_sanitize_nan_inf(value), default=str)
         except (TypeError, ValueError):
             return str(value)
+    if hasattr(value, "model_dump"):
+        try:
+            return json.dumps(_sanitize_nan_inf(value.model_dump()), default=str)
+        except Exception:
+            pass
+    if hasattr(value, "isoformat"):
+        try:
+            return value.isoformat()
+        except Exception:
+            pass
     return str(value)
+
+
+def _sanitize_nan_inf(obj: Any) -> Any:
+    """Recursively replace NaN / Inf floats with their string forms so
+    ``json.dumps(allow_nan=True)`` does not emit bare ``NaN`` / ``Infinity``
+    tokens that strict JSON parsers (e.g. ClickHouse) reject.
+
+    Pass-through for every other type. Tuples are returned as tuples so the
+    outer JSON encoder still produces an array; dicts and lists are
+    rebuilt so the recursion actually walks nested structures.
+    """
+    if isinstance(obj, float):
+        if math.isnan(obj):
+            return "NaN"
+        if math.isinf(obj):
+            return "Infinity" if obj > 0 else "-Infinity"
+        return obj
+    if isinstance(obj, dict):
+        return {k: _sanitize_nan_inf(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize_nan_inf(v) for v in obj]
+    if isinstance(obj, tuple):
+        return tuple(_sanitize_nan_inf(v) for v in obj)
+    return obj
 
 
 def reset_tracer() -> None:

@@ -10,6 +10,7 @@ Only contains truly shared concerns:
 
 import inspect
 import json
+import math
 import os
 import time
 from contextvars import ContextVar
@@ -263,9 +264,46 @@ def apply_wrap_context_attributes(span: Any, is_root: bool = True) -> None:
 
     for key, value in (context.get("workflow") or {}).items():
         try:
-            span.set_attribute(f"neatlogs.workflow.{key}", str(value))
+            span.set_attribute(f"neatlogs.workflow.{key}", _coerce_workflow_value(value))
         except Exception:
             pass
+
+
+def _coerce_workflow_value(value: Any) -> Any:
+    """Coerce a workflow-attribute value for OTel storage.
+
+    Mirrors ``neatlogs._annotations._coerce`` so the wrap() and annotate()
+    entry points agree on type semantics. Duplicated here (rather than
+    imported) to avoid a circular import — ``_annotations`` already
+    depends on this module.
+
+    - Primitives (bool, int, str, float) pass through natively so backend
+      numeric / boolean filters remain meaningful.
+    - ``NaN`` / ``Inf`` floats are stringified so strict JSON parsers
+      (e.g. ClickHouse) do not reject the attribute.
+    - Bytes are utf-8 decoded; unrepresentable bytes fall back to repr.
+    - dict / list / tuple are JSON-serialized.
+    - Everything else falls back to ``str()``.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, str)):
+        return value
+    if isinstance(value, float):
+        if math.isnan(value) or math.isinf(value):
+            return "NaN" if math.isnan(value) else ("Infinity" if value > 0 else "-Infinity")
+        return value
+    if isinstance(value, bytes):
+        try:
+            return value.decode("utf-8")
+        except (UnicodeDecodeError, AttributeError):
+            return repr(value)
+    if isinstance(value, (dict, list, tuple)):
+        try:
+            return json.dumps(value, default=str)
+        except (TypeError, ValueError):
+            return str(value)
+    return str(value)
 
 
 def reset_tracer() -> None:

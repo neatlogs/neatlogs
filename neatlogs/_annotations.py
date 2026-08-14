@@ -174,7 +174,19 @@ def annotate(**attrs: Any) -> bool:
             continue
         if not _valid_key(key):
             continue
-        span.set_attribute(f"{ANNOTATION_PREFIX}{key}", _coerce(value))
+        try:
+            coerced = _coerce(value)
+        except Exception:
+            # Coercion failure on this value (e.g. circular ref, hostile
+            # __str__): skip just this value, continue with the rest.
+            # The fail-open contract: never raise from an annotation call.
+            continue
+        try:
+            span.set_attribute(f"{ANNOTATION_PREFIX}{key}", coerced)
+        except Exception:
+            # SDK-level failure on set_attribute: skip just this value,
+            # continue with the rest. Same fail-open contract.
+            continue
         applied = True
     return applied
 
@@ -209,7 +221,12 @@ def add_event(name: str, **attrs: Any) -> bool:
             continue
         if not _valid_key(key):
             continue
-        coerced[key] = _coerce(value)
+        try:
+            coerced[key] = _coerce(value)
+        except Exception:
+            # Coercion failure on this attr: skip just this attr, continue.
+            # The fail-open contract: never raise from an annotation call.
+            continue
     event_name = f"{ANNOTATION_PREFIX}{name}"
     try:
         span.add_event(event_name, attributes=coerced)

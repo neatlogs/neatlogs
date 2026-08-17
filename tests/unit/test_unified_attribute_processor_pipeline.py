@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from opentelemetry.trace import SpanKind
 
 import neatlogs
@@ -55,6 +56,29 @@ def test_process_marks_http_client_span_as_http_kind() -> None:
 
     out = proc.process(span)
     assert out["neatlogs.span.kind"] == "http"
+
+
+@pytest.mark.parametrize("kind", ["GUARDRAIL", "EVALUATOR", "MEMORY"])
+def test_process_maps_generic_io_to_semantic_kind_namespace(kind: str) -> None:
+    proc = UnifiedAttributeProcessor(mapping_config=_load_mapping(), debug=False)
+    span = _mk_span(
+        kind=SpanKind.INTERNAL,
+        attributes={
+            "openinference.span.kind": kind,
+            "input.value": '{"question":"what happened"}',
+            "output.value": '{"answer":"verified"}',
+            "input.mime_type": "application/json",
+            "output.mime_type": "application/json",
+        },
+    )
+
+    out = proc.process(span)
+    namespace = kind.lower()
+    assert out["neatlogs.span.kind"] == namespace
+    assert out[f"neatlogs.{namespace}.input"] == '{"question":"what happened"}'
+    assert out[f"neatlogs.{namespace}.output"] == '{"answer":"verified"}'
+    assert out[f"neatlogs.{namespace}.input_mime_type"] == "application/json"
+    assert out[f"neatlogs.{namespace}.output_mime_type"] == "application/json"
 
 
 def test_process_infers_retriever_kind_from_db_system() -> None:

@@ -21,23 +21,37 @@ independent test jobs from reporting their results.
 
 ## Local development setup
 
-Install the project and development dependencies with Poetry:
+Install the project and development dependencies with [uv](https://docs.astral.sh/uv/):
 
 ```bash
-poetry install --with dev
+uv sync
 ```
 
 The supported Python range is declared in `pyproject.toml`. Use a Python
 version inside that range for local development.
+
+### Extras
+
+`uv sync --extra <name>` installs one framework extra. Note that `--all-extras`
+will **not** work: `crewai` and `hermes` cannot coexist in one environment, and
+`pyproject.toml` declares them as conflicting under `[tool.uv]`.
+
+```bash
+uv sync --extra crewai   # or --extra hermes, never both
+```
+
+`hermes-agent` publishes no distribution for Python 3.10, so the `hermes` extra
+carries a `python_version >= '3.11'` marker. On 3.10 the extra installs cleanly
+and simply contributes nothing.
 
 ## Required checks before pushing
 
 Run these commands from the repository root:
 
 ```bash
-poetry run black neatlogs tests
-poetry run isort neatlogs tests
-poetry run pytest -q tests/unit
+uv run black neatlogs tests
+uv run isort neatlogs tests
+uv run pytest -q tests/unit
 git diff --check
 ```
 
@@ -52,8 +66,8 @@ fail the pull request.
 To check formatting without modifying files:
 
 ```bash
-poetry run black --check neatlogs tests
-poetry run isort --check-only neatlogs tests
+uv run black --check neatlogs tests
+uv run isort --check-only neatlogs tests
 ```
 
 ## Formatting and logical changes
@@ -89,7 +103,7 @@ changing CI results without a repository change. They reduce dependency drift,
 but they are not a complete lock of every transitive dependency installed by
 pip.
 
-`poetry.lock` remains the source of truth for the resolved versions. Whenever
+`uv.lock` remains the source of truth for the resolved versions. Whenever
 the lock file changes, check whether any package listed in either CI
 requirements file also changed. If it did, update the matching pin in the same
 pull request.
@@ -98,7 +112,7 @@ After installing dependencies, the resolved version of a package can be
 checked with:
 
 ```bash
-poetry show <package-name>
+uv pip show <package-name>
 ```
 
 ### Updating Black or isort
@@ -106,7 +120,7 @@ poetry show <package-name>
 When intentionally upgrading a formatter:
 
 1. Update its constraint in `pyproject.toml` if required.
-2. Regenerate `poetry.lock`.
+2. Regenerate `uv.lock` with `uv lock`.
 3. Copy the resolved version into `.github/requirements-lint.txt`.
 4. Run Black and isort over both `neatlogs/` and `tests/`.
 5. Commit the generated formatter baseline separately from CI configuration
@@ -121,7 +135,7 @@ corresponding formatter output.
 When a unit test directly needs a new package:
 
 1. Add it to the development dependency group in `pyproject.toml`.
-2. Regenerate `poetry.lock`.
+2. Regenerate `uv.lock` with `uv lock`.
 3. Add the exact resolved version to `.github/requirements-test.txt`.
 4. Verify installation and run `pytest -q tests/unit` in a clean environment.
 
@@ -178,7 +192,7 @@ When adding or removing a supported Python version:
 The required CI gate is:
 
 ```bash
-poetry run pytest -q tests/unit
+uv run pytest -q tests/unit
 ```
 
 Integration tests may require optional framework packages, service-specific
@@ -218,7 +232,7 @@ Before requesting review:
 - [ ] isort passes for `neatlogs/` and `tests/`.
 - [ ] All unit tests pass locally.
 - [ ] `git diff --check` passes.
-- [ ] CI dependency pins match `poetry.lock`.
+- [ ] CI dependency pins match `uv.lock`.
 - [ ] Formatter-only and logical changes are clearly separated.
 - [ ] Relevant integration tests were run for instrumentation changes.
 - [ ] The pull-request description lists the exact commands and results.

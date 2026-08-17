@@ -32,6 +32,7 @@ Enable via ``neatlogs.init(instrumentations=["claude_agent_sdk"])`` or ``neatlog
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, Dict, List, Optional
 
 from opentelemetry import context as otel_context
@@ -44,6 +45,30 @@ from ._wrap_utils import get_tracer, is_suppressed
 
 _PROVIDER = "claude_agent_sdk"
 _ROOT_SCOPE = "__root__"
+
+
+# OpenAI ids arrive bare ("gpt-4o"), gateway-namespaced ("azure/gpt-4o", "openai.gpt-oss-120b") or as
+# an o-series id. `gpt-` matches at a separator boundary; the o-series only at the start of a namespace
+# segment, so a trailing "-o1" on another vendor's id (e.g. "cohere-o1") stays unmatched.
+_GPT_ID = re.compile(r"(?:^|[/:._-])(?:chat)?gpt-[a-z0-9]")
+_O_SERIES_ID = re.compile(r"^o[1-9][0-9]*(?:-|$)")
+_ID_SEGMENT = re.compile(r"[/:.]")
+
+
+def _provider_for_model(model: str) -> str:
+    """Identify the actual provider behind an Agent SDK proxy from its exposed model id."""
+    value = (model or "").lower()
+    if "gemini" in value:
+        return "vertex_ai"
+    if "claude" in value:
+        return "anthropic"
+    if _GPT_ID.search(value) or any(_O_SERIES_ID.match(seg) for seg in _ID_SEGMENT.split(value)):
+        return "openai"
+    if "mistral" in value or "mixtral" in value:
+        return "mistral"
+    if "llama" in value:
+        return "meta"
+    return "unknown"
 
 
 class ClaudeAgentSDKInstrumentor:
@@ -503,10 +528,11 @@ class _TracingQuery:
         scope.assistant_buffer = None
         model = buf["model"] or self._model or ""
 
+        provider = _provider_for_model(str(model))
         attrs: Dict[str, Any] = {
             "neatlogs.span.kind": "llm",
-            "neatlogs.llm.provider": "anthropic",
-            "neatlogs.llm.system": "anthropic",
+            "neatlogs.llm.provider": provider,
+            "neatlogs.llm.system": provider,
         }
         if model:
             attrs["neatlogs.llm.model_name"] = str(model)
@@ -596,6 +622,8 @@ class _TracingQuery:
                 if _get(block, "is_error"):
                     span.set_status(StatusCode.ERROR)
                     span.set_attribute("neatlogs.tool.is_error", True)
+                    span.set_attribute("error.type", "tool_error")
+                    span.set_attribute("error.message", out_text)
                 else:
                     span.set_status(StatusCode.OK)
                 span.end()

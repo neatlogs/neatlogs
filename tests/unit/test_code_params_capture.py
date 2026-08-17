@@ -10,6 +10,7 @@ import functools
 import inspect
 from pathlib import Path
 
+import pytest
 from opentelemetry import trace
 
 from neatlogs.decorators._base import _decorate_span
@@ -33,6 +34,23 @@ def _install(tracer_provider):
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("kind", ["GUARDRAIL", "EVALUATOR", "MEMORY"])
+def test_semantic_span_kinds_auto_capture_io(kind, tracer_provider, in_memory_span_exporter):
+    _install(tracer_provider)
+
+    @neatlogs_span(kind=kind, name=f"test.{kind.lower()}")
+    def semantic_stage(value: str):
+        return {"seen": value}
+
+    assert semantic_stage("evidence") == {"seen": "evidence"}
+
+    [finished] = in_memory_span_exporter.get_finished_spans()
+    attrs = finished.attributes
+    assert attrs["neatlogs.span.kind"] == kind.lower()
+    assert "evidence" in attrs["input.value"]
+    assert "evidence" in attrs["output.value"]
 
 
 def test_sync_decorator_sets_code_file_path(tracer_provider, in_memory_span_exporter):

@@ -30,6 +30,7 @@ from opentelemetry.trace import StatusCode
 from ._wrap_utils import (
     AsyncStreamWrapper,
     SyncStreamWrapper,
+    _telemetry_fallback,
     get_provider_tracer,
     is_suppressed,
     serialize,
@@ -231,8 +232,11 @@ def _patch_chat(chat: Any) -> None:
         def patched_send(*args, **kwargs):
             if is_suppressed():
                 return orig_send(*args, **kwargs)
-            is_stream = bool(kwargs.get("stream", False))
-            span = _start(kwargs, is_stream)
+            try:
+                is_stream = bool(kwargs.get("stream", False))
+                span = _start(kwargs, is_stream)
+            except Exception:
+                return _telemetry_fallback(orig_send, *args, **kwargs)
             start = time.perf_counter()
             try:
                 response = orig_send(*args, **kwargs)
@@ -241,7 +245,10 @@ def _patch_chat(chat: Any) -> None:
                 raise
             if is_stream:
                 return SyncStreamWrapper(response, span, _finalize_chat_stream)
-            _finalize_chat(span, response, (time.perf_counter() - start) * 1000)
+            try:
+                _finalize_chat(span, response, (time.perf_counter() - start) * 1000)
+            except Exception:
+                pass
             return response
 
         chat.send = patched_send
@@ -251,8 +258,11 @@ def _patch_chat(chat: Any) -> None:
         async def patched_send_async(*args, **kwargs):
             if is_suppressed():
                 return await orig_send_async(*args, **kwargs)
-            is_stream = bool(kwargs.get("stream", False))
-            span = _start(kwargs, is_stream)
+            try:
+                is_stream = bool(kwargs.get("stream", False))
+                span = _start(kwargs, is_stream)
+            except Exception:
+                return await _telemetry_fallback(orig_send_async, *args, **kwargs)
             start = time.perf_counter()
             try:
                 response = await orig_send_async(*args, **kwargs)
@@ -261,7 +271,10 @@ def _patch_chat(chat: Any) -> None:
                 raise
             if is_stream:
                 return AsyncStreamWrapper(response, span, _finalize_chat_stream)
-            _finalize_chat(span, response, (time.perf_counter() - start) * 1000)
+            try:
+                _finalize_chat(span, response, (time.perf_counter() - start) * 1000)
+            except Exception:
+                pass
             return response
 
         chat.send_async = patched_send_async
@@ -437,8 +450,11 @@ def _patch_responses(responses: Any) -> None:
         def patched_send(*args, **kwargs):
             if is_suppressed():
                 return orig_send(*args, **kwargs)
-            is_stream = bool(kwargs.get("stream", False))
-            span = _start(kwargs, is_stream)
+            try:
+                is_stream = bool(kwargs.get("stream", False))
+                span = _start(kwargs, is_stream)
+            except Exception:
+                return _telemetry_fallback(orig_send, *args, **kwargs)
             start = time.perf_counter()
             try:
                 response = orig_send(*args, **kwargs)
@@ -447,7 +463,10 @@ def _patch_responses(responses: Any) -> None:
                 raise
             if is_stream:
                 return SyncStreamWrapper(response, span, _finalize_responses_stream)
-            _finalize_responses(span, response, (time.perf_counter() - start) * 1000)
+            try:
+                _finalize_responses(span, response, (time.perf_counter() - start) * 1000)
+            except Exception:
+                pass
             return response
 
         responses.send = patched_send
@@ -457,8 +476,11 @@ def _patch_responses(responses: Any) -> None:
         async def patched_send_async(*args, **kwargs):
             if is_suppressed():
                 return await orig_send_async(*args, **kwargs)
-            is_stream = bool(kwargs.get("stream", False))
-            span = _start(kwargs, is_stream)
+            try:
+                is_stream = bool(kwargs.get("stream", False))
+                span = _start(kwargs, is_stream)
+            except Exception:
+                return await _telemetry_fallback(orig_send_async, *args, **kwargs)
             start = time.perf_counter()
             try:
                 response = await orig_send_async(*args, **kwargs)
@@ -467,7 +489,10 @@ def _patch_responses(responses: Any) -> None:
                 raise
             if is_stream:
                 return AsyncStreamWrapper(response, span, _finalize_responses_stream)
-            _finalize_responses(span, response, (time.perf_counter() - start) * 1000)
+            try:
+                _finalize_responses(span, response, (time.perf_counter() - start) * 1000)
+            except Exception:
+                pass
             return response
 
         responses.send_async = patched_send_async
@@ -571,18 +596,21 @@ def _patch_embeddings(embeddings: Any) -> None:
     def patched(*args, **kwargs):
         if is_suppressed():
             return orig(*args, **kwargs)
-        inp = kwargs.get("input", "")
-        span = get_provider_tracer().start_span(
-            name="openrouter.embeddings.generate",
-            attributes={
-                "neatlogs.span.kind": "embedding",
-                "neatlogs.llm.provider": _PROVIDER,
-                "neatlogs.embedding.model_name": kwargs.get("model", ""),
-                "neatlogs.embedding.text": (
-                    inp if isinstance(inp, str) else serialize(_plain(inp))
-                )[:10000],
-            },
-        )
+        try:
+            inp = kwargs.get("input", "")
+            span = get_provider_tracer().start_span(
+                name="openrouter.embeddings.generate",
+                attributes={
+                    "neatlogs.span.kind": "embedding",
+                    "neatlogs.llm.provider": _PROVIDER,
+                    "neatlogs.embedding.model_name": kwargs.get("model", ""),
+                    "neatlogs.embedding.text": (
+                        inp if isinstance(inp, str) else serialize(_plain(inp))
+                    )[:10000],
+                },
+            )
+        except Exception:
+            return _telemetry_fallback(orig, *args, **kwargs)
         start = time.perf_counter()
         try:
             response = orig(*args, **kwargs)
@@ -651,21 +679,24 @@ def _patch_rerank(rerank: Any) -> None:
     def patched(*args, **kwargs):
         if is_suppressed():
             return orig(*args, **kwargs)
-        documents = kwargs.get("documents", []) or []
-        span = get_provider_tracer().start_span(
-            name="openrouter.rerank.rerank",
-            attributes={
-                "neatlogs.span.kind": "reranker",
-                "neatlogs.llm.provider": _PROVIDER,
-                "neatlogs.reranker.model_name": kwargs.get("model", ""),
-                "neatlogs.reranker.query": str(kwargs.get("query", "")),
-            },
-        )
-        for i, doc in enumerate(documents):
-            span.set_attribute(
-                f"neatlogs.reranker.input_documents.{i}",
-                doc if isinstance(doc, str) else serialize(_plain(doc)),
+        try:
+            documents = kwargs.get("documents", []) or []
+            span = get_provider_tracer().start_span(
+                name="openrouter.rerank.rerank",
+                attributes={
+                    "neatlogs.span.kind": "reranker",
+                    "neatlogs.llm.provider": _PROVIDER,
+                    "neatlogs.reranker.model_name": kwargs.get("model", ""),
+                    "neatlogs.reranker.query": str(kwargs.get("query", "")),
+                },
             )
+            for i, doc in enumerate(documents):
+                span.set_attribute(
+                    f"neatlogs.reranker.input_documents.{i}",
+                    doc if isinstance(doc, str) else serialize(_plain(doc)),
+                )
+        except Exception:
+            return _telemetry_fallback(orig, *args, **kwargs)
         start = time.perf_counter()
         try:
             response = orig(*args, **kwargs)

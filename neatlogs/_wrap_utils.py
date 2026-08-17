@@ -589,6 +589,17 @@ def is_suppressed() -> bool:
         return False
 
 
+def _telemetry_fallback(orig: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+    """Call the untraced original directly.
+
+    Used by provider wrappers when their own pre-execution or finalize phase
+    raises an exception. The user's primary LLM call must never be blocked
+    by a neatlogs internal bug; a telemetry library should fail open, not
+    crash the host application.
+    """
+    return orig(*args, **kwargs)
+
+
 # ---------------------------------------------------------------------------
 # Auto-root
 #

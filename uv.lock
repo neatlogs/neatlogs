@@ -4258,7 +4258,7 @@ wheels = [
 
 [[package]]
 name = "neatlogs"
-version = "1.4.19"
+version = "1.4.20"
 source = { editable = "." }
 dependencies = [
     { name = "agnost" },

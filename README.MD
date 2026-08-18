@@ -147,12 +147,15 @@ Pass keys to `instrumentations` in `neatlogs.init()`. Install extras when noted.
 | OpenAI | `openai` | `pip install "neatlogs[openai]"` |
 | Anthropic | `anthropic` | `pip install "neatlogs[anthropic]"` |
 | Google Gemini | `google_genai` | `pip install "neatlogs[google-genai]"` |
-| Azure OpenAI | `azure_ai_inference` | `pip install "neatlogs[azure-ai-inference]"` |
+| Azure AI Inference | `azure_ai_inference` | `pip install "neatlogs[azure-ai-inference]"` |
+| Azure OpenAI (`AzureOpenAI` client) | `openai` | `pip install "neatlogs[azure-openai]"` |
 | AWS Bedrock | `bedrock` | `pip install "neatlogs[bedrock]"` |
 | LiteLLM | `litellm` | `pip install "neatlogs[litellm]"` |
 | Groq | `groq` | `pip install "neatlogs[groq]"` |
 | Vertex AI | `vertexai` | `pip install "neatlogs[vertexai]"` |
+| Vertex AI (google-genai SDK) | `vertex_ai` | `pip install "neatlogs[vertex-ai]"` |
 | Mistral | `mistralai` | `pip install "neatlogs[mistralai]"` |
+| Portkey | `portkey` | `pip install "neatlogs[portkey]"` |
 
 ### Agent frameworks
 
@@ -166,6 +169,19 @@ Pass keys to `instrumentations` in `neatlogs.init()`. Install extras when noted.
 | AutoGen | `autogen` | `pip install "neatlogs[autogen-agentchat]"` |
 | DSPy | `dspy` | `pip install "neatlogs[dspy]"` |
 | MCP | `mcp` | `pip install "neatlogs[mcp]"` |
+| Agno | `agno` | `pip install "neatlogs[agno]"` |
+| Google ADK | `google_adk` | `pip install "neatlogs[google-adk]"` |
+| OpenAI Agents | `openai_agents` | `pip install "neatlogs[openai-agents]"` |
+| Pydantic AI | `pydantic_ai` | `pip install "neatlogs[pydantic-ai]"` |
+| smolagents | `smolagents` | `pip install "neatlogs[smolagents]"` |
+| Hermes | `hermes` | `pip install "neatlogs[hermes]"` (Python 3.11+) |
+
+### Structured output & guardrails
+
+| Library | Key | Install |
+|---|---|---|
+| Instructor | `instructor` | `pip install "neatlogs[instructor]"` |
+| Guardrails AI | `guardrails` | `pip install "neatlogs[guardrails]"` |
 
 ### Vector stores & HTTP
 

@@ -24,6 +24,7 @@
         "RERANKER": "reranker",
         "GUARDRAIL": "guardrail",
         "EVALUATOR": "evaluator",
+        "MEMORY": "memory",
         "MCP_TOOL": "mcp_tool",
         "HTTP": "http"
       },

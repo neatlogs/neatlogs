@@ -299,6 +299,8 @@ def span(
         "RETRIEVER",
         "EMBEDDING",
         "GUARDRAIL",
+        "EVALUATOR",
+        "MEMORY",
         "MCP_TOOL",
     }
     kind_upper = kind.upper()

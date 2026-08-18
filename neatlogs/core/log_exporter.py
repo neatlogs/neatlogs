@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING
 from opentelemetry.sdk._logs import LogRecordProcessor
 
 if TYPE_CHECKING:
-    from opentelemetry.sdk._logs import LogData, LoggerProvider
+    from opentelemetry.sdk._logs import ReadWriteLogRecord
 
 # Python 3.10+ exposes stdlib module names directly; fall back to empty set on older versions.
 _STDLIB_MODULE_NAMES: frozenset = getattr(sys, "stdlib_module_names", frozenset())
@@ -69,7 +69,7 @@ class NeatlogsLogFilter(LogRecordProcessor):
         self._downstream = downstream
         self._log_file = open(_LOG_LOGS_FILE, "a") if _LOG_LOGS_FILE else None
 
-    def _debug_log(self, action: str, log_data: "LogData", reason: str = "") -> None:
+    def _debug_log(self, action: str, log_data: "ReadWriteLogRecord", reason: str = "") -> None:
         if not _LOG_LOGS:
             return
         lr = log_data.log_record
@@ -94,14 +94,10 @@ class NeatlogsLogFilter(LogRecordProcessor):
         else:
             print(f"[neatlogs:log] {line}", file=sys.stderr)
 
-    def _forward_emit(self, log_data: "LogData") -> None:
-        """Forward to downstream processor (emit vs on_emit varies by OTel SDK version)."""
-        if hasattr(self._downstream, "emit"):
-            self._downstream.emit(log_data)
-        elif hasattr(self._downstream, "on_emit"):
-            self._downstream.on_emit(log_data)
+    def _forward_emit(self, log_data: "ReadWriteLogRecord") -> None:
+        self._downstream.on_emit(log_data)
 
-    def emit(self, log_data: "LogData") -> None:
+    def on_emit(self, log_data: "ReadWriteLogRecord") -> None:
         lr = log_data.log_record
 
         # Drop records with no active trace (logged outside a span)
@@ -125,9 +121,6 @@ class NeatlogsLogFilter(LogRecordProcessor):
 
         self._debug_log("PASS", log_data)
         self._forward_emit(log_data)
-
-    # Newer OTel SDKs may call on_emit instead of emit on LogRecordProcessor.
-    on_emit = emit
 
     def shutdown(self) -> None:
         self._downstream.shutdown()

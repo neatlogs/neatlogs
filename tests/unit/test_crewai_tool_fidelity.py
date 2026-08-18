@@ -17,7 +17,10 @@ def _install_test_tracer(in_memory_span_exporter) -> None:
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(in_memory_span_exporter))
     trace.set_tracer_provider(provider)
-    neatlogs.init(api_key="test-key", disable_export=True, instrumentations=[])
+    # isolate=False pins neatlogs to the provider set above. Without it, auto-isolation engages
+    # whenever a foreign instrumentor (logfire, traceloop, …) is merely importable in the venv and
+    # spans go to a private provider this exporter never sees.
+    neatlogs.init(api_key="test-key", disable_export=True, instrumentations=[], isolate=False)
 
 
 def _crewai_module():

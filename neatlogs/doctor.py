@@ -550,6 +550,18 @@ def _diagnose_trace(
         else:
             seen_span_ids.add(sid)
 
+    # --- Pre-launch reliability: 3 new diagnostic dimensions. ----------------
+    # These run BEFORE the early-return checks below so they fire on every
+    # trace shape (rootless HTTP, missing root kind, etc.). init-order and
+    # data-integrity are useful diagnostic info even when the trace is
+    # structurally unusual.
+    # (1) init order: wrappers created before neatlogs.init()
+    findings.extend(_init_order_findings(visible, trace_id, run_id))
+    # (2) attribute completeness: neatlogs.span.kind set on every span
+    findings.extend(_attribute_completeness_findings(visible, trace_id, run_id))
+    # (3) data integrity: zero-duration, error-no-event, latency-mismatch
+    findings.extend(_data_integrity_findings(visible, trace_id, run_id))
+
     # --- Bug #2: rootless HTTP-only trace. ------------------------------------
     if _is_rootless_http_only(visible):
         findings.append(
@@ -597,14 +609,6 @@ def _diagnose_trace(
 
     # --- Bug #1 / I/O check: missing input or output on LLM/tool/retriever. --
     findings.extend(_missing_io_findings(visible, trace_id, run_id))
-
-    # --- Pre-launch reliability: 3 new diagnostic dimensions. ----------------
-    # (1) init order: wrappers created before neatlogs.init()
-    findings.extend(_init_order_findings(visible, trace_id, run_id))
-    # (2) attribute completeness: neatlogs.span.kind set on every span
-    findings.extend(_attribute_completeness_findings(visible, trace_id, run_id))
-    # (3) data integrity: zero-duration, error-no-event, latency-mismatch
-    findings.extend(_data_integrity_findings(visible, trace_id, run_id))
 
     return findings
 
@@ -1151,6 +1155,28 @@ def _truncate(s: Any, max_len: int = MAX_EVIDENCE_LEN) -> str:
     return text
 
 
+def _span_status_is_error(status: Any) -> bool:
+    """Return True if the span's status indicates an error.
+
+    Tolerant of two formats:
+    - neatlogs log exporter normalizes to ``{"code": "ERROR", ...}``
+    - OTel SDK canonical form is ``{"status_code": {"name": "ERROR", ...}}``
+    """
+    if not isinstance(status, dict):
+        return False
+    code = status.get("code")
+    if isinstance(code, str) and code.upper() in ("ERROR", "ERROR_STATUS"):
+        return True
+    status_code = status.get("status_code")
+    if isinstance(status_code, dict):
+        name = status_code.get("name")
+        if isinstance(name, str) and name.upper() in ("ERROR", "ERROR_STATUS"):
+            return True
+    if isinstance(status_code, str) and status_code.upper() in ("ERROR", "ERROR_STATUS"):
+        return True
+    return False
+
+
 # --- Diagnostic dimensions: init order, attributes, data integrity, stage ---
 
 
@@ -1283,7 +1309,7 @@ def _data_integrity_findings(
             latency_mismatch.append(name)
 
         # b) error status without exception event
-        if isinstance(status, dict) and status.get("code") in ("ERROR", "error"):
+        if _span_status_is_error(status):
             has_exception = any(
                 isinstance(e, dict) and e.get("name") == "exception" for e in events
             )

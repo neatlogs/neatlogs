@@ -156,6 +156,46 @@ def test_diagnose_rootless_http_only_trace(tmp_path):
     assert '@span(kind="WORKFLOW")' in report.findings[0].suggestion
 
 
+def test_diagnose_rootless_http_with_data_integrity_still_flags_both(tmp_path):
+    """Data-integrity findings must fire on rootless HTTP traces too — the
+    early-return for rootless-http-only would otherwise hide zero-duration
+    or latency-mismatch issues in those traces.
+    """
+    path = tmp_path / "http_zerodur.log"
+    _write_jsonl(
+        path,
+        [
+            {
+                "trace_id": "trace-1",
+                "span_id": "http-1",
+                "parent_span_id": None,
+                "name": "GET",
+                "kind": "http",
+                "start_time": 100,
+                "end_time": 100,  # zero duration
+                "duration_ns": 0,
+                "attributes": {},
+            },
+            {
+                "trace_id": "trace-1",
+                "span_id": "http-2",
+                "parent_span_id": None,
+                "name": "POST",
+                "kind": "http",
+                "start_time": 200,
+                "end_time": 100,  # latency mismatch: end < start
+                "duration_ns": -100_000_000,
+                "attributes": {},
+            },
+        ],
+    )
+    report = diagnose(path)
+    codes = [f.code for f in report.findings]
+    assert "rootless-http-only" in codes
+    assert "zero-duration-span" in codes
+    assert "latency-mismatch" in codes
+
+
 def test_diagnose_agent_without_llm_child(tmp_path):
     path = tmp_path / "agent.log"
     _write_jsonl(
@@ -767,6 +807,43 @@ def test_bug4_run_id_not_found(tmp_path):
     assert report.findings[0].severity == "error"
 
 
+def test_run_id_and_foreign_only_filters_compose(tmp_path):
+    """Both filters apply: run_id scopes to one run, foreign_only keeps
+    only foreign-instrumentation findings. The two filters must compose
+    without losing each other's effect."""
+    path = tmp_path / "two_runs_foreign.log"
+    _write_jsonl(
+        path,
+        [
+            # run alpha: clean neatlogs span
+            _span(
+                "trace-A",
+                "a1",
+                name="workflow",
+                kind="workflow",
+                attributes={"neatlogs.span.kind": "workflow", "session.id": "alpha"},
+                instrumentation_scope={"name": "neatlogs.core.context"},
+            ),
+            # run beta: foreign span (would normally produce a foreign-instrumentation finding)
+            _span(
+                "trace-B",
+                "b1",
+                name="workflow",
+                kind="workflow",
+                attributes={"neatlogs.span.kind": "workflow", "session.id": "beta"},
+                instrumentation_scope={"name": "openlit"},
+            ),
+        ],
+    )
+    # Filter to run alpha + foreign_only: should be empty (clean run).
+    report = diagnose(path, run_id="alpha", foreign_only=True)
+    assert report.run_count == 1
+    assert report.findings == ()
+    # Filter to run beta + foreign_only: should have the foreign finding.
+    report = diagnose(path, run_id="beta", foreign_only=True)
+    assert any(f.code == "foreign-instrumentation-detected" for f in report.findings)
+
+
 # ---------------------------------------------------------------------------
 # Bug #5 — covered implicitly (revert the rename in this PR; not testable here)
 # ---------------------------------------------------------------------------
@@ -1364,6 +1441,45 @@ def test_data_integrity_error_no_event(tmp_path):
     f = no_event[0]
     assert f.fix_class == "data_integrity"
     assert "err" in f.evidence
+
+
+def test_data_integrity_error_no_event_sdk_status_format(tmp_path):
+    """Tolerate the OTel SDK canonical status format too: a non-neatlogs
+    exporter (or foreign SDK) may emit ``status.status_code.name`` instead
+    of the normalized ``status.code``. The doctor must still flag it."""
+    path = tmp_path / "err_sdk_format.log"
+    _write_jsonl(
+        path,
+        [
+            _span(
+                "t", "wf", name="wf", kind="workflow", attributes={"neatlogs.span.kind": "workflow"}
+            ),
+            {
+                "trace_id": "t",
+                "span_id": "err",
+                "parent_span_id": "wf",
+                "name": "err",
+                "kind": "tool",
+                "start_time": 100,
+                "end_time": 200,
+                "duration_ns": 100,
+                "status": {
+                    "status_code": {"name": "ERROR", "value": 2},
+                    "description": "sdk-format",
+                },
+                "events": [],
+                "attributes": {
+                    "neatlogs.span.kind": "tool",
+                    "neatlogs.tool.parameters": "{}",
+                    "neatlogs.tool.output": "{}",
+                },
+            },
+        ],
+    )
+    report = diagnose(path)
+    no_event = [f for f in report.findings if f.code == "error-status-no-event"]
+    assert len(no_event) == 1
+    assert "err" in no_event[0].evidence
 
 
 def test_data_integrity_error_with_event_no_finding(tmp_path):

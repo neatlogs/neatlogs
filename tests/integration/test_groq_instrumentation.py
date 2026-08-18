@@ -328,3 +328,52 @@ class TestGroqFailOpen:
 
         assert response.choices[0].message.content == "async ok"
         assert len(_llm_spans(in_memory_span_exporter)) == 0
+
+
+def test_groq_finalize_throws_still_ends_span_and_returns_response(in_memory_span_exporter):
+    """Finalize-phase regression: if _finalize_chat raises after a successful
+    LLM call, the response must still be returned and the span must be ended
+    (not leaked). Same shape as the PR #71 finalize-leak fix."""
+    from opentelemetry.trace import StatusCode
+
+    _setup_tracer(in_memory_span_exporter)
+    from neatlogs import groq as _groq_mod
+    from neatlogs.groq import wrap_groq_client
+
+    orig_finalize = _groq_mod._finalize_chat
+
+    def _explode(span, response, duration_ms):
+        raise RuntimeError("simulated finalize bug")
+
+    _groq_mod._finalize_chat = _explode
+    try:
+
+        def create(*, messages, model, **kwargs):
+            return SimpleNamespace(
+                id="ok",
+                model=model,
+                choices=[
+                    SimpleNamespace(
+                        index=0,
+                        finish_reason="stop",
+                        message=SimpleNamespace(
+                            role="assistant", content="hi", tool_calls=None, reasoning=None
+                        ),
+                    )
+                ],
+                usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+            )
+
+        client = _fake_groq_client(create=create)
+        wrap_groq_client(client)
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": "hi"}],
+        )
+        assert response.choices[0].message.content == "hi"
+        llm_spans = _llm_spans(in_memory_span_exporter)
+        assert len(llm_spans) == 1
+        assert llm_spans[0].end_time is not None
+        assert llm_spans[0].status.status_code == StatusCode.OK
+    finally:
+        _groq_mod._finalize_chat = orig_finalize

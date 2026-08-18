@@ -29,6 +29,8 @@ from opentelemetry.trace import StatusCode
 from ._wrap_utils import (
     AsyncStreamWrapper,
     SyncStreamWrapper,
+    _safe_finalize,
+    _telemetry_fallback,
     get_provider_tracer,
     is_suppressed,
     serialize,
@@ -218,7 +220,7 @@ def _patch_completions(completions: Any) -> None:
                 span = _start(kwargs, is_stream)
                 start = time.perf_counter()
             except Exception:
-                return await orig_create(*args, **kwargs)
+                return await _telemetry_fallback(orig_create, *args, **kwargs)
             try:
                 response = await orig_create(*args, **kwargs)
             except Exception as e:
@@ -226,7 +228,7 @@ def _patch_completions(completions: Any) -> None:
                 raise
             if is_stream:
                 return AsyncStreamWrapper(response, span, _finalize_chat_stream)
-            _finalize_chat(span, response, (time.perf_counter() - start) * 1000)
+            _safe_finalize(span, _finalize_chat, response, (time.perf_counter() - start) * 1000)
             return response
 
         completions.create = patched_create_async
@@ -240,7 +242,7 @@ def _patch_completions(completions: Any) -> None:
                 span = _start(kwargs, is_stream)
                 start = time.perf_counter()
             except Exception:
-                return orig_create(*args, **kwargs)
+                return _telemetry_fallback(orig_create, *args, **kwargs)
             try:
                 response = orig_create(*args, **kwargs)
             except Exception as e:
@@ -248,7 +250,7 @@ def _patch_completions(completions: Any) -> None:
                 raise
             if is_stream:
                 return SyncStreamWrapper(response, span, _finalize_chat_stream)
-            _finalize_chat(span, response, (time.perf_counter() - start) * 1000)
+            _safe_finalize(span, _finalize_chat, response, (time.perf_counter() - start) * 1000)
             return response
 
         completions.create = patched_create

@@ -22,6 +22,7 @@ from opentelemetry.trace import StatusCode
 from ._wrap_utils import (
     AsyncStreamWrapper,
     SyncStreamWrapper,
+    _safe_finalize,
     get_provider_tracer,
     is_suppressed,
     serialize,
@@ -203,7 +204,7 @@ def _patch_completions(completions: Any) -> None:
             return SyncStreamWrapper(response, span, _finalize_stream)
 
         duration_ms = (time.perf_counter() - start) * 1000
-        _finalize_response(span, response, duration_ms)
+        _safe_finalize(span, _finalize_response, response, duration_ms)
         return response
 
     completions.create = patched_create
@@ -304,7 +305,7 @@ def _patch_async_completions(completions: Any) -> None:
             return AsyncStreamWrapper(response, span, _finalize_stream)
 
         duration_ms = (time.perf_counter() - start) * 1000
-        _finalize_response(span, response, duration_ms)
+        _safe_finalize(span, _finalize_response, response, duration_ms)
         return response
 
     completions.create = patched_create
@@ -363,7 +364,7 @@ def _patch_responses(responses: Any) -> None:
             return SyncStreamWrapper(response, span, _finalize_responses_stream)
 
         duration_ms = (time.perf_counter() - start) * 1000
-        _finalize_responses_response(span, response, duration_ms)
+        _safe_finalize(span, _finalize_responses_response, response, duration_ms)
         return response
 
     responses.create = patched_create
@@ -670,7 +671,9 @@ def _patch_async_responses(responses: Any) -> None:
             raise
         if is_stream:
             return AsyncStreamWrapper(response, span, _finalize_responses_stream)
-        _finalize_responses_response(span, response, (time.perf_counter() - start) * 1000)
+        _safe_finalize(
+            span, _finalize_responses_response, response, (time.perf_counter() - start) * 1000
+        )
         return response
 
     responses.create = patched_create

@@ -2,8 +2,6 @@
 
 import json
 import math
-from types import SimpleNamespace
-from unittest.mock import patch
 
 import pytest
 from opentelemetry import trace as otel_trace
@@ -1122,7 +1120,7 @@ def test_annotate_inside_annotate_loop_does_not_stack():
     span.end()
     attrs = dict(exporter.get_finished_spans()[0].attributes or {})
     for i in range(5):
-        assert attrs[f"neatlogs.annotation.loop_step"] == 4  # last wins
+        assert attrs["neatlogs.annotation.loop_step"] == 4  # last wins
     events = exporter.get_finished_spans()[0].events
     assert len(events) == 5
     for i, e in enumerate(events):

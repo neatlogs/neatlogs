@@ -688,7 +688,9 @@ def _patch_chat_classes() -> None:
             except Exception as e:
                 _err(span, e)
                 raise
-            _finalize_response(span, resp, (time.perf_counter() - start) * 1000)
+            _finish_ok(
+                span, lambda: _finalize_response(span, resp, (time.perf_counter() - start) * 1000)
+            )
             return resp
 
         Chat.send_message = patched_send
@@ -724,7 +726,9 @@ def _patch_chat_classes() -> None:
             except Exception as e:
                 _err(span, e)
                 raise
-            _finalize_response(span, resp, (time.perf_counter() - start) * 1000)
+            _finish_ok(
+                span, lambda: _finalize_response(span, resp, (time.perf_counter() - start) * 1000)
+            )
             return resp
 
         AsyncChat.send_message = patched_asend

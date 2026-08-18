@@ -34,6 +34,7 @@ from ._wrap_utils import (
     _current_neatlogs_parent,
     _is_neatlogs_span,
     _isolation_active,
+    serialize,
 )
 
 ANNOTATION_PREFIX = "neatlogs.annotation."
@@ -62,13 +63,17 @@ def _coerce(value: Any) -> Any:
     bool is checked before int because bool is a subclass of int in Python.
     NaN/Inf are converted to their string form because json.dumps emits them
     by default and strict backend parsers (e.g. ClickHouse JSON) reject the
-    unquoted forms. Pydantic v2 models are dumped via .model_dump() first.
+    unquoted forms. The replacement recurses through dict / list / tuple
+    so nested NaN/Inf are caught too. Pydantic v2 models are dumped via
+    .model_dump() first.
     """
     if value is None:
         return None
     if isinstance(value, bool):
         return value
     if isinstance(value, (int, str)):
+        if isinstance(value, str) and len(value) > 100_000:
+            return serialize(value)
         return value
     if isinstance(value, float):
         if math.isnan(value) or math.isinf(value):
@@ -83,11 +88,11 @@ def _coerce(value: Any) -> Any:
         except (UnicodeDecodeError, AttributeError):
             return repr(value)
     if isinstance(value, (dict, list, tuple)):
-        return json.dumps(value, default=_pydantic_default)
+        return json.dumps(_sanitize_nan_inf(value), default=_pydantic_default)
     # datetime, Pydantic v2 models, or anything else: try .model_dump() first.
     if hasattr(value, "model_dump"):
         try:
-            return json.dumps(value.model_dump(), default=str)
+            return json.dumps(_sanitize_nan_inf(value.model_dump()), default=str)
         except Exception:
             pass
     if hasattr(value, "isoformat"):
@@ -96,6 +101,30 @@ def _coerce(value: Any) -> Any:
         except Exception:
             pass
     return str(value)
+
+
+def _sanitize_nan_inf(obj: Any) -> Any:
+    """Recursively replace NaN / Inf floats with their string forms so
+    ``json.dumps(allow_nan=True)`` does not emit bare ``NaN`` / ``Infinity``
+    tokens that strict JSON parsers (e.g. ClickHouse) reject.
+
+    Pass-through for every other type. Tuples are returned as tuples so the
+    outer JSON encoder still produces an array; dicts and lists are rebuilt
+    so the recursion walks nested structures.
+    """
+    if isinstance(obj, float):
+        if math.isnan(obj):
+            return "NaN"
+        if math.isinf(obj):
+            return "Infinity" if obj > 0 else "-Infinity"
+        return obj
+    if isinstance(obj, dict):
+        return {k: _sanitize_nan_inf(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize_nan_inf(v) for v in obj]
+    if isinstance(obj, tuple):
+        return tuple(_sanitize_nan_inf(v) for v in obj)
+    return obj
 
 
 def _pydantic_default(obj: Any) -> Any:

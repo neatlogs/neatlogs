@@ -3,7 +3,6 @@
 import json
 import math
 
-import pytest
 from opentelemetry import trace as otel_trace
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
@@ -1132,9 +1131,9 @@ def test_annotate_inside_annotate_loop_does_not_stack():
 # ---------------------------------------------------------------------------
 # The 4-model panel (deepseek-v4-flash-free, hy3-free, mimo-v2.5-free, plus
 # big-pickle which failed to produce output) reviewed the implementation and
-# identified scenarios not covered by the 59-test baseline. Tests that
-# document KNOWN BUGS use pytest.xfail so the suite stays green while the
-# bug is tracked; they flip to plain asserts when the bug is fixed.
+# identified scenarios not covered by the 59-test baseline. F2 and F5 used
+# to be xfail-marked known bugs; they are now fixed and the tests run as
+# plain asserts.
 
 
 def test_add_event_returns_false_on_ended_span():
@@ -1339,15 +1338,9 @@ def test_annotate_swallows_set_attribute_exception(monkeypatch):
     assert "neatlogs.annotation.other" not in attrs
 
 
-@pytest.mark.xfail(
-    reason="Known bug F2: nested NaN/Inf in dict/list still emits bare "
-    "JSON tokens (json.dumps allow_nan=True), defeating the ClickHouse "
-    "protection that works for top-level floats.",
-    strict=True,
-)
 def test_nested_nan_inside_dict_is_stringified():
-    """Document F2: NaN/Inf nested inside a dict must be stringified, not
-    left as bare JSON tokens (which ClickHouse would reject)."""
+    """NaN/Inf nested inside a dict must be stringified, not left as bare
+    JSON tokens (which ClickHouse would reject)."""
     import math
 
     span, exporter = _recording_neatlogs_span()
@@ -1363,15 +1356,9 @@ def test_nested_nan_inside_dict_is_stringified():
     assert '"Infinity"' in raw
 
 
-@pytest.mark.xfail(
-    reason="Known bug F5: annotate() bypasses the serialize() truncation "
-    "the rest of the SDK uses (max_length=100_000 in _wrap_utils.py). "
-    "A 200KB value lands whole on the span.",
-    strict=True,
-)
 def test_annotate_truncates_oversized_values():
-    """Document F5: large values must be truncated to match the rest of
-    the SDK's behavior (100KB ceiling via serialize())."""
+    """Large values are truncated to match the rest of the SDK's behavior
+    (100KB ceiling via serialize())."""
     span, exporter = _recording_neatlogs_span()
     huge = "x" * 200_000
     with otel_trace.use_span(span, end_on_exit=False):
@@ -1382,7 +1369,7 @@ def test_annotate_truncates_oversized_values():
     span.end()
     attrs = dict(exporter.get_finished_spans()[0].attributes or {})
     raw = attrs["neatlogs.annotation.big"]
-    # Currently fails — value is stored whole (200KB). Should be ~100KB + marker.
+    # ~100KB + the "...[truncated]" marker.
     assert len(raw) < 110_000
 
 

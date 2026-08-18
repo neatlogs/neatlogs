@@ -432,6 +432,21 @@ class NeatlogsSpanProcessor(SpanProcessor):
                 parent_span_id = None
 
             # 6. Build span_data dict (used for file logging)
+            # NOTE: instrumentation_scope is preserved for the trace doctor
+            # (Enhancement #4 — see neatlogs/doctor.py for the consumer).
+            # Without this field the doctor cannot detect foreign
+            # instrumentation. The scope object is read-only on the OTel
+            # span; we extract name + version defensively because some
+            # older SDK builds return None for one of them.
+            scope_obj = getattr(span, "instrumentation_scope", None)
+            scope_name = getattr(scope_obj, "name", None) or ""
+            scope_version = getattr(scope_obj, "version", None) or ""
+            scope_dict: dict[str, str] = {}
+            if scope_name:
+                scope_dict["name"] = scope_name
+            if scope_version:
+                scope_dict["version"] = scope_version
+
             span_data = {
                 "trace_id": trace_id,
                 "span_id": span_id,
@@ -443,6 +458,7 @@ class NeatlogsSpanProcessor(SpanProcessor):
                 "duration_ns": span.end_time - span.start_time if span.end_time else None,
                 "attributes": unified_attrs,
                 "resource": {"attributes": resource_attrs},
+                "instrumentation_scope": scope_dict,
                 "status": {
                     "code": span.status.status_code.name,
                     "description": span.status.description,

@@ -23,7 +23,13 @@ from typing import Any, List, Optional
 
 from opentelemetry.trace import StatusCode
 
-from ._wrap_utils import get_provider_tracer, is_suppressed, serialize
+from ._wrap_utils import (
+    _safe_finalize,
+    _telemetry_fallback,
+    get_provider_tracer,
+    is_suppressed,
+    serialize,
+)
 
 _PROVIDER = "bedrock"
 
@@ -250,15 +256,18 @@ def _patch_converse(client: Any) -> None:
     def patched(*args, **kwargs):
         if is_suppressed():
             return orig(*args, **kwargs)
-        span = _start_span("bedrock.converse", kwargs.get("modelId"), is_stream=False)
-        _set_converse_input(span, kwargs)
+        try:
+            span = _start_span("bedrock.converse", kwargs.get("modelId"), is_stream=False)
+            _set_converse_input(span, kwargs)
+        except Exception:
+            return _telemetry_fallback(orig, *args, **kwargs)
         start = time.perf_counter()
         try:
             response = orig(*args, **kwargs)
         except Exception as e:
             _err(span, e)
             raise
-        _finalize_converse(span, response, (time.perf_counter() - start) * 1000)
+        _safe_finalize(span, _finalize_converse, response, (time.perf_counter() - start) * 1000)
         return response
 
     client.converse = patched
@@ -270,8 +279,11 @@ def _patch_converse_stream(client: Any) -> None:
     def patched(*args, **kwargs):
         if is_suppressed():
             return orig(*args, **kwargs)
-        span = _start_span("bedrock.converse_stream", kwargs.get("modelId"), is_stream=True)
-        _set_converse_input(span, kwargs)
+        try:
+            span = _start_span("bedrock.converse_stream", kwargs.get("modelId"), is_stream=True)
+            _set_converse_input(span, kwargs)
+        except Exception:
+            return _telemetry_fallback(orig, *args, **kwargs)
         start = time.perf_counter()
         try:
             response = orig(*args, **kwargs)
@@ -500,29 +512,32 @@ def _patch_invoke_model(client: Any) -> None:
     def patched(*args, **kwargs):
         if is_suppressed():
             return orig(*args, **kwargs)
-        model_id = kwargs.get("modelId")
-        vendor = _vendor_from_model(model_id)
-        is_embedding = _is_embedding_model(model_id)
-        body_in = _decode_body(kwargs.get("body"))
+        try:
+            model_id = kwargs.get("modelId")
+            vendor = _vendor_from_model(model_id)
+            is_embedding = _is_embedding_model(model_id)
+            body_in = _decode_body(kwargs.get("body"))
 
-        if is_embedding:
-            span = get_provider_tracer().start_span(
-                name="bedrock.invoke_model",
-                attributes={
-                    "neatlogs.span.kind": "embedding",
-                    "neatlogs.llm.provider": _PROVIDER,
-                    "neatlogs.embedding.model_name": str(model_id or ""),
-                },
-            )
-            text = body_in.get("inputText") or body_in.get("texts") or body_in.get("input_text")
-            if text:
-                span.set_attribute(
-                    "neatlogs.embedding.text",
-                    (text if isinstance(text, str) else serialize(text))[:10000],
+            if is_embedding:
+                span = get_provider_tracer().start_span(
+                    name="bedrock.invoke_model",
+                    attributes={
+                        "neatlogs.span.kind": "embedding",
+                        "neatlogs.llm.provider": _PROVIDER,
+                        "neatlogs.embedding.model_name": str(model_id or ""),
+                    },
                 )
-        else:
-            span = _start_span("bedrock.invoke_model", model_id, is_stream=False)
-            _set_invoke_input(span, vendor, body_in)
+                text = body_in.get("inputText") or body_in.get("texts") or body_in.get("input_text")
+                if text:
+                    span.set_attribute(
+                        "neatlogs.embedding.text",
+                        (text if isinstance(text, str) else serialize(text))[:10000],
+                    )
+            else:
+                span = _start_span("bedrock.invoke_model", model_id, is_stream=False)
+                _set_invoke_input(span, vendor, body_in)
+        except Exception:
+            return _telemetry_fallback(orig, *args, **kwargs)
 
         start = time.perf_counter()
         try:
@@ -571,10 +586,15 @@ def _patch_invoke_model_stream(client: Any) -> None:
     def patched(*args, **kwargs):
         if is_suppressed():
             return orig(*args, **kwargs)
-        model_id = kwargs.get("modelId")
-        vendor = _vendor_from_model(model_id)
-        span = _start_span("bedrock.invoke_model_with_response_stream", model_id, is_stream=True)
-        _set_invoke_input(span, vendor, _decode_body(kwargs.get("body")))
+        try:
+            model_id = kwargs.get("modelId")
+            vendor = _vendor_from_model(model_id)
+            span = _start_span(
+                "bedrock.invoke_model_with_response_stream", model_id, is_stream=True
+            )
+            _set_invoke_input(span, vendor, _decode_body(kwargs.get("body")))
+        except Exception:
+            return _telemetry_fallback(orig, *args, **kwargs)
         start = time.perf_counter()
         try:
             response = orig(*args, **kwargs)

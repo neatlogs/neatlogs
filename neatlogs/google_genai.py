@@ -23,6 +23,8 @@ from opentelemetry.trace import StatusCode
 from ._wrap_utils import (
     AsyncStreamWrapper,
     SyncStreamWrapper,
+    _safe_finalize,
+    _telemetry_fallback,
     get_provider_tracer,
     is_suppressed,
     serialize,
@@ -70,22 +72,25 @@ def _patch_models(models: Any) -> None:
         if is_suppressed():
             return orig_generate(*args, **kwargs)
 
-        model = kwargs.get("model", args[0] if args else "")
-        contents = kwargs.get("contents", args[1] if len(args) > 1 else "")
+        try:
+            model = kwargs.get("model", args[0] if args else "")
+            contents = kwargs.get("contents", args[1] if len(args) > 1 else "")
 
-        tracer = get_provider_tracer()
-        span = tracer.start_span(
-            name="google_genai.models.generate_content",
-            attributes={
-                "neatlogs.span.kind": "llm",
-                "neatlogs.llm.provider": "google_genai",
-                "neatlogs.llm.system": "google_genai",
-                "neatlogs.llm.model_name": str(model),
-                "neatlogs.llm.is_streaming": False,
-            },
-        )
+            tracer = get_provider_tracer()
+            span = tracer.start_span(
+                name="google_genai.models.generate_content",
+                attributes={
+                    "neatlogs.span.kind": "llm",
+                    "neatlogs.llm.provider": "google_genai",
+                    "neatlogs.llm.system": "google_genai",
+                    "neatlogs.llm.model_name": str(model),
+                    "neatlogs.llm.is_streaming": False,
+                },
+            )
 
-        _set_input_attributes(span, contents, kwargs)
+            _set_input_attributes(span, contents, kwargs)
+        except Exception:
+            return _telemetry_fallback(orig_generate, *args, **kwargs)
 
         start = time.perf_counter()
 
@@ -98,7 +103,7 @@ def _patch_models(models: Any) -> None:
             raise
 
         duration_ms = (time.perf_counter() - start) * 1000
-        _finalize_response(span, response, duration_ms)
+        _safe_finalize(span, _finalize_response, response, duration_ms)
         return response
 
     models.generate_content = patched_generate_content
@@ -109,22 +114,25 @@ def _patch_models(models: Any) -> None:
             if is_suppressed():
                 return orig_stream(*args, **kwargs)
 
-            model = kwargs.get("model", args[0] if args else "")
-            contents = kwargs.get("contents", args[1] if len(args) > 1 else "")
+            try:
+                model = kwargs.get("model", args[0] if args else "")
+                contents = kwargs.get("contents", args[1] if len(args) > 1 else "")
 
-            tracer = get_provider_tracer()
-            span = tracer.start_span(
-                name="google_genai.models.generate_content",
-                attributes={
-                    "neatlogs.span.kind": "llm",
-                    "neatlogs.llm.provider": "google_genai",
-                    "neatlogs.llm.system": "google_genai",
-                    "neatlogs.llm.model_name": str(model),
-                    "neatlogs.llm.is_streaming": True,
-                },
-            )
+                tracer = get_provider_tracer()
+                span = tracer.start_span(
+                    name="google_genai.models.generate_content",
+                    attributes={
+                        "neatlogs.span.kind": "llm",
+                        "neatlogs.llm.provider": "google_genai",
+                        "neatlogs.llm.system": "google_genai",
+                        "neatlogs.llm.model_name": str(model),
+                        "neatlogs.llm.is_streaming": True,
+                    },
+                )
 
-            _set_input_attributes(span, contents, kwargs)
+                _set_input_attributes(span, contents, kwargs)
+            except Exception:
+                return _telemetry_fallback(orig_stream, *args, **kwargs)
 
             stream = orig_stream(*args, **kwargs)
             return SyncStreamWrapper(stream, span, _finalize_stream)
@@ -145,22 +153,25 @@ def _patch_async_models(models: Any) -> None:
         if is_suppressed():
             return await orig_generate(*args, **kwargs)
 
-        model = kwargs.get("model", args[0] if args else "")
-        contents = kwargs.get("contents", args[1] if len(args) > 1 else "")
+        try:
+            model = kwargs.get("model", args[0] if args else "")
+            contents = kwargs.get("contents", args[1] if len(args) > 1 else "")
 
-        tracer = get_provider_tracer()
-        span = tracer.start_span(
-            name="google_genai.models.generate_content",
-            attributes={
-                "neatlogs.span.kind": "llm",
-                "neatlogs.llm.provider": "google_genai",
-                "neatlogs.llm.system": "google_genai",
-                "neatlogs.llm.model_name": str(model),
-                "neatlogs.llm.is_streaming": False,
-            },
-        )
+            tracer = get_provider_tracer()
+            span = tracer.start_span(
+                name="google_genai.models.generate_content",
+                attributes={
+                    "neatlogs.span.kind": "llm",
+                    "neatlogs.llm.provider": "google_genai",
+                    "neatlogs.llm.system": "google_genai",
+                    "neatlogs.llm.model_name": str(model),
+                    "neatlogs.llm.is_streaming": False,
+                },
+            )
 
-        _set_input_attributes(span, contents, kwargs)
+            _set_input_attributes(span, contents, kwargs)
+        except Exception:
+            return await _telemetry_fallback(orig_generate, *args, **kwargs)
 
         start = time.perf_counter()
 
@@ -173,7 +184,7 @@ def _patch_async_models(models: Any) -> None:
             raise
 
         duration_ms = (time.perf_counter() - start) * 1000
-        _finalize_response(span, response, duration_ms)
+        _safe_finalize(span, _finalize_response, response, duration_ms)
         return response
 
     models.generate_content = patched_generate_content
@@ -190,22 +201,25 @@ def _patch_async_models(models: Any) -> None:
             if is_suppressed():
                 return await orig_stream(*args, **kwargs)
 
-            model = kwargs.get("model", args[0] if args else "")
-            contents = kwargs.get("contents", args[1] if len(args) > 1 else "")
+            try:
+                model = kwargs.get("model", args[0] if args else "")
+                contents = kwargs.get("contents", args[1] if len(args) > 1 else "")
 
-            tracer = get_provider_tracer()
-            span = tracer.start_span(
-                name="google_genai.models.generate_content",
-                attributes={
-                    "neatlogs.span.kind": "llm",
-                    "neatlogs.llm.provider": "google_genai",
-                    "neatlogs.llm.system": "google_genai",
-                    "neatlogs.llm.model_name": str(model),
-                    "neatlogs.llm.is_streaming": True,
-                },
-            )
+                tracer = get_provider_tracer()
+                span = tracer.start_span(
+                    name="google_genai.models.generate_content",
+                    attributes={
+                        "neatlogs.span.kind": "llm",
+                        "neatlogs.llm.provider": "google_genai",
+                        "neatlogs.llm.system": "google_genai",
+                        "neatlogs.llm.model_name": str(model),
+                        "neatlogs.llm.is_streaming": True,
+                    },
+                )
 
-            _set_input_attributes(span, contents, kwargs)
+                _set_input_attributes(span, contents, kwargs)
+            except Exception:
+                return await _telemetry_fallback(orig_stream, *args, **kwargs)
 
             try:
                 stream = await orig_stream(*args, **kwargs)
@@ -537,15 +551,22 @@ def _patch_models_extra(models: Any, is_async: bool) -> None:
             async def patched_embed(*args, **kwargs):
                 if is_suppressed():
                     return await orig(*args, **kwargs)
-                span = get_provider_tracer().start_span(
-                    name="google_genai.models.embed_content", attributes=_embed_attrs(kwargs)
-                )
+                try:
+                    span = get_provider_tracer().start_span(
+                        name="google_genai.models.embed_content",
+                        attributes=_embed_attrs(kwargs),
+                    )
+                except Exception:
+                    return await _telemetry_fallback(orig, *args, **kwargs)
                 try:
                     resp = await orig(*args, **kwargs)
                 except Exception as e:
                     _err(span, e)
                     raise
-                _embed_finalize(span, resp)
+                try:
+                    _embed_finalize(span, resp)
+                except Exception:
+                    pass
                 return resp
 
         else:
@@ -553,15 +574,22 @@ def _patch_models_extra(models: Any, is_async: bool) -> None:
             def patched_embed(*args, **kwargs):
                 if is_suppressed():
                     return orig(*args, **kwargs)
-                span = get_provider_tracer().start_span(
-                    name="google_genai.models.embed_content", attributes=_embed_attrs(kwargs)
-                )
+                try:
+                    span = get_provider_tracer().start_span(
+                        name="google_genai.models.embed_content",
+                        attributes=_embed_attrs(kwargs),
+                    )
+                except Exception:
+                    return _telemetry_fallback(orig, *args, **kwargs)
                 try:
                     resp = orig(*args, **kwargs)
                 except Exception as e:
                     _err(span, e)
                     raise
-                _embed_finalize(span, resp)
+                try:
+                    _embed_finalize(span, resp)
+                except Exception:
+                    pass
                 return resp
 
         models.embed_content = patched_embed
@@ -591,15 +619,21 @@ def _patch_models_extra(models: Any, is_async: bool) -> None:
             async def patched_ct(*args, **kwargs):
                 if is_suppressed():
                     return await orig_ct(*args, **kwargs)
-                span = get_provider_tracer().start_span(
-                    name="google_genai.models.count_tokens", attributes=_ct_attrs(kwargs)
-                )
+                try:
+                    span = get_provider_tracer().start_span(
+                        name="google_genai.models.count_tokens", attributes=_ct_attrs(kwargs)
+                    )
+                except Exception:
+                    return await _telemetry_fallback(orig_ct, *args, **kwargs)
                 try:
                     resp = await orig_ct(*args, **kwargs)
                 except Exception as e:
                     _err(span, e)
                     raise
-                _ct_finalize(span, resp)
+                try:
+                    _ct_finalize(span, resp)
+                except Exception:
+                    pass
                 return resp
 
         else:
@@ -607,15 +641,21 @@ def _patch_models_extra(models: Any, is_async: bool) -> None:
             def patched_ct(*args, **kwargs):
                 if is_suppressed():
                     return orig_ct(*args, **kwargs)
-                span = get_provider_tracer().start_span(
-                    name="google_genai.models.count_tokens", attributes=_ct_attrs(kwargs)
-                )
+                try:
+                    span = get_provider_tracer().start_span(
+                        name="google_genai.models.count_tokens", attributes=_ct_attrs(kwargs)
+                    )
+                except Exception:
+                    return _telemetry_fallback(orig_ct, *args, **kwargs)
                 try:
                     resp = orig_ct(*args, **kwargs)
                 except Exception as e:
                     _err(span, e)
                     raise
-                _ct_finalize(span, resp)
+                try:
+                    _ct_finalize(span, resp)
+                except Exception:
+                    pass
                 return resp
 
         models.count_tokens = patched_ct
@@ -644,14 +684,17 @@ def _patch_chat_classes() -> None:
         def patched_send(self, message, *args, **kwargs):
             if is_suppressed():
                 return orig_send(self, message, *args, **kwargs)
-            span = _start_chat_span(self, message, stream=False)
+            try:
+                span = _start_chat_span(self, message, stream=False)
+            except Exception:
+                return _telemetry_fallback(orig_send, self, message, *args, **kwargs)
             start = time.perf_counter()
             try:
                 resp = orig_send(self, message, *args, **kwargs)
             except Exception as e:
                 _err(span, e)
                 raise
-            _finalize_response(span, resp, (time.perf_counter() - start) * 1000)
+            _safe_finalize(span, _finalize_response, resp, (time.perf_counter() - start) * 1000)
             return resp
 
         Chat.send_message = patched_send
@@ -662,7 +705,10 @@ def _patch_chat_classes() -> None:
             def patched_send_stream(self, message, *args, **kwargs):
                 if is_suppressed():
                     return orig_send_stream(self, message, *args, **kwargs)
-                span = _start_chat_span(self, message, stream=True)
+                try:
+                    span = _start_chat_span(self, message, stream=True)
+                except Exception:
+                    return _telemetry_fallback(orig_send_stream, self, message, *args, **kwargs)
                 stream = orig_send_stream(self, message, *args, **kwargs)
                 return SyncStreamWrapper(stream, span, _finalize_stream)
 
@@ -681,14 +727,17 @@ def _patch_chat_classes() -> None:
         async def patched_asend(self, message, *args, **kwargs):
             if is_suppressed():
                 return await orig_asend(self, message, *args, **kwargs)
-            span = _start_chat_span(self, message, stream=False)
+            try:
+                span = _start_chat_span(self, message, stream=False)
+            except Exception:
+                return await _telemetry_fallback(orig_asend, self, message, *args, **kwargs)
             start = time.perf_counter()
             try:
                 resp = await orig_asend(self, message, *args, **kwargs)
             except Exception as e:
                 _err(span, e)
                 raise
-            _finalize_response(span, resp, (time.perf_counter() - start) * 1000)
+            _safe_finalize(span, _finalize_response, resp, (time.perf_counter() - start) * 1000)
             return resp
 
         AsyncChat.send_message = patched_asend
@@ -703,7 +752,12 @@ def _patch_chat_classes() -> None:
             async def patched_asend_stream(self, message, *args, **kwargs):
                 if is_suppressed():
                     return await orig_asend_stream(self, message, *args, **kwargs)
-                span = _start_chat_span(self, message, stream=True)
+                try:
+                    span = _start_chat_span(self, message, stream=True)
+                except Exception:
+                    return await _telemetry_fallback(
+                        orig_asend_stream, self, message, *args, **kwargs
+                    )
                 try:
                     stream = await orig_asend_stream(self, message, *args, **kwargs)
                 except Exception as e:

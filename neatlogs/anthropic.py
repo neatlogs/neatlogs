@@ -22,6 +22,8 @@ from opentelemetry.trace import StatusCode
 from ._wrap_utils import (
     AsyncStreamWrapper,
     SyncStreamWrapper,
+    _safe_finalize,
+    _telemetry_fallback,
     get_provider_tracer,
     is_suppressed,
     serialize,
@@ -80,24 +82,27 @@ def _patch_messages(messages: Any) -> None:
         if is_suppressed():
             return orig_create(*args, **kwargs)
 
-        model = kwargs.get("model", "")
-        input_messages = kwargs.get("messages", [])
-        system = kwargs.get("system")
-        is_stream = kwargs.get("stream", False)
+        try:
+            model = kwargs.get("model", "")
+            input_messages = kwargs.get("messages", [])
+            system = kwargs.get("system")
+            is_stream = kwargs.get("stream", False)
 
-        tracer = get_provider_tracer()
-        span = tracer.start_span(
-            name="anthropic.messages.create",
-            attributes={
-                "neatlogs.span.kind": "llm",
-                "neatlogs.llm.provider": "anthropic",
-                "neatlogs.llm.system": "anthropic",
-                "neatlogs.llm.model_name": model,
-                "neatlogs.llm.is_streaming": is_stream,
-            },
-        )
+            tracer = get_provider_tracer()
+            span = tracer.start_span(
+                name="anthropic.messages.create",
+                attributes={
+                    "neatlogs.span.kind": "llm",
+                    "neatlogs.llm.provider": "anthropic",
+                    "neatlogs.llm.system": "anthropic",
+                    "neatlogs.llm.model_name": model,
+                    "neatlogs.llm.is_streaming": is_stream,
+                },
+            )
 
-        _set_input_attributes(span, input_messages, system, kwargs)
+            _set_input_attributes(span, input_messages, system, kwargs)
+        except Exception:
+            return _telemetry_fallback(orig_create, *args, **kwargs)
 
         start = time.perf_counter()
 
@@ -113,7 +118,7 @@ def _patch_messages(messages: Any) -> None:
             return SyncStreamWrapper(response, span, _finalize_stream)
 
         duration_ms = (time.perf_counter() - start) * 1000
-        _finalize_response(span, response, duration_ms)
+        _safe_finalize(span, _finalize_response, response, duration_ms)
         return response
 
     messages.create = patched_create
@@ -124,23 +129,26 @@ def _patch_messages(messages: Any) -> None:
             if is_suppressed():
                 return orig_stream(*args, **kwargs)
 
-            model = kwargs.get("model", "")
-            input_messages = kwargs.get("messages", [])
-            system = kwargs.get("system")
+            try:
+                model = kwargs.get("model", "")
+                input_messages = kwargs.get("messages", [])
+                system = kwargs.get("system")
 
-            tracer = get_provider_tracer()
-            span = tracer.start_span(
-                name="anthropic.messages.create",
-                attributes={
-                    "neatlogs.span.kind": "llm",
-                    "neatlogs.llm.provider": "anthropic",
-                    "neatlogs.llm.system": "anthropic",
-                    "neatlogs.llm.model_name": model,
-                    "neatlogs.llm.is_streaming": True,
-                },
-            )
+                tracer = get_provider_tracer()
+                span = tracer.start_span(
+                    name="anthropic.messages.create",
+                    attributes={
+                        "neatlogs.span.kind": "llm",
+                        "neatlogs.llm.provider": "anthropic",
+                        "neatlogs.llm.system": "anthropic",
+                        "neatlogs.llm.model_name": model,
+                        "neatlogs.llm.is_streaming": True,
+                    },
+                )
 
-            _set_input_attributes(span, input_messages, system, kwargs)
+                _set_input_attributes(span, input_messages, system, kwargs)
+            except Exception:
+                return _telemetry_fallback(orig_stream, *args, **kwargs)
 
             stream_mgr = orig_stream(*args, **kwargs)
             return _SyncStreamManagerWrapper(stream_mgr, span)
@@ -161,24 +169,27 @@ def _patch_async_messages(messages: Any) -> None:
         if is_suppressed():
             return await orig_create(*args, **kwargs)
 
-        model = kwargs.get("model", "")
-        input_messages = kwargs.get("messages", [])
-        system = kwargs.get("system")
-        is_stream = kwargs.get("stream", False)
+        try:
+            model = kwargs.get("model", "")
+            input_messages = kwargs.get("messages", [])
+            system = kwargs.get("system")
+            is_stream = kwargs.get("stream", False)
 
-        tracer = get_provider_tracer()
-        span = tracer.start_span(
-            name="anthropic.messages.create",
-            attributes={
-                "neatlogs.span.kind": "llm",
-                "neatlogs.llm.provider": "anthropic",
-                "neatlogs.llm.system": "anthropic",
-                "neatlogs.llm.model_name": model,
-                "neatlogs.llm.is_streaming": is_stream,
-            },
-        )
+            tracer = get_provider_tracer()
+            span = tracer.start_span(
+                name="anthropic.messages.create",
+                attributes={
+                    "neatlogs.span.kind": "llm",
+                    "neatlogs.llm.provider": "anthropic",
+                    "neatlogs.llm.system": "anthropic",
+                    "neatlogs.llm.model_name": model,
+                    "neatlogs.llm.is_streaming": is_stream,
+                },
+            )
 
-        _set_input_attributes(span, input_messages, system, kwargs)
+            _set_input_attributes(span, input_messages, system, kwargs)
+        except Exception:
+            return await _telemetry_fallback(orig_create, *args, **kwargs)
 
         start = time.perf_counter()
 
@@ -194,7 +205,7 @@ def _patch_async_messages(messages: Any) -> None:
             return AsyncStreamWrapper(response, span, _finalize_stream)
 
         duration_ms = (time.perf_counter() - start) * 1000
-        _finalize_response(span, response, duration_ms)
+        _safe_finalize(span, _finalize_response, response, duration_ms)
         return response
 
     messages.create = patched_create
@@ -205,23 +216,26 @@ def _patch_async_messages(messages: Any) -> None:
             if is_suppressed():
                 return orig_stream(*args, **kwargs)
 
-            model = kwargs.get("model", "")
-            input_messages = kwargs.get("messages", [])
-            system = kwargs.get("system")
+            try:
+                model = kwargs.get("model", "")
+                input_messages = kwargs.get("messages", [])
+                system = kwargs.get("system")
 
-            tracer = get_provider_tracer()
-            span = tracer.start_span(
-                name="anthropic.messages.create",
-                attributes={
-                    "neatlogs.span.kind": "llm",
-                    "neatlogs.llm.provider": "anthropic",
-                    "neatlogs.llm.system": "anthropic",
-                    "neatlogs.llm.model_name": model,
-                    "neatlogs.llm.is_streaming": True,
-                },
-            )
+                tracer = get_provider_tracer()
+                span = tracer.start_span(
+                    name="anthropic.messages.create",
+                    attributes={
+                        "neatlogs.span.kind": "llm",
+                        "neatlogs.llm.provider": "anthropic",
+                        "neatlogs.llm.system": "anthropic",
+                        "neatlogs.llm.model_name": model,
+                        "neatlogs.llm.is_streaming": True,
+                    },
+                )
 
-            _set_input_attributes(span, input_messages, system, kwargs)
+                _set_input_attributes(span, input_messages, system, kwargs)
+            except Exception:
+                return _telemetry_fallback(orig_stream, *args, **kwargs)
 
             stream_mgr = orig_stream(*args, **kwargs)
             return _AsyncStreamManagerWrapper(stream_mgr, span)
@@ -575,14 +589,17 @@ def _extra_message_methods(messages: Any, is_async: bool) -> None:
             async def patched_parse(*args, **kwargs):
                 if is_suppressed():
                     return await orig_parse(*args, **kwargs)
-                span = _start_message_span(kwargs, "anthropic.messages.parse", structured=True)
+                try:
+                    span = _start_message_span(kwargs, "anthropic.messages.parse", structured=True)
+                except Exception:
+                    return await _telemetry_fallback(orig_parse, *args, **kwargs)
                 start = time.perf_counter()
                 try:
                     resp = await orig_parse(*args, **kwargs)
                 except Exception as e:
                     _err(span, e)
                     raise
-                _finalize_response(span, resp, (time.perf_counter() - start) * 1000)
+                _safe_finalize(span, _finalize_response, resp, (time.perf_counter() - start) * 1000)
                 return resp
 
         else:
@@ -590,14 +607,17 @@ def _extra_message_methods(messages: Any, is_async: bool) -> None:
             def patched_parse(*args, **kwargs):
                 if is_suppressed():
                     return orig_parse(*args, **kwargs)
-                span = _start_message_span(kwargs, "anthropic.messages.parse", structured=True)
+                try:
+                    span = _start_message_span(kwargs, "anthropic.messages.parse", structured=True)
+                except Exception:
+                    return _telemetry_fallback(orig_parse, *args, **kwargs)
                 start = time.perf_counter()
                 try:
                     resp = orig_parse(*args, **kwargs)
                 except Exception as e:
                     _err(span, e)
                     raise
-                _finalize_response(span, resp, (time.perf_counter() - start) * 1000)
+                _safe_finalize(span, _finalize_response, resp, (time.perf_counter() - start) * 1000)
                 return resp
 
         messages.parse = patched_parse
@@ -613,21 +633,24 @@ def _extra_message_methods(messages: Any, is_async: bool) -> None:
             async def patched_count(*args, **kwargs):
                 if is_suppressed():
                     return await orig_count(*args, **kwargs)
-                span = get_provider_tracer().start_span(
-                    name="anthropic.messages.count_tokens",
-                    attributes={
-                        "neatlogs.span.kind": "llm",
-                        "neatlogs.llm.provider": "anthropic",
-                        "neatlogs.llm.task": "count_tokens",
-                        "neatlogs.llm.model_name": kwargs.get("model", ""),
-                    },
-                )
+                try:
+                    span = get_provider_tracer().start_span(
+                        name="anthropic.messages.count_tokens",
+                        attributes={
+                            "neatlogs.span.kind": "llm",
+                            "neatlogs.llm.provider": "anthropic",
+                            "neatlogs.llm.task": "count_tokens",
+                            "neatlogs.llm.model_name": kwargs.get("model", ""),
+                        },
+                    )
+                except Exception:
+                    return await _telemetry_fallback(orig_count, *args, **kwargs)
                 try:
                     resp = await orig_count(*args, **kwargs)
                 except Exception as e:
                     _err(span, e)
                     raise
-                _finalize_count_tokens(span, resp)
+                _safe_finalize(span, _finalize_count_tokens, resp)
                 return resp
 
         else:
@@ -635,21 +658,24 @@ def _extra_message_methods(messages: Any, is_async: bool) -> None:
             def patched_count(*args, **kwargs):
                 if is_suppressed():
                     return orig_count(*args, **kwargs)
-                span = get_provider_tracer().start_span(
-                    name="anthropic.messages.count_tokens",
-                    attributes={
-                        "neatlogs.span.kind": "llm",
-                        "neatlogs.llm.provider": "anthropic",
-                        "neatlogs.llm.task": "count_tokens",
-                        "neatlogs.llm.model_name": kwargs.get("model", ""),
-                    },
-                )
+                try:
+                    span = get_provider_tracer().start_span(
+                        name="anthropic.messages.count_tokens",
+                        attributes={
+                            "neatlogs.span.kind": "llm",
+                            "neatlogs.llm.provider": "anthropic",
+                            "neatlogs.llm.task": "count_tokens",
+                            "neatlogs.llm.model_name": kwargs.get("model", ""),
+                        },
+                    )
+                except Exception:
+                    return _telemetry_fallback(orig_count, *args, **kwargs)
                 try:
                     resp = orig_count(*args, **kwargs)
                 except Exception as e:
                     _err(span, e)
                     raise
-                _finalize_count_tokens(span, resp)
+                _safe_finalize(span, _finalize_count_tokens, resp)
                 return resp
 
         messages.count_tokens = patched_count

@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING
 from opentelemetry.sdk._logs import LogRecordProcessor
 
 if TYPE_CHECKING:
-    from opentelemetry.sdk._logs import LogData, LoggerProvider
+    from opentelemetry.sdk._logs import LogData
 
 # Python 3.10+ exposes stdlib module names directly; fall back to empty set on older versions.
 _STDLIB_MODULE_NAMES: frozenset = getattr(sys, "stdlib_module_names", frozenset())

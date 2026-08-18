@@ -5,7 +5,9 @@ Neatlogs SDK.
 import atexit
 import os
 import re
+import signal
 import sys
+import threading
 from typing import Any, Callable, Dict, List, Optional
 
 try:
@@ -113,6 +115,8 @@ _log_provider = None
 _span_processor = None
 _instrumentation_manager = None
 _debug_mode = False
+_signal_handlers = {}
+_signal_shutdown_in_progress = False
 _session_config = {
     "session_id": None,
     "user_id": None,
@@ -125,6 +129,59 @@ _session_config = {
 def is_debug_enabled() -> bool:
     """Return True if neatlogs was initialized with debug=True."""
     return _debug_mode
+
+
+def _restore_shutdown_signal_handlers() -> None:
+    """Restore handlers that were present before Neatlogs initialized."""
+    global _signal_handlers
+    if threading.current_thread() is not threading.main_thread():
+        return
+    for signum, previous in list(_signal_handlers.items()):
+        try:
+            signal.signal(signum, previous)
+        except (OSError, RuntimeError, ValueError):
+            pass
+    _signal_handlers = {}
+
+
+def _shutdown_signal_handler(signum, frame) -> None:
+    """Close active spans, flush, then preserve the process' signal semantics."""
+    global _signal_shutdown_in_progress
+    if _signal_shutdown_in_progress:
+        return
+    _signal_shutdown_in_progress = True
+    previous = _signal_handlers.get(signum, signal.SIG_DFL)
+    try:
+        try:
+            reason = signal.Signals(signum).name
+        except ValueError:
+            reason = f"signal-{signum}"
+        shutdown(termination_reason=reason)
+    finally:
+        _signal_shutdown_in_progress = False
+
+    if callable(previous) and previous is not _shutdown_signal_handler:
+        previous(signum, frame)
+    if signum == getattr(signal, "SIGINT", None):
+        raise KeyboardInterrupt
+    raise SystemExit(128 + int(signum))
+
+
+def _register_shutdown_signal_handlers() -> None:
+    """Best-effort SIGINT/SIGTERM registration; only legal on the main thread."""
+    global _signal_handlers
+    if threading.current_thread() is not threading.main_thread():
+        logger.debug("Skipping Neatlogs signal handlers outside the main thread")
+        return
+    for signum in (getattr(signal, "SIGINT", None), getattr(signal, "SIGTERM", None)):
+        if signum is None or signum in _signal_handlers:
+            continue
+        try:
+            previous = signal.getsignal(signum)
+            signal.signal(signum, _shutdown_signal_handler)
+            _signal_handlers[signum] = previous
+        except (OSError, RuntimeError, ValueError) as exc:
+            logger.debug(f"Could not register shutdown handler for signal {signum}: {exc}")
 
 
 _DEFAULT_MAX_SPAN_ATTRIBUTES = 10_000
@@ -179,6 +236,7 @@ def init(
     pii_span_types: Optional[List[str]] = None,
     tracer_provider: Optional[Any] = None,
     isolate: Optional[bool] = None,
+    register_shutdown_handlers: bool = True,
 ) -> None:
     """
     Initialize Neatlogs SDK.
@@ -265,6 +323,10 @@ def init(
               False to force the legacy own-or-reuse behaviour even when a foreign
               instrumentor is present. Passing ``tracer_provider=`` implies isolation
               regardless of this flag.
+        register_shutdown_handlers: Register SIGINT and SIGTERM handlers that end
+              active Neatlogs spans child-first and flush before preserving normal
+              signal termination. Defaults to True. Set False only when the host
+              application owns signal handling and calls ``neatlogs.shutdown()``.
     """
     global _initialized
 
@@ -617,8 +679,9 @@ def init(
             logger.debug(f"Instrumented libraries: {manager.instrumented}")
 
     atexit.register(shutdown)
-
     _initialized = True
+    if register_shutdown_handlers:
+        _register_shutdown_signal_handlers()
 
     if debug:
         logger.info("Neatlogs SDK initialized successfully")
@@ -676,8 +739,8 @@ def get_session_config():
     return _session_config.copy()
 
 
-def shutdown(timeout_millis: int = 30000) -> bool:
-    """Shutdown the SDK and flush pending spans/metrics."""
+def shutdown(timeout_millis: int = 30000, termination_reason: str = "shutdown") -> bool:
+    """End active Neatlogs spans, then flush and shut down SDK providers."""
     global _tracer_provider, _owns_tracer_provider, _meter_provider, _log_provider, _span_processor, _initialized
     global _instrumentation_manager
 
@@ -686,10 +749,15 @@ def shutdown(timeout_millis: int = 30000) -> bool:
     except Exception:
         pass
 
+    _restore_shutdown_signal_handlers()
+
     success = True
 
     if _span_processor:
         try:
+            ended = _span_processor.end_active_spans(termination_reason)
+            if ended:
+                logger.info(f"Ended {ended} active Neatlogs span(s) during {termination_reason}")
             _span_processor._log_performance_stats()
         except Exception as e:
             logger.warning(f"Error logging performance stats: {e}")

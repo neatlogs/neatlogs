@@ -6,11 +6,13 @@ Transport is handled by BatchSpanProcessor + OTLPSpanExporter (added in init.py)
 import json
 import os
 import random
+import threading
 import time
 from typing import Any, Callable, Dict, List, Optional
 
 from opentelemetry.context import Context
 from opentelemetry.sdk.trace import ReadableSpan, Span, SpanProcessor
+from opentelemetry.trace import Status, StatusCode
 
 from .attribute_processor import UnifiedAttributeProcessor
 from .logger import get_logger
@@ -140,6 +142,14 @@ class NeatlogsSpanProcessor(SpanProcessor):
         # Per-trace child I/O accumulator for root backfill (see on_end §1b):
         #   trace_id(int) -> {parent_hex: {"in_ts","in_val","out_ts","out_val"}}
         self._trace_child_io: dict = {}
+        # Spans are normally closed by their context manager/decorator. Keep a
+        # lifecycle registry as a last line of defence for process
+        # shutdown: OpenTelemetry cannot export an open span, and a root that
+        # never ends cannot emit the completion marker used by finalization.
+        # Only spans created by a Neatlogs instrumentation scope are tracked so
+        # a shared provider never lets us end another observability SDK's spans.
+        self._active_spans: dict[int, Span] = {}
+        self._active_spans_lock = threading.RLock()
 
     def _init_processor(self) -> None:
         base_path = os.path.dirname(os.path.dirname(__file__))
@@ -190,6 +200,10 @@ class NeatlogsSpanProcessor(SpanProcessor):
     def on_start(self, span: Span, parent_context: Optional[Context] = None) -> None:
         start_time = time.perf_counter()
         try:
+            if _is_neatlogs_scope_span(span):
+                with self._active_spans_lock:
+                    self._active_spans[span.context.span_id] = span
+
             # Stamp request-scoped identity (neatlogs.identify()) onto EVERY root
             # span as a fallback. trace()/@span set it explicitly after creation
             # (overriding this); direct-provider auto-roots stamp it themselves.
@@ -273,6 +287,9 @@ class NeatlogsSpanProcessor(SpanProcessor):
             self.perf_stats["on_start_time"] += time.perf_counter() - start_time
 
     def on_end(self, span: ReadableSpan) -> None:
+        with self._active_spans_lock:
+            self._active_spans.pop(span.context.span_id, None)
+
         # Skip processing for internal completion markers — they only need to
         # be exported as-is by the downstream BatchSpanProcessor.
         if span.name == "neatlogs.trace.complete":
@@ -526,6 +543,59 @@ class NeatlogsSpanProcessor(SpanProcessor):
 
         finally:
             self.perf_stats["on_end_time"] += time.perf_counter() - start_time
+
+    def end_active_spans(self, reason: str = "shutdown") -> int:
+        """End active Neatlogs spans child-first before provider shutdown.
+
+        Ending the root through the normal SDK span lifecycle emits
+        ``neatlogs.trace.complete``. The interruption attributes make recovery
+        explicit without inventing a second root or bypassing normal export.
+        Concurrent normal ``end()`` calls are safe: OpenTelemetry span end is
+        idempotent and ``on_end`` removes each span from the live registry.
+        """
+        with self._active_spans_lock:
+            active = list(self._active_spans.values())
+
+        if not active:
+            return 0
+
+        active_ids = {span.context.span_id for span in active}
+
+        def depth(span: Span) -> int:
+            current = span
+            seen: set[int] = set()
+            value = 0
+            while current.parent is not None and current.parent.span_id in active_ids:
+                parent_id = current.parent.span_id
+                if parent_id in seen:
+                    break
+                seen.add(parent_id)
+                value += 1
+                with self._active_spans_lock:
+                    parent = self._active_spans.get(parent_id)
+                if parent is None:
+                    break
+                current = parent
+            return value
+
+        clean_reason = str(reason or "shutdown")[:256]
+        ended = 0
+        for span in sorted(active, key=depth, reverse=True):
+            try:
+                if not span.is_recording():
+                    continue
+                span.set_attribute("neatlogs.trace.interrupted", True)
+                span.set_attribute("neatlogs.trace.termination.reason", clean_reason)
+                span.set_status(Status(StatusCode.ERROR, f"Interrupted during {clean_reason}"))
+                span.add_event(
+                    "neatlogs.trace.interrupted",
+                    {"neatlogs.trace.termination.reason": clean_reason},
+                )
+                span.end()
+                ended += 1
+            except Exception as exc:
+                logger.warning(f"Failed to end active span during {clean_reason}: {exc}")
+        return ended
 
     def _accumulate_or_backfill_root_io(self, span: ReadableSpan) -> None:
         """Client-side root I/O backfill for I/O-less roots.

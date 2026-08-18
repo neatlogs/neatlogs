@@ -12,7 +12,6 @@ from typing import Any, Callable, Dict, List, Optional
 
 from opentelemetry.context import Context
 from opentelemetry.sdk.trace import ReadableSpan, Span, SpanProcessor
-from opentelemetry.trace import Status, StatusCode
 
 from .attribute_processor import UnifiedAttributeProcessor
 from .logger import get_logger
@@ -200,8 +199,13 @@ class NeatlogsSpanProcessor(SpanProcessor):
     def on_start(self, span: Span, parent_context: Optional[Context] = None) -> None:
         start_time = time.perf_counter()
         try:
-            if _is_neatlogs_scope_span(span):
-                with self._active_spans_lock:
+            with self._active_spans_lock:
+                parent_id = span.parent.span_id if span.parent is not None else None
+                # Framework auto-instrumentation uses its own scope name. Once
+                # it nests under a Neatlogs span it is part of the SDK-owned
+                # trace and must close before that parent. Foreign roots on a
+                # shared provider remain outside the registry.
+                if _is_neatlogs_scope_span(span) or parent_id in self._active_spans:
                     self._active_spans[span.context.span_id] = span
 
             # Stamp request-scoped identity (neatlogs.identify()) onto EVERY root
@@ -553,8 +557,15 @@ class NeatlogsSpanProcessor(SpanProcessor):
         Concurrent normal ``end()`` calls are safe: OpenTelemetry span end is
         idempotent and ``on_end`` removes each span from the live registry.
         """
+        # Claim the current registry in one critical section.  ``span.end()``
+        # synchronously calls ``on_end()``, and shutdown can also race a normal
+        # application ``end()`` from another thread.  Removing the snapshot up
+        # front makes concurrent/re-entrant shutdown calls idempotent while the
+        # SDK span's own recording guard handles a normal end that wins the race.
         with self._active_spans_lock:
-            active = list(self._active_spans.values())
+            active_by_id = self._active_spans
+            self._active_spans = {}
+        active = list(active_by_id.values())
 
         if not active:
             return 0
@@ -571,8 +582,7 @@ class NeatlogsSpanProcessor(SpanProcessor):
                     break
                 seen.add(parent_id)
                 value += 1
-                with self._active_spans_lock:
-                    parent = self._active_spans.get(parent_id)
+                parent = active_by_id.get(parent_id)
                 if parent is None:
                     break
                 current = parent
@@ -586,11 +596,6 @@ class NeatlogsSpanProcessor(SpanProcessor):
                     continue
                 span.set_attribute("neatlogs.trace.interrupted", True)
                 span.set_attribute("neatlogs.trace.termination.reason", clean_reason)
-                span.set_status(Status(StatusCode.ERROR, f"Interrupted during {clean_reason}"))
-                span.add_event(
-                    "neatlogs.trace.interrupted",
-                    {"neatlogs.trace.termination.reason": clean_reason},
-                )
                 span.end()
                 ended += 1
             except Exception as exc:

@@ -2090,6 +2090,78 @@ def test_to_dict_omits_new_fields_when_unset():
     assert d["code"] == "llm-missing-io"
 
 
+def test_new_dimension_doc_urls_are_resolvable(tmp_path):
+    """The LLM-actionability doc_url field must not be a 404 — an LLM agent
+    reading the JSON report would click it. Pre-fix these pointed to
+    docs.neatlogs.com which 404'd. The fix points to in-repo troubleshooting
+    anchors that exist in the source tree."""
+    from pathlib import Path as _P
+
+    repo_root = _P(__file__).resolve().parent.parent.parent
+    for code, expected_path_fragment in [
+        ("init-after-client", "skills/neatlogs/references/troubleshooting.md"),
+        ("missing-span-kind", "skills/neatlogs/references/troubleshooting.md"),
+    ]:
+        # Build a trace that produces the finding.
+        if code == "init-after-client":
+            path = tmp_path / "init.log"
+            _write_jsonl(
+                path,
+                [
+                    {
+                        "trace_id": "t",
+                        "span_id": "a",
+                        "parent_span_id": None,
+                        "name": "wf",
+                        "kind": "workflow",
+                        "attributes": {},  # no init markers
+                    }
+                ],
+            )
+        elif code == "missing-span-kind":
+            path = tmp_path / "kind.log"
+            _write_jsonl(
+                path,
+                [
+                    {
+                        "trace_id": "t",
+                        "span_id": "a",
+                        "parent_span_id": None,
+                        "name": "wf",
+                        "kind": "workflow",
+                        "attributes": {"neatlogs.span.kind": "workflow"},
+                    },
+                    {
+                        "trace_id": "t",
+                        "span_id": "b",
+                        "parent_span_id": "a",
+                        "name": "x",
+                        "kind": "tool",
+                        "attributes": {"neatlogs.span.kind": "tool"},
+                    },
+                    {
+                        "trace_id": "t",
+                        "span_id": "c",
+                        "parent_span_id": "b",
+                        "name": "y",
+                        "kind": "tool",
+                        "attributes": {},  # missing kind
+                    },
+                ],
+            )
+        report = diagnose(path)
+        f = next((f for f in report.findings if f.code == code), None)
+        assert f is not None, f"{code} finding missing"
+        assert f.doc_url is not None, f"{code} has no doc_url"
+        assert (
+            "docs.neatlogs.com" not in f.doc_url
+        ), f"{code} doc_url still points to 404'd domain: {f.doc_url}"
+        # Path must resolve to an existing file relative to repo root.
+        assert (
+            repo_root / expected_path_fragment
+        ).exists(), f"{code} doc_url fragment does not resolve: {expected_path_fragment}"
+
+
 def test_main_json_output_includes_new_fields(tmp_path, capsys):
     """The --json CLI flag includes the new LLM-actionability fields."""
     path = tmp_path / "json.log"
@@ -2114,7 +2186,9 @@ def test_main_json_output_includes_new_fields(tmp_path, capsys):
     assert len(init_findings) == 1
     assert init_findings[0]["fix_class"] == "init_order"
     assert init_findings[0]["automated_fix_available"] is True
-    assert init_findings[0]["doc_url"] == "https://docs.neatlogs.com/getting-started/init-order"
+    # doc_url points to an in-repo troubleshooting anchor (not the 404'd
+    # public docs URL — the local file is the source of truth).
+    assert init_findings[0]["doc_url"].startswith("skills/neatlogs/references/")
 
 
 def test_multiple_foreign_scopes_deduped(tmp_path):

@@ -1218,7 +1218,7 @@ def _init_order_findings(
                 run_id=run_id,
                 fix_class="init_order",
                 automated_fix_available=True,
-                doc_url="https://docs.neatlogs.com/getting-started/init-order",
+                doc_url="skills/neatlogs/references/troubleshooting.md#1-import-order-issues-most-common-mistake",
                 related_codes=("no-spans", "missing-root-kind"),
             )
         )
@@ -1271,7 +1271,7 @@ def _attribute_completeness_findings(
                 trace_id=trace_id,
                 run_id=run_id,
                 fix_class="attribute",
-                doc_url="https://docs.neatlogs.com/api/span-attributes",
+                doc_url="skills/neatlogs/references/troubleshooting.md#6-common-anti-patterns-table",
             )
         )
     return findings

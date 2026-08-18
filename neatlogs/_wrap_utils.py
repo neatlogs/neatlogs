@@ -272,23 +272,26 @@ def apply_wrap_context_attributes(span: Any, is_root: bool = True) -> None:
 def _coerce_workflow_value(value: Any) -> Any:
     """Coerce a workflow-attribute value for OTel storage.
 
-    Mirrors ``neatlogs._annotations._coerce`` so the wrap() and annotate()
-    entry points agree on type semantics. Duplicated here (rather than
-    imported) to avoid a circular import — ``_annotations`` already
-    depends on this module.
+    Standalone copy of the coerce helper used by ``neatlogs.annotate`` /
+    ``neatlogs.add_event``. Duplicated here rather than imported to avoid a
+    circular import: ``neatlogs._annotations`` already depends on this
+    module. The two helpers intentionally diverge on one point — this one
+    stringifies ``None`` rather than passing it through, because the
+    wrap-context path may receive a None value from user-supplied workflow
+    metadata and OTel's ``set_attribute`` rejects None.
 
     - Primitives (bool, int, str, float) pass through natively so backend
       numeric / boolean filters remain meaningful.
     - ``NaN`` / ``Inf`` floats are stringified so strict JSON parsers
-      (e.g. ClickHouse) do not reject the attribute. This applies
-      recursively inside dict / list / tuple as well.
+      (e.g. ClickHouse) do not reject the attribute. The replacement
+      recurses through dict / list / tuple.
     - Bytes are utf-8 decoded; unrepresentable bytes fall back to repr.
     - dict / list / tuple are JSON-serialized.
     - Pydantic-v2-style objects (anything with ``model_dump()``) are
       dumped then JSON-serialized.
     - datetimes (anything with ``isoformat()``) are stringified via
       ``isoformat()``.
-    - Everything else falls back to ``str()``.
+    - Everything else (including ``None``) falls back to ``str()``.
     """
     if isinstance(value, bool):
         return value

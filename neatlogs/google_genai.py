@@ -23,6 +23,7 @@ from opentelemetry.trace import StatusCode
 from ._wrap_utils import (
     AsyncStreamWrapper,
     SyncStreamWrapper,
+    _safe_finalize,
     _telemetry_fallback,
     get_provider_tracer,
     is_suppressed,
@@ -102,10 +103,7 @@ def _patch_models(models: Any) -> None:
             raise
 
         duration_ms = (time.perf_counter() - start) * 1000
-        try:
-            _finalize_response(span, response, duration_ms)
-        except Exception:
-            pass
+        _safe_finalize(span, _finalize_response, response, duration_ms)
         return response
 
     models.generate_content = patched_generate_content
@@ -186,10 +184,7 @@ def _patch_async_models(models: Any) -> None:
             raise
 
         duration_ms = (time.perf_counter() - start) * 1000
-        try:
-            _finalize_response(span, response, duration_ms)
-        except Exception:
-            pass
+        _safe_finalize(span, _finalize_response, response, duration_ms)
         return response
 
     models.generate_content = patched_generate_content
@@ -699,10 +694,7 @@ def _patch_chat_classes() -> None:
             except Exception as e:
                 _err(span, e)
                 raise
-            try:
-                _finalize_response(span, resp, (time.perf_counter() - start) * 1000)
-            except Exception:
-                pass
+            _safe_finalize(span, _finalize_response, resp, (time.perf_counter() - start) * 1000)
             return resp
 
         Chat.send_message = patched_send
@@ -745,10 +737,7 @@ def _patch_chat_classes() -> None:
             except Exception as e:
                 _err(span, e)
                 raise
-            try:
-                _finalize_response(span, resp, (time.perf_counter() - start) * 1000)
-            except Exception:
-                pass
+            _safe_finalize(span, _finalize_response, resp, (time.perf_counter() - start) * 1000)
             return resp
 
         AsyncChat.send_message = patched_asend

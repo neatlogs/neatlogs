@@ -600,6 +600,24 @@ def _telemetry_fallback(orig: Callable[..., Any], *args: Any, **kwargs: Any) -> 
     return orig(*args, **kwargs)
 
 
+def _safe_finalize(span: Any, finalize_fn: Callable[..., Any], *args: Any) -> None:
+    """Run a finalize callback; if it throws, end the span with OK so it is
+    not leaked, then swallow. Used by the per-call wrappers when the LLM
+    call has already returned a response and the only thing left is to
+    record telemetry attributes.
+    """
+    try:
+        finalize_fn(span, *args)
+    except Exception:
+        from opentelemetry.trace import StatusCode
+
+        try:
+            span.set_status(StatusCode.OK)
+            span.end()
+        except Exception:
+            pass
+
+
 # ---------------------------------------------------------------------------
 # Auto-root
 #

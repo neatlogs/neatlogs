@@ -22,6 +22,7 @@ from opentelemetry.trace import StatusCode
 from ._wrap_utils import (
     AsyncStreamWrapper,
     SyncStreamWrapper,
+    _safe_finalize,
     _telemetry_fallback,
     get_provider_tracer,
     is_suppressed,
@@ -117,10 +118,7 @@ def _patch_messages(messages: Any) -> None:
             return SyncStreamWrapper(response, span, _finalize_stream)
 
         duration_ms = (time.perf_counter() - start) * 1000
-        try:
-            _finalize_response(span, response, duration_ms)
-        except Exception:
-            pass
+        _safe_finalize(span, _finalize_response, response, duration_ms)
         return response
 
     messages.create = patched_create
@@ -207,10 +205,7 @@ def _patch_async_messages(messages: Any) -> None:
             return AsyncStreamWrapper(response, span, _finalize_stream)
 
         duration_ms = (time.perf_counter() - start) * 1000
-        try:
-            _finalize_response(span, response, duration_ms)
-        except Exception:
-            pass
+        _safe_finalize(span, _finalize_response, response, duration_ms)
         return response
 
     messages.create = patched_create
@@ -604,10 +599,7 @@ def _extra_message_methods(messages: Any, is_async: bool) -> None:
                 except Exception as e:
                     _err(span, e)
                     raise
-                try:
-                    _finalize_response(span, resp, (time.perf_counter() - start) * 1000)
-                except Exception:
-                    pass
+                _safe_finalize(span, _finalize_response, resp, (time.perf_counter() - start) * 1000)
                 return resp
 
         else:
@@ -625,10 +617,7 @@ def _extra_message_methods(messages: Any, is_async: bool) -> None:
                 except Exception as e:
                     _err(span, e)
                     raise
-                try:
-                    _finalize_response(span, resp, (time.perf_counter() - start) * 1000)
-                except Exception:
-                    pass
+                _safe_finalize(span, _finalize_response, resp, (time.perf_counter() - start) * 1000)
                 return resp
 
         messages.parse = patched_parse
@@ -661,10 +650,7 @@ def _extra_message_methods(messages: Any, is_async: bool) -> None:
                 except Exception as e:
                     _err(span, e)
                     raise
-                try:
-                    _finalize_count_tokens(span, resp)
-                except Exception:
-                    pass
+                _safe_finalize(span, _finalize_count_tokens, resp)
                 return resp
 
         else:
@@ -689,10 +675,7 @@ def _extra_message_methods(messages: Any, is_async: bool) -> None:
                 except Exception as e:
                     _err(span, e)
                     raise
-                try:
-                    _finalize_count_tokens(span, resp)
-                except Exception:
-                    pass
+                _safe_finalize(span, _finalize_count_tokens, resp)
                 return resp
 
         messages.count_tokens = patched_count

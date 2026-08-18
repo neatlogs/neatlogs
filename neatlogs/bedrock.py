@@ -23,7 +23,13 @@ from typing import Any, List, Optional
 
 from opentelemetry.trace import StatusCode
 
-from ._wrap_utils import _telemetry_fallback, get_provider_tracer, is_suppressed, serialize
+from ._wrap_utils import (
+    _safe_finalize,
+    _telemetry_fallback,
+    get_provider_tracer,
+    is_suppressed,
+    serialize,
+)
 
 _PROVIDER = "bedrock"
 
@@ -261,10 +267,7 @@ def _patch_converse(client: Any) -> None:
         except Exception as e:
             _err(span, e)
             raise
-        try:
-            _finalize_converse(span, response, (time.perf_counter() - start) * 1000)
-        except Exception:
-            pass
+        _safe_finalize(span, _finalize_converse, response, (time.perf_counter() - start) * 1000)
         return response
 
     client.converse = patched

@@ -111,15 +111,11 @@ def test_openai_pre_exec_throwing_message_fails_open_to_orig():
 
     client = types.SimpleNamespace()
     orig = _CountingOrig(return_value="response-ok")
-    client.chat = types.SimpleNamespace(
-        completions=types.SimpleNamespace(create=orig)
-    )
+    client.chat = types.SimpleNamespace(completions=types.SimpleNamespace(create=orig))
 
     wrap_openai_client(client)
 
-    result = client.chat.completions.create(
-        model="gpt-4", messages=[ThrowingMsg()]
-    )
+    result = client.chat.completions.create(model="gpt-4", messages=[ThrowingMsg()])
     assert result == "response-ok"
     assert len(orig.calls) == 1
     _reset_wrapper_tracer()
@@ -134,9 +130,7 @@ def test_openai_pre_exec_throwing_tool_fails_open_to_orig():
 
     client = types.SimpleNamespace()
     orig = _CountingOrig(return_value="response-ok")
-    client.chat = types.SimpleNamespace(
-        completions=types.SimpleNamespace(create=orig)
-    )
+    client.chat = types.SimpleNamespace(completions=types.SimpleNamespace(create=orig))
 
     wrap_openai_client(client)
 
@@ -165,16 +159,12 @@ def test_openai_orig_exception_still_propagates_after_telemetry_setup():
             raise ValueError("real LLM error")
 
     client = types.SimpleNamespace()
-    client.chat = types.SimpleNamespace(
-        completions=types.SimpleNamespace(create=Boom())
-    )
+    client.chat = types.SimpleNamespace(completions=types.SimpleNamespace(create=Boom()))
 
     wrap_openai_client(client)
 
     with pytest.raises(ValueError, match="real LLM error"):
-        client.chat.completions.create(
-            model="gpt-4", messages=[{"role": "user", "content": "hi"}]
-        )
+        client.chat.completions.create(model="gpt-4", messages=[{"role": "user", "content": "hi"}])
     # The error span should have been emitted.
     spans = exporter.get_finished_spans()
     assert any(s.status.status_code.name == "ERROR" for s in spans)
@@ -192,9 +182,7 @@ def test_openai_happy_path_still_emits_span():
     fake_response = types.SimpleNamespace(
         choices=[
             types.SimpleNamespace(
-                message=types.SimpleNamespace(
-                    role="assistant", content="hello", tool_calls=None
-                ),
+                message=types.SimpleNamespace(role="assistant", content="hello", tool_calls=None),
                 finish_reason="stop",
             )
         ],
@@ -244,9 +232,7 @@ def test_anthropic_pre_exec_throwing_messages_fails_open_to_orig():
 
     _patch_messages(messages)
 
-    result = messages.create(
-        model="claude-3-5-sonnet", messages=[ThrowingMsg()]
-    )
+    result = messages.create(model="claude-3-5-sonnet", messages=[ThrowingMsg()])
     assert result == "anthropic-ok"
     assert len(orig.calls) == 1
     _reset_wrapper_tracer()
@@ -365,3 +351,113 @@ def test_openrouter_pre_exec_throwing_input_fails_open_to_orig():
     assert result == "openrouter-ok"
     assert len(orig.calls) == 1
     _reset_wrapper_tracer()
+
+
+# ---------------------------------------------------------------------------
+# Finalize-phase span leak: when the finalize callback throws, the span must
+# still be ended (not leaked). This was a real bug — pre-fix the wrappers
+# used `except Exception: pass`, which left the span open in the SDK.
+# ---------------------------------------------------------------------------
+
+
+def test_openai_finalize_throws_still_ends_span_and_returns_response():
+    """If _finalize_response raises after a successful LLM call, the response
+    must still be returned to the caller and the span must be ended with OK
+    status (not leaked)."""
+    provider, exporter = _setup_provider()
+    _wu._neatlogs_provider = provider
+    _wu._wrapper_tracer = None
+
+    # Patch the module-level _finalize_response used by the wrapper closure.
+    from neatlogs import openai as _openai_mod
+    from neatlogs.openai import _finalize_response as orig_finalize
+    from neatlogs.openai import wrap_openai_client
+
+    def _explode(span, response, duration_ms):
+        raise RuntimeError("simulated finalize bug")
+
+    _openai_mod._finalize_response = _explode  # type: ignore[assignment]
+    try:
+        fake_response = types.SimpleNamespace(
+            choices=[
+                types.SimpleNamespace(
+                    message=types.SimpleNamespace(
+                        role="assistant", content="hello", tool_calls=None
+                    ),
+                    finish_reason="stop",
+                )
+            ],
+            usage=types.SimpleNamespace(
+                prompt_tokens=10,
+                completion_tokens=5,
+                total_tokens=15,
+                prompt_tokens_details=None,
+                completion_tokens_details=None,
+            ),
+            model="gpt-4",
+        )
+        client = types.SimpleNamespace()
+        client.chat = types.SimpleNamespace(
+            completions=types.SimpleNamespace(create=lambda *a, **kw: fake_response)
+        )
+        wrap_openai_client(client)
+        result = client.chat.completions.create(
+            model="gpt-4", messages=[{"role": "user", "content": "hi"}]
+        )
+        # The response must be returned to the caller.
+        assert result is fake_response
+        # The span must have been ended (not leaked) — exporter sees it.
+        spans = exporter.get_finished_spans()
+        llm_spans = [s for s in spans if s.name == "openai.chat.completions.create"]
+        assert len(llm_spans) == 1
+        s = llm_spans[0]
+        assert s.end_time is not None
+        # Status should be OK (the LLM call succeeded; only the telemetry
+        # finalize threw, so the span records the real outcome).
+        from opentelemetry.trace import StatusCode
+
+        assert s.status.status_code == StatusCode.OK
+    finally:
+        _openai_mod._finalize_response = orig_finalize
+        _reset_wrapper_tracer()
+
+
+def test_anthropic_finalize_throws_still_ends_span_and_returns_response():
+    provider, exporter = _setup_provider()
+    _wu._neatlogs_provider = provider
+    _wu._wrapper_tracer = None
+
+    from neatlogs import anthropic as _anthropic_mod
+    from neatlogs.anthropic import _finalize_response as orig
+    from neatlogs.anthropic import _patch_messages
+
+    def _explode(span, response, duration_ms):
+        raise RuntimeError("simulated finalize bug")
+
+    _anthropic_mod._finalize_response = _explode  # type: ignore[assignment]
+    try:
+        messages = types.SimpleNamespace()
+        fake_response = types.SimpleNamespace(
+            content=[types.SimpleNamespace(type="text", text="hello")],
+            stop_reason="end_turn",
+            usage=types.SimpleNamespace(input_tokens=10, output_tokens=5),
+        )
+        orig_call = _CountingOrig(return_value=fake_response)
+        messages.create = orig_call
+        messages.stream = None
+        messages._neatlogs_patched = False
+        _patch_messages(messages)
+        result = messages.create(
+            model="claude-3-5-sonnet", messages=[{"role": "user", "content": "hi"}]
+        )
+        assert result is fake_response
+        spans = exporter.get_finished_spans()
+        llm_spans = [s for s in spans if s.name == "anthropic.messages.create"]
+        assert len(llm_spans) == 1
+        assert llm_spans[0].end_time is not None
+        from opentelemetry.trace import StatusCode
+
+        assert llm_spans[0].status.status_code == StatusCode.OK
+    finally:
+        _anthropic_mod._finalize_response = orig
+        _reset_wrapper_tracer()

@@ -30,6 +30,7 @@ from opentelemetry.trace import StatusCode
 from ._wrap_utils import (
     AsyncStreamWrapper,
     SyncStreamWrapper,
+    _safe_finalize,
     get_provider_tracer,
     is_suppressed,
     serialize,
@@ -253,7 +254,7 @@ def _patch_chat(chat: Any) -> None:
                 raise
             if is_stream:
                 return SyncStreamWrapper(response, span, _finalize_chat_stream)
-            _finalize_chat(span, response, (time.perf_counter() - start) * 1000)
+            _safe_finalize(span, _finalize_chat, response, (time.perf_counter() - start) * 1000)
             return response
 
         chat.send = patched_send
@@ -285,7 +286,7 @@ def _patch_chat(chat: Any) -> None:
                 raise
             if is_stream:
                 return AsyncStreamWrapper(response, span, _finalize_chat_stream)
-            _finalize_chat(span, response, (time.perf_counter() - start) * 1000)
+            _safe_finalize(span, _finalize_chat, response, (time.perf_counter() - start) * 1000)
             return response
 
         chat.send_async = patched_send_async
@@ -483,7 +484,9 @@ def _patch_responses(responses: Any) -> None:
                 raise
             if is_stream:
                 return SyncStreamWrapper(response, span, _finalize_responses_stream)
-            _finalize_responses(span, response, (time.perf_counter() - start) * 1000)
+            _safe_finalize(
+                span, _finalize_responses, response, (time.perf_counter() - start) * 1000
+            )
             return response
 
         responses.send = patched_send
@@ -515,7 +518,9 @@ def _patch_responses(responses: Any) -> None:
                 raise
             if is_stream:
                 return AsyncStreamWrapper(response, span, _finalize_responses_stream)
-            _finalize_responses(span, response, (time.perf_counter() - start) * 1000)
+            _safe_finalize(
+                span, _finalize_responses, response, (time.perf_counter() - start) * 1000
+            )
             return response
 
         responses.send_async = patched_send_async

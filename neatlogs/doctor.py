@@ -1212,7 +1212,8 @@ def _init_order_findings(
                     "Move neatlogs.init() to the very top of your entry point, "
                     "BEFORE constructing any LLM client (openai.Anthropic(), "
                     "ChatOpenAI(), genai.Client(), etc.). If you cannot reorder, "
-                    "call neatlogs.init(force_reload=True) after construction."
+                    "call neatlogs.shutdown() then neatlogs.init() again to "
+                    "re-attach the wrappers."
                 ),
                 trace_id=trace_id,
                 run_id=run_id,
@@ -1391,22 +1392,27 @@ def _pipeline_stage_summary(
     Used by the ``pipeline-stage-summary`` finding (below) and exposed via
     ``DoctorReport.findings_by_pipeline_stage()``.
     """
-    stage_map = {
-        "init_order": "init",
-        "config": "init",
-        "pipeline": "init",
-        "instrumentation": "instrument",
-        "capture": "instrument",
-        "data_integrity": "span",
-        "attribute": "span",
-        "hierarchy": "hierarchy",
-    }
     out: dict[str, int] = {"init": 0, "instrument": 0, "span": 0, "hierarchy": 0}
     for f in findings:
-        stage = stage_map.get(f.fix_class or "")
+        stage = _FIX_CLASS_TO_STAGE.get(f.fix_class or "")
         if stage is not None:
             out[stage] += 1
     return out
+
+
+# fix_class → pipeline-stage mapping. Used by both the stage summary counter
+# and the summary's related_codes filter (so related_codes always matches the
+# dominant stage, not a hardcoded init-only set).
+_FIX_CLASS_TO_STAGE = {
+    "init_order": "init",
+    "config": "init",
+    "pipeline": "init",
+    "instrumentation": "instrument",
+    "capture": "instrument",
+    "data_integrity": "span",
+    "attribute": "span",
+    "hierarchy": "hierarchy",
+}
 
 
 def _pipeline_stage_run_finding(
@@ -1443,7 +1449,7 @@ def _pipeline_stage_run_finding(
         suggestion=stage_suggestion,
         fix_class="pipeline",
         related_codes=tuple(
-            f.code for f in findings if f.fix_class in ("init_order", "config", "pipeline")
+            f.code for f in findings if _FIX_CLASS_TO_STAGE.get(f.fix_class or "") == dominant
         ),
     )
 

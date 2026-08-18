@@ -1373,6 +1373,38 @@ def test_attribute_completeness_skipped_when_all_missing(tmp_path):
     )
 
 
+def test_init_order_suggestion_does_not_reference_nonexistent_api(tmp_path):
+    """The init-after-client suggestion must not reference an API that
+    doesn't exist on the public neatlogs.init() function. Pre-fix the
+    suggestion told users to call ``neatlogs.init(force_reload=True)``
+    but no such kwarg exists. The fix points users at shutdown()+init()
+    which is the actual escape hatch."""
+    path = tmp_path / "init.log"
+    _write_jsonl(
+        path,
+        [
+            {
+                "trace_id": "t",
+                "span_id": "a",
+                "parent_span_id": None,
+                "name": "wf",
+                "kind": "workflow",
+                "attributes": {},
+            }
+        ],
+    )
+    report = diagnose(path)
+    init_findings = [f for f in report.findings if f.code == "init-after-client"]
+    assert len(init_findings) == 1
+    suggestion = init_findings[0].suggestion
+    assert (
+        "force_reload" not in suggestion
+    ), f"suggestion references non-existent force_reload kwarg: {suggestion!r}"
+    assert (
+        "shutdown" in suggestion
+    ), f"suggestion should mention shutdown() as the escape hatch: {suggestion!r}"
+
+
 def test_data_integrity_zero_duration(tmp_path):
     """Span with duration_ns == 0 is flagged."""
     path = tmp_path / "zero_dur.log"
@@ -1944,6 +1976,70 @@ def test_pipeline_stage_summary_reflects_dominant_stage(tmp_path):
     # Title and suggestion must reference the dominant stage, not "init".
     assert "init stage" not in summary[0].title.lower()
     assert "init" not in summary[0].suggestion.lower()
+
+
+def test_pipeline_stage_summary_related_codes_matches_dominant_stage(tmp_path):
+    """The summary's related_codes must include the codes that actually
+    drove the dominant stage, not a hardcoded init-stage set.
+
+    Pre-fix the related_codes filter was hardcoded to
+    ``f.fix_class in ("init_order", "config", "pipeline")``, so when the
+    dominant stage was 'span' (driven by data_integrity findings like
+    zero-duration-span), related_codes was empty.
+    """
+    # Build 5 separate traces, each with one zero-duration tool span. That
+    # produces 5 zero-duration-span findings + 1 multi-run-log finding.
+    # With 5 findings all of fix_class='data_integrity' (→ span stage) and
+    # 1 finding with fix_class=None, span stage clearly dominates.
+    spans = []
+    for i in range(5):
+        spans.append(
+            {
+                "trace_id": f"t{i}",
+                "span_id": f"wf-{i}",
+                "parent_span_id": None,
+                "name": f"wf-{i}",
+                "kind": "workflow",
+                "start_time": 100,
+                "end_time": 200,
+                "duration_ns": 100_000_000,
+                "status": {"code": "OK"},
+                "attributes": {"neatlogs.span.kind": "workflow"},
+                "events": [],
+                "instrumentation_scope": {"name": "neatlogs.core.context"},
+            }
+        )
+        spans.append(
+            {
+                "trace_id": f"t{i}",
+                "span_id": f"td-{i}",
+                "parent_span_id": f"wf-{i}",
+                "name": f"td-{i}",
+                "kind": "tool",
+                "start_time": 100,
+                "end_time": 100,
+                "duration_ns": 0,
+                "status": {"code": "OK"},
+                "attributes": {
+                    "neatlogs.span.kind": "tool",
+                    "neatlogs.tool.parameters": "{}",
+                    "neatlogs.tool.output": "{}",
+                },
+                "events": [],
+                "instrumentation_scope": {"name": "neatlogs.core.context"},
+            }
+        )
+    path = tmp_path / "span_dominant.log"
+    _write_jsonl(path, spans)
+    report = diagnose(path)
+    summary = next((f for f in report.findings if f.code == "pipeline-stage-summary"), None)
+    assert summary is not None, "summary should fire when one stage dominates"
+    # dominant stage is 'span' (5 zero-duration-span findings)
+    assert "span stage" in summary.title.lower()
+    # related_codes must include the codes that drove the dominant stage
+    assert (
+        "zero-duration-span" in summary.related_codes
+    ), f"related_codes missing zero-duration-span: {summary.related_codes!r}"
 
 
 def test_internal_spans_excluded_from_data_integrity(tmp_path):

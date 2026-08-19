@@ -7,7 +7,6 @@ from __future__ import annotations
 import functools
 import inspect
 import json
-import os
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple, TypeVar, Union
 
@@ -15,13 +14,6 @@ from opentelemetry import trace as otel_trace
 from opentelemetry.trace import Status, StatusCode
 
 F = TypeVar("F", bound=Callable[..., Any])
-
-
-def _should_capture_content() -> bool:
-    v = os.getenv("NEATLOGS_TRACE_CONTENT")
-    if v is None:
-        return True
-    return v.lower() not in ("false", "0", "no")
 
 
 def _capture_code_attrs(func: Callable[..., Any]) -> Dict[str, Any]:
@@ -202,9 +194,13 @@ def _decorate_span(
 
         span_name = name or func.__name__
 
-        cap = _should_capture_content()
-        cap_in = cap if capture_input is None else capture_input
-        cap_out = cap if capture_output is None else capture_output
+        # Full-fidelity capture is the SDK default. Privacy-sensitive callers
+        # can disable either side explicitly on this decorator, while the
+        # exporter-level mask remains the global privacy boundary. A process
+        # environment switch cannot truthfully protect provider wrappers that
+        # do not consult it, so decorators must not pretend otherwise.
+        cap_in = True if capture_input is None else capture_input
+        cap_out = True if capture_output is None else capture_output
 
         # Capture code location once at decoration time — these are static
         # properties of the decorated function so there is no per-call overhead.

@@ -1,5 +1,6 @@
 import asyncio
 
+import pytest
 from opentelemetry.sdk._logs.export import (
     InMemoryLogRecordExporter,
     SimpleLogRecordProcessor,
@@ -132,3 +133,61 @@ def test_flushing_one_client_does_not_flush_another(monkeypatch):
 
     first.shutdown()
     second.shutdown()
+
+
+def test_client_shutdown_ends_active_spans_and_blocks_cached_tracer():
+    client, _, exporter = _client("closing")
+    tracer = client.get_tracer("neatlogs.client.test")
+    active = tracer.start_span("active")
+
+    assert client.shutdown(termination_reason="SIGTERM") is True
+    assert not active.is_recording()
+    finished = next(span for span in exporter.get_finished_spans() if span.name == "active")
+    assert finished.attributes["neatlogs.trace.interrupted"] is True
+
+    late = tracer.start_span("late")
+    assert not late.is_recording()
+    with pytest.raises(RuntimeError, match="closing or closed"):
+        with client.activate():
+            pass
+
+
+def test_client_inherits_temporary_verification_resource_marker(monkeypatch):
+    monkeypatch.setenv(
+        "OTEL_RESOURCE_ATTRIBUTES",
+        "deployment.environment=test,neatlogs.verification.marker=run-123",
+    )
+    client = neatlogs.Client(
+        api_key="unused",
+        workflow_name="verification",
+        disable_export=True,
+    )
+    try:
+        assert (
+            client.tracer_provider.resource.attributes["neatlogs.verification.marker"] == "run-123"
+        )
+    finally:
+        client.shutdown()
+
+
+def test_client_shutdown_same_thread_reentry_does_not_deadlock(monkeypatch):
+    client, _, _ = _client("reentrant")
+    original = client._span_processor.end_active_spans
+
+    def reentrant(reason):
+        assert client.shutdown(termination_reason="nested") is True
+        return original(reason)
+
+    monkeypatch.setattr(client._span_processor, "end_active_spans", reentrant)
+    assert client.shutdown(termination_reason="outer") is True
+
+
+def test_custom_client_tracer_is_closed_and_finalized():
+    client, _, exporter = _client("custom")
+    tracer = client.get_tracer("application.custom")
+    active = tracer.start_span("custom-root")
+
+    assert client.shutdown(termination_reason="SIGTERM") is True
+    assert not active.is_recording()
+    names = [span.name for span in exporter.get_finished_spans()]
+    assert "custom-root" in names

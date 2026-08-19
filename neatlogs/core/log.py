@@ -134,6 +134,8 @@ def log(msg_template: str, /, level: str = "info", **data: Any) -> None:
 
     client = get_active_client()
     if client is not None:
+        if not client._is_running():
+            return
         if client.log_provider is None:
             return
         otel_logger = client.log_provider.get_logger(__name__)

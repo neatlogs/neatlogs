@@ -58,8 +58,8 @@ class SimulatedRetriever:
         Creates RETRIEVER span for trace visualization.
         """
         with neatlogs.trace("simulated_retriever_search", kind="RETRIEVER") as span:
-            span.set_attribute("neatlogs.retrieval.query", query)
-            span.set_attribute("neatlogs.retrieval.top_k", k)
+            span.set_attribute("neatlogs.retriever.query", query)
+            span.set_attribute("neatlogs.retriever.top_k", k)
 
             # Simple keyword matching (simulates vector similarity)
             query_lower = query.lower()
@@ -80,7 +80,7 @@ class SimulatedRetriever:
             if not results:
                 results = self.documents[:k]
 
-            span.set_attribute("neatlogs.retrieval.documents", json.dumps(results))
+            span.set_attribute("neatlogs.retriever.documents", json.dumps(results))
             return results
 
 

@@ -129,10 +129,10 @@ def vector_search(client: MilvusClient, query_vector: list[float], query_text: s
     Matches the span kind convention used for RAG pipelines.
     """
     span = otel_trace.get_current_span()
-    span.set_attribute("neatlogs.retrieval.query",      query_text)
-    span.set_attribute("neatlogs.retrieval.top_k",      TOP_K)
-    span.set_attribute("neatlogs.retrieval.vector_db",  "milvus")
-    span.set_attribute("neatlogs.retrieval.collection", COLLECTION)
+    span.set_attribute("neatlogs.retriever.query",      query_text)
+    span.set_attribute("neatlogs.retriever.top_k",      TOP_K)
+    span.set_attribute("neatlogs.retriever.vector_db",  "milvus")
+    span.set_attribute("neatlogs.retriever.collection", COLLECTION)
 
     results = client.search(
         collection_name=COLLECTION,
@@ -150,8 +150,8 @@ def vector_search(client: MilvusClient, query_vector: list[float], query_text: s
         }
         for hit in results[0]
     ]
-    span.set_attribute("neatlogs.retrieval.result_count", len(hits))
-    span.set_attribute("neatlogs.retrieval.documents",    json.dumps(hits))
+    span.set_attribute("neatlogs.retriever.result_count", len(hits))
+    span.set_attribute("neatlogs.retriever.documents",    json.dumps(hits))
     return hits
 
 

@@ -363,7 +363,7 @@ def span(
 
 
 def _retriever_postprocessor(span: Any, result: Any, bound_inputs: Dict[str, Any]) -> None:
-    """Helper to set retrieval-specific attributes."""
+    """Helper to set canonical retriever-specific attributes."""
     # Extract query
     query = None
     for k in ("query", "question", "text"):
@@ -377,7 +377,7 @@ def _retriever_postprocessor(span: Any, result: Any, bound_inputs: Dict[str, Any
                 query = v
                 break
     if query:
-        span.set_attribute("retrieval.query", query)
+        span.set_attribute("neatlogs.retriever.query", query)
 
     # Extract documents
     docs: Any = None
@@ -395,7 +395,7 @@ def _retriever_postprocessor(span: Any, result: Any, bound_inputs: Dict[str, Any
     # Set document attributes
     for i, doc in enumerate(docs[:20]):
         if isinstance(doc, str):
-            span.set_attribute(f"retrieval.documents.{i}.document.content", doc)
+            span.set_attribute(f"neatlogs.retriever.documents.{i}.content", doc)
             continue
 
         if isinstance(doc, dict):
@@ -405,16 +405,16 @@ def _retriever_postprocessor(span: Any, result: Any, bound_inputs: Dict[str, Any
             metadata = doc.get("metadata") or {}
 
             if doc_id is not None:
-                span.set_attribute(f"retrieval.documents.{i}.document.id", str(doc_id))
+                span.set_attribute(f"neatlogs.retriever.documents.{i}.id", str(doc_id))
             if content is not None:
-                span.set_attribute(f"retrieval.documents.{i}.document.content", str(content))
+                span.set_attribute(f"neatlogs.retriever.documents.{i}.content", str(content))
             if score is not None:
                 try:
-                    span.set_attribute(f"retrieval.documents.{i}.document.score", float(score))
+                    span.set_attribute(f"neatlogs.retriever.documents.{i}.score", float(score))
                 except Exception:
-                    span.set_attribute(f"retrieval.documents.{i}.document.score", str(score))
+                    span.set_attribute(f"neatlogs.retriever.documents.{i}.score", str(score))
             if metadata:
                 span.set_attribute(
-                    f"retrieval.documents.{i}.document.metadata",
+                    f"neatlogs.retriever.documents.{i}.metadata",
                     _safe_json_dumps(metadata),
                 )

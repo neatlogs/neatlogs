@@ -83,8 +83,8 @@ class MockVectorStoreRetriever(BaseRetriever):
         self, query: str, *, run_manager: CallbackManagerForRetrieverRun
     ) -> List[Document]:
         with neatlogs.trace("knowledge_base_retriever", kind="RETRIEVER") as span:
-            span.set_attribute("neatlogs.retrieval.query", query)
-            span.set_attribute("neatlogs.retrieval.top_k", 4)
+            span.set_attribute("neatlogs.retriever.query", query)
+            span.set_attribute("neatlogs.retriever.top_k", 4)
             query_lower = query.lower()
             docs = []
             for keyword, passages in _KNOWLEDGE_BASE.items():
@@ -94,7 +94,7 @@ class MockVectorStoreRetriever(BaseRetriever):
                 docs = [Document(page_content=p, metadata={"source": "kb_default"}) for p in _KNOWLEDGE_BASE["default"]]
             docs = docs[:4]
             span.set_attribute(
-                "neatlogs.retrieval.documents",
+                "neatlogs.retriever.documents",
                 json.dumps([{"content": d.page_content, "metadata": d.metadata} for d in docs]),
             )
         return docs

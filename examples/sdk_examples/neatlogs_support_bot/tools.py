@@ -9,7 +9,7 @@ The embedding calls inside KB.search() are auto-instrumented and appear as
 EMBEDDING spans via the `openai` instrumentation.
 
 RETRIEVER spans wrap the KB/past-ticket search tools. `@span(kind="TOOL")`
-would lose the `neatlogs.retrieval.*` attributes, so we use `trace()` inside
+would lose the `neatlogs.retriever.*` attributes, so we use `trace()` inside
 the CrewAI tool body per the skill's custom-retriever pattern.
 """
 
@@ -42,10 +42,10 @@ def kb_search_tool(query: str) -> str:
     from kb import KB
 
     with neatlogs.trace("kb_search", kind="RETRIEVER") as span:
-        span.set_attribute("neatlogs.retrieval.query", query)
-        span.set_attribute("neatlogs.retrieval.top_k", 3)
+        span.set_attribute("neatlogs.retriever.query", query)
+        span.set_attribute("neatlogs.retriever.top_k", 3)
         results = KB.search(query, top_k=3)
-        span.set_attribute("neatlogs.retrieval.documents", json.dumps(results))
+        span.set_attribute("neatlogs.retriever.documents", json.dumps(results))
 
     if not results:
         return "No relevant KB articles found."
@@ -61,10 +61,10 @@ def past_tickets_search_tool(query: str) -> str:
     from kb import PAST_KB
 
     with neatlogs.trace("past_tickets_search", kind="RETRIEVER") as span:
-        span.set_attribute("neatlogs.retrieval.query", query)
-        span.set_attribute("neatlogs.retrieval.top_k", 3)
+        span.set_attribute("neatlogs.retriever.query", query)
+        span.set_attribute("neatlogs.retriever.top_k", 3)
         results = PAST_KB.search(query, top_k=3)
-        span.set_attribute("neatlogs.retrieval.documents", json.dumps(results))
+        span.set_attribute("neatlogs.retriever.documents", json.dumps(results))
 
     if not results:
         return "No similar past tickets found."

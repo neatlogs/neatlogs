@@ -286,7 +286,7 @@ def _patch_retrieve_class() -> None:
                 query_or_queries
                 if isinstance(query_or_queries, str)
                 else serialize(query_or_queries)
-            )[:10000]
+            )
         effective_k = k if k is not None else getattr(self, "k", None)
         if effective_k is not None:
             attrs["neatlogs.retriever.top_k"] = effective_k
@@ -310,7 +310,7 @@ def _patch_retrieve_class() -> None:
                 span.set_attribute("neatlogs.retriever.document_count", len(passages))
             except TypeError:
                 pass
-            span.set_attribute("neatlogs.retriever.documents", serialize(passages)[:10000])
+            span.set_attribute("neatlogs.retriever.documents", serialize(passages))
         span.set_attribute(
             "neatlogs.llm.metrics.duration_ms", round((time.perf_counter() - start) * 1000, 3)
         )

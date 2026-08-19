@@ -393,7 +393,7 @@ def _retriever_postprocessor(span: Any, result: Any, bound_inputs: Dict[str, Any
         return
 
     # Set document attributes
-    for i, doc in enumerate(docs[:20]):
+    for i, doc in enumerate(docs):
         if isinstance(doc, str):
             span.set_attribute(f"neatlogs.retriever.documents.{i}.content", doc)
             continue

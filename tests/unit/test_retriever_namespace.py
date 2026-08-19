@@ -38,3 +38,14 @@ def test_retriever_postprocessor_emits_only_canonical_namespace() -> None:
     }
     assert all(not key.startswith("neatlogs.retrieval.") for key in span.attributes)
     assert all(not key.startswith("retrieval.") for key in span.attributes)
+
+
+def test_retriever_postprocessor_does_not_truncate_documents() -> None:
+    span = _RecordingSpan()
+    documents = [f"document-{index}-" + ("x" * 12_000) for index in range(25)]
+
+    _retriever_postprocessor(span, documents, {"query": "q" * 12_000})
+
+    assert span.attributes["neatlogs.retriever.query"] == "q" * 12_000
+    assert span.attributes["neatlogs.retriever.documents.24.content"] == documents[24]
+    assert len(span.attributes) == 26

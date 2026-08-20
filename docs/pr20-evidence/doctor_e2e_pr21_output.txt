@@ -1,0 +1,79 @@
+
+=== A.1 otel-genai-missing (neatlogs-only trace) ===
+  ✅ A.1 otel-genai-missing fires on neatlogs-only LLM span — codes=['otel-genai-missing', 'pipeline-stage-summary']
+  ✅ A.1 severity is warning
+  ✅ A.1 fix_class is config
+
+=== A.2 otel-genai-missing does NOT fire (clean OTel trace) ===
+  ✅ A.2 otel-genai-missing does NOT fire when gen_ai.* attrs present — codes=[]
+
+=== A.3 otel-genai-inconsistent (neatlogs=llm, OTel=embeddings) ===
+  ✅ A.3 otel-genai-inconsistent fires when kinds disagree
+  ✅ A.3 severity is info
+
+=== C.1 oversized-prompt (>50K chars in one LLM span) ===
+  ✅ C.1 oversized-prompt fires on 60K-char prompt
+  ✅ C.1 severity is warning
+  ✅ C.1 fix_class is config
+
+=== C.2 repeated-system-prompt (PII opt-in) ===
+  ✅ C.2 repeated-system-prompt does NOT fire by default (PII-safe) — codes=['llm-missing-io', 'otel-genai-missing']
+  ✅ C.2 repeated-system-prompt fires when --read-prompt-content=True — codes=['llm-missing-io', 'otel-genai-missing', 'pipeline-stage-summary', 'repeated-system-prompt']
+  ✅ C.2 fix_class is config
+  ✅ C.2 suggestion mentions prompt caching
+
+=== C.3 unused-tool-definition ===
+  ✅ C.3 unused-tool-definition fires
+  ✅ C.3 evidence names all 3 unused tools
+  ✅ C.3 fix_class is config
+
+=== D.1 --emit-fix <code> (manual-fix snippet) ===
+  ✅ D.1 --emit-fix init-after-client exits 0
+  ✅ D.1 output contains '# Finding: init-after-client'
+  ✅ D.1 output contains '# BEFORE:'
+  ✅ D.1 output contains '# AFTER:'
+  ✅ D.1 BEFORE block has 'from openai import OpenAI'
+  ✅ D.1 AFTER block has 'import neatlogs' before 'from openai'
+
+=== D.2 --emit-fix unknown code ===
+  ✅ D.2 --emit-fix unknown code exits 2
+  ✅ D.2 stderr says 'Unknown finding code'
+  ✅ D.2 stdout is empty
+
+=== D.3 --emit-fix for all 4 registered snippets ===
+  ✅ D.3 --emit-fix init-after-client renders full snippet
+  ✅ D.3 --emit-fix missing-span-kind renders full snippet
+  ✅ D.3 --emit-fix zero-duration-span renders full snippet
+  ✅ D.3 --emit-fix error-status-no-event renders full snippet
+
+=== D.4 --emit-fix ignores path ===
+  ✅ D.4 --emit-fix ignores nonexistent path
+
+=== E. real CLI --json end-to-end ===
+  ✅ E. real CLI --json returns valid JSON
+  ✅ E. real CLI --json has 'findings' list
+  ✅ E. real CLI --json includes 'otel-genai-missing' — codes=['otel-genai-missing', 'pipeline-stage-summary', 'unused-tool-definition']
+  ✅ E. real CLI --json includes 'unused-tool-definition' — codes=['otel-genai-missing', 'pipeline-stage-summary', 'unused-tool-definition']
+  ✅ E. real CLI --json exit code is 0 (no error-severity findings)
+
+=== F. real CLI --read-prompt-content --json ===
+  ✅ F. real CLI --read-prompt-content surfaces 'repeated-system-prompt' — codes=['llm-missing-io', 'otel-genai-missing', 'pipeline-stage-summary', 'repeated-system-prompt']
+
+=== G. real SDK roundtrip ===
+2026-08-21 01:12:39 - neatlogs - INFO - Processed span logging enabled: /var/folders/1g/hgfl1v516xl72v53rsxtg26r0000gn/T/tmp8v2halbk.log
+Attempting to uninstrument while already uninstrumented
+2026-08-21 01:12:39 - neatlogs - INFO - Neatlogs SDK shutdown complete
+  ✅ G. real SDK roundtrip: SDK wrote a JSONL log — spans_read=3
+  ✅ G. real SDK roundtrip: every span has instrumentation_scope
+  ✅ G. real SDK roundtrip: doctor runs without error
+  ✅ G. real SDK roundtrip: no false foreign-scope finding
+  ✅ G. real SDK roundtrip: no false 'otel-genai-missing' on CHAIN-only trace — codes=[]
+
+========================================================================
+E2E SUMMARY
+========================================================================
+  Total assertions: 41
+  Passed:           41 (100%)
+  Failed:           0
+
+  ✅ ALL E2E TESTS PASSED

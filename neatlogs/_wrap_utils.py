@@ -16,6 +16,8 @@ from contextvars import ContextVar
 from typing import Any, Callable, Dict, List, Mapping, Optional
 from urllib.parse import urlparse
 
+from .constants import DEFAULT_INGEST_ENDPOINT
+
 from opentelemetry import context as context_api
 from opentelemetry import trace as otel_trace
 from opentelemetry.sdk.trace import TracerProvider
@@ -103,7 +105,7 @@ def _normalize_traces_endpoint(endpoint: str) -> str:
     """Convert a Neatlogs base endpoint into the OTLP traces endpoint."""
     raw = (endpoint or "").strip().rstrip("/")
     if not raw:
-        raw = "https://ingest.neatlogs.com"
+        raw = DEFAULT_INGEST_ENDPOINT
 
     if raw.endswith("/v1/traces"):
         return raw
@@ -428,13 +430,16 @@ def neatlogs_span(scope: str, name: str, **start_kwargs: Any) -> "_NeatlogsSpanC
 
 
 def _bootstrap_from_env(api_key: str) -> None:
+    from opentelemetry.exporter.otlp.proto.http import Compression
     from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
     from opentelemetry.sdk.resources import SERVICE_NAME, Resource
     from opentelemetry.sdk.trace import SpanLimits
-    from opentelemetry.sdk.trace.export import BatchSpanProcessor
+    from .core.byte_limited_exporter import ByteLimitedSpanExporter
+    from .core.delivery import DeliveryDiagnostics, ObservableBatchSpanProcessor
+    from .core.transport import build_otlp_session
 
     endpoint = _wrapper_config.get("endpoint") or os.environ.get(
-        "NEATLOGS_ENDPOINT", "https://ingest.neatlogs.com"
+        "NEATLOGS_ENDPOINT", DEFAULT_INGEST_ENDPOINT
     )
     endpoint = _normalize_traces_endpoint(endpoint)
 
@@ -456,8 +461,16 @@ def _bootstrap_from_env(api_key: str) -> None:
     exporter = OTLPSpanExporter(
         endpoint=endpoint,
         headers={"x-api-key": api_key},
+        compression=Compression.Gzip,
+        session=build_otlp_session(),
     )
-    provider.add_span_processor(BatchSpanProcessor(exporter))
+    diagnostics = DeliveryDiagnostics()
+    provider.add_span_processor(
+        ObservableBatchSpanProcessor(
+            ByteLimitedSpanExporter(exporter, diagnostics=diagnostics),
+            diagnostics=diagnostics,
+        )
+    )
     set_neatlogs_provider(provider)
     logger.debug(f"neatlogs wrapper: auto-bootstrapped private TracerProvider → {endpoint}")
 
@@ -856,13 +869,13 @@ def get_provider_tracer() -> "_AutoRootTracer":
     return _AutoRootTracer(get_tracer())
 
 
-def serialize(obj: Any, max_length: int = 100_000) -> str:
-    """Safe JSON serialization with truncation."""
+def serialize(obj: Any, max_length: Optional[int] = None) -> str:
+    """Safe JSON serialization; truncation is only applied when explicitly requested."""
     try:
         s = json.dumps(obj, default=str, ensure_ascii=False)
     except (TypeError, ValueError):
         s = str(obj)
-    if len(s) > max_length:
+    if max_length is not None and len(s) > max_length:
         return s[:max_length] + "...[truncated]"
     return s
 
@@ -879,25 +892,42 @@ class SyncStreamWrapper:
         self._finalizer = finalizer
         self._start_time = time.perf_counter()
         self._first_chunk_time: Optional[float] = None
+        self._incremental = hasattr(finalizer, "on_chunk") and hasattr(finalizer, "finish")
         self._chunks: List[Any] = []
         self._finalized = False
+        self._exhausted = False
 
     def __iter__(self):
-        return self
+        def consume():
+            try:
+                while True:
+                    try:
+                        yield self.__next__()
+                    except StopIteration:
+                        return
+            finally:
+                if not self._finalized:
+                    self.close()
+
+        return consume()
 
     def __next__(self):
         try:
             chunk = next(self._stream)
         except StopIteration:
-            self._finalize()
+            self._exhausted = True
+            self._finalize(interrupted=False)
             raise
-        except Exception as e:
+        except BaseException as e:
             self._finalize_error(e)
             raise
 
         if self._first_chunk_time is None:
             self._first_chunk_time = time.perf_counter()
-        self._chunks.append(chunk)
+        if self._incremental:
+            self._finalizer.on_chunk(self._span, chunk)
+        else:
+            self._chunks.append(chunk)
         return chunk
 
     def __enter__(self):
@@ -905,12 +935,28 @@ class SyncStreamWrapper:
             self._stream.__enter__()
         return self
 
-    def __exit__(self, *args):
-        if hasattr(self._stream, "__exit__"):
-            self._stream.__exit__(*args)
-        self._finalize()
+    def __exit__(self, exc_type, exc, tb):
+        try:
+            if hasattr(self._stream, "__exit__"):
+                self._stream.__exit__(exc_type, exc, tb)
+        except BaseException as close_error:
+            self._finalize_error(close_error)
+            raise
+        if exc is not None:
+            self._finalize_error(exc)
+        else:
+            self._finalize(interrupted=not self._exhausted)
 
-    def _finalize(self):
+    def close(self):
+        try:
+            if hasattr(self._stream, "close"):
+                self._stream.close()
+        except BaseException as close_error:
+            self._finalize_error(close_error)
+            raise
+        self._finalize(interrupted=not self._exhausted)
+
+    def _finalize(self, *, interrupted: bool):
         if self._finalized:
             return
         self._finalized = True
@@ -918,16 +964,34 @@ class SyncStreamWrapper:
         ttft_ms = None
         if self._first_chunk_time is not None:
             ttft_ms = (self._first_chunk_time - self._start_time) * 1000
-        self._finalizer(self._span, self._chunks, elapsed_ms, ttft_ms)
+        if self._incremental:
+            self._finalizer.finish(
+                self._span,
+                elapsed_ms,
+                ttft_ms,
+                interrupted=interrupted,
+            )
+        else:
+            if interrupted:
+                self._span.set_attribute("neatlogs.stream.cancelled", True)
+            self._finalizer(self._span, self._chunks, elapsed_ms, ttft_ms)
 
-    def _finalize_error(self, error: Exception):
+    def _finalize_error(self, error: BaseException):
         if self._finalized:
             return
         self._finalized = True
+        if self._incremental and hasattr(self._finalizer, "fail"):
+            self._finalizer.fail(self._span, error)
+            return
         from opentelemetry.trace import StatusCode
 
-        self._span.set_status(StatusCode.ERROR, str(error))
-        self._span.record_exception(error)
+        if error.__class__.__name__ in {"CancelledError", "GeneratorExit"}:
+            self._span.set_attribute("neatlogs.stream.cancelled", True)
+            self._span.set_status(StatusCode.UNSET)
+        else:
+            self._span.set_status(StatusCode.ERROR, str(error))
+            if isinstance(error, Exception):
+                self._span.record_exception(error)
         self._span.end()
 
     def __getattr__(self, name):
@@ -945,25 +1009,42 @@ class AsyncStreamWrapper:
         self._finalizer = finalizer
         self._start_time = time.perf_counter()
         self._first_chunk_time: Optional[float] = None
+        self._incremental = hasattr(finalizer, "on_chunk") and hasattr(finalizer, "finish")
         self._chunks: List[Any] = []
         self._finalized = False
+        self._exhausted = False
 
     def __aiter__(self):
-        return self
+        async def consume():
+            try:
+                while True:
+                    try:
+                        yield await self.__anext__()
+                    except StopAsyncIteration:
+                        return
+            finally:
+                if not self._finalized:
+                    await self.aclose()
+
+        return consume()
 
     async def __anext__(self):
         try:
             chunk = await self._stream.__anext__()
         except StopAsyncIteration:
-            self._finalize()
+            self._exhausted = True
+            self._finalize(interrupted=False)
             raise
-        except Exception as e:
+        except BaseException as e:
             self._finalize_error(e)
             raise
 
         if self._first_chunk_time is None:
             self._first_chunk_time = time.perf_counter()
-        self._chunks.append(chunk)
+        if self._incremental:
+            self._finalizer.on_chunk(self._span, chunk)
+        else:
+            self._chunks.append(chunk)
         return chunk
 
     async def __aenter__(self):
@@ -971,12 +1052,28 @@ class AsyncStreamWrapper:
             await self._stream.__aenter__()
         return self
 
-    async def __aexit__(self, *args):
-        if hasattr(self._stream, "__aexit__"):
-            await self._stream.__aexit__(*args)
-        self._finalize()
+    async def __aexit__(self, exc_type, exc, tb):
+        try:
+            if hasattr(self._stream, "__aexit__"):
+                await self._stream.__aexit__(exc_type, exc, tb)
+        except BaseException as close_error:
+            self._finalize_error(close_error)
+            raise
+        if exc is not None:
+            self._finalize_error(exc)
+        else:
+            self._finalize(interrupted=not self._exhausted)
 
-    def _finalize(self):
+    async def aclose(self):
+        try:
+            if hasattr(self._stream, "aclose"):
+                await self._stream.aclose()
+        except BaseException as close_error:
+            self._finalize_error(close_error)
+            raise
+        self._finalize(interrupted=not self._exhausted)
+
+    def _finalize(self, *, interrupted: bool):
         if self._finalized:
             return
         self._finalized = True
@@ -984,16 +1081,34 @@ class AsyncStreamWrapper:
         ttft_ms = None
         if self._first_chunk_time is not None:
             ttft_ms = (self._first_chunk_time - self._start_time) * 1000
-        self._finalizer(self._span, self._chunks, elapsed_ms, ttft_ms)
+        if self._incremental:
+            self._finalizer.finish(
+                self._span,
+                elapsed_ms,
+                ttft_ms,
+                interrupted=interrupted,
+            )
+        else:
+            if interrupted:
+                self._span.set_attribute("neatlogs.stream.cancelled", True)
+            self._finalizer(self._span, self._chunks, elapsed_ms, ttft_ms)
 
-    def _finalize_error(self, error: Exception):
+    def _finalize_error(self, error: BaseException):
         if self._finalized:
             return
         self._finalized = True
+        if self._incremental and hasattr(self._finalizer, "fail"):
+            self._finalizer.fail(self._span, error)
+            return
         from opentelemetry.trace import StatusCode
 
-        self._span.set_status(StatusCode.ERROR, str(error))
-        self._span.record_exception(error)
+        if error.__class__.__name__ in {"CancelledError", "GeneratorExit"}:
+            self._span.set_attribute("neatlogs.stream.cancelled", True)
+            self._span.set_status(StatusCode.UNSET)
+        else:
+            self._span.set_status(StatusCode.ERROR, str(error))
+            if isinstance(error, Exception):
+                self._span.record_exception(error)
         self._span.end()
 
     def __getattr__(self, name):

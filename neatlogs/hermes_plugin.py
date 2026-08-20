@@ -71,6 +71,7 @@ from opentelemetry.trace import (
 
 from ._wrap_utils import configure, get_tracer, serialize
 from .core.logger import get_logger
+from .constants import DEFAULT_INGEST_ENDPOINT
 
 
 class _FixedIdGen(RandomIdGenerator):
@@ -178,7 +179,7 @@ def _ensure_configured() -> bool:
 
     # Resolve the endpoint to the SAME canonical default as neatlogs.init()
     # (ingest.neatlogs.com) and honor NEATLOGS_ENDPOINT when set.
-    endpoint = os.environ.get("NEATLOGS_ENDPOINT", "").strip() or "https://ingest.neatlogs.com"
+    endpoint = os.environ.get("NEATLOGS_ENDPOINT", "").strip() or DEFAULT_INGEST_ENDPOINT
     # workflow_name is an init()/configure() argument, not an env var, so we pass
     # our default directly. configure() only sets wrapper-mode defaults; if
     # neatlogs.init() already ran in this process (mixed library+plugin use),

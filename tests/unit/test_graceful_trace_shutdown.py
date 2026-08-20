@@ -221,6 +221,25 @@ def test_shutdown_drains_logs_before_trace_completion(monkeypatch):
     assert order == ["fence", "logs", "root-marker", "traces"]
 
 
+def test_shutdown_deadline_detaches_a_stuck_exporter_generation(monkeypatch):
+    release = threading.Event()
+
+    class Provider:
+        def shutdown(self):
+            release.wait()
+
+    monkeypatch.setattr(init_module, "_tracer_provider", Provider())
+    monkeypatch.setattr(init_module, "_owns_tracer_provider", True)
+    monkeypatch.setattr(init_module, "_log_provider", None)
+    monkeypatch.setattr(init_module, "_span_processor", None)
+    monkeypatch.setattr(init_module, "_completion_span_processor", None)
+    monkeypatch.setattr(init_module, "_instrumentation_manager", None)
+
+    assert init_module.shutdown(timeout_millis=20) is False
+    assert init_module._tracer_provider is None
+    release.set()
+
+
 def test_completion_marker_is_deferred_until_requested():
     provider = TracerProvider()
     lifecycle = NeatlogsSpanProcessor(

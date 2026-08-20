@@ -1,6 +1,8 @@
 """Masking is applied once, off the normalizer, at the final exporter boundary."""
 
 import asyncio
+import threading
+import time
 
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk._logs.export import InMemoryLogRecordExporter, SimpleLogRecordProcessor
@@ -10,7 +12,8 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from neatlogs.core.mask import register_mask
-from neatlogs.core.masking_exporter import MaskingLogExporter, MaskingSpanExporter
+from neatlogs.core.masking_exporter import MaskingLogExporter, MaskingSpanExporter, _MaskRunner
+from neatlogs.core.delivery import DeliveryDiagnostics
 from neatlogs.core.span_processor import NeatlogsSpanProcessor
 
 
@@ -112,6 +115,59 @@ def test_awaitable_mask_runs_and_callback_failure_fails_closed():
     span.end()
     provider.shutdown()
     assert inner.get_finished_spans() == ()
+
+
+def test_context_aware_mask_timeout_is_fail_closed_and_cancellable():
+    blocker = threading.Event()
+    observed = {}
+
+    def stuck_mask(snapshot, context):
+        observed["context"] = context
+        blocker.wait()
+        return snapshot
+
+    provider = TracerProvider()
+    inner = InMemorySpanExporter()
+    diagnostics = DeliveryDiagnostics()
+    provider.add_span_processor(
+        SimpleSpanProcessor(
+            MaskingSpanExporter(inner, stuck_mask, timeout_seconds=0.02, diagnostics=diagnostics)
+        )
+    )
+    span = provider.get_tracer("neatlogs.test").start_span("secret")
+    span.set_attribute("neatlogs.input.value", "must-not-export")
+    span.end()
+
+    context = observed["context"]
+    assert context.signal_type == "span"
+    assert context.cancelled.is_set()
+    assert inner.get_finished_spans() == ()
+    assert diagnostics.snapshot()["masked_span_drops"] == 1
+    blocker.set()
+    provider.shutdown()
+
+
+def test_mask_batch_uses_bounded_parallel_workers():
+    active = 0
+    peak = 0
+    lock = threading.Lock()
+
+    def mask(snapshot):
+        nonlocal active, peak
+        with lock:
+            active += 1
+            peak = max(peak, active)
+        time.sleep(0.02)
+        with lock:
+            active -= 1
+        return snapshot
+
+    runner = _MaskRunner(timeout_seconds=1, max_workers=4)
+    results = runner.apply_many([(mask, {"signal": "span", "index": i}) for i in range(8)])
+    runner.shutdown()
+
+    assert all(result is not None for result in results)
+    assert 2 <= peak <= 4
 
 
 def test_global_mask_covers_logs_and_drops_failed_items():

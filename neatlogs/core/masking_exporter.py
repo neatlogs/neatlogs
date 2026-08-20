@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-import concurrent.futures
 import copy
 import inspect
 import logging
+import queue
+import threading
+import time
+from dataclasses import dataclass
 from collections.abc import Mapping, Sequence
 from typing import Any, Callable
 
@@ -25,45 +28,142 @@ from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
 from opentelemetry.trace import Link, Status, StatusCode
 
 from .mask import effective_mask
+from .delivery import DeliveryDiagnostics
 
 logger = logging.getLogger(__name__)
 
 
-def _mask_call(mask: Callable, snapshot: dict[str, Any], timeout_seconds: float):
-    result = mask(snapshot)
+@dataclass(frozen=True)
+class MaskContext:
+    """Deadline/cancellation information supplied to context-aware masks."""
+
+    signal_type: str
+    timeout_seconds: float
+    deadline_monotonic: float
+    cancelled: threading.Event
+
+
+def _accepts_context(mask: Callable, snapshot: dict[str, Any], context: MaskContext) -> bool:
+    try:
+        inspect.signature(mask).bind(snapshot, context)
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
+def _mask_call(
+    mask: Callable,
+    snapshot: dict[str, Any],
+    timeout_seconds: float,
+    context: MaskContext,
+):
+    result = (
+        mask(snapshot, context) if _accepts_context(mask, snapshot, context) else mask(snapshot)
+    )
     if inspect.isawaitable(result):
         return asyncio.run(asyncio.wait_for(result, timeout=timeout_seconds))
     return result
 
 
 class _MaskRunner:
-    def __init__(self, timeout_seconds: float = 5.0) -> None:
+    def __init__(self, timeout_seconds: float = 5.0, max_workers: int = 4) -> None:
         self._timeout_seconds = timeout_seconds
-        self._executor = concurrent.futures.ThreadPoolExecutor(
-            max_workers=4, thread_name_prefix="neatlogs-mask"
-        )
+        self._max_workers = max_workers
+        self._slots = threading.BoundedSemaphore(max_workers)
+        self._closed = threading.Event()
+        self._active_lock = threading.Lock()
+        self._active_cancellations: set[threading.Event] = set()
 
     def apply(self, mask: Callable, snapshot: dict[str, Any]) -> dict[str, Any] | None:
-        candidate = copy.deepcopy(snapshot)
-        future = self._executor.submit(_mask_call, mask, candidate, self._timeout_seconds)
-        try:
-            result = future.result(timeout=self._timeout_seconds)
-        except Exception as exc:
-            future.cancel()
-            logger.error(
-                "[neatlogs] mask failed; telemetry item dropped (%s)",
-                type(exc).__name__,
+        return self.apply_many(((mask, snapshot),))[0]
+
+    def apply_many(
+        self,
+        items: Sequence[tuple[Callable, dict[str, Any]]],
+    ) -> list[dict[str, Any] | None]:
+        """Mask a batch concurrently under one bounded export-worker deadline."""
+        if not items:
+            return []
+        results: list[dict[str, Any] | None] = [None] * len(items)
+        deadline = time.monotonic() + self._timeout_seconds
+        result_queue: queue.Queue[tuple[int, bool, Any, dict[str, Any]]] = queue.Queue()
+        pending = list(range(len(items)))
+        active: dict[int, threading.Event] = {}
+
+        def launch(index: int) -> bool:
+            if self._closed.is_set() or not self._slots.acquire(blocking=False):
+                return False
+            mask, snapshot = items[index]
+            candidate = copy.deepcopy(snapshot)
+            cancelled = threading.Event()
+            context = MaskContext(
+                signal_type=str(snapshot.get("signal") or "span"),
+                timeout_seconds=max(0.0, deadline - time.monotonic()),
+                deadline_monotonic=deadline,
+                cancelled=cancelled,
             )
-            return None
-        if result is None:
-            return candidate
-        if not isinstance(result, Mapping):
-            logger.error("[neatlogs] mask returned a non-mapping; telemetry item dropped")
-            return None
-        return dict(result)
+            active[index] = cancelled
+            with self._active_lock:
+                self._active_cancellations.add(cancelled)
+
+            def run() -> None:
+                try:
+                    remaining = max(0.001, deadline - time.monotonic())
+                    result = _mask_call(mask, candidate, remaining, context)
+                    result_queue.put((index, True, result, candidate))
+                except BaseException as exc:
+                    result_queue.put((index, False, exc, candidate))
+                finally:
+                    with self._active_lock:
+                        self._active_cancellations.discard(cancelled)
+                    self._slots.release()
+
+            threading.Thread(target=run, name="neatlogs-mask", daemon=True).start()
+            return True
+
+        while pending and len(active) < self._max_workers:
+            if not launch(pending[0]):
+                break
+            pending.pop(0)
+
+        while active and time.monotonic() < deadline:
+            try:
+                index, succeeded, result, candidate = result_queue.get(
+                    timeout=max(0.001, deadline - time.monotonic())
+                )
+            except queue.Empty:
+                break
+            active.pop(index, None)
+            if succeeded and result is None:
+                results[index] = candidate
+            elif succeeded and isinstance(result, Mapping):
+                results[index] = dict(result)
+            elif succeeded:
+                logger.error("[neatlogs] mask returned a non-mapping; telemetry item dropped")
+            else:
+                logger.error(
+                    "[neatlogs] mask failed; telemetry item dropped (%s)",
+                    type(result).__name__,
+                )
+            while pending and len(active) < self._max_workers:
+                if not launch(pending[0]):
+                    break
+                pending.pop(0)
+
+        if active or pending:
+            for cancelled in active.values():
+                cancelled.set()
+            logger.error(
+                "[neatlogs] mask deadline/capacity exhausted; %d telemetry item(s) dropped",
+                len(active) + len(pending),
+            )
+        return results
 
     def shutdown(self) -> None:
-        self._executor.shutdown(wait=False, cancel_futures=True)
+        self._closed.set()
+        with self._active_lock:
+            for cancelled in self._active_cancellations:
+                cancelled.set()
 
 
 def _attrs(value: Any) -> dict[str, Any]:
@@ -155,22 +255,36 @@ def _masked_span(span: ReadableSpan, snapshot: Mapping[str, Any]) -> ReadableSpa
 class MaskingSpanExporter(SpanExporter):
     """Clone, mask and export spans; callback failures drop only the affected span."""
 
-    def __init__(self, inner: SpanExporter, mask: Callable | None) -> None:
+    def __init__(
+        self,
+        inner: SpanExporter,
+        mask: Callable | None,
+        timeout_seconds: float = 5.0,
+        diagnostics: DeliveryDiagnostics | None = None,
+    ) -> None:
         self._inner = inner
         self._global_mask = mask
-        self._runner = _MaskRunner()
+        self._runner = _MaskRunner(timeout_seconds)
+        self._diagnostics = diagnostics
 
     def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
-        kept = []
-        for span in spans:
+        prepared: list[ReadableSpan | None] = [None] * len(spans)
+        masked_inputs: list[tuple[Callable, dict[str, Any]]] = []
+        masked_indexes: list[int] = []
+        for index, span in enumerate(spans):
             snapshot = _span_snapshot(span)
             mask = effective_mask(snapshot, self._global_mask)
             if mask is None:
-                kept.append(span)
+                prepared[index] = span
                 continue
-            masked = self._runner.apply(mask, snapshot)
+            masked_inputs.append((mask, snapshot))
+            masked_indexes.append(index)
+        for index, masked in zip(masked_indexes, self._runner.apply_many(masked_inputs)):
             if masked is not None:
-                kept.append(_masked_span(span, masked))
+                prepared[index] = _masked_span(spans[index], masked)
+            elif self._diagnostics is not None:
+                self._diagnostics.record_masked_drop("span")
+        kept = [span for span in prepared if span is not None]
         if not kept:
             return SpanExportResult.SUCCESS
         return self._inner.export(kept)
@@ -201,18 +315,30 @@ def _log_snapshot(item: ReadableLogRecord) -> dict[str, Any]:
 class MaskingLogExporter(LogRecordExporter):
     """Apply the same global fail-closed mask contract to correlated logs."""
 
-    def __init__(self, inner: LogRecordExporter, mask: Callable | None) -> None:
+    def __init__(
+        self,
+        inner: LogRecordExporter,
+        mask: Callable | None,
+        timeout_seconds: float = 5.0,
+        diagnostics: DeliveryDiagnostics | None = None,
+    ) -> None:
         self._inner = inner
         self._mask = mask
-        self._runner = _MaskRunner()
+        self._runner = _MaskRunner(timeout_seconds)
+        self._diagnostics = diagnostics
 
     def export(self, batch: Sequence[ReadableLogRecord]) -> LogRecordExportResult:
         if self._mask is None:
-            return self._inner.export(batch)
+            result = self._inner.export(batch)
+            if result is not LogRecordExportResult.SUCCESS and self._diagnostics is not None:
+                self._diagnostics.record_export_failure("log", len(batch))
+            return result
         kept = []
-        for item in batch:
-            masked = self._runner.apply(self._mask, _log_snapshot(item))
+        snapshots = [(self._mask, _log_snapshot(item)) for item in batch]
+        for item, masked in zip(batch, self._runner.apply_many(snapshots)):
             if masked is None:
+                if self._diagnostics is not None:
+                    self._diagnostics.record_masked_drop("log")
                 continue
             clone = copy.copy(item)
             clone_record = copy.copy(item.log_record)
@@ -241,7 +367,10 @@ class MaskingLogExporter(LogRecordExporter):
             kept.append(clone)
         if not kept:
             return LogRecordExportResult.SUCCESS
-        return self._inner.export(kept)
+        result = self._inner.export(kept)
+        if result is not LogRecordExportResult.SUCCESS and self._diagnostics is not None:
+            self._diagnostics.record_export_failure("log", len(kept))
+        return result
 
     def force_flush(self, timeout_millis: int = 10000) -> bool:
         # LogRecordExporter.force_flush became abstract in OpenTelemetry 1.44.

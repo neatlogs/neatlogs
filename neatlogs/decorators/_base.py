@@ -15,6 +15,7 @@ from opentelemetry import trace as otel_trace
 from opentelemetry.trace import Status, StatusCode
 
 F = TypeVar("F", bound=Callable[..., Any])
+_MAX_SEMANTIC_STREAM_EVENTS = 128
 
 
 def _capture_code_attrs(func: Callable[..., Any]) -> Dict[str, Any]:
@@ -237,17 +238,35 @@ def _decorate_span(
             return bound
 
         def _record_stream_chunk(span, index: int, value: Any) -> None:
+            if index >= _MAX_SEMANTIC_STREAM_EVENTS:
+                return
+            serialized = _safe_json_dumps(value)
+            summary: Dict[str, Any] = {
+                "value_type": type(value).__name__,
+                "encoded_bytes": len(serialized.encode("utf-8")),
+            }
+            if isinstance(value, dict):
+                summary["keys"] = sorted(str(key) for key in value.keys())
+            elif isinstance(value, (list, tuple)):
+                summary["items"] = len(value)
             span.add_event(
                 "neatlogs.stream.chunk",
                 {
                     "neatlogs.stream.chunk.index": index,
-                    "neatlogs.stream.chunk.value": _safe_json_dumps(value),
-                    "neatlogs.stream.chunk.mime_type": "application/json",
+                    "neatlogs.stream.chunk.summary": _safe_json_dumps(summary),
                 },
             )
 
+        def _set_stream_counts(span, count: int) -> None:
+            span.set_attribute("neatlogs.stream.chunk_count", count)
+            if count > _MAX_SEMANTIC_STREAM_EVENTS:
+                span.set_attribute(
+                    "neatlogs.stream.events_dropped",
+                    count - _MAX_SEMANTIC_STREAM_EVENTS,
+                )
+
         def _finish_stream(span, chunks: list[Any], bound_inputs: Dict[str, Any]) -> None:
-            span.set_attribute("neatlogs.stream.chunk_count", len(chunks))
+            _set_stream_counts(span, len(chunks))
             if postprocess_result is not None:
                 try:
                     postprocess_result(span, chunks, bound_inputs)
@@ -279,13 +298,13 @@ def _decorate_span(
                         _finish_stream(span, chunks, bound_inputs)
                     except (GeneratorExit, asyncio.CancelledError):
                         span.set_attribute("neatlogs.stream.cancelled", True)
-                        span.set_attribute("neatlogs.stream.chunk_count", len(chunks))
+                        _set_stream_counts(span, len(chunks))
                         if cap_out:
                             span.set_attribute("output.value", _safe_json_dumps(chunks))
                             span.set_attribute("output.mime_type", "application/json")
                         raise
                     except Exception as exc:
-                        span.set_attribute("neatlogs.stream.chunk_count", len(chunks))
+                        _set_stream_counts(span, len(chunks))
                         if cap_out:
                             span.set_attribute("output.value", _safe_json_dumps(chunks))
                             span.set_attribute("output.mime_type", "application/json")
@@ -319,13 +338,13 @@ def _decorate_span(
                         _finish_stream(span, chunks, bound_inputs)
                     except GeneratorExit:
                         span.set_attribute("neatlogs.stream.cancelled", True)
-                        span.set_attribute("neatlogs.stream.chunk_count", len(chunks))
+                        _set_stream_counts(span, len(chunks))
                         if cap_out:
                             span.set_attribute("output.value", _safe_json_dumps(chunks))
                             span.set_attribute("output.mime_type", "application/json")
                         raise
                     except Exception as exc:
-                        span.set_attribute("neatlogs.stream.chunk_count", len(chunks))
+                        _set_stream_counts(span, len(chunks))
                         if cap_out:
                             span.set_attribute("output.value", _safe_json_dumps(chunks))
                             span.set_attribute("output.mime_type", "application/json")
@@ -393,6 +412,10 @@ def _decorate_span(
                             span.set_attribute("output.mime_type", "application/json")
                         span.set_status(Status(StatusCode.OK))
                         return result
+                    except asyncio.CancelledError:
+                        span.set_attribute("neatlogs.stream.cancelled", True)
+                        span.set_status(Status(StatusCode.UNSET))
+                        raise
                     except Exception as e:
                         span.record_exception(e)
                         span.set_status(Status(StatusCode.ERROR, str(e)))

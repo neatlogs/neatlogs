@@ -1,0 +1,1987 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.neatlogs.com/telemetry/v2/neatlogs-telemetry.schema.json",
+  "title": "NeatLogs Canonical Telemetry Span Envelope v2",
+  "description": "The language-neutral canonical span representation used after capture normalization and before masking/export.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "trace_id",
+    "span_id",
+    "parent_span_id",
+    "name",
+    "kind",
+    "ownership",
+    "wrapper",
+    "input",
+    "output",
+    "status",
+    "error",
+    "code",
+    "provenance",
+    "conflicts",
+    "semantic",
+    "attributes"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 2
+    },
+    "trace_id": {
+      "$ref": "#/$defs/traceId"
+    },
+    "span_id": {
+      "$ref": "#/$defs/spanId"
+    },
+    "parent_span_id": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/spanId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024
+    },
+    "kind": {
+      "$ref": "#/$defs/spanKind"
+    },
+    "start_time_unix_nano": {
+      "$ref": "#/$defs/uint64String"
+    },
+    "end_time_unix_nano": {
+      "$ref": "#/$defs/uint64String"
+    },
+    "ownership": {
+      "$ref": "#/$defs/ownership"
+    },
+    "wrapper": {
+      "$ref": "#/$defs/wrapper"
+    },
+    "input": {
+      "$ref": "#/$defs/typedValue"
+    },
+    "output": {
+      "$ref": "#/$defs/typedValue"
+    },
+    "status": {
+      "$ref": "#/$defs/status"
+    },
+    "error": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/error"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "code": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/codeLocation"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "provenance": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/provenance"
+      }
+    },
+    "conflicts": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/conflict"
+      }
+    },
+    "semantic": {
+      "$ref": "#/$defs/semantic"
+    },
+    "attributes": {
+      "type": "object",
+      "description": "Non-canonical source attributes retained for compatibility and debugging. They never override canonical fields.",
+      "additionalProperties": {
+        "$ref": "#/$defs/jsonValue"
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "LLM"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "semantic": {
+            "$ref": "#/$defs/llmSemantic"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "enum": [
+              "TOOL",
+              "MCP_TOOL"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "semantic": {
+            "$ref": "#/$defs/toolSemantic"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "RETRIEVER"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "semantic": {
+            "$ref": "#/$defs/retrieverSemantic"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "RERANKER"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "semantic": {
+            "$ref": "#/$defs/rerankerSemantic"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "EMBEDDING"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "semantic": {
+            "$ref": "#/$defs/embeddingSemantic"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "VECTOR_STORE"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "semantic": {
+            "$ref": "#/$defs/vectorStoreSemantic"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "MEMORY"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "semantic": {
+            "$ref": "#/$defs/memorySemantic"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "GUARDRAIL"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "semantic": {
+            "$ref": "#/$defs/guardrailSemantic"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "LOG"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "semantic": {
+            "$ref": "#/$defs/logSemantic"
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "traceId": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{32}$"
+    },
+    "spanId": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{16}$"
+    },
+    "uint64String": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)$"
+    },
+    "jsonValue": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "string"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/jsonValue"
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/jsonValue"
+          }
+        }
+      ]
+    },
+    "spanKind": {
+      "type": "string",
+      "enum": [
+        "WORKFLOW",
+        "AGENT",
+        "CHAIN",
+        "TASK",
+        "LLM",
+        "TOOL",
+        "MCP_TOOL",
+        "RETRIEVER",
+        "RERANKER",
+        "EMBEDDING",
+        "VECTOR_STORE",
+        "MEMORY",
+        "GUARDRAIL",
+        "LOG",
+        "HTTP",
+        "UNKNOWN"
+      ]
+    },
+    "ownership": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "owner",
+        "provider_generation",
+        "project_key_id",
+        "propagation"
+      ],
+      "properties": {
+        "owner": {
+          "type": "string",
+          "enum": [
+            "neatlogs-sdk",
+            "neatlogs-ingest-adapter",
+            "neatlogs-backend-recovery",
+            "external-otel"
+          ]
+        },
+        "provider_generation": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "project_key_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "propagation": {
+          "type": "string",
+          "enum": [
+            "local-private-context",
+            "explicit-neatlogs-remote",
+            "backend-projection",
+            "external-ingest"
+          ]
+        }
+      }
+    },
+    "wrapper": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "captured",
+        "integration",
+        "integration_version",
+        "capture_fidelity"
+      ],
+      "properties": {
+        "captured": {
+          "type": "boolean"
+        },
+        "integration": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "integration_version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "capture_fidelity": {
+          "type": "string",
+          "enum": [
+            "native",
+            "normalized",
+            "flattened",
+            "synthetic-recovery",
+            "unknown"
+          ]
+        }
+      }
+    },
+    "typedValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "value",
+        "media"
+      ],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "none",
+            "text",
+            "json",
+            "messages",
+            "documents",
+            "media",
+            "binary-reference"
+          ]
+        },
+        "value": {
+          "$ref": "#/$defs/jsonValue"
+        },
+        "media": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/mediaReference"
+          }
+        }
+      }
+    },
+    "mediaReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "sha256",
+        "mime_type",
+        "byte_length",
+        "source",
+        "purpose",
+        "state",
+        "safe_preview"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "mime_type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "byte_length": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "source": {
+          "type": "string",
+          "enum": [
+            "inline",
+            "url",
+            "file",
+            "provider",
+            "uploaded",
+            "generated"
+          ]
+        },
+        "purpose": {
+          "type": "string",
+          "enum": [
+            "input",
+            "output",
+            "tool-argument",
+            "tool-result",
+            "document",
+            "raw-stream",
+            "overflow"
+          ]
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "inline",
+            "pending-upload",
+            "available",
+            "failed",
+            "expired"
+          ]
+        },
+        "safe_preview": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 4096
+        }
+      }
+    },
+    "status": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "message",
+        "source"
+      ],
+      "properties": {
+        "code": {
+          "type": "string",
+          "enum": [
+            "UNSET",
+            "OK",
+            "ERROR"
+          ]
+        },
+        "message": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "type": "string",
+          "enum": [
+            "application",
+            "provider",
+            "sdk",
+            "backend-recovery",
+            "unknown"
+          ]
+        }
+      }
+    },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "message",
+        "stack",
+        "escaped"
+      ],
+      "properties": {
+        "type": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "message": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "stack": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "escaped": {
+          "type": "boolean"
+        }
+      }
+    },
+    "codeLocation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "file",
+        "function",
+        "line",
+        "column",
+        "namespace"
+      ],
+      "properties": {
+        "file": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "function": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "line": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        },
+        "column": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        },
+        "namespace": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "sourceDialect": {
+      "type": "string",
+      "enum": [
+        "native-v2",
+        "neatlogs-direct",
+        "otel-genai",
+        "openinference",
+        "provider-specific",
+        "external-legacy",
+        "unknown-raw"
+      ]
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "target",
+        "source_dialect",
+        "source_key",
+        "precedence",
+        "action"
+      ],
+      "properties": {
+        "target": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source_dialect": {
+          "$ref": "#/$defs/sourceDialect"
+        },
+        "source_key": {
+          "type": "string",
+          "minLength": 1
+        },
+        "precedence": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 7
+        },
+        "action": {
+          "type": "string",
+          "enum": [
+            "accepted",
+            "synthesized",
+            "missing",
+            "ignored-lower-precedence",
+            "retained-raw",
+            "rejected-invalid"
+          ]
+        }
+      }
+    },
+    "conflict": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "target",
+        "winner_source_key",
+        "loser_source_key",
+        "reason_code"
+      ],
+      "properties": {
+        "target": {
+          "type": "string",
+          "minLength": 1
+        },
+        "winner_source_key": {
+          "type": "string",
+          "minLength": 1
+        },
+        "loser_source_key": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason_code": {
+          "type": "string",
+          "enum": [
+            "LOWER_PRECEDENCE",
+            "INVALID_TYPE",
+            "INVALID_JSON",
+            "EMPTY_VALUE",
+            "DUPLICATE_SEMANTIC_VALUE",
+            "UNSUPPORTED_SOURCE"
+          ]
+        }
+      }
+    },
+    "message": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "role",
+        "name",
+        "content",
+        "tool_calls",
+        "tool_call_id"
+      ],
+      "properties": {
+        "role": {
+          "type": "string",
+          "enum": [
+            "system",
+            "developer",
+            "user",
+            "assistant",
+            "tool"
+          ]
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "content": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/contentPart"
+          }
+        },
+        "tool_calls": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/toolCall"
+          }
+        },
+        "tool_call_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "contentPart": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "text"
+          ],
+          "properties": {
+            "type": {
+              "const": "text"
+            },
+            "text": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "reference"
+          ],
+          "properties": {
+            "type": {
+              "enum": [
+                "image",
+                "audio",
+                "document",
+                "video"
+              ]
+            },
+            "reference": {
+              "$ref": "#/$defs/mediaReference"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "call_id",
+            "value",
+            "is_error"
+          ],
+          "properties": {
+            "type": {
+              "const": "tool_result"
+            },
+            "call_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "value": {
+              "$ref": "#/$defs/jsonValue"
+            },
+            "is_error": {
+              "type": "boolean"
+            }
+          }
+        }
+      ]
+    },
+    "toolDefinition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "name",
+        "description",
+        "schema",
+        "configuration"
+      ],
+      "properties": {
+        "type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "schema": {
+          "$ref": "#/$defs/jsonValue"
+        },
+        "configuration": {
+          "$ref": "#/$defs/jsonValue"
+        }
+      }
+    },
+    "toolCall": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "id_origin",
+        "type",
+        "name",
+        "arguments",
+        "choice_index",
+        "tool_index"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "id_origin": {
+          "type": "string",
+          "enum": [
+            "neatlogs-direct",
+            "provider",
+            "deterministic-synthetic"
+          ]
+        },
+        "type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "arguments": {
+          "$ref": "#/$defs/jsonValue"
+        },
+        "choice_index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "tool_index": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "toolResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "call_id",
+        "value",
+        "is_error",
+        "media"
+      ],
+      "properties": {
+        "call_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "value": {
+          "$ref": "#/$defs/jsonValue"
+        },
+        "is_error": {
+          "type": "boolean"
+        },
+        "media": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/mediaReference"
+          }
+        }
+      }
+    },
+    "llmParameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "temperature",
+        "top_p",
+        "top_k",
+        "max_output_tokens",
+        "stop",
+        "seed",
+        "frequency_penalty",
+        "presence_penalty",
+        "response_format",
+        "reasoning",
+        "service_tier",
+        "provider_options"
+      ],
+      "properties": {
+        "temperature": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "top_p": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "top_k": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "max_output_tokens": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "stop": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "seed": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "frequency_penalty": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "presence_penalty": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "response_format": {
+          "$ref": "#/$defs/jsonValue"
+        },
+        "reasoning": {
+          "$ref": "#/$defs/jsonValue"
+        },
+        "service_tier": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "provider_options": {
+          "$ref": "#/$defs/jsonValue"
+        }
+      }
+    },
+    "llmRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider",
+        "model",
+        "operation",
+        "messages",
+        "tools",
+        "parameters"
+      ],
+      "properties": {
+        "provider": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "operation": {
+          "type": "string",
+          "enum": [
+            "chat",
+            "completion",
+            "responses",
+            "generate",
+            "unknown"
+          ]
+        },
+        "messages": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/message"
+          }
+        },
+        "tools": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/toolDefinition"
+          }
+        },
+        "parameters": {
+          "$ref": "#/$defs/llmParameters"
+        }
+      }
+    },
+    "llmChoice": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "choice_index",
+        "message",
+        "finish_reason"
+      ],
+      "properties": {
+        "choice_index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "message": {
+          "$ref": "#/$defs/message"
+        },
+        "finish_reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "llmResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "model",
+        "choices",
+        "finish_reasons"
+      ],
+      "properties": {
+        "id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "choices": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/llmChoice"
+          }
+        },
+        "finish_reasons": {
+          "type": "array",
+          "items": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      }
+    },
+    "llmUsage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "input_tokens",
+        "output_tokens",
+        "total_tokens",
+        "reasoning_tokens",
+        "cache_read_tokens",
+        "cache_write_tokens",
+        "cost_usd"
+      ],
+      "properties": {
+        "input_tokens": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "output_tokens": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "total_tokens": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "reasoning_tokens": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "cache_read_tokens": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "cache_write_tokens": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "cost_usd": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        }
+      }
+    },
+    "streamEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sequence",
+        "time_unix_nano",
+        "type",
+        "choice_index",
+        "tool_index",
+        "value"
+      ],
+      "properties": {
+        "sequence": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "time_unix_nano": {
+          "$ref": "#/$defs/uint64String"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "output_text.delta",
+            "reasoning.delta",
+            "tool_call.delta",
+            "choice.finish",
+            "usage",
+            "error"
+          ]
+        },
+        "choice_index": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "tool_index": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "value": {
+          "$ref": "#/$defs/jsonValue"
+        }
+      }
+    },
+    "llmStream": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "time_to_first_token_ms",
+        "chunk_count",
+        "choice_count",
+        "events",
+        "raw_chunks"
+      ],
+      "properties": {
+        "time_to_first_token_ms": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "chunk_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "choice_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "events": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/streamEvent"
+          }
+        },
+        "raw_chunks": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/mediaReference"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "llmSemantic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "request",
+        "response",
+        "usage",
+        "stream"
+      ],
+      "properties": {
+        "kind": {
+          "const": "LLM"
+        },
+        "request": {
+          "$ref": "#/$defs/llmRequest"
+        },
+        "response": {
+          "$ref": "#/$defs/llmResponse"
+        },
+        "usage": {
+          "$ref": "#/$defs/llmUsage"
+        },
+        "stream": {
+          "$ref": "#/$defs/llmStream"
+        }
+      }
+    },
+    "toolSemantic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "definition",
+        "call",
+        "result",
+        "requesting_span_id",
+        "transport"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "TOOL",
+            "MCP_TOOL"
+          ]
+        },
+        "definition": {
+          "$ref": "#/$defs/toolDefinition"
+        },
+        "call": {
+          "$ref": "#/$defs/toolCall"
+        },
+        "result": {
+          "$ref": "#/$defs/toolResult"
+        },
+        "requesting_span_id": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/spanId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "transport": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/mcpTransport"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "document": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "content",
+        "score",
+        "metadata",
+        "media"
+      ],
+      "properties": {
+        "id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "content": {
+          "$ref": "#/$defs/jsonValue"
+        },
+        "score": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "metadata": {
+          "$ref": "#/$defs/jsonValue"
+        },
+        "media": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/mediaReference"
+          }
+        }
+      }
+    },
+    "retrieverSemantic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "query",
+        "documents",
+        "top_k",
+        "filters"
+      ],
+      "properties": {
+        "kind": {
+          "const": "RETRIEVER"
+        },
+        "query": {
+          "$ref": "#/$defs/jsonValue"
+        },
+        "documents": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/document"
+          }
+        },
+        "top_k": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "filters": {
+          "$ref": "#/$defs/jsonValue"
+        }
+      }
+    },
+    "rerankerSemantic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "model",
+        "query",
+        "input_documents",
+        "output_documents",
+        "top_n"
+      ],
+      "properties": {
+        "kind": {
+          "const": "RERANKER"
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "query": {
+          "$ref": "#/$defs/jsonValue"
+        },
+        "input_documents": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/document"
+          }
+        },
+        "output_documents": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/document"
+          }
+        },
+        "top_n": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        }
+      }
+    },
+    "embeddingSemantic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "provider",
+        "model",
+        "inputs",
+        "vectors",
+        "dimensions",
+        "usage"
+      ],
+      "properties": {
+        "kind": {
+          "const": "EMBEDDING"
+        },
+        "provider": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "inputs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/jsonValue"
+          }
+        },
+        "vectors": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            }
+          }
+        },
+        "dimensions": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "usage": {
+          "$ref": "#/$defs/llmUsage"
+        }
+      }
+    },
+    "vectorStoreSemantic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "provider",
+        "operation",
+        "collection",
+        "query",
+        "documents"
+      ],
+      "properties": {
+        "kind": {
+          "const": "VECTOR_STORE"
+        },
+        "provider": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "operation": {
+          "type": "string",
+          "minLength": 1
+        },
+        "collection": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "query": {
+          "$ref": "#/$defs/jsonValue"
+        },
+        "documents": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/document"
+          }
+        }
+      }
+    },
+    "memorySemantic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "operation",
+        "memory_id",
+        "scope",
+        "value"
+      ],
+      "properties": {
+        "kind": {
+          "const": "MEMORY"
+        },
+        "operation": {
+          "type": "string",
+          "enum": [
+            "read",
+            "write",
+            "update",
+            "delete",
+            "search",
+            "unknown"
+          ]
+        },
+        "memory_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "scope": {
+          "$ref": "#/$defs/jsonValue"
+        },
+        "value": {
+          "$ref": "#/$defs/jsonValue"
+        }
+      }
+    },
+    "guardrailSemantic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "name",
+        "action",
+        "triggered",
+        "score",
+        "reason"
+      ],
+      "properties": {
+        "kind": {
+          "const": "GUARDRAIL"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "action": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "triggered": {
+          "type": "boolean"
+        },
+        "score": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "mcpTransport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "transport",
+        "server",
+        "method",
+        "request_id"
+      ],
+      "properties": {
+        "transport": {
+          "type": "string",
+          "enum": [
+            "stdio",
+            "sse",
+            "streamable-http",
+            "websocket",
+            "unknown"
+          ]
+        },
+        "server": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "method": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "request_id": {
+          "type": [
+            "string",
+            "number",
+            "null"
+          ]
+        }
+      }
+    },
+    "logSemantic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "severity_text",
+        "severity_number",
+        "body",
+        "logger_name"
+      ],
+      "properties": {
+        "kind": {
+          "const": "LOG"
+        },
+        "severity_text": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "severity_number": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "body": {
+          "$ref": "#/$defs/jsonValue"
+        },
+        "logger_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "operationSemantic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "operation",
+        "role",
+        "metadata",
+        "recovery"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "WORKFLOW",
+            "AGENT",
+            "CHAIN",
+            "TASK",
+            "HTTP",
+            "UNKNOWN"
+          ]
+        },
+        "operation": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "role": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "metadata": {
+          "$ref": "#/$defs/jsonValue"
+        },
+        "recovery": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/recovery"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "recovery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "synthetic",
+        "reason",
+        "recovery_span_id",
+        "genuine_root_span_id",
+        "reconciled"
+      ],
+      "properties": {
+        "synthetic": {
+          "const": true
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "recovery_span_id": {
+          "$ref": "#/$defs/spanId"
+        },
+        "genuine_root_span_id": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/spanId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reconciled": {
+          "type": "boolean"
+        }
+      }
+    },
+    "semantic": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/llmSemantic"
+        },
+        {
+          "$ref": "#/$defs/toolSemantic"
+        },
+        {
+          "$ref": "#/$defs/retrieverSemantic"
+        },
+        {
+          "$ref": "#/$defs/rerankerSemantic"
+        },
+        {
+          "$ref": "#/$defs/embeddingSemantic"
+        },
+        {
+          "$ref": "#/$defs/vectorStoreSemantic"
+        },
+        {
+          "$ref": "#/$defs/memorySemantic"
+        },
+        {
+          "$ref": "#/$defs/guardrailSemantic"
+        },
+        {
+          "$ref": "#/$defs/logSemantic"
+        },
+        {
+          "$ref": "#/$defs/operationSemantic"
+        }
+      ]
+    }
+  },
+  "x-neatlogs-policy": {
+    "contract_version": "2.0.0",
+    "attribute_prefix": "neatlogs.v2",
+    "conflict_precedence": [
+      "native-v2",
+      "neatlogs-direct",
+      "otel-genai",
+      "openinference",
+      "provider-specific",
+      "external-legacy",
+      "unknown-raw"
+    ],
+    "tool_calls": {
+      "assistant_requests_live_in_assistant_message": true,
+      "execution_is_separate_tool_span": true,
+      "id_precedence": [
+        "neatlogs-direct",
+        "provider",
+        "deterministic-synthetic"
+      ],
+      "retain_unlinked_execution": true,
+      "forbid_name_timing_merge": true
+    },
+    "root_finalization": {
+      "launch_sdk_auto_workflow_roots": true,
+      "launch_completion_markers": true,
+      "stale_root_recovery_is_safety_net": true,
+      "recovered_root_status_must_not_be_fabricated_ok": true,
+      "preserve_late_genuine_root_identity": true,
+      "logical_root_only_finalization": "deferred-post-launch"
+    },
+    "launch_scope": {
+      "sdk_transport": "otlp-http-protobuf",
+      "python_openinference_compatibility": "retain-where-active",
+      "sdk_product_apis_excluded": [
+        "datasets",
+        "evaluations",
+        "scoring",
+        "experiments",
+        "new-prompt-apis"
+      ],
+      "new_go_integrations": false,
+      "typescript_edge_entrypoint": false
+    },
+    "compatibility": [
+      {
+        "dialect": "neatlogs-direct",
+        "patterns": [
+          "neatlogs.span.kind",
+          "neatlogs.workflow.*",
+          "neatlogs.agent.*",
+          "neatlogs.llm.*",
+          "neatlogs.tool.*",
+          "neatlogs.retriever.*",
+          "neatlogs.reranker.*",
+          "neatlogs.embedding.*",
+          "neatlogs.vector_store.*",
+          "neatlogs.memory.*",
+          "neatlogs.guardrail.*",
+          "neatlogs.mcp.*",
+          "neatlogs.code.*"
+        ],
+        "launch_state": "accepted"
+      },
+      {
+        "dialect": "otel-genai",
+        "patterns": [
+          "gen_ai.*"
+        ],
+        "launch_state": "accepted-at-normalization-boundary"
+      },
+      {
+        "dialect": "openinference",
+        "patterns": [
+          "openinference.span.kind",
+          "input.value",
+          "input.mime_type",
+          "output.value",
+          "output.mime_type",
+          "llm.*",
+          "tool.*",
+          "retrieval.*",
+          "embedding.*"
+        ],
+        "launch_state": "accepted-for-active-python-integrations"
+      },
+      {
+        "dialect": "provider-specific",
+        "patterns": [
+          "ai.*",
+          "openai.*",
+          "anthropic.*",
+          "aws.bedrock.*",
+          "google_genai.*",
+          "vertex_ai.*"
+        ],
+        "launch_state": "accepted-at-source-adapter"
+      },
+      {
+        "dialect": "external-legacy",
+        "patterns": [
+          "traceloop.*",
+          "openlit.*"
+        ],
+        "launch_state": "accepted-with-provenance"
+      },
+      {
+        "dialect": "unknown-raw",
+        "patterns": [
+          "*"
+        ],
+        "launch_state": "retain-raw-never-overwrite-canonical"
+      }
+    ],
+    "compatibility_removal_gate": {
+      "minimum_releases": 2,
+      "minimum_observation_days": 30,
+      "requires_zero_mapping_hits": true,
+      "requires_source_adapter_migration": true,
+      "requires_golden_fixture_removal_review": true
+    },
+    "deferred_post_launch": [
+      "logical-root-only-finalization",
+      "automatic-root-removal",
+      "completion-marker-removal",
+      "user-defined-export-filter",
+      "runtime-tracing-toggle",
+      "new-go-integrations",
+      "typescript-edge-entrypoint",
+      "sdk-datasets-evaluations-scoring-experiments"
+    ]
+  }
+}

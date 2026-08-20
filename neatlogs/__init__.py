@@ -55,6 +55,14 @@ from .prompt.client import (
     update_prompt,
 )
 from .prompt.template import PromptTemplate, SystemPromptTemplate, UserPromptTemplate
+from .schema_v2 import (
+    TELEMETRY_CONTRACT_VERSION,
+    TELEMETRY_SCHEMA_SHA256,
+    TELEMETRY_SCHEMA_VERSION,
+    telemetry_schema,
+    telemetry_schema_bytes,
+    verify_telemetry_schema,
+)
 from .version import __version__
 
 

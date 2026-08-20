@@ -11,6 +11,7 @@ import time
 from typing import Any, Callable, Dict, List, Optional
 from urllib.parse import unquote
 
+from opentelemetry import context as context_api
 from opentelemetry.context import Context
 from opentelemetry.sdk.trace import ReadableSpan, Span, SpanProcessor
 from opentelemetry.trace import Status, StatusCode
@@ -173,6 +174,9 @@ class NeatlogsSpanProcessor(SpanProcessor):
         # a shared provider never lets us end another observability SDK's spans.
         self._active_spans: dict[int, Span] = {}
         self._active_spans_lock = threading.RLock()
+        self._owned_span_ids: set[int] = set()
+        self._ownership_context_key = context_api.create_key("neatlogs.span_processor.owner")
+        self._ownership_context_token = object()
         self._downstream_condition = threading.Condition(self._active_spans_lock)
         self._downstream_pending: set[int] = set()
         self._closing_reason: Optional[str] = None
@@ -235,17 +239,24 @@ class NeatlogsSpanProcessor(SpanProcessor):
             owned = False
             with self._active_spans_lock:
                 parent_id = span.parent.span_id if span.parent is not None else None
+                context_owned = (
+                    parent_context is not None
+                    and context_api.get_value(self._ownership_context_key, parent_context)
+                    is self._ownership_context_token
+                )
                 # Framework auto-instrumentation uses its own scope name. Once
                 # it nests under a Neatlogs span it is part of the SDK-owned
                 # trace and must close before that parent. Foreign roots on a
                 # shared provider remain outside the registry.
                 owned = (
                     self.own_all_spans
+                    or context_owned
                     or _is_neatlogs_scope_span(span)
                     or parent_id in self._active_spans
                 )
                 if owned and not is_completion_marker:
                     self._active_spans[span.context.span_id] = span
+                    self._owned_span_ids.add(span.context.span_id)
                     marker = _verification_marker_from_env()
                     if marker:
                         span.set_attribute("neatlogs.verification.marker", marker)
@@ -604,7 +615,24 @@ class NeatlogsSpanProcessor(SpanProcessor):
                     self._completion_eligible_roots.add(span.context.span_id)
 
         finally:
+            if not self._completion_coordination_enabled:
+                with self._active_spans_lock:
+                    self._owned_span_ids.discard(span.context.span_id)
             self.perf_stats["on_end_time"] += time.perf_counter() - start_time
+
+    def owned_span_context(self, context: Optional[Context] = None) -> Context:
+        """Mark a tracer start as owned by this processor without claiming peers.
+
+        This is used by ``Client`` when it is attached to a caller-supplied
+        provider. The marker exists only in OTel context; it is not exported as a
+        span attribute and therefore cannot affect customer telemetry.
+        """
+        base = context if context is not None else context_api.get_current()
+        return context_api.set_value(
+            self._ownership_context_key,
+            self._ownership_context_token,
+            base,
+        )
 
     def end_active_spans(self, reason: str = "shutdown") -> int:
         """End active Neatlogs spans child-first before provider shutdown.
@@ -672,6 +700,7 @@ class NeatlogsSpanProcessor(SpanProcessor):
     def mark_downstream_complete(self, span: ReadableSpan) -> None:
         with self._downstream_condition:
             self._downstream_pending.discard(span.context.span_id)
+            self._owned_span_ids.discard(span.context.span_id)
             self._downstream_condition.notify_all()
 
     def wait_for_downstream(self, timeout_millis: int = 30000) -> bool:
@@ -698,7 +727,9 @@ class NeatlogsSpanProcessor(SpanProcessor):
         )
 
     def owns_span(self, span: ReadableSpan) -> bool:
-        return self.own_all_spans or _is_neatlogs_scope_span(span)
+        with self._active_spans_lock:
+            context_owned = span.context.span_id in self._owned_span_ids
+        return self.own_all_spans or context_owned or _is_neatlogs_scope_span(span)
 
     def consume_completion_eligibility(self, span: ReadableSpan) -> bool:
         if self._closed:

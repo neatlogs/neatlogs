@@ -293,25 +293,35 @@ class _ForeignParentGuardTracer:
     integration that starts spans via get_tracer() (crewai, openai_agents,
     pydantic_ai, google_adk, agno, strands, hermes, claude_agent_sdk, ...)."""
 
-    __slots__ = ("_tracer",)
+    __slots__ = ("_tracer", "_context_transform")
 
-    def __init__(self, tracer: otel_trace.Tracer):
+    def __init__(
+        self,
+        tracer: otel_trace.Tracer,
+        context_transform: Optional[
+            Callable[[Optional[context_api.Context]], context_api.Context]
+        ] = None,
+    ):
         object.__setattr__(self, "_tracer", tracer)
+        object.__setattr__(self, "_context_transform", context_transform)
 
-    def start_span(self, *args: Any, **kwargs: Any):
-        tracer = object.__getattribute__(self, "_tracer")
+    def _prepare_context(self, kwargs: Dict[str, Any]) -> None:
         if "context" not in kwargs:
             guard = _neatlogs_root_kwargs()  # {} or {"context": empty} if foreign parent
             if guard:
                 kwargs.update(guard)
+        transform = object.__getattribute__(self, "_context_transform")
+        if transform is not None:
+            kwargs["context"] = transform(kwargs.get("context"))
+
+    def start_span(self, *args: Any, **kwargs: Any):
+        tracer = object.__getattribute__(self, "_tracer")
+        self._prepare_context(kwargs)
         return tracer.start_span(*args, **kwargs)
 
     def start_as_current_span(self, *args: Any, **kwargs: Any):
         tracer = object.__getattribute__(self, "_tracer")
-        if "context" not in kwargs:
-            guard = _neatlogs_root_kwargs()
-            if guard:
-                kwargs.update(guard)
+        self._prepare_context(kwargs)
         return tracer.start_as_current_span(*args, **kwargs)
 
     def __getattr__(self, name: str) -> Any:

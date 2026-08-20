@@ -108,9 +108,10 @@ class Client:
 
         self._span_processor = NeatlogsSpanProcessor(
             emit_completion_markers=False,
-            # Client activation is an isolated project pipeline. Caller-owned
-            # provider shutdown semantics do not change span ownership here.
-            own_all_spans=True,
+            # A private provider is an isolated project pipeline. A caller-owned
+            # provider may be shared with host telemetry, so ownership is marked
+            # per Client tracer start instead of claiming every provider span.
+            own_all_spans=self._owns_provider,
         )
         self.tracer_provider.add_span_processor(self._span_processor)
         self._transport_processors: list[Any] = []
@@ -157,7 +158,10 @@ class Client:
     def get_tracer(self, scope: str):
         tracer = self._tracers.get(scope)
         if tracer is None:
-            guarded = _ForeignParentGuardTracer(self.tracer_provider.get_tracer(scope))
+            guarded = _ForeignParentGuardTracer(
+                self.tracer_provider.get_tracer(scope),
+                context_transform=self._span_processor.owned_span_context,
+            )
             tracer = _ClientLifecycleTracer(self, guarded)
             self._tracers[scope] = tracer
         return tracer

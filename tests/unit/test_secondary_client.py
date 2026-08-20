@@ -152,6 +152,21 @@ def test_client_shutdown_ends_active_spans_and_blocks_cached_tracer():
             pass
 
 
+def test_client_shutdown_does_not_end_foreign_span_on_caller_provider():
+    client, provider, exporter = _client("shared")
+    foreign = provider.get_tracer("host.application").start_span("host-work")
+
+    assert foreign.is_recording()
+    assert client.shutdown(termination_reason="SIGTERM") is True
+    assert foreign.is_recording()
+    assert "neatlogs.trace.interrupted" not in foreign.attributes
+
+    foreign.end()
+    finished = next(span for span in exporter.get_finished_spans() if span.name == "host-work")
+    assert finished.status.status_code.name == "UNSET"
+    assert "neatlogs.trace.interrupted" not in finished.attributes
+
+
 def test_client_inherits_temporary_verification_resource_marker(monkeypatch):
     monkeypatch.setenv(
         "OTEL_RESOURCE_ATTRIBUTES",

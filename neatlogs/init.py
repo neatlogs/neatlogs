@@ -3,7 +3,9 @@ Neatlogs SDK.
 """
 
 import atexit
+import concurrent.futures
 import functools
+import math
 import os
 import re
 import signal
@@ -11,12 +13,7 @@ import sys
 import threading
 from typing import Any, Callable, Dict, List, Optional
 
-try:
-    from opentelemetry import logs
-except ImportError:
-    from opentelemetry import _logs as logs  # type: ignore[no-redef]
-
-from opentelemetry import metrics, trace
+from opentelemetry import trace as otel_trace
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
@@ -24,15 +21,15 @@ from opentelemetry.sdk.environment_variables import (
     OTEL_ATTRIBUTE_COUNT_LIMIT,
     OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT,
 )
-from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.resources import SERVICE_NAME, Resource
 from opentelemetry.sdk.trace import SpanLimits, TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
-from opentelemetry.sdk.trace.sampling import TraceIdRatioBased
+from opentelemetry.sdk.trace.sampling import ParentBased, TraceIdRatioBased
 
 from ._wrap_utils import _normalize_traces_endpoint
 from .core.logger import get_logger
 from .core.span_processor import CompletionMarkerSpanProcessor, NeatlogsSpanProcessor
+from .errors import NeatlogsConfigurationError
 from .instrumentation.manager import InstrumentationManager
 from .version import __version__
 
@@ -42,76 +39,8 @@ logger = get_logger()
 _initialized = False
 _tracer_provider = None
 _owns_tracer_provider = False  # True only when neatlogs created the provider (safe to shut down)
-_isolated_provider = False  # True when isolated (explicit tracer_provider= OR auto-detected)
-
-# Foreign LLM-observability instrumentors that own the global OTel pipeline and
-# resolve their span parent from the GLOBAL current-span. If one is active while
-# neatlogs would otherwise reuse the global provider, spans cross-contaminate both
-# ways. Their presence is the auto-detect signal to isolate onto a private provider.
-#
-# NOTE: `openinference` is deliberately NOT listed. The bare
-# `openinference-instrumentation-*` packages are neatlogs' OWN instrumentation
-# backend (hard dependency) — neatlogs imports them itself the moment it
-# instruments anything, and they are always importable. So their presence in
-# sys.modules / on disk carries no information about a co-tenant and would cause
-# a false-positive isolation (spurious for every standalone user, and — because
-# the modules stay resident after shutdown — for every re-init in one process).
-# Genuine OpenInference-based co-tenants (Arize Phoenix, Arize) import `phoenix`/
-# `arize` and are detected via those entries below.
-_FOREIGN_LLM_INSTRUMENTORS = (
-    "openlit",
-    "langfuse",
-    "traceloop",  # traceloop-sdk / openllmetry
-    "phoenix",  # arize-phoenix (uses OpenInference under the hood)
-    "arize",
-    "logfire",
-)
 
 
-def _foreign_llm_instrumentor_active():
-    """Return the name of a loaded foreign LLM-observability instrumentor, or None.
-
-    Import presence in ``sys.modules`` is the signal: these packages install their
-    instrumentation onto the global provider at import/init time, so being loaded
-    in-process means their spans are (or will be) flowing through the global
-    pipeline neatlogs would otherwise share.
-    """
-    for name in _FOREIGN_LLM_INSTRUMENTORS:
-        if name in sys.modules:
-            return name
-    return None
-
-
-def _foreign_llm_instrumentor_installed():
-    """Return the name of an INSTALLED (importable) foreign LLM instrumentor, or None.
-
-    Unlike ``_foreign_llm_instrumentor_active`` (which requires the package to be
-    imported already), this only checks that it is importable. That is the signal
-    we need when neatlogs is the FIRST tracing SDK to init: the foreign tool
-    (openlit/langfuse/…) frequently loads LATER — e.g. in a FastAPI startup event
-    that runs after an import-time ``neatlogs.init()``. If neatlogs claimed the
-    global provider now, that later instrumentor would bind to OUR provider and
-    both pipelines would cross-contaminate. Detecting the package on-disk lets us
-    pre-emptively stay private and leave the global slot free for the co-tenant,
-    WITHOUT requiring the customer to pass ``isolate=True``.
-
-    A user who has a foreign package installed but genuinely wants neatlogs to own
-    the global provider (e.g. to capture their own raw-OTel spans) can force the
-    legacy behaviour with ``isolate=False``.
-    """
-    import importlib.util
-
-    for name in _FOREIGN_LLM_INSTRUMENTORS:
-        try:
-            if importlib.util.find_spec(name) is not None:
-                return name
-        except (ImportError, ValueError):
-            # find_spec can raise for namespace-package edge cases; treat as absent.
-            continue
-    return None
-
-
-_meter_provider = None
 _log_provider = None
 _span_processor = None
 _transport_span_processors = []
@@ -137,6 +66,16 @@ _session_config = {
 def is_debug_enabled() -> bool:
     """Return True if neatlogs was initialized with debug=True."""
     return _debug_mode
+
+
+def _trace_sampler(sample_rate: float) -> ParentBased:
+    """Validate one trace-level rate and preserve the parent's sampling decision."""
+    if isinstance(sample_rate, bool) or not isinstance(sample_rate, (int, float)):
+        raise NeatlogsConfigurationError("sample_rate must be a finite number from 0.0 to 1.0")
+    rate = float(sample_rate)
+    if not math.isfinite(rate) or rate < 0.0 or rate > 1.0:
+        raise NeatlogsConfigurationError("sample_rate must be a finite number from 0.0 to 1.0")
+    return ParentBased(root=TraceIdRatioBased(rate))
 
 
 def _restore_shutdown_signal_handlers() -> None:
@@ -319,7 +258,7 @@ def init(
               Pass a list of span kind strings, e.g. ["LLM", "TOOL"]. This selection
               is persisted so the dashboard reflects it. When None (default), the
               project setting is preserved.
-        tracer_provider: Opt-in FULL ISOLATION. Pass a private ``TracerProvider`` (one you
+        tracer_provider: Pass a private ``TracerProvider`` that Neatlogs may configure.
               created but did NOT install as the OTel global) and neatlogs will emit ALL of
               its spans — auto-instrumented, wrap()/trace()/@span, and the internal
               completion marker — into that provider ONLY. Use this when another tool
@@ -328,28 +267,9 @@ def init(
               neatlogs span reaches the other backend and no foreign span reaches neatlogs.
               neatlogs never shuts this provider down and never claims the global
               meter/logger providers. When None (default), behaviour is auto-detected
-              (see ``isolate``): neatlogs isolates automatically when a foreign LLM
-              instrumentor owns the global provider, and otherwise owns-or-reuses it.
-        isolate: Override the auto-isolation decision. When None (default), neatlogs
-              AUTO-DETECTS and isolates onto a private provider — with NO customer
-              code change — in either of these cases:
-                * a foreign LLM-observability instrumentor
-                  (openlit/langfuse/traceloop/openinference/…) already owns the
-                  global tracer provider (it loaded first), OR
-                * neatlogs is the first tracing SDK to load but a foreign
-                  instrumentor is INSTALLED (importable) and may attach to the
-                  global provider later (the common FastAPI-startup ordering, where
-                  neatlogs.init runs at import time and openlit.init runs in a
-                  startup event).
-              In both cases neatlogs routes ALL its spans through a private provider
-              so the two pipelines share nothing — no neatlogs span reaches the
-              foreign backend, no foreign span reaches neatlogs, and no foreign span
-              inherits a neatlogs parent. When NO foreign instrumentor is installed,
-              neatlogs owns-or-reuses the global provider exactly as before (standalone
-              behaviour is unchanged). Pass True to force isolation unconditionally, or
-              False to force the legacy own-or-reuse behaviour even when a foreign
-              instrumentor is present. Passing ``tracer_provider=`` implies isolation
-              regardless of this flag.
+              unnecessary because Neatlogs creates an SDK-private provider by default.
+        isolate: Deprecated compatibility option. Neatlogs is always isolated and
+              never installs or reuses the process-global tracer provider.
         register_shutdown_handlers: Register SIGINT and SIGTERM handlers that end
               active Neatlogs spans child-first and flush before preserving normal
               signal termination. Defaults to True. Set False only when the host
@@ -361,6 +281,17 @@ def init(
         if debug:
             logger.warning("Neatlogs already initialized, skipping re-initialization")
         return
+
+    sampler = _trace_sampler(sample_rate)
+    if tracer_provider is not None and float(sample_rate) != 1.0:
+        raise NeatlogsConfigurationError(
+            "sample_rate cannot configure a caller-owned tracer_provider; "
+            "configure its sampler directly or omit tracer_provider"
+        )
+    if tracer_provider is not None and tracer_provider is otel_trace.get_tracer_provider():
+        raise NeatlogsConfigurationError(
+            "tracer_provider must be private and must not be the process-global provider"
+        )
 
     disable_export_resolved = bool(disable_export) or (
         os.getenv("NEATLOGS_DISABLE_EXPORT", "").lower() in ("true", "1", "yes")
@@ -453,9 +384,7 @@ def init(
         resource_attrs["neatlogs.pii.span_types"] = ",".join(pii_span_types)
     resource = Resource.create(resource_attrs)
 
-    global _tracer_provider, _owns_tracer_provider, _isolated_provider
-    existing_provider = trace.get_tracer_provider()
-
+    global _tracer_provider, _owns_tracer_provider
     if tracer_provider is not None:
         # ISOLATED MODE. The caller handed us a PRIVATE provider (never installed
         # as the OTel global) so neatlogs shares NO pipeline with a co-tenant such
@@ -467,7 +396,6 @@ def init(
         # meter/logger providers below. This is what makes isolation total.
         provider = tracer_provider
         _owns_tracer_provider = False
-        _isolated_provider = True
         # Merge neatlogs' resource (service.name + neatlogs.workflow_name + tags/pii)
         # onto the caller's provider so exported spans carry workflow_name — the
         # branches that build their OWN provider pass resource= at construction,
@@ -481,87 +409,15 @@ def init(
                 logger.debug("Could not merge neatlogs resource onto provided provider")
         if debug:
             logger.debug("Using explicitly provided tracer provider (isolated mode)")
-    elif existing_provider and hasattr(existing_provider, "add_span_processor"):
-        # A real provider already owns the global pipeline. Two sub-cases:
-        _foreign = None if isolate is False else _foreign_llm_instrumentor_active()
-        if isolate is True or _foreign is not None:
-            # AUTO-DETECT ISOLATION. A foreign LLM-observability instrumentor
-            # (openlit/langfuse/traceloop/…) owns the global provider AND resolves
-            # its parent from the global current-span. Reusing that provider would
-            # cross-contaminate both pipelines: neatlogs spans export to the foreign
-            # backend, and foreign spans (a) export to neatlogs and (b) inherit a
-            # neatlogs parent. So we build a PRIVATE provider neatlogs never installs
-            # globally — identical semantics to an explicit tracer_provider=.
-            provider = TracerProvider(
-                resource=resource,
-                span_limits=_span_limits_for_capture_everything(),
-            )
-            _owns_tracer_provider = True  # we made it; safe to shut down
-            _isolated_provider = True
-            if debug:
-                _why = (
-                    f"detected foreign LLM instrumentor '{_foreign}'"
-                    if _foreign is not None
-                    else "isolate=True was requested"
-                )
-                logger.info(
-                    f"Auto-isolation engaged: {_why} owning the global tracer "
-                    f"provider — routing all neatlogs spans through a private "
-                    f"provider so the two pipelines share nothing."
-                )
-        else:
-            # Reuse a provider set by the host app / another SDK (plain OpenTelemetry
-            # with no foreign LLM instrumentor). We do NOT own it — shutdown() must
-            # never tear it down, or it would kill the co-tenant's exporter too.
-            provider = existing_provider
-            _owns_tracer_provider = False
-            _isolated_provider = False
-            if debug:
-                logger.debug("Using existing tracer provider (not owned by neatlogs)")
     else:
-        sampler = None
-        if sample_rate < 1.0:
-            sampler = TraceIdRatioBased(sample_rate)
-            if debug:
-                logger.debug(f"Using TraceIdRatioBased sampler with rate {sample_rate}")
-
         provider = TracerProvider(
             resource=resource,
             sampler=sampler,
             span_limits=_span_limits_for_capture_everything(),
         )
         _owns_tracer_provider = True
-
-        # neatlogs is the first tracing SDK to load (no real global provider yet).
-        # We must still decide whether to claim the global slot or stay private. A
-        # foreign LLM instrumentor (openlit/langfuse/…) frequently attaches to the
-        # global provider LATER — e.g. in a FastAPI startup event that runs after an
-        # import-time neatlogs.init(). If we claimed the global now, that later
-        # instrumentor would bind to OUR provider and both pipelines would
-        # cross-contaminate. So when isolation is requested OR a foreign instrumentor
-        # is merely INSTALLED (importable), we pre-emptively keep a private provider
-        # and leave the global slot free for the co-tenant to own — no isolate=True
-        # required from the customer.
-        _foreign_installed = None if isolate is False else _foreign_llm_instrumentor_installed()
-        if isolate is True or _foreign_installed is not None:
-            _isolated_provider = True
-            if debug:
-                _why = (
-                    "isolate=True was requested"
-                    if isolate is True
-                    else f"foreign LLM instrumentor '{_foreign_installed}' is installed "
-                    f"(may attach to the global provider later)"
-                )
-                logger.info(
-                    f"Pre-emptive isolation: {_why} — neatlogs loaded first but keeps "
-                    f"a PRIVATE tracer provider and leaves the global slot free for the "
-                    f"co-tenant so the two pipelines share nothing."
-                )
-        else:
-            trace.set_tracer_provider(provider)
-            _isolated_provider = False
-            if debug:
-                logger.debug("Created new tracer provider (owned by neatlogs)")
+        if debug:
+            logger.debug("Created SDK-private tracer provider (owned by neatlogs)")
 
     _tracer_provider = provider
 
@@ -575,13 +431,12 @@ def init(
     # NeatlogsSpanProcessor: pure pre-processing (attribute normalization + file logging)
     global _span_processor
     _span_processor = NeatlogsSpanProcessor(
-        sample_rate=sample_rate,
         debug=debug,
         mask=mask,
         emit_completion_markers=False,
         # A private/isolated pipeline contains only Neatlogs execution spans,
         # even when the caller retains provider shutdown ownership.
-        own_all_spans=_owns_tracer_provider or _isolated_provider,
+        own_all_spans=True,
     )
     provider.add_span_processor(_span_processor)
 
@@ -597,6 +452,7 @@ def init(
         # warmups, outbound fetches outside any traced request) are never sent — on
         # their own they're junk rootless traces the backend can't simplify. Nested
         # HTTP spans (with a parent) still export normally.
+        from .core.masking_exporter import MaskingSpanExporter
         from .core.span_processor import is_rootless_infra_http
 
         class _FilteredOTLPExporter:
@@ -618,7 +474,7 @@ def init(
                 return self._inner.force_flush(timeout_millis)
 
         batch_processor = BatchSpanProcessor(
-            _FilteredOTLPExporter(otlp_exporter),
+            _FilteredOTLPExporter(MaskingSpanExporter(otlp_exporter, mask)),
             max_export_batch_size=batch_size,
             schedule_delay_millis=int(flush_interval * 1000),
         )
@@ -642,18 +498,6 @@ def init(
     if debug:
         logger.debug("Neatlogs tracer provider initialized")
 
-    global _meter_provider
-    _meter_provider = MeterProvider(resource=resource)
-    # In isolated mode, never claim the GLOBAL meter provider — that would clobber
-    # a co-tenant's (e.g. their OpenTelemetry/Langfuse) meter pipeline. neatlogs
-    # currently emits no metrics of its own, so a non-global provider is harmless.
-    if not _isolated_provider:
-        metrics.set_meter_provider(_meter_provider)
-        if debug:
-            logger.debug("Neatlogs meter provider initialized")
-    elif debug:
-        logger.debug("Isolated mode: skipping global meter provider registration")
-
     # --- Logs signal (opt-in) ---
     # neatlogs.log(), capture_stdout=True, and logging.* auto-capture all require
     # capture_logs=True. When False, nothing is captured as LOG spans.
@@ -662,6 +506,7 @@ def init(
         from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
 
         from .core.log_exporter import NeatlogsLogFilter
+        from .core.masking_exporter import MaskingLogExporter
 
         logs_endpoint = f"{_base_url}/v1/logs"
         _otlp_log_exporter = OTLPLogExporter(
@@ -672,14 +517,8 @@ def init(
         # NeatlogsLogFilter drops external-module and no-trace records before
         # BatchLogRecordProcessor batches and sends them via OTLPLogExporter.
         _log_provider.add_log_record_processor(
-            NeatlogsLogFilter(BatchLogRecordProcessor(_otlp_log_exporter))
+            NeatlogsLogFilter(BatchLogRecordProcessor(MaskingLogExporter(_otlp_log_exporter, mask)))
         )
-        # Isolated mode: don't claim the GLOBAL logger provider (would clobber a
-        # co-tenant's log pipeline). LoggingInstrumentor below is still bound to
-        # our _log_provider explicitly via logger_provider=, so capture still works.
-        if not _isolated_provider:
-            logs.set_logger_provider(_log_provider)
-
         try:
             import logging as _stdlib_logging
 
@@ -736,8 +575,8 @@ def init(
 
 
 def flush(timeout_millis: int = 30000) -> bool:
-    """Flush all pending spans and metrics."""
-    global _tracer_provider, _meter_provider
+    """Flush the process-default Neatlogs pipeline only."""
+    global _tracer_provider
     success = True
 
     # Log provider must flush BEFORE tracer provider: the tracer batch includes
@@ -753,27 +592,59 @@ def flush(timeout_millis: int = 30000) -> bool:
             logger.error(f"Error flushing logs: {e}", exc_info=True)
             success = False
 
-    if _tracer_provider:
+    for processor in _transport_span_processors:
         try:
-            logger.debug("Flushing tracer provider...")
-            ok = _tracer_provider.force_flush(timeout_millis=timeout_millis)
-            success = bool(ok) and success
-            logger.debug("Tracer provider flushed successfully")
+            logger.debug("Flushing Neatlogs trace processor...")
+            ok = processor.force_flush(timeout_millis=timeout_millis)
+            success = (ok is None or bool(ok)) and success
         except Exception as e:
             logger.error(f"Error flushing spans: {e}", exc_info=True)
             success = False
 
-    if _meter_provider:
-        try:
-            logger.debug("Flushing meter provider...")
-            ok = _meter_provider.force_flush(timeout_millis=timeout_millis)
-            success = bool(ok) and success
-            logger.debug("Meter provider flushed successfully")
-        except Exception as e:
-            logger.error(f"Error flushing metrics: {e}", exc_info=True)
-            success = False
-
     return success
+
+
+def get_log_provider() -> Optional[LoggerProvider]:
+    """Return the SDK-private default log provider, when log capture is enabled."""
+    return _log_provider
+
+
+def flush_all(timeout_millis: int = 30000) -> Dict[str, bool]:
+    """Flush every live Neatlogs pipeline concurrently under one deadline.
+
+    Only processors/exporters installed by Neatlogs are flushed. The process-global
+    OpenTelemetry provider and caller/foreign processors are never touched.
+    """
+    from .core.client_registry import snapshot_clients
+
+    clients = snapshot_clients()
+    operations = [("default", flush)] if _initialized else []
+    operations.extend(
+        (f"client:{client.workflow_name}:{id(client):x}", client.flush) for client in clients
+    )
+    if not operations:
+        return {}
+
+    results: Dict[str, bool] = {}
+    timeout_seconds = max(0, timeout_millis) / 1000
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=len(operations))
+    try:
+        futures = {
+            executor.submit(operation, timeout_millis): name for name, operation in operations
+        }
+        done, pending = concurrent.futures.wait(futures, timeout=timeout_seconds)
+        for future in done:
+            name = futures[future]
+            try:
+                results[name] = bool(future.result())
+            except Exception:
+                results[name] = False
+        for future in pending:
+            results[futures[future]] = False
+            future.cancel()
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
+    return results
 
 
 def get_session_config():
@@ -817,7 +688,7 @@ def shutdown(timeout_millis: int = 30000, termination_reason: str = "shutdown") 
 
 def _perform_shutdown(timeout_millis: int, termination_reason: str) -> bool:
     """End active Neatlogs spans, then flush and shut down SDK providers."""
-    global _tracer_provider, _owns_tracer_provider, _meter_provider, _log_provider, _span_processor, _initialized
+    global _tracer_provider, _owns_tracer_provider, _log_provider, _span_processor, _initialized
     global _instrumentation_manager, _transport_span_processors, _completion_span_processor
 
     try:
@@ -894,16 +765,6 @@ def _perform_shutdown(timeout_millis: int, termination_reason: str) -> bool:
             logger.error(f"Error shutting down tracer provider: {e}", exc_info=True)
             success = False
 
-    if _meter_provider:
-        try:
-            logger.debug("Shutting down meter provider...")
-            ok = _meter_provider.shutdown()
-            success = (ok is None or bool(ok)) and success
-            logger.debug("Meter provider shut down successfully")
-        except Exception as e:
-            logger.error(f"Error shutting down meter provider: {e}", exc_info=True)
-            success = False
-
     try:
         from opentelemetry.instrumentation.logging import LoggingInstrumentor
 
@@ -932,11 +793,8 @@ def _perform_shutdown(timeout_millis: int, termination_reason: str) -> bool:
     except Exception:
         pass
 
-    global _isolated_provider
-    _isolated_provider = False
     _initialized = False
     _tracer_provider = None
-    _meter_provider = None
     _log_provider = None
     _span_processor = None
     _transport_span_processors = []

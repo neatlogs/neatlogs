@@ -34,7 +34,8 @@ from .core.llm_binder import bind_templates
 from .core.log import log
 from .core.propagation import extract_trace_context, inject_trace_context
 from .decorators import span
-from .init import flush, init, shutdown
+from .errors import NeatlogsConfigurationError, NeatlogsError
+from .init import flush, flush_all, init, shutdown
 from .prompt.client import (
     AsyncPromptClient,
     CachedPrompt,
@@ -278,6 +279,9 @@ __all__ = [
     "init",
     "flush",
     "shutdown",
+    "flush_all",
+    "NeatlogsError",
+    "NeatlogsConfigurationError",
     "span",
     "trace",
     "identify",

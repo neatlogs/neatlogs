@@ -11,6 +11,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 
 import neatlogs
 from neatlogs._wrap_utils import get_neatlogs_provider, get_tracer
+from neatlogs.init import get_log_provider
 
 
 def _client(name: str, *, capture_logs: bool = False):
@@ -116,7 +117,26 @@ def test_structured_logs_use_the_active_client():
     second.shutdown()
 
 
-def test_flushing_one_client_does_not_flush_another(monkeypatch):
+def test_structured_logs_use_the_private_default_log_provider():
+    neatlogs.init(
+        api_key="unused",
+        workflow_name="default",
+        capture_logs=True,
+        disable_export=True,
+        instrumentations=[],
+    )
+    provider = get_log_provider()
+    assert provider is not None
+    logs = InMemoryLogRecordExporter()
+    provider.add_log_record_processor(SimpleLogRecordProcessor(logs))
+
+    with neatlogs.trace("run", kind="WORKFLOW"):
+        neatlogs.log("private message")
+
+    assert [str(item.log_record.body) for item in logs.get_finished_logs()] == ["private message"]
+
+
+def test_flushing_one_client_touches_no_other_or_caller_owned_provider(monkeypatch):
     first, first_provider, _ = _client("first")
     second, second_provider, _ = _client("second")
     first_flushes = []
@@ -128,10 +148,33 @@ def test_flushing_one_client_does_not_flush_another(monkeypatch):
 
     first.flush()
 
-    assert first_flushes == [1]
+    assert first_flushes == []
     assert second_flushes == []
 
     first.shutdown()
+    second.shutdown()
+
+
+def test_flush_all_discovers_live_clients_and_unregisters_closed_clients(monkeypatch):
+    first, _, _ = _client("first")
+    second, _, _ = _client("second")
+    calls = []
+    monkeypatch.setattr(first, "flush", lambda timeout_millis=30000: calls.append("first") or True)
+    monkeypatch.setattr(
+        second, "flush", lambda timeout_millis=30000: calls.append("second") or True
+    )
+
+    results = neatlogs.flush_all()
+    assert set(calls) == {"first", "second"}
+    assert len(results) == 2
+    assert all(results.values())
+
+    first.shutdown()
+    calls.clear()
+    results = neatlogs.flush_all()
+    assert calls == ["second"]
+    assert len(results) == 1
+
     second.shutdown()
 
 

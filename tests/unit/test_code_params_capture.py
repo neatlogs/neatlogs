@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 from opentelemetry import trace
 
+from neatlogs._wrap_utils import set_neatlogs_provider
 from neatlogs.decorators._base import _decorate_span
 from neatlogs.decorators.orchestration import span as neatlogs_span
 
@@ -22,13 +23,14 @@ from neatlogs.decorators.orchestration import span as neatlogs_span
 
 
 def _install(tracer_provider):
-    """Install ``tracer_provider`` as the global provider for the current test.
+    """Register the test provider explicitly with both test pipelines.
 
     The autouse ``reset_neatlogs_and_otel_state`` fixture in ``conftest.py``
     clears the OTel ``set_tracer_provider`` guard between tests, so this is
     safe to call repeatedly.
     """
     trace.set_tracer_provider(tracer_provider)
+    set_neatlogs_provider(tracer_provider)
 
 
 # ---------------------------------------------------------------------------

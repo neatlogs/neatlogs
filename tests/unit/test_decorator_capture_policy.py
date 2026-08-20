@@ -2,11 +2,13 @@
 
 from opentelemetry import trace
 
+from neatlogs._wrap_utils import set_neatlogs_provider
 from neatlogs.decorators.orchestration import span
 
 
 def _install(tracer_provider):
     trace.set_tracer_provider(tracer_provider)
+    set_neatlogs_provider(tracer_provider)
 
 
 def _finished(in_memory_span_exporter, name):

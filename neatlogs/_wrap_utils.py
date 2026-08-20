@@ -2,7 +2,7 @@
 Shared infrastructure for Neatlogs provider wrappers.
 
 Only contains truly shared concerns:
-  - TracerProvider bootstrap (auto from env or reuse from init())
+  - private TracerProvider bootstrap (auto from env or reuse from init())
   - configure() for wrapper-only mode
   - Sync/async stream wrapper classes
   - Safe JSON serialization
@@ -28,24 +28,16 @@ _wrapper_tracer: Optional[otel_trace.Tracer] = None
 _wrapper_bootstrapped = False
 _bootstrap_warned = False
 
-# Single source of truth for the provider neatlogs emits into. Set by init()
-# (to the owned/shared/private provider). When non-None, EVERY neatlogs tracer
-# resolves from it instead of the global provider — this is what keeps neatlogs
-# spans off a co-tenant's pipeline (e.g. a user's Langfuse provider) when a
-# private provider is passed to init(tracer_provider=...).
+# Single source of truth for the private provider Neatlogs emits into. Every
+# Neatlogs tracer resolves from it; the process-global provider is never adopted.
 _neatlogs_provider: Optional[TracerProvider] = None
 
 # Optional secondary Client selected only for the current async/thread context.
 # The process-wide provider configured by neatlogs.init() remains the default.
 _active_client: ContextVar[Optional[Any]] = ContextVar("neatlogs.active_client", default=None)
 
-# True when neatlogs emits into a PRIVATE provider distinct from the OTel global
-# (init(tracer_provider=<private>) → isolated mode). This is the auto-detect gate:
-# only in this mode does neatlogs thread its parent via a private context key
-# instead of the global current-span, so a co-tenant instrumentor (openlit /
-# langfuse) keeps nesting under the HOST — never under a neatlogs span, and no
-# neatlogs span ever borrows a foreign parent. In the default single-provider
-# mode this is False and behaviour is byte-for-byte unchanged.
+# True when Neatlogs has its required private provider. Neatlogs threads parents
+# through a private context key so co-tenant instrumentors never inherit them.
 _isolated: bool = False
 
 
@@ -83,7 +75,7 @@ def reset_active_client(token: Any) -> None:
 
 
 def _isolation_active() -> bool:
-    """Auto-detect gate: True in isolated mode (private provider != OTel global)."""
+    """True when a private default or context-scoped Client pipeline is active."""
     return _active_client.get() is not None or _isolated
 
 
@@ -270,7 +262,7 @@ def apply_wrap_context_attributes(span: Any, is_root: bool = True) -> None:
 
 def reset_tracer() -> None:
     """Drop the cached wrapper tracer so the next get_tracer() rebinds to the
-    current global provider. Called by neatlogs.shutdown() — without it, a re-init
+    next private provider. Called by neatlogs.shutdown() — without it, a re-init
     (or a test that swaps the TracerProvider) keeps emitting wrapper spans through
     the previous, now-dead provider."""
     global _wrapper_tracer, _wrapper_bootstrapped
@@ -341,10 +333,9 @@ def get_tracer() -> otel_trace.Tracer:
     if _wrapper_tracer is not None:
         return _wrapper_tracer
 
-    # Prefer the provider init() registered (may be a PRIVATE provider never
-    # installed globally). Only when none is set do we fall back to the global
-    # provider — preserving behaviour for the default single-provider mode.
-    provider = _neatlogs_provider or otel_trace.get_tracer_provider()
+    # Neatlogs never adopts the process-global provider. Wrapper-only mode either
+    # uses the private provider registered by init/configuration or bootstraps one.
+    provider = _neatlogs_provider
     if isinstance(provider, TracerProvider):
         _wrapper_tracer = _ForeignParentGuardTracer(provider.get_tracer("neatlogs.wrapper"))
         return _wrapper_tracer
@@ -364,7 +355,11 @@ def get_tracer() -> otel_trace.Tracer:
         _wrapper_bootstrapped = True
         _bootstrap_from_env(api_key)
 
-    _wrapper_tracer = _ForeignParentGuardTracer(otel_trace.get_tracer("neatlogs.wrapper"))
+    provider = get_neatlogs_provider()
+    if provider is None:
+        _wrapper_tracer = _ForeignParentGuardTracer(otel_trace.get_tracer("neatlogs.wrapper.noop"))
+    else:
+        _wrapper_tracer = _ForeignParentGuardTracer(provider.get_tracer("neatlogs.wrapper"))
     return _wrapper_tracer
 
 
@@ -379,10 +374,17 @@ def get_internal_tracer(scope: str) -> otel_trace.Tracer:
     client = _active_client.get()
     if client is not None:
         return client.get_tracer(scope)
-    provider = _neatlogs_provider or otel_trace.get_tracer_provider()
+    provider = _neatlogs_provider
     if isinstance(provider, TracerProvider):
         return _ForeignParentGuardTracer(provider.get_tracer(scope))
-    return _ForeignParentGuardTracer(otel_trace.get_tracer(scope))
+    # Give wrapper-only configuration one chance to bootstrap a private provider.
+    get_tracer()
+    provider = _neatlogs_provider
+    if isinstance(provider, TracerProvider):
+        return _ForeignParentGuardTracer(provider.get_tracer(scope))
+    return _ForeignParentGuardTracer(
+        otel_trace.NoOpTracerProvider().get_tracer("neatlogs.unconfigured")
+    )
 
 
 class _NeatlogsSpanCM:
@@ -456,8 +458,8 @@ def _bootstrap_from_env(api_key: str) -> None:
         headers={"x-api-key": api_key},
     )
     provider.add_span_processor(BatchSpanProcessor(exporter))
-    otel_trace.set_tracer_provider(provider)
-    logger.debug(f"neatlogs wrapper: auto-bootstrapped TracerProvider → {endpoint}")
+    set_neatlogs_provider(provider)
+    logger.debug(f"neatlogs wrapper: auto-bootstrapped private TracerProvider → {endpoint}")
 
 
 def set_neatlogs_span_in_context(

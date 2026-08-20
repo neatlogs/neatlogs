@@ -4,7 +4,6 @@ import json
 import sys
 from pathlib import Path
 
-from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 
@@ -84,9 +83,12 @@ def test_example_uses_automatic_crewai_instrumentation() -> None:
 def _install_test_tracer(in_memory_span_exporter) -> None:
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(in_memory_span_exporter))
-    trace.set_tracer_provider(provider)
-    # isolate=False pins neatlogs to the provider set above — see test_crewai_tool_fidelity.
-    neatlogs.init(api_key="test-key", disable_export=True, instrumentations=[], isolate=False)
+    neatlogs.init(
+        api_key="test-key",
+        disable_export=True,
+        instrumentations=[],
+        tracer_provider=provider,
+    )
 
 
 def test_crewai_string_input_preserves_content_after_10000_characters(

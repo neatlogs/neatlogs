@@ -83,13 +83,23 @@ def _span(
 
 
 def _llm_attrs(content="hello", role="user", output_content="hi back"):
-    """Build a healthy LLM-span attribute dict (role + content)."""
+    """Build a healthy LLM-span attribute dict (role + content).
+
+    Includes both neatlogs attrs and OTel GenAI semconv attrs — the modern
+    clean trace should carry both for interop with OTel GenAI tools.
+    """
     return {
         "neatlogs.span.kind": "llm",
         "neatlogs.llm.input_messages.0.role": role,
         "neatlogs.llm.input_messages.0.content": content,
         "neatlogs.llm.output_messages.0.role": "assistant",
         "neatlogs.llm.output_messages.0.content": output_content,
+        # OTel GenAI semconv (the modern standard)
+        "gen_ai.operation.name": "chat",
+        "gen_ai.provider.name": "openai",
+        "gen_ai.request.model": "gpt-4o",
+        "gen_ai.usage.input_tokens": 10,
+        "gen_ai.usage.output_tokens": 5,
     }
 
 
@@ -1770,6 +1780,14 @@ def _build_framework_trace(framework, with_io=True, scope_name=None):
                 attrs["neatlogs.llm.input_messages.0.content"] = "hi"
                 attrs["neatlogs.llm.output_messages.0.role"] = "assistant"
                 attrs["neatlogs.llm.output_messages.0.content"] = "hello"
+                # Healthy fixture also has OTel GenAI attrs (the OTel
+                # semconv is the modern standard; a clean trace should
+                # carry both neatlogs and OTel attrs for interop).
+                attrs["gen_ai.operation.name"] = "chat"
+                attrs["gen_ai.provider.name"] = framework
+                attrs["gen_ai.request.model"] = f"{framework}-model"
+                attrs["gen_ai.usage.input_tokens"] = 10
+                attrs["gen_ai.usage.output_tokens"] = 5
             elif kind == "tool":
                 attrs["neatlogs.tool.parameters"] = '{"x": 1}'
                 attrs["neatlogs.tool.output"] = '{"y": 2}'
@@ -2575,3 +2593,546 @@ def test_real_sdk_style_init_after_client(tmp_path):
     # fire since scope is opentelemetry)
     assert init[0].fix_class == "init_order"
     assert init[0].automated_fix_available is True
+
+
+# ============================================================================
+# A. OTel GenAI semantic convention validation
+# ============================================================================
+
+
+def test_otel_genai_missing_fires_when_llm_span_has_no_otel_attrs(tmp_path):
+    """A span with neatlogs.span.kind=llm but no gen_ai.* attrs triggers
+    otel-genai-missing (warning) so the user knows their trace won't be
+    interoperable with OTel GenAI tools (Langfuse, Phoenix, etc.)."""
+    path = tmp_path / "otel_missing.log"
+    _write_jsonl(
+        path,
+        [
+            {
+                "trace_id": "t",
+                "span_id": "wf",
+                "parent_span_id": None,
+                "name": "wf",
+                "kind": "workflow",
+                "start_time": 100,
+                "end_time": 200,
+                "duration_ns": 100_000_000,
+                "status": {"code": "OK"},
+                "attributes": {"neatlogs.span.kind": "workflow"},
+                "events": [],
+                "instrumentation_scope": {"name": "neatlogs.core.context"},
+            },
+            {
+                "trace_id": "t",
+                "span_id": "llm",
+                "parent_span_id": "wf",
+                "name": "openai.chat",
+                "kind": "llm",
+                "start_time": 100,
+                "end_time": 200,
+                "duration_ns": 100_000_000,
+                "status": {"code": "OK"},
+                "attributes": {
+                    "neatlogs.span.kind": "llm",
+                    "neatlogs.llm.model_name": "gpt-4o",
+                },
+                "events": [],
+                "instrumentation_scope": {"name": "neatlogs.core.context"},
+            },
+        ],
+    )
+    report = diagnose(path)
+    f = next((f for f in report.findings if f.code == "otel-genai-missing"), None)
+    assert f is not None
+    assert f.severity == "warning"
+    assert f.fix_class == "config"
+    assert "gen_ai.operation.name" in f.evidence
+
+
+def test_otel_genai_missing_does_not_fire_when_attrs_present(tmp_path):
+    """If gen_ai.* attrs are set on every LLM span, no missing finding."""
+    path = tmp_path / "otel_present.log"
+    _write_jsonl(
+        path,
+        [
+            {
+                "trace_id": "t",
+                "span_id": "wf",
+                "parent_span_id": None,
+                "name": "wf",
+                "kind": "workflow",
+                "start_time": 100,
+                "end_time": 200,
+                "duration_ns": 100_000_000,
+                "status": {"code": "OK"},
+                "attributes": {"neatlogs.span.kind": "workflow"},
+                "events": [],
+                "instrumentation_scope": {"name": "neatlogs.core.context"},
+            },
+            {
+                "trace_id": "t",
+                "span_id": "llm",
+                "parent_span_id": "wf",
+                "name": "openai.chat",
+                "kind": "llm",
+                "start_time": 100,
+                "end_time": 200,
+                "duration_ns": 100_000_000,
+                "status": {"code": "OK"},
+                "attributes": {
+                    "neatlogs.span.kind": "llm",
+                    "gen_ai.operation.name": "chat",
+                    "gen_ai.provider.name": "openai",
+                    "gen_ai.request.model": "gpt-4o",
+                    "gen_ai.usage.input_tokens": 100,
+                    "gen_ai.usage.output_tokens": 50,
+                },
+                "events": [],
+                "instrumentation_scope": {"name": "neatlogs.core.context"},
+            },
+        ],
+    )
+    report = diagnose(path)
+    f = [f for f in report.findings if f.code == "otel-genai-missing"]
+    assert f == []
+
+
+def test_otel_genai_inconsistent_fires_when_kinds_disagree(tmp_path):
+    """If neatlogs says 'llm' but OTel says 'embeddings', they're
+    inconsistent — flag it (info, since one of them is right)."""
+    path = tmp_path / "inconsistent.log"
+    _write_jsonl(
+        path,
+        [
+            {
+                "trace_id": "t",
+                "span_id": "wf",
+                "parent_span_id": None,
+                "name": "wf",
+                "kind": "workflow",
+                "start_time": 100,
+                "end_time": 200,
+                "duration_ns": 100_000_000,
+                "status": {"code": "OK"},
+                "attributes": {"neatlogs.span.kind": "workflow"},
+                "events": [],
+                "instrumentation_scope": {"name": "neatlogs.core.context"},
+            },
+            {
+                "trace_id": "t",
+                "span_id": "llm",
+                "parent_span_id": "wf",
+                "name": "embed",
+                "kind": "llm",
+                "start_time": 100,
+                "end_time": 200,
+                "duration_ns": 100_000_000,
+                "status": {"code": "OK"},
+                "attributes": {
+                    "neatlogs.span.kind": "llm",
+                    "gen_ai.operation.name": "embeddings",
+                },
+                "events": [],
+                "instrumentation_scope": {"name": "neatlogs.core.context"},
+            },
+        ],
+    )
+    report = diagnose(path)
+    f = next((f for f in report.findings if f.code == "otel-genai-inconsistent"), None)
+    assert f is not None
+    assert f.severity == "info"
+
+
+def test_otel_genai_check_skips_internal_spans(tmp_path):
+    """Internal spans (neatlogs.internal=True) are excluded from the OTel
+    GenAI check — they are SDK bookkeeping, not user-visible."""
+    path = tmp_path / "otel_internal.log"
+    _write_jsonl(
+        path,
+        [
+            {
+                "trace_id": "t",
+                "span_id": "wf",
+                "parent_span_id": None,
+                "name": "wf",
+                "kind": "workflow",
+                "start_time": 100,
+                "end_time": 200,
+                "duration_ns": 100_000_000,
+                "status": {"code": "OK"},
+                "attributes": {"neatlogs.span.kind": "workflow"},
+                "events": [],
+                "instrumentation_scope": {"name": "neatlogs.core.context"},
+            },
+            {
+                "trace_id": "t",
+                "span_id": "internal-llm",
+                "parent_span_id": "wf",
+                "name": "internal",
+                "kind": "llm",
+                "start_time": 100,
+                "end_time": 200,
+                "duration_ns": 100_000_000,
+                "status": {"code": "OK"},
+                "attributes": {
+                    "neatlogs.span.kind": "llm",
+                    "neatlogs.internal": True,
+                },
+                "events": [],
+                "instrumentation_scope": {"name": "neatlogs.core.context"},
+            },
+        ],
+    )
+    report = diagnose(path)
+    f = [f for f in report.findings if f.code == "otel-genai-missing"]
+    assert f == []
+
+
+# ============================================================================
+# C. Token-waste patterns
+# ============================================================================
+
+
+def test_oversized_prompt_fires_on_large_llm_span(tmp_path):
+    """A single LLM span with >50K chars in prompt content triggers the
+    oversized-prompt warning. Almost certainly a bug (leaked retrieved doc)."""
+    path = tmp_path / "oversized.log"
+    _write_jsonl(
+        path,
+        [
+            {
+                "trace_id": "t",
+                "span_id": "wf",
+                "parent_span_id": None,
+                "name": "wf",
+                "kind": "workflow",
+                "start_time": 100,
+                "end_time": 200,
+                "duration_ns": 100_000_000,
+                "status": {"code": "OK"},
+                "attributes": {"neatlogs.span.kind": "workflow"},
+                "events": [],
+                "instrumentation_scope": {"name": "neatlogs.core.context"},
+            },
+            {
+                "trace_id": "t",
+                "span_id": "llm",
+                "parent_span_id": "wf",
+                "name": "openai.chat",
+                "kind": "llm",
+                "start_time": 100,
+                "end_time": 200,
+                "duration_ns": 100_000_000,
+                "status": {"code": "OK"},
+                "attributes": {
+                    "neatlogs.span.kind": "llm",
+                    "neatlogs.llm.system": "x" * 60_000,  # 60K chars
+                    "neatlogs.llm.input_messages.0": "user",
+                },
+                "events": [],
+                "instrumentation_scope": {"name": "neatlogs.core.context"},
+            },
+        ],
+    )
+    report = diagnose(path)
+    f = next((f for f in report.findings if f.code == "oversized-prompt"), None)
+    assert f is not None
+    assert f.severity == "warning"
+    assert "60" in f.evidence  # the size shows up
+
+
+def test_oversized_prompt_does_not_fire_on_normal_size(tmp_path):
+    """A normal-sized LLM span (a few KB) doesn't trigger oversized-prompt."""
+    path = tmp_path / "normal.log"
+    _write_jsonl(
+        path,
+        [
+            {
+                "trace_id": "t",
+                "span_id": "wf",
+                "parent_span_id": None,
+                "name": "wf",
+                "kind": "workflow",
+                "start_time": 100,
+                "end_time": 200,
+                "duration_ns": 100_000_000,
+                "status": {"code": "OK"},
+                "attributes": {"neatlogs.span.kind": "workflow"},
+                "events": [],
+                "instrumentation_scope": {"name": "neatlogs.core.context"},
+            },
+            {
+                "trace_id": "t",
+                "span_id": "llm",
+                "parent_span_id": "wf",
+                "name": "openai.chat",
+                "kind": "llm",
+                "start_time": 100,
+                "end_time": 200,
+                "duration_ns": 100_000_000,
+                "status": {"code": "OK"},
+                "attributes": {
+                    "neatlogs.span.kind": "llm",
+                    "neatlogs.llm.system": "You are a helpful assistant.",
+                    "neatlogs.llm.input_messages.0": "user: hi",
+                },
+                "events": [],
+                "instrumentation_scope": {"name": "neatlogs.core.context"},
+            },
+        ],
+    )
+    report = diagnose(path)
+    f = [f for f in report.findings if f.code == "oversized-prompt"]
+    assert f == []
+
+
+def test_repeated_system_prompt_off_by_default(tmp_path):
+    """The repeated-system-prompt finding requires read_prompt_content=True.
+    By default (PII concern), it does NOT fire even when 50 spans share
+    the same system prompt."""
+    path = tmp_path / "repeated.log"
+    spans = [
+        {
+            "trace_id": "t",
+            "span_id": "wf",
+            "parent_span_id": None,
+            "name": "wf",
+            "kind": "workflow",
+            "start_time": 100,
+            "end_time": 200,
+            "duration_ns": 100_000_000,
+            "status": {"code": "OK"},
+            "attributes": {"neatlogs.span.kind": "workflow"},
+            "events": [],
+            "instrumentation_scope": {"name": "neatlogs.core.context"},
+        }
+    ]
+    for i in range(15):
+        spans.append(
+            {
+                "trace_id": "t",
+                "span_id": f"llm-{i}",
+                "parent_span_id": "wf",
+                "name": f"openai.chat-{i}",
+                "kind": "llm",
+                "start_time": 100,
+                "end_time": 200,
+                "duration_ns": 100_000_000,
+                "status": {"code": "OK"},
+                "attributes": {
+                    "neatlogs.span.kind": "llm",
+                    "neatlogs.llm.system": "You are a helpful assistant. " * 10,
+                },
+                "events": [],
+                "instrumentation_scope": {"name": "neatlogs.core.context"},
+            }
+        )
+    _write_jsonl(path, spans)
+    report = diagnose(path)  # read_prompt_content=False (default)
+    f = [f for f in report.findings if f.code == "repeated-system-prompt"]
+    assert f == [], "PII-sensitive finding must be opt-in only"
+
+
+def test_repeated_system_prompt_fires_when_opt_in(tmp_path):
+    """With read_prompt_content=True, 15 spans sharing the same system
+    prompt trigger the repeated-system-prompt finding."""
+    path = tmp_path / "repeated_optin.log"
+    spans = [
+        {
+            "trace_id": "t",
+            "span_id": "wf",
+            "parent_span_id": None,
+            "name": "wf",
+            "kind": "workflow",
+            "start_time": 100,
+            "end_time": 200,
+            "duration_ns": 100_000_000,
+            "status": {"code": "OK"},
+            "attributes": {"neatlogs.span.kind": "workflow"},
+            "events": [],
+            "instrumentation_scope": {"name": "neatlogs.core.context"},
+        }
+    ]
+    for i in range(15):
+        spans.append(
+            {
+                "trace_id": "t",
+                "span_id": f"llm-{i}",
+                "parent_span_id": "wf",
+                "name": f"openai.chat-{i}",
+                "kind": "llm",
+                "start_time": 100,
+                "end_time": 200,
+                "duration_ns": 100_000_000,
+                "status": {"code": "OK"},
+                "attributes": {
+                    "neatlogs.span.kind": "llm",
+                    "neatlogs.llm.system": "static prompt",
+                },
+                "events": [],
+                "instrumentation_scope": {"name": "neatlogs.core.context"},
+            }
+        )
+    _write_jsonl(path, spans)
+    report = diagnose(path, read_prompt_content=True)
+    f = next((f for f in report.findings if f.code == "repeated-system-prompt"), None)
+    assert f is not None
+    assert f.severity == "info"
+    assert "caching" in f.suggestion.lower()
+
+
+def test_unused_tool_definition_fires(tmp_path):
+    """A tool defined on the LLM span but never called surfaces an
+    unused-tool-definition finding (info)."""
+    path = tmp_path / "unused_tool.log"
+    _write_jsonl(
+        path,
+        [
+            {
+                "trace_id": "t",
+                "span_id": "wf",
+                "parent_span_id": None,
+                "name": "wf",
+                "kind": "workflow",
+                "start_time": 100,
+                "end_time": 200,
+                "duration_ns": 100_000_000,
+                "status": {"code": "OK"},
+                "attributes": {"neatlogs.span.kind": "workflow"},
+                "events": [],
+                "instrumentation_scope": {"name": "neatlogs.core.context"},
+            },
+            {
+                "trace_id": "t",
+                "span_id": "llm",
+                "parent_span_id": "wf",
+                "name": "openai.chat",
+                "kind": "llm",
+                "start_time": 100,
+                "end_time": 200,
+                "duration_ns": 100_000_000,
+                "status": {"code": "OK"},
+                "attributes": {
+                    "neatlogs.span.kind": "llm",
+                    "neatlogs.llm.tools": json.dumps(
+                        [
+                            {"function": {"name": "search_web"}},
+                            {"function": {"name": "get_weather"}},
+                        ]
+                    ),
+                    # No tool_calls at all
+                },
+                "events": [],
+                "instrumentation_scope": {"name": "neatlogs.core.context"},
+            },
+        ],
+    )
+    report = diagnose(path)
+    f = next((f for f in report.findings if f.code == "unused-tool-definition"), None)
+    assert f is not None
+    assert f.severity == "info"
+    assert "search_web" in f.evidence
+    assert "get_weather" in f.evidence
+
+
+def test_unused_tool_does_not_fire_when_tools_are_called(tmp_path):
+    """If a defined tool is actually called, no unused-tool finding."""
+    import json as _json
+
+    path = tmp_path / "tools_called.log"
+    _write_jsonl(
+        path,
+        [
+            {
+                "trace_id": "t",
+                "span_id": "wf",
+                "parent_span_id": None,
+                "name": "wf",
+                "kind": "workflow",
+                "start_time": 100,
+                "end_time": 200,
+                "duration_ns": 100_000_000,
+                "status": {"code": "OK"},
+                "attributes": {"neatlogs.span.kind": "workflow"},
+                "events": [],
+                "instrumentation_scope": {"name": "neatlogs.core.context"},
+            },
+            {
+                "trace_id": "t",
+                "span_id": "llm",
+                "parent_span_id": "wf",
+                "name": "openai.chat",
+                "kind": "llm",
+                "start_time": 100,
+                "end_time": 200,
+                "duration_ns": 100_000_000,
+                "status": {"code": "OK"},
+                "attributes": {
+                    "neatlogs.span.kind": "llm",
+                    "neatlogs.llm.tools": _json.dumps([{"function": {"name": "search_web"}}]),
+                    "neatlogs.llm.tool_calls.0": _json.dumps({"function": {"name": "search_web"}}),
+                },
+                "events": [],
+                "instrumentation_scope": {"name": "neatlogs.core.context"},
+            },
+        ],
+    )
+    report = diagnose(path)
+    f = [f for f in report.findings if f.code == "unused-tool-definition"]
+    assert f == []
+
+
+# ============================================================================
+# D. Manual-fix snippet output
+# ============================================================================
+
+
+def test_emit_fix_init_after_client_renders_snippet(capsys):
+    """--emit-fix init-after-client prints a BEFORE/AFTER snippet to stdout
+    and exits 0 (no log file needed)."""
+    from neatlogs.doctor import main
+
+    rc = main(["--emit-fix", "init-after-client"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "# Finding: init-after-client" in out
+    assert "# BEFORE:" in out
+    assert "# AFTER:" in out
+    assert "neatlogs.init" in out
+
+
+def test_emit_fix_unknown_code_returns_error(capsys):
+    """--emit-fix with an unknown code writes to stderr and returns 2."""
+    from neatlogs.doctor import main
+
+    rc = main(["--emit-fix", "totally-bogus-code"])
+    captured = capsys.readouterr()
+    assert rc == 2
+    assert "Unknown finding code" in captured.err
+    assert captured.out == ""
+
+
+def test_emit_fix_works_for_each_known_code(capsys):
+    """Every code in _FIX_SNIPPETS renders without error."""
+    from neatlogs import doctor
+    from neatlogs.doctor import main
+
+    for code in doctor._FIX_SNIPPETS:
+        capsys.readouterr()
+        rc = main(["--emit-fix", code])
+        out = capsys.readouterr().out
+        assert rc == 0, f"emit-fix {code} returned {rc}"
+        assert f"# Finding: {code}" in out
+        assert "# BEFORE:" in out
+        assert "# AFTER:" in out
+
+
+def test_emit_fix_does_not_read_log_file(tmp_path, capsys):
+    """--emit-fix ignores the path argument — useful for the wizard to
+    show snippets without needing a real log file."""
+    from neatlogs.doctor import main
+
+    rc = main(["--emit-fix", "init-after-client", "/nonexistent/path/that/should/not/be/read.log"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "# Finding: init-after-client" in out

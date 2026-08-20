@@ -229,6 +229,7 @@ def diagnose(
     *,
     run_id: Optional[str] = None,
     foreign_only: bool = False,
+    read_prompt_content: bool = False,
 ) -> DoctorReport:
     """Diagnose a processed span JSONL file.
 
@@ -238,6 +239,11 @@ def diagnose(
             fallback) matches. Useful when a single log file contains many runs.
         foreign_only: If True, only return foreign-instrumentation findings.
             Used by the ``--foreign-only`` CLI flag.
+        read_prompt_content: If True, the doctor reads LLM prompt contents
+            (PII concern) to detect the ``repeated-system-prompt`` pattern.
+            Default is False; pass ``--read-prompt-content`` on the CLI to
+            enable. Oversized-prompt and unused-tool-definition are always
+            checked because they only read sizes / tool names.
 
     Returns:
         A :class:`DoctorReport` with the findings sorted by severity then code.
@@ -310,7 +316,14 @@ def diagnose(
         # Group by trace within the run.
         traces = _group_by_trace(run_spans)
         for tid, trace_spans in traces.items():
-            findings.extend(_diagnose_trace(tid, trace_spans, run_id=rid))
+            findings.extend(
+                _diagnose_trace(
+                    tid,
+                    trace_spans,
+                    run_id=rid,
+                    read_prompt_content=read_prompt_content,
+                )
+            )
 
         # Cross-trace: detect foreign instrumentation in this run.
         scope_findings, scope_seen_here = _foreign_instrumentation_findings(run_spans, run_id=rid)
@@ -399,7 +412,12 @@ def main(argv: list[str] | None = None) -> int:
         prog="neatlogs-doctor",
         description="Diagnose local Neatlogs processed span logs.",
     )
-    parser.add_argument("path", help="Path to a processed span JSONL file.")
+    parser.add_argument(
+        "path",
+        nargs="?",
+        default=None,
+        help="Path to a processed span JSONL file. Ignored when --emit-fix is set.",
+    )
     parser.add_argument("--json", action="store_true", help="Print a JSON report instead of text.")
     parser.add_argument(
         "--run-id",
@@ -411,9 +429,47 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Only show foreign-instrumentation findings.",
     )
+    parser.add_argument(
+        "--read-prompt-content",
+        action="store_true",
+        help=(
+            "Read LLM prompt contents to detect the 'repeated-system-prompt' pattern. "
+            "PII concern: the prompt may contain user data. Default is off."
+        ),
+    )
+    parser.add_argument(
+        "--emit-fix",
+        metavar="CODE",
+        default=None,
+        help=(
+            "Print a manual-fix snippet for the given finding code and exit. "
+            "Use this to get a copy-paste-able BEFORE/AFTER for a specific issue. "
+            "No log file is read when this flag is set; path is ignored."
+        ),
+    )
     args = parser.parse_args(argv)
 
-    report = diagnose(args.path, run_id=args.run_id, foreign_only=args.foreign_only)
+    if args.emit_fix is not None:
+        snippet = render_fix_snippet(args.emit_fix)
+        if snippet is None:
+            sys.stderr.write(
+                f"Unknown finding code: {args.emit_fix!r}. "
+                f"Known codes: {', '.join(sorted(_FIX_SNIPPETS.keys()))}\n"
+            )
+            return 2
+        sys.stdout.write(snippet)
+        return 0
+
+    if args.path is None:
+        sys.stderr.write("error: a path is required (or use --emit-fix <code>)\n")
+        sys.exit(2)
+
+    report = diagnose(
+        args.path,
+        run_id=args.run_id,
+        foreign_only=args.foreign_only,
+        read_prompt_content=args.read_prompt_content,
+    )
     if args.json:
         json.dump(report.to_dict(), sys.stdout, indent=2)
         sys.stdout.write("\n")
@@ -515,7 +571,11 @@ def _iter_traces(runs: dict[str, list[dict[str, Any]]]) -> Iterable[tuple[str, s
 
 
 def _diagnose_trace(
-    trace_id: str, spans: list[dict[str, Any]], *, run_id: str
+    trace_id: str,
+    spans: list[dict[str, Any]],
+    *,
+    run_id: str,
+    read_prompt_content: bool = False,
 ) -> list[DoctorFinding]:
     """Run all per-trace checks and return the resulting findings.
 
@@ -561,6 +621,12 @@ def _diagnose_trace(
     findings.extend(_attribute_completeness_findings(visible, trace_id, run_id))
     # (3) data integrity: zero-duration, error-no-event, latency-mismatch
     findings.extend(_data_integrity_findings(visible, trace_id, run_id))
+    # (4) OTel GenAI semconv: LLM spans also carry gen_ai.* attrs
+    findings.extend(_otel_genai_findings(visible, trace_id, run_id))
+    # (5) token-waste: oversized prompts, repeated system prompts, unused tools
+    findings.extend(
+        _token_waste_findings(visible, trace_id, run_id, read_prompt_content=read_prompt_content)
+    )
 
     # --- Bug #2: rootless HTTP-only trace. ------------------------------------
     if _is_rootless_http_only(visible):
@@ -1177,6 +1243,110 @@ def _span_status_is_error(status: Any) -> bool:
     return False
 
 
+#: OTel GenAI semantic convention attribute keys. Reference:
+#: https://github.com/open-telemetry/semantic-conventions/blob/main/docs/gen-ai/gen-ai-spans.md
+OTEL_GENAI_OPERATION_NAME = "gen_ai.operation.name"
+OTEL_GENAI_PROVIDER_NAME = "gen_ai.provider.name"
+OTEL_GENAI_REQUEST_MODEL = "gen_ai.request.model"
+OTEL_GENAI_USAGE_INPUT_TOKENS = "gen_ai.usage.input_tokens"
+OTEL_GENAI_USAGE_OUTPUT_TOKENS = "gen_ai.usage.output_tokens"
+OTEL_GENAI_RESPONSE_FINISH_REASONS = "gen_ai.response.finish_reasons"
+
+#: OTel GenAI operation-name values that correspond to a "llm" kind span
+#: (per the semconv, these are the chat-style operations).
+OTEL_GENAI_LLM_OPERATIONS = frozenset({"chat", "text_completion", "generate_content"})
+
+
+def _is_llm_kind(span: dict[str, Any]) -> bool:
+    """True if the span represents an LLM operation, either by neatlogs kind
+    or by OTel ``gen_ai.operation.name``.
+    """
+    attrs = span.get("attributes") or {}
+    if attrs.get("neatlogs.span.kind") == "llm":
+        return True
+    op = attrs.get(OTEL_GENAI_OPERATION_NAME)
+    if isinstance(op, str) and op in OTEL_GENAI_LLM_OPERATIONS:
+        return True
+    return False
+
+
+def _otel_genai_findings(
+    spans: list[dict[str, Any]], trace_id: str, run_id: str
+) -> list[DoctorFinding]:
+    """Validate that LLM-kind spans also carry OTel GenAI semconv attrs.
+
+    Two findings:
+    - ``otel-genai-missing``: LLM span has no ``gen_ai.operation.name``. Trace
+      won't be interoperable with OTel GenAI tools (Langfuse, Phoenix) that
+      filter on ``gen_ai.*``.
+    - ``otel-genai-inconsistent``: span has BOTH neatlogs and OTel attrs but
+      they disagree (e.g. ``neatlogs.span.kind=llm`` vs
+      ``gen_ai.operation.name=text_completion``). Signals a wrapper bug or
+      a migration in progress.
+    """
+    findings: list[DoctorFinding] = []
+    seen_kinds: dict[str, int] = {}
+    for span in spans:
+        if not _is_llm_kind(span):
+            continue
+        attrs = span.get("attributes") or {}
+        neatlogs_kind = attrs.get("neatlogs.span.kind")
+        otel_op = attrs.get(OTEL_GENAI_OPERATION_NAME)
+        if otel_op is None:
+            seen_kinds[neatlogs_kind or "unknown"] = (
+                seen_kinds.get(neatlogs_kind or "unknown", 0) + 1
+            )
+            continue
+        # Both present: check they agree on the operation kind.
+        if neatlogs_kind == "llm" and isinstance(otel_op, str):
+            if otel_op not in OTEL_GENAI_LLM_OPERATIONS:
+                findings.append(
+                    DoctorFinding(
+                        severity="info",
+                        code="otel-genai-inconsistent",
+                        title="LLM span has mismatched neatlogs/OTel GenAI operation kind",
+                        evidence=(
+                            f"span '{_truncate(span.get('name') or '<unnamed>')}' has "
+                            f"neatlogs.span.kind='llm' but "
+                            f"{OTEL_GENAI_OPERATION_NAME}='{otel_op}'"
+                        ),
+                        suggestion=(
+                            "Update the wrapper so the neatlogs span kind and the OTel "
+                            "GenAI operation name agree. Reference: "
+                            "https://opentelemetry.io/docs/specs/semconv/gen-ai/"
+                        ),
+                        trace_id=trace_id,
+                        run_id=run_id,
+                        fix_class="config",
+                        related_codes=("missing-span-kind",),
+                    )
+                )
+    if seen_kinds:
+        n = sum(seen_kinds.values())
+        findings.append(
+            DoctorFinding(
+                severity="warning",
+                code="otel-genai-missing",
+                title="LLM span(s) lack OTel GenAI semantic-convention attributes",
+                evidence=(
+                    f"{n} LLM span(s) missing {OTEL_GENAI_OPERATION_NAME}. "
+                    "Langfuse, Phoenix, and other OTel GenAI tools will skip these."
+                ),
+                suggestion=(
+                    "Set the OTel GenAI attributes on every LLM span. The SDK does this "
+                    "automatically when the span is created via the OTel GenAI "
+                    "instrumentation (e.g. opentelemetry-instrumentation-openai). "
+                    "Reference: https://opentelemetry.io/docs/specs/semconv/gen-ai/"
+                ),
+                trace_id=trace_id,
+                run_id=run_id,
+                fix_class="config",
+                related_codes=("otel-genai-inconsistent",),
+            )
+        )
+    return findings
+
+
 # --- Diagnostic dimensions: init order, attributes, data integrity, stage ---
 
 
@@ -1415,6 +1585,278 @@ _FIX_CLASS_TO_STAGE = {
 }
 
 
+#: Threshold for ``oversized-prompt`` — anything over this many characters in
+#: a single LLM span's prompt content is almost certainly a bug (forgot to
+#: truncate retrieved documents, leaked a long CSV, etc.).
+OVERSIZED_PROMPT_CHAR_THRESHOLD = 50_000
+
+#: Threshold for ``repeated-system-prompt`` — the same system prompt content
+#: appearing this many times in the run suggests the user is sending a static
+#: prefix without leveraging prompt caching. Most providers offer caching for
+#: prefixes over 1024 tokens; 10+ repetitions is a strong signal.
+REPEATED_SYSTEM_PROMPT_THRESHOLD = 10
+
+
+def _llm_prompt_size(span: dict[str, Any]) -> int:
+    """Total character count of an LLM span's prompt content.
+
+    Walks the standard locations:
+    - ``gen_ai.input.messages`` (OTel semconv, list of message dicts)
+    - ``neatlogs.llm.input_messages.*`` (neatlogs-namespaced; concatenated)
+    - ``neatlogs.llm.system`` (just the system prompt)
+    - ``neatlogs.llm.prompts.*`` (older neatlogs layout; concatenated)
+    Returns 0 if no prompt content is found.
+    """
+    attrs = span.get("attributes") or {}
+    n = 0
+    # OTel semconv: list of message dicts
+    msgs = attrs.get("gen_ai.input.messages")
+    if isinstance(msgs, list):
+        for m in msgs:
+            if isinstance(m, dict):
+                content = m.get("content")
+                if isinstance(content, str):
+                    n += len(content)
+                elif isinstance(content, list):
+                    # content can be a list of {type, text} dicts
+                    for part in content:
+                        if isinstance(part, dict):
+                            text = part.get("text")
+                            if isinstance(text, str):
+                                n += len(text)
+    # neatlogs namespaced: each numbered attribute holds a serialized message
+    for prefix in ("neatlogs.llm.input_messages.", "neatlogs.llm.prompts."):
+        for k, v in attrs.items():
+            if k.startswith(prefix) and isinstance(v, str):
+                n += len(v)
+    sys = attrs.get("neatlogs.llm.system")
+    if isinstance(sys, str):
+        n += len(sys)
+    return n
+
+
+def _llm_system_prompt(span: dict[str, Any]) -> str | None:
+    """Return the system prompt text for an LLM span, or None.
+
+    Looks at ``neatlogs.llm.system`` (neatlogs) and the first
+    ``gen_ai.system_instructions`` (OTel semconv) message.
+    """
+    attrs = span.get("attributes") or {}
+    sys = attrs.get("neatlogs.llm.system")
+    if isinstance(sys, str) and sys:
+        return sys
+    si = attrs.get("gen_ai.system_instructions")
+    if isinstance(si, list) and si:
+        parts: list[str] = []
+        for m in si:
+            if isinstance(m, dict):
+                content = m.get("content")
+                if isinstance(content, str):
+                    parts.append(content)
+                elif isinstance(content, list):
+                    for part in content:
+                        if isinstance(part, dict):
+                            text = part.get("text")
+                            if isinstance(text, str):
+                                parts.append(text)
+        if parts:
+            return "\n".join(parts)
+    return None
+
+
+def _llm_tool_definitions(span: dict[str, Any]) -> set[str]:
+    """Return the set of tool names defined on an LLM span, or empty.
+
+    Reads:
+    - ``gen_ai.tool.definitions`` (OTel semconv, list of {name, ...} dicts)
+    - ``neatlogs.llm.tools`` (JSON string, list of {function: {name, ...}} dicts)
+    """
+    attrs = span.get("attributes") or {}
+    out: set[str] = set()
+    td = attrs.get("gen_ai.tool.definitions")
+    if isinstance(td, list):
+        for t in td:
+            if isinstance(t, dict):
+                name = t.get("name")
+                if isinstance(name, str):
+                    out.add(name)
+    tools = attrs.get("neatlogs.llm.tools")
+    if isinstance(tools, str) and tools:
+        try:
+            parsed = json.loads(tools)
+        except (TypeError, ValueError):
+            parsed = None
+        if isinstance(parsed, list):
+            for t in parsed:
+                if isinstance(t, dict):
+                    fn = t.get("function")
+                    if isinstance(fn, dict):
+                        name = fn.get("name")
+                        if isinstance(name, str):
+                            out.add(name)
+                    else:
+                        name = t.get("name")
+                        if isinstance(name, str):
+                            out.add(name)
+    return out
+
+
+def _llm_tool_calls(span: dict[str, Any]) -> set[str]:
+    """Return the set of tool names called in this span (assistant message)."""
+    attrs = span.get("attributes") or {}
+    out: set[str] = set()
+    # OTel: gen_ai.output.messages with finish_reasons=tool_use
+    msgs = attrs.get("gen_ai.output.messages")
+    if isinstance(msgs, list):
+        for m in msgs:
+            if not isinstance(m, dict):
+                continue
+            for tc in m.get("tool_calls") or []:
+                if isinstance(tc, dict):
+                    fn = tc.get("function") or {}
+                    if isinstance(fn, dict):
+                        name = fn.get("name")
+                        if isinstance(name, str):
+                            out.add(name)
+    # neatlogs: neatlogs.llm.tool_calls.* (each numbered attribute is a JSON
+    # string of the call dict)
+    for k, v in attrs.items():
+        if k.startswith("neatlogs.llm.tool_calls.") and isinstance(v, str):
+            try:
+                parsed = json.loads(v)
+            except (TypeError, ValueError):
+                parsed = None
+            if isinstance(parsed, dict):
+                fn = parsed.get("function")
+                if isinstance(fn, dict):
+                    name = fn.get("name")
+                    if isinstance(name, str):
+                        out.add(name)
+    return out
+
+
+def _token_waste_findings(
+    spans: list[dict[str, Any]],
+    trace_id: str,
+    run_id: str,
+    *,
+    read_prompt_content: bool,
+) -> list[DoctorFinding]:
+    """Detect token-waste patterns in LLM spans.
+
+    Three findings:
+    - ``oversized-prompt``: a single LLM span's prompt exceeds the threshold.
+    - ``repeated-system-prompt``: the same system prompt content appears
+      ``REPEATED_SYSTEM_PROMPT_THRESHOLD``+ times. Only checked when
+      ``read_prompt_content=True`` (PII concern).
+    - ``unused-tool-definition``: a tool defined on an LLM span is never
+      called in any subsequent span.
+
+    Internal spans are excluded.
+    """
+    findings: list[DoctorFinding] = []
+    oversized: list[str] = []
+    system_prompt_counts: dict[str, int] = {}
+    all_defined_tools: set[str] = set()
+    all_called_tools: set[str] = set()
+    for span in spans:
+        if _is_internal(span):
+            continue
+        if not _is_llm_kind(span):
+            continue
+        name = str(span.get("name") or "<unnamed>")
+        # Oversized check — always runs, no PII.
+        size = _llm_prompt_size(span)
+        if size > OVERSIZED_PROMPT_CHAR_THRESHOLD:
+            oversized.append(f"{name} ({size} chars)")
+        # Repeated system-prompt — only with opt-in (PII).
+        if read_prompt_content:
+            sys = _llm_system_prompt(span)
+            if sys is not None:
+                system_prompt_counts[sys] = system_prompt_counts.get(sys, 0) + 1
+        # Tool definitions vs. calls — no PII (just tool names).
+        all_defined_tools.update(_llm_tool_definitions(span))
+        all_called_tools.update(_llm_tool_calls(span))
+
+    if oversized:
+        findings.append(
+            DoctorFinding(
+                severity="warning",
+                code="oversized-prompt",
+                title="LLM span(s) have oversized prompt content",
+                evidence=(
+                    f"{len(oversized)} LLM span(s) exceed {OVERSIZED_PROMPT_CHAR_THRESHOLD} "
+                    f"chars in prompt: {', '.join(_truncate(s) for s in oversized[:3])}"
+                    f"{' ...' if len(oversized) > 3 else ''}"
+                ),
+                suggestion=(
+                    "Almost certainly a bug: usually a leaked retrieved document, CSV, "
+                    "or log dump. Cap the prompt with the wrapper's max_input_chars or "
+                    "truncate the source data before it reaches the LLM."
+                ),
+                trace_id=trace_id,
+                run_id=run_id,
+                fix_class="config",
+            )
+        )
+
+    if read_prompt_content:
+        repeated = [
+            (text, n)
+            for text, n in system_prompt_counts.items()
+            if n >= REPEATED_SYSTEM_PROMPT_THRESHOLD
+        ]
+        if repeated:
+            repeated.sort(key=lambda pair: -pair[1])
+            top_text, top_count = repeated[0]
+            findings.append(
+                DoctorFinding(
+                    severity="info",
+                    code="repeated-system-prompt",
+                    title="Same system prompt content sent many times — consider prompt caching",
+                    evidence=(
+                        f"{len(repeated)} distinct system prompt(s) repeated >= "
+                        f"{REPEATED_SYSTEM_PROMPT_THRESHOLD} times. Top repeat: "
+                        f"{top_count} times ({len(top_text)} chars each)."
+                    ),
+                    suggestion=(
+                        "If the system prompt is static, enable your provider's prompt "
+                        "caching (OpenAI cached_prompt_tokens, Anthropic cache_control, "
+                        "Gemini cachedContent). Repeated prefixes over ~1k tokens are "
+                        "usually free or heavily discounted at the provider."
+                    ),
+                    trace_id=trace_id,
+                    run_id=run_id,
+                    fix_class="config",
+                )
+            )
+
+    unused = sorted(all_defined_tools - all_called_tools)
+    if unused:
+        findings.append(
+            DoctorFinding(
+                severity="info",
+                code="unused-tool-definition",
+                title="Tool(s) defined in prompt but never called",
+                evidence=(
+                    f"{len(unused)} tool(s) defined but not called: {', '.join(unused[:3])}"
+                    f"{' ...' if len(unused) > 3 else ''}"
+                ),
+                suggestion=(
+                    "Either the model chose not to call them (drop them from the prompt "
+                    "to save tokens) or the wrapper is silently dropping tool calls "
+                    "(check the wrapper's tool-call routing)."
+                ),
+                trace_id=trace_id,
+                run_id=run_id,
+                fix_class="config",
+                related_codes=("missing-span-kind",),
+            )
+        )
+
+    return findings
+
+
 def _pipeline_stage_run_finding(
     findings: list[DoctorFinding],
 ) -> Optional[DoctorFinding]:
@@ -1479,6 +1921,76 @@ _STAGE_SUGGESTIONS = {
         "active context."
     ),
 }
+
+
+#: Manual-fix snippets — printed by ``neatlogs-doctor --emit-fix <code>``.
+#: Each entry is a (description, before, after) triple the user can copy-paste.
+#: We intentionally do NOT do AST-based auto-fix: rewrites are fragile across
+#: project structures (Jupyter, K8s init, generated code). The user copy-pastes
+#: the snippet, which is correct-by-construction.
+_FIX_SNIPPETS: dict[str, tuple[str, str, str]] = {
+    "init-after-client": (
+        "Move neatlogs.init() to the top of the entry point (before any LLM client is constructed).",
+        "from openai import OpenAI\n"
+        "import neatlogs\n"
+        "neatlogs.init(api_key=os.environ['NEATLOGS_API_KEY'])\n",
+        "import neatlogs\n"
+        "neatlogs.init(api_key=os.environ['NEATLOGS_API_KEY'])\n"
+        "from openai import OpenAI\n",
+    ),
+    "missing-span-kind": (
+        "Set neatlogs.span.kind on every emitted span, either via the @neatlogs.span decorator or the wrapper.",
+        "from neatlogs import trace\n\n" "@trace\n" "def my_function():\n" "    ...\n",
+        "from neatlogs import trace\n\n" "@trace(kind='TOOL')\n" "def my_function():\n" "    ...\n",
+    ),
+    "zero-duration-span": (
+        "The wrapper exited the span before calling .end() — fix the exception path.",
+        "def patched(*args, **kwargs):\n"
+        "    span = tracer.start_span('my_op')\n"
+        "    response = orig(*args, **kwargs)\n"
+        "    return response  # bug: span.end() never called on the error path\n",
+        "def patched(*args, **kwargs):\n"
+        "    span = tracer.start_span('my_op')\n"
+        "    try:\n"
+        "        return orig(*args, **kwargs)\n"
+        "    finally:\n"
+        "        span.end()\n",
+    ),
+    "error-status-no-event": (
+        "Call record_exception() inside the wrapper's except block so the error view shows the stack trace.",
+        "try:\n"
+        "    response = orig(*args, **kwargs)\n"
+        "except Exception as e:\n"
+        "    span.set_status(StatusCode.ERROR)\n"
+        "    raise\n",
+        "try:\n"
+        "    response = orig(*args, **kwargs)\n"
+        "except Exception as e:\n"
+        "    span.set_status(StatusCode.ERROR, str(e))\n"
+        "    span.record_exception(e)\n"
+        "    raise\n",
+    ),
+}
+
+
+def render_fix_snippet(code: str) -> str | None:
+    """Render a manual-fix snippet for the given finding code, or None if the
+    code has no registered snippet. The output is plain text suitable for
+    piping to a file or for the user to copy-paste.
+    """
+    if code not in _FIX_SNIPPETS:
+        return None
+    desc, before, after = _FIX_SNIPPETS[code]
+    return (
+        f"# Finding: {code}\n"
+        f"# Suggested: {desc}\n"
+        f"\n"
+        f"# BEFORE:\n"
+        f"{before}\n"
+        f"\n"
+        f"# AFTER:\n"
+        f"{after}\n"
+    )
 
 
 __all__ = [

@@ -3,9 +3,12 @@ Neatlogs SDK.
 """
 
 import atexit
+import functools
 import os
 import re
+import signal
 import sys
+import threading
 from typing import Any, Callable, Dict, List, Optional
 
 try:
@@ -29,7 +32,7 @@ from opentelemetry.sdk.trace.sampling import TraceIdRatioBased
 
 from ._wrap_utils import _normalize_traces_endpoint
 from .core.logger import get_logger
-from .core.span_processor import NeatlogsSpanProcessor
+from .core.span_processor import CompletionMarkerSpanProcessor, NeatlogsSpanProcessor
 from .instrumentation.manager import InstrumentationManager
 from .version import __version__
 
@@ -111,8 +114,17 @@ def _foreign_llm_instrumentor_installed():
 _meter_provider = None
 _log_provider = None
 _span_processor = None
+_transport_span_processors = []
+_completion_span_processor = None
 _instrumentation_manager = None
 _debug_mode = False
+_signal_handlers = {}
+_signal_shutdown_in_progress = False
+_shutdown_condition = threading.Condition(threading.RLock())
+_shutdown_state = "idle"
+_shutdown_owner = None
+_shutdown_result = True
+_lifecycle_operation_lock = threading.RLock()
 _session_config = {
     "session_id": None,
     "user_id": None,
@@ -125,6 +137,68 @@ _session_config = {
 def is_debug_enabled() -> bool:
     """Return True if neatlogs was initialized with debug=True."""
     return _debug_mode
+
+
+def _restore_shutdown_signal_handlers() -> None:
+    """Restore handlers that were present before Neatlogs initialized."""
+    global _signal_handlers
+    if threading.current_thread() is not threading.main_thread():
+        return
+    for signum, previous in list(_signal_handlers.items()):
+        try:
+            signal.signal(signum, previous)
+        except (OSError, RuntimeError, ValueError):
+            pass
+    _signal_handlers = {}
+
+
+def _shutdown_signal_handler(signum, frame) -> None:
+    """Close active spans, flush, then preserve the process' signal semantics."""
+    global _signal_shutdown_in_progress
+    if _signal_shutdown_in_progress:
+        return
+    _signal_shutdown_in_progress = True
+    previous = _signal_handlers.get(signum, signal.SIG_DFL)
+    if previous == signal.SIG_IGN:
+        _signal_shutdown_in_progress = False
+        return
+    try:
+        try:
+            reason = signal.Signals(signum).name
+        except ValueError:
+            reason = f"signal-{signum}"
+        shutdown(termination_reason=reason)
+    finally:
+        _signal_shutdown_in_progress = False
+
+    if callable(previous) and previous is not _shutdown_signal_handler:
+        previous(signum, frame)
+        # The application owns this signal. A handler that returns may be
+        # intentionally coordinating its own graceful shutdown; do not force an
+        # additional KeyboardInterrupt/SystemExit after it regains control.
+        return
+    if signum == getattr(signal, "SIGINT", None):
+        raise KeyboardInterrupt
+    raise SystemExit(128 + int(signum))
+
+
+def _register_shutdown_signal_handlers() -> None:
+    """Best-effort SIGINT/SIGTERM registration; only legal on the main thread."""
+    global _signal_handlers
+    if threading.current_thread() is not threading.main_thread():
+        logger.debug("Skipping Neatlogs signal handlers outside the main thread")
+        return
+    for signum in (getattr(signal, "SIGINT", None), getattr(signal, "SIGTERM", None)):
+        if signum is None or signum in _signal_handlers:
+            continue
+        try:
+            previous = signal.getsignal(signum)
+            if previous == signal.SIG_IGN:
+                continue
+            signal.signal(signum, _shutdown_signal_handler)
+            _signal_handlers[signum] = previous
+        except (OSError, RuntimeError, ValueError) as exc:
+            logger.debug(f"Could not register shutdown handler for signal {signum}: {exc}")
 
 
 _DEFAULT_MAX_SPAN_ATTRIBUTES = 10_000
@@ -159,6 +233,16 @@ def _span_limits_for_capture_everything() -> SpanLimits:
     return SpanLimits(max_span_attributes=_DEFAULT_MAX_SPAN_ATTRIBUTES)
 
 
+def _serialize_init(func):
+    @functools.wraps(func)
+    def wrapped(*args, **kwargs):
+        with _lifecycle_operation_lock:
+            return func(*args, **kwargs)
+
+    return wrapped
+
+
+@_serialize_init
 def init(
     api_key: Optional[str] = None,
     endpoint: str = "https://ingest.neatlogs.com",
@@ -179,6 +263,7 @@ def init(
     pii_span_types: Optional[List[str]] = None,
     tracer_provider: Optional[Any] = None,
     isolate: Optional[bool] = None,
+    register_shutdown_handlers: bool = True,
 ) -> None:
     """
     Initialize Neatlogs SDK.
@@ -265,6 +350,10 @@ def init(
               False to force the legacy own-or-reuse behaviour even when a foreign
               instrumentor is present. Passing ``tracer_provider=`` implies isolation
               regardless of this flag.
+        register_shutdown_handlers: Register SIGINT and SIGTERM handlers that end
+              active Neatlogs spans child-first and flush before preserving normal
+              signal termination. Defaults to True. Set False only when the host
+              application owns signal handling and calls ``neatlogs.shutdown()``.
     """
     global _initialized
 
@@ -489,6 +578,10 @@ def init(
         sample_rate=sample_rate,
         debug=debug,
         mask=mask,
+        emit_completion_markers=False,
+        # A private/isolated pipeline contains only Neatlogs execution spans,
+        # even when the caller retains provider shutdown ownership.
+        own_all_spans=_owns_tracer_provider or _isolated_provider,
     )
     provider.add_span_processor(_span_processor)
 
@@ -530,6 +623,17 @@ def init(
             schedule_delay_millis=int(flush_interval * 1000),
         )
         provider.add_span_processor(batch_processor)
+        # Registered after the batch processor so a root is queued for export
+        # before the completion marker that triggers backend finalization.
+        completion_processor = CompletionMarkerSpanProcessor(
+            _span_processor,
+            provider.get_tracer("neatlogs.internal"),
+        )
+        provider.add_span_processor(completion_processor)
+        global _transport_span_processors
+        _transport_span_processors = [batch_processor, completion_processor]
+        global _completion_span_processor
+        _completion_span_processor = completion_processor
         if debug:
             logger.debug(f"OTLP trace exporter configured: {traces_endpoint}")
     elif debug:
@@ -617,8 +721,9 @@ def init(
             logger.debug(f"Instrumented libraries: {manager.instrumented}")
 
     atexit.register(shutdown)
-
     _initialized = True
+    if register_shutdown_handlers:
+        _register_shutdown_signal_handlers()
 
     if debug:
         logger.info("Neatlogs SDK initialized successfully")
@@ -676,23 +781,86 @@ def get_session_config():
     return _session_config.copy()
 
 
-def shutdown(timeout_millis: int = 30000) -> bool:
-    """Shutdown the SDK and flush pending spans/metrics."""
+def shutdown(timeout_millis: int = 30000, termination_reason: str = "shutdown") -> bool:
+    """Run one shutdown at a time and make same-thread re-entry non-blocking."""
+    global _shutdown_state, _shutdown_owner, _shutdown_result
+    current_thread = threading.get_ident()
+    with _shutdown_condition:
+        if _shutdown_state == "closing":
+            # end_active_spans() invokes processors synchronously. If one of
+            # those callbacks re-enters shutdown on this thread, waiting here
+            # would deadlock the original shutdown.
+            if _shutdown_owner == current_thread:
+                return _shutdown_result
+            _shutdown_condition.wait_for(lambda: _shutdown_state == "idle")
+            return _shutdown_result
+        _shutdown_state = "closing"
+        _shutdown_owner = current_thread
+
+    try:
+        with _lifecycle_operation_lock:
+            result = _perform_shutdown(timeout_millis, termination_reason)
+    except BaseException:
+        with _shutdown_condition:
+            _shutdown_result = False
+        raise
+    else:
+        with _shutdown_condition:
+            _shutdown_result = result
+        return result
+    finally:
+        with _shutdown_condition:
+            _shutdown_state = "idle"
+            _shutdown_owner = None
+            _shutdown_condition.notify_all()
+
+
+def _perform_shutdown(timeout_millis: int, termination_reason: str) -> bool:
+    """End active Neatlogs spans, then flush and shut down SDK providers."""
     global _tracer_provider, _owns_tracer_provider, _meter_provider, _log_provider, _span_processor, _initialized
-    global _instrumentation_manager
+    global _instrumentation_manager, _transport_span_processors, _completion_span_processor
 
     try:
         atexit.unregister(shutdown)
     except Exception:
         pass
 
-    success = True
+    _restore_shutdown_signal_handlers()
 
+    success = True
+    if _completion_span_processor is not None:
+        _completion_span_processor.begin_shutdown()
+    if _span_processor is not None:
+        _span_processor.begin_shutdown(termination_reason)
+
+    # LOG records must drain before trace completion. The tracer batch contains
+    # neatlogs.trace.complete, which can trigger backend finalization as soon as
+    # it is ingested.
+    if _log_provider:
+        try:
+            logger.debug("Shutting down log provider...")
+            ok = _log_provider.shutdown()
+            success = (ok is None or bool(ok)) and success
+            logger.debug("Log provider shut down successfully")
+        except Exception as e:
+            logger.error(f"Error shutting down log provider: {e}", exc_info=True)
+            success = False
+
+    # Root end creates the completion marker, so it must happen only after all
+    # buffered LOG records have drained.
     if _span_processor:
         try:
+            ended = _span_processor.end_active_spans(termination_reason)
+            if ended:
+                logger.info(f"Ended {ended} active Neatlogs span(s) during {termination_reason}")
             _span_processor._log_performance_stats()
         except Exception as e:
             logger.warning(f"Error logging performance stats: {e}")
+        if not _span_processor.wait_for_downstream(timeout_millis):
+            logger.warning("Timed out waiting for ending spans to reach the export queue")
+            success = False
+    if _completion_span_processor is not None:
+        _completion_span_processor.emit_deferred()
 
     if _tracer_provider:
         try:
@@ -711,6 +879,12 @@ def shutdown(timeout_millis: int = 30000) -> bool:
                 logger.debug("Shared tracer provider — flushing without shutting it down")
                 ok = _tracer_provider.force_flush(timeout_millis=timeout_millis)
                 success = (ok is None or bool(ok)) and success
+                for processor in reversed(_transport_span_processors):
+                    try:
+                        processor.shutdown()
+                    except Exception as e:
+                        logger.warning(f"Error shutting down Neatlogs transport: {e}")
+                        success = False
                 if _span_processor is not None:
                     try:
                         _span_processor.shutdown()
@@ -728,16 +902,6 @@ def shutdown(timeout_millis: int = 30000) -> bool:
             logger.debug("Meter provider shut down successfully")
         except Exception as e:
             logger.error(f"Error shutting down meter provider: {e}", exc_info=True)
-            success = False
-
-    if _log_provider:
-        try:
-            logger.debug("Shutting down log provider...")
-            ok = _log_provider.shutdown()
-            success = (ok is None or bool(ok)) and success
-            logger.debug("Log provider shut down successfully")
-        except Exception as e:
-            logger.error(f"Error shutting down log provider: {e}", exc_info=True)
             success = False
 
     try:
@@ -775,6 +939,8 @@ def shutdown(timeout_millis: int = 30000) -> bool:
     _meter_provider = None
     _log_provider = None
     _span_processor = None
+    _transport_span_processors = []
+    _completion_span_processor = None
     _debug_mode = False
     _session_config["session_id"] = None
     _session_config["user_id"] = None

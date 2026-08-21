@@ -6,17 +6,39 @@ Transport is handled by BatchSpanProcessor + OTLPSpanExporter (added in init.py)
 import json
 import os
 import random
+import threading
 import time
 from typing import Any, Callable, Dict, List, Optional
+from urllib.parse import unquote
 
+from opentelemetry import context as context_api
 from opentelemetry.context import Context
 from opentelemetry.sdk.trace import ReadableSpan, Span, SpanProcessor
+from opentelemetry.trace import Status, StatusCode
 
 from .attribute_processor import UnifiedAttributeProcessor
 from .logger import get_logger
 from .mask import apply_mask
 
 logger = get_logger()
+
+
+def _sanitize_termination_reason(reason: Any) -> str:
+    printable = "".join(
+        " " if ord(char) < 32 or 127 <= ord(char) <= 159 else char
+        for char in str(reason or "shutdown")
+    )
+    return (" ".join(printable.split()) or "shutdown")[:256]
+
+
+def _verification_marker_from_env() -> Optional[str]:
+    for entry in os.getenv("OTEL_RESOURCE_ATTRIBUTES", "").split(","):
+        key, separator, value = entry.partition("=")
+        if not separator or unquote(key.strip()) != "neatlogs.verification.marker":
+            continue
+        marker = unquote(value.strip())
+        return marker if 0 < len(marker) <= 128 else None
+    return None
 
 
 def _is_neatlogs_scope_span(span: Any) -> bool:
@@ -121,10 +143,14 @@ class NeatlogsSpanProcessor(SpanProcessor):
         sample_rate: float = 1.0,
         debug: bool = False,
         mask: Optional[Callable[[Dict[str, Any]], Any]] = None,
+        emit_completion_markers: bool = True,
+        own_all_spans: bool = False,
     ):
         self.sample_rate = sample_rate
         self.debug = debug
         self.mask = mask
+        self.emit_completion_markers = emit_completion_markers
+        self.own_all_spans = own_all_spans
 
         self._init_processor()
         self._init_file_logging()
@@ -140,6 +166,23 @@ class NeatlogsSpanProcessor(SpanProcessor):
         # Per-trace child I/O accumulator for root backfill (see on_end §1b):
         #   trace_id(int) -> {parent_hex: {"in_ts","in_val","out_ts","out_val"}}
         self._trace_child_io: dict = {}
+        # Spans are normally closed by their context manager/decorator. Keep a
+        # lifecycle registry as a last line of defence for process
+        # shutdown: OpenTelemetry cannot export an open span, and a root that
+        # never ends cannot emit the completion marker used by finalization.
+        # Only spans created by a Neatlogs instrumentation scope are tracked so
+        # a shared provider never lets us end another observability SDK's spans.
+        self._active_spans: dict[int, Span] = {}
+        self._active_spans_lock = threading.RLock()
+        self._owned_span_ids: set[int] = set()
+        self._ownership_context_key = context_api.create_key("neatlogs.span_processor.owner")
+        self._ownership_context_token = object()
+        self._downstream_condition = threading.Condition(self._active_spans_lock)
+        self._downstream_pending: set[int] = set()
+        self._closing_reason: Optional[str] = None
+        self._closed = False
+        self._completion_eligible_roots: set[int] = set()
+        self._completion_coordination_enabled = False
 
     def _init_processor(self) -> None:
         base_path = os.path.dirname(os.path.dirname(__file__))
@@ -188,8 +231,45 @@ class NeatlogsSpanProcessor(SpanProcessor):
                 self._processed_log_file_handle = None
 
     def on_start(self, span: Span, parent_context: Optional[Context] = None) -> None:
+        if self._closed:
+            return
         start_time = time.perf_counter()
         try:
+            is_completion_marker = span.name == "neatlogs.trace.complete"
+            owned = False
+            with self._active_spans_lock:
+                parent_id = span.parent.span_id if span.parent is not None else None
+                context_owned = (
+                    parent_context is not None
+                    and context_api.get_value(self._ownership_context_key, parent_context)
+                    is self._ownership_context_token
+                )
+                # Framework auto-instrumentation uses its own scope name. Once
+                # it nests under a Neatlogs span it is part of the SDK-owned
+                # trace and must close before that parent. Foreign roots on a
+                # shared provider remain outside the registry.
+                owned = (
+                    self.own_all_spans
+                    or context_owned
+                    or _is_neatlogs_scope_span(span)
+                    or parent_id in self._active_spans
+                )
+                if owned and not is_completion_marker:
+                    self._active_spans[span.context.span_id] = span
+                    self._owned_span_ids.add(span.context.span_id)
+                    marker = _verification_marker_from_env()
+                    if marker:
+                        span.set_attribute("neatlogs.verification.marker", marker)
+                closing_reason = self._closing_reason
+
+            # A tracer cached by application code can race shutdown. End that
+            # newly-started SDK span immediately so it cannot remain open after
+            # the shutdown snapshot. Completion markers are deliberately exempt.
+            if owned and not is_completion_marker and closing_reason:
+                self._mark_interrupted(span, closing_reason)
+                span.end()
+                return
+
             # Stamp request-scoped identity (neatlogs.identify()) onto EVERY root
             # span as a fallback. trace()/@span set it explicitly after creation
             # (overriding this); direct-provider auto-roots stamp it themselves.
@@ -273,6 +353,13 @@ class NeatlogsSpanProcessor(SpanProcessor):
             self.perf_stats["on_start_time"] += time.perf_counter() - start_time
 
     def on_end(self, span: ReadableSpan) -> None:
+        with self._active_spans_lock:
+            self._active_spans.pop(span.context.span_id, None)
+            if self._completion_coordination_enabled:
+                self._downstream_pending.add(span.context.span_id)
+        if self._closed:
+            return
+
         # Skip processing for internal completion markers — they only need to
         # be exported as-is by the downstream BatchSpanProcessor.
         if span.name == "neatlogs.trace.complete":
@@ -521,11 +608,137 @@ class NeatlogsSpanProcessor(SpanProcessor):
             # OTel/Langfuse setup), this processor also sees their FOREIGN spans —
             # we must not emit a marker for a foreign root (it would trigger
             # finalization for a trace that has no neatlogs spans, or dangle).
-            if not span.parent and _is_neatlogs_scope_span(span):
-                self._emit_completion_marker(span, trace_id, resource_attrs)
+            if not span.parent and self.owns_span(span):
+                if self.emit_completion_markers:
+                    self._emit_completion_marker(span, trace_id, resource_attrs)
+                elif self._completion_coordination_enabled:
+                    self._completion_eligible_roots.add(span.context.span_id)
 
         finally:
+            if not self._completion_coordination_enabled:
+                with self._active_spans_lock:
+                    self._owned_span_ids.discard(span.context.span_id)
             self.perf_stats["on_end_time"] += time.perf_counter() - start_time
+
+    def owned_span_context(self, context: Optional[Context] = None) -> Context:
+        """Mark a tracer start as owned by this processor without claiming peers.
+
+        This is used by ``Client`` when it is attached to a caller-supplied
+        provider. The marker exists only in OTel context; it is not exported as a
+        span attribute and therefore cannot affect customer telemetry.
+        """
+        base = context if context is not None else context_api.get_current()
+        return context_api.set_value(
+            self._ownership_context_key,
+            self._ownership_context_token,
+            base,
+        )
+
+    def end_active_spans(self, reason: str = "shutdown") -> int:
+        """End active Neatlogs spans child-first before provider shutdown.
+
+        Ending the root through the normal SDK span lifecycle emits
+        ``neatlogs.trace.complete``. The interruption attributes make recovery
+        explicit without inventing a second root or bypassing normal export.
+        Concurrent normal ``end()`` calls are safe: OpenTelemetry span end is
+        idempotent and ``on_end`` removes each span from the live registry.
+        """
+        # Claim the current registry in one critical section.  ``span.end()``
+        # synchronously calls ``on_end()``, and shutdown can also race a normal
+        # application ``end()`` from another thread.  Removing the snapshot up
+        # front makes concurrent/re-entrant shutdown calls idempotent while the
+        # SDK span's own recording guard handles a normal end that wins the race.
+        clean_reason = self.begin_shutdown(reason)
+        with self._active_spans_lock:
+            active_by_id = self._active_spans
+            self._active_spans = {}
+        active = list(active_by_id.values())
+
+        if not active:
+            return 0
+
+        active_ids = {span.context.span_id for span in active}
+
+        def depth(span: Span) -> int:
+            current = span
+            seen: set[int] = set()
+            value = 0
+            while current.parent is not None and current.parent.span_id in active_ids:
+                parent_id = current.parent.span_id
+                if parent_id in seen:
+                    break
+                seen.add(parent_id)
+                value += 1
+                parent = active_by_id.get(parent_id)
+                if parent is None:
+                    break
+                current = parent
+            return value
+
+        ended = 0
+        for span in sorted(active, key=depth, reverse=True):
+            try:
+                if not span.is_recording():
+                    continue
+                self._mark_interrupted(span, clean_reason)
+                span.end()
+                ended += 1
+            except Exception as exc:
+                logger.warning(f"Failed to end active span during {clean_reason}: {exc}")
+        return ended
+
+    def begin_shutdown(self, reason: str = "shutdown") -> str:
+        clean_reason = _sanitize_termination_reason(reason)
+        with self._active_spans_lock:
+            if self._closing_reason is None:
+                self._closing_reason = clean_reason
+            return self._closing_reason
+
+    def enable_completion_coordination(self) -> None:
+        self._completion_coordination_enabled = True
+
+    def mark_downstream_complete(self, span: ReadableSpan) -> None:
+        with self._downstream_condition:
+            self._downstream_pending.discard(span.context.span_id)
+            self._owned_span_ids.discard(span.context.span_id)
+            self._downstream_condition.notify_all()
+
+    def wait_for_downstream(self, timeout_millis: int = 30000) -> bool:
+        deadline = time.monotonic() + max(timeout_millis, 0) / 1000
+        with self._downstream_condition:
+            while self._downstream_pending:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return False
+                self._downstream_condition.wait(remaining)
+            return True
+
+    @staticmethod
+    def _mark_interrupted(span: Span, clean_reason: str) -> None:
+        span.set_attribute("neatlogs.trace.interrupted", True)
+        span.set_attribute("neatlogs.trace.termination.reason", clean_reason)
+        # Preserve application/framework terminal success. A span that was
+        # still UNSET when interrupted did not complete and is an OTel ERROR.
+        if span.status.status_code is StatusCode.UNSET:
+            span.set_status(Status(StatusCode.ERROR, f"Interrupted during {clean_reason}"))
+        span.add_event(
+            "neatlogs.trace.interrupted",
+            {"neatlogs.trace.termination.reason": clean_reason},
+        )
+
+    def owns_span(self, span: ReadableSpan) -> bool:
+        with self._active_spans_lock:
+            context_owned = span.context.span_id in self._owned_span_ids
+        return self.own_all_spans or context_owned or _is_neatlogs_scope_span(span)
+
+    def consume_completion_eligibility(self, span: ReadableSpan) -> bool:
+        if self._closed:
+            return False
+        span_id = span.context.span_id
+        if span_id not in self._completion_eligible_roots:
+            return False
+        self._completion_eligible_roots.discard(span_id)
+        return True
 
     def _accumulate_or_backfill_root_io(self, span: ReadableSpan) -> None:
         """Client-side root I/O backfill for I/O-less roots.
@@ -612,6 +825,7 @@ class NeatlogsSpanProcessor(SpanProcessor):
         root_span: ReadableSpan,
         trace_id: str,
         resource_attrs: dict,
+        marker_tracer=None,
     ) -> None:
         """Emit a neatlogs.trace.complete span so the backend triggers simplification."""
         try:
@@ -634,7 +848,7 @@ class NeatlogsSpanProcessor(SpanProcessor):
             from .._wrap_utils import get_neatlogs_provider
 
             _nl_provider = get_neatlogs_provider()
-            tracer = (
+            tracer = marker_tracer or (
                 _nl_provider.get_tracer("neatlogs.internal")
                 if _nl_provider is not None
                 else otel_trace.get_tracer("neatlogs.internal")
@@ -699,6 +913,7 @@ class NeatlogsSpanProcessor(SpanProcessor):
         return True
 
     def shutdown(self) -> None:
+        self._closed = True
         self._log_performance_stats()
         if self._raw_log_file_handle:
             try:
@@ -727,3 +942,73 @@ class NeatlogsSpanProcessor(SpanProcessor):
             )
         except (ValueError, OSError):
             pass
+
+
+class CompletionMarkerSpanProcessor(SpanProcessor):
+    """Emit completion only after earlier processors have accepted the root.
+
+    OpenTelemetry invokes processors in registration order. Register this after
+    the transport ``BatchSpanProcessor`` so the root enters the export queue
+    before its ``neatlogs.trace.complete`` marker.
+    """
+
+    def __init__(self, span_processor: NeatlogsSpanProcessor, tracer=None):
+        self._span_processor = span_processor
+        self._tracer = tracer
+        self._closed = False
+        self._defer_markers = False
+        self._deferred_roots: list[ReadableSpan] = []
+        self._lock = threading.RLock()
+        self._span_processor.enable_completion_coordination()
+
+    def on_start(self, span: Span, parent_context: Optional[Context] = None) -> None:
+        return None
+
+    def on_end(self, span: ReadableSpan) -> None:
+        try:
+            if self._closed or span.name == "neatlogs.trace.complete":
+                return
+            if span.parent or not self._span_processor.owns_span(span):
+                return
+            if not self._span_processor.consume_completion_eligibility(span):
+                return
+            with self._lock:
+                if self._defer_markers:
+                    self._deferred_roots.append(span)
+                    return
+                # Emit while holding the same lock used by begin_shutdown(), so
+                # defer choice and marker creation are one ordered operation.
+                self._emit(span)
+        finally:
+            self._span_processor.mark_downstream_complete(span)
+
+    def begin_shutdown(self) -> None:
+        with self._lock:
+            self._defer_markers = True
+
+    def emit_deferred(self) -> None:
+        with self._lock:
+            roots = self._deferred_roots
+            self._deferred_roots = []
+            self._defer_markers = False
+        for span in roots:
+            self._emit(span)
+
+    def _emit(self, span: ReadableSpan) -> None:
+        resource_attrs: dict[str, Any] = {}
+        if span.resource and span.resource.attributes:
+            resource_attrs.update(span.resource.attributes)
+        self._span_processor._emit_completion_marker(
+            span,
+            format(span.context.trace_id, "032x"),
+            resource_attrs,
+            self._tracer,
+        )
+
+    def shutdown(self) -> None:
+        with self._lock:
+            self._closed = True
+            self._deferred_roots = []
+
+    def force_flush(self, timeout_millis: int = 30000) -> bool:
+        return True

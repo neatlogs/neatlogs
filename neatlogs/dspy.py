@@ -282,14 +282,14 @@ def _patch_retrieve_class() -> None:
         tracer = get_provider_tracer()
         attrs = {"neatlogs.span.kind": "retriever"}
         if query_or_queries is not None:
-            attrs["neatlogs.retrieval.query"] = (
+            attrs["neatlogs.retriever.query"] = (
                 query_or_queries
                 if isinstance(query_or_queries, str)
                 else serialize(query_or_queries)
-            )[:10000]
+            )
         effective_k = k if k is not None else getattr(self, "k", None)
         if effective_k is not None:
-            attrs["neatlogs.retrieval.top_k"] = effective_k
+            attrs["neatlogs.retriever.top_k"] = effective_k
 
         span = tracer.start_span(name="dspy.retrieve", attributes=attrs)
         token = attach_as_current(span)
@@ -307,10 +307,10 @@ def _patch_retrieve_class() -> None:
             passages = result
         if passages is not None:
             try:
-                span.set_attribute("neatlogs.retrieval.document_count", len(passages))
+                span.set_attribute("neatlogs.retriever.document_count", len(passages))
             except TypeError:
                 pass
-            span.set_attribute("neatlogs.retrieval.documents", serialize(passages)[:10000])
+            span.set_attribute("neatlogs.retriever.documents", serialize(passages))
         span.set_attribute(
             "neatlogs.llm.metrics.duration_ms", round((time.perf_counter() - start) * 1000, 3)
         )

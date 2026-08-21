@@ -76,9 +76,9 @@ def search_knowledge_base(query: str) -> str:
             results = ["No relevant documentation found. Contact customer support."]
 
         top_results = results[:3]
-        span.set_attribute("neatlogs.retrieval.query", query)
-        span.set_attribute("neatlogs.retrieval.top_k", 3)
-        span.set_attribute("neatlogs.retrieval.documents", json.dumps(top_results))
+        span.set_attribute("neatlogs.retriever.query", query)
+        span.set_attribute("neatlogs.retriever.top_k", 3)
+        span.set_attribute("neatlogs.retriever.documents", json.dumps(top_results))
 
         return json.dumps({
             "query": query,

@@ -7,10 +7,12 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 
 messages = pytest.importorskip("langchain_core.messages")
 outputs = pytest.importorskip("langchain_core.outputs")
+documents = pytest.importorskip("langchain_core.documents")
 AIMessage = messages.AIMessage
 HumanMessage = messages.HumanMessage
 ChatGeneration = outputs.ChatGeneration
 LLMResult = outputs.LLMResult
+Document = documents.Document
 langchain_integration = importlib.import_module("neatlogs.langchain")
 
 
@@ -200,3 +202,38 @@ async def test_callback_aggregates_message_usage_for_batched_prompts(
     assert span.attributes["neatlogs.llm.token_count.prompt"] == 8
     assert span.attributes["neatlogs.llm.token_count.completion"] == 10
     assert span.attributes["neatlogs.llm.token_count.total"] == 18
+
+
+@pytest.mark.asyncio
+async def test_retriever_callback_does_not_truncate_query_or_documents(
+    monkeypatch, in_memory_span_exporter
+):
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(in_memory_span_exporter))
+    monkeypatch.setattr(
+        langchain_integration,
+        "get_tracer",
+        lambda: provider.get_tracer("neatlogs.test.langchain"),
+    )
+    monkeypatch.setattr(langchain_integration, "_auto_root_enabled", lambda: False)
+
+    handler = langchain_integration.NeatlogsCallbackHandler()
+    run_id = uuid4()
+    query = "q" * 12_000
+    retrieved = [Document(page_content=f"document-{index}-" + ("x" * 3_000)) for index in range(12)]
+
+    await handler.on_retriever_start(
+        {"name": "complete-retriever"},
+        query,
+        run_id=run_id,
+    )
+    await handler.on_retriever_end(retrieved, run_id=run_id)
+
+    span = next(
+        span
+        for span in in_memory_span_exporter.get_finished_spans()
+        if span.name == "langchain.retriever.complete-retriever"
+    )
+    assert span.attributes["neatlogs.retriever.query"] == query
+    assert span.attributes["neatlogs.retriever.document_count"] == 12
+    assert span.attributes["neatlogs.retriever.documents.11.content"] == retrieved[11].page_content

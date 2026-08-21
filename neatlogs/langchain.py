@@ -664,7 +664,7 @@ class NeatlogsCallbackHandler(AsyncCallbackHandler, BaseCallbackHandler):
             attributes={"neatlogs.span.kind": "retriever", "neatlogs.retriever.name": str(name)},
         )
         if query:
-            span.set_attribute("neatlogs.retrieval.query", str(query)[:10000])
+            span.set_attribute("neatlogs.retriever.query", str(query))
         if tags:
             span.set_attribute("neatlogs.tags", ",".join(tags))
         self._spans[run_id] = span
@@ -683,16 +683,14 @@ class NeatlogsCallbackHandler(AsyncCallbackHandler, BaseCallbackHandler):
         if not span:
             return
         try:
-            span.set_attribute("neatlogs.retrieval.document_count", len(documents))
+            span.set_attribute("neatlogs.retriever.document_count", len(documents))
         except TypeError:
             pass
         if documents:
-            for i, doc in enumerate(documents[:10]):
+            for i, doc in enumerate(documents):
                 content = getattr(doc, "page_content", None)
                 if content:
-                    span.set_attribute(
-                        f"neatlogs.retrieval.documents.{i}.content", str(content)[:2000]
-                    )
+                    span.set_attribute(f"neatlogs.retriever.documents.{i}.content", str(content))
         span.set_status(StatusCode.OK)
         span.end()
         self._end_auto_root(run_id)

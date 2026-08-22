@@ -1,0 +1,43 @@
+E. retry-loop
+  ✅ retry-loop fires on 5 same-name spans — codes=['tool-missing-io', 'pipeline-stage-summary', 'retry-loop']
+  ✅ severity is info
+  ✅ evidence has count + parent
+  ✅ fix_class is instrumentation
+  ✅ retry-loop does NOT fire on 3 same-name spans
+
+F. unbalanced-llm-usage
+  ✅ fires on input-only
+  ✅ severity is warning
+  ✅ fix_class is data_integrity
+  ✅ evidence mentions input_tokens + output_tokens
+  ✅ fires on output-only
+  ✅ does NOT fire when both are set
+
+G. empty-trace
+  ✅ fires on 1-span trace
+  ✅ severity is info
+  ✅ evidence has the span name
+  ✅ does NOT fire on 2-span trace
+
+H. context-propagation-broken
+  ✅ fires on cross-trace parent
+  ✅ severity is error
+  ✅ fix_class is hierarchy
+  ✅ evidence names the broken span
+  ✅ does NOT fire on orphan-parent
+  ✅ orphan-parent DOES fire for missing parent
+  ✅ does NOT fire on normal parent
+
+I. Bug regressions
+  ✅ llm-missing-io fires on the regression shape
+  ✅ doc_url is in-repo, NOT 404 docs.neatlogs.com — doc_url=skills/neatlogs/references/troubleshooting.md#6-common-anti-patterns-table
+  ✅ related_codes points to a valid finding code — related_codes=('foreign-instrumentation-detected',)
+
+========================================================================
+E2E SUMMARY
+========================================================================
+  Total assertions: 25
+  Passed:           25 (100%)
+  Failed:           0
+
+  ✅ ALL E2E TESTS PASSED

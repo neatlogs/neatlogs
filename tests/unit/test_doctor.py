@@ -3136,3 +3136,505 @@ def test_emit_fix_does_not_read_log_file(tmp_path, capsys):
     out = capsys.readouterr().out
     assert rc == 0
     assert "# Finding: init-after-client" in out
+
+
+# --- Bug regressions ---
+
+
+def test_missing_io_doc_url_points_to_in_repo_path_not_404(tmp_path):
+    """llm/tool/retriever-missing-io used to point at docs.neatlogs.com,
+    which returns 404. The PR #20 review fixed this for the new
+    dimensions but missed the pre-existing codes."""
+    path = tmp_path / "missing_io.log"
+    _write_jsonl(
+        path,
+        [
+            {
+                "trace_id": "t",
+                "span_id": "wf",
+                "parent_span_id": None,
+                "name": "wf",
+                "kind": "workflow",
+                "start_time": 100,
+                "end_time": 200,
+                "duration_ns": 100_000_000,
+                "status": {"code": "OK"},
+                "attributes": {"neatlogs.span.kind": "workflow"},
+                "events": [],
+                "instrumentation_scope": {"name": "neatlogs.core.context"},
+            },
+            {
+                "trace_id": "t",
+                "span_id": "llm1",
+                "parent_span_id": "wf",
+                "name": "openai.chat",
+                "kind": "llm",
+                "start_time": 100,
+                "end_time": 200,
+                "duration_ns": 100_000_000,
+                "status": {"code": "OK"},
+                "attributes": {"neatlogs.span.kind": "llm"},
+                "events": [],
+                "instrumentation_scope": {"name": "neatlogs.core.context"},
+            },
+        ],
+    )
+    report = diagnose(path)
+    for f in report.findings:
+        if f.code in ("llm-missing-io", "tool-missing-io", "retriever-missing-io"):
+            assert f.doc_url is not None
+            assert "docs.neatlogs.com" not in f.doc_url
+            assert f.doc_url.startswith("skills/")
+
+
+def test_missing_io_related_codes_is_a_valid_code(tmp_path):
+    """missing-io related_codes was ("instrumentation-missing",) — not a
+    real code. The cross-reference is now a real one."""
+    path = tmp_path / "missing_io_rel.log"
+    _write_jsonl(
+        path,
+        [
+            {
+                "trace_id": "t",
+                "span_id": "wf",
+                "parent_span_id": None,
+                "name": "wf",
+                "kind": "workflow",
+                "start_time": 100,
+                "end_time": 200,
+                "duration_ns": 100_000_000,
+                "status": {"code": "OK"},
+                "attributes": {"neatlogs.span.kind": "workflow"},
+                "events": [],
+                "instrumentation_scope": {"name": "neatlogs.core.context"},
+            },
+            {
+                "trace_id": "t",
+                "span_id": "llm1",
+                "parent_span_id": "wf",
+                "name": "openai.chat",
+                "kind": "llm",
+                "start_time": 100,
+                "end_time": 200,
+                "duration_ns": 100_000_000,
+                "status": {"code": "OK"},
+                "attributes": {"neatlogs.span.kind": "llm"},
+                "events": [],
+                "instrumentation_scope": {"name": "neatlogs.core.context"},
+            },
+        ],
+    )
+    report = diagnose(path)
+    valid_codes = {
+        "init-after-client",
+        "missing-span-kind",
+        "zero-duration-span",
+        "error-status-no-event",
+        "latency-mismatch",
+        "otel-genai-missing",
+        "otel-genai-inconsistent",
+        "oversized-prompt",
+        "repeated-system-prompt",
+        "unused-tool-definition",
+        "retry-loop",
+        "unbalanced-llm-usage",
+        "empty-trace",
+        "context-propagation-broken",
+        "foreign-instrumentation-detected",
+        "missing-root-kind",
+        "rootless-http-only",
+        "orphan-parent",
+        "self-parent",
+        "duplicate-span-id",
+        "multiple-roots",
+        "cycle",
+        "agent-without-llm",
+        "multi-run-log",
+        "scope-not-preserved",
+    }
+    for f in report.findings:
+        if f.code in ("llm-missing-io", "tool-missing-io", "retriever-missing-io"):
+            for ref in f.related_codes:
+                assert ref in valid_codes, f"related_codes references unknown code {ref!r}"
+
+
+# --- retry-loop ---
+
+
+def test_retry_loop_fires_when_same_name_repeats_4_times(tmp_path):
+    path = tmp_path / "retry.log"
+    spans = [
+        {
+            "trace_id": "t",
+            "span_id": "wf",
+            "parent_span_id": None,
+            "name": "wf",
+            "kind": "workflow",
+            "start_time": 100,
+            "end_time": 1000,
+            "duration_ns": 900_000_000,
+            "status": {"code": "OK"},
+            "attributes": {"neatlogs.span.kind": "workflow"},
+            "events": [],
+            "instrumentation_scope": {"name": "neatlogs.core.context"},
+        },
+    ]
+    for i in range(5):
+        spans.append(
+            {
+                "trace_id": "t",
+                "span_id": f"r{i}",
+                "parent_span_id": "wf",
+                "name": "call_api",
+                "kind": "tool",
+                "start_time": 100 + i * 10,
+                "end_time": 110 + i * 10,
+                "duration_ns": 10_000_000,
+                "status": {"code": "OK"},
+                "attributes": {"neatlogs.span.kind": "tool"},
+                "events": [],
+                "instrumentation_scope": {"name": "neatlogs.core.context"},
+            }
+        )
+    _write_jsonl(path, spans)
+    report = diagnose(path)
+    f = next((f for f in report.findings if f.code == "retry-loop"), None)
+    assert f is not None
+    assert f.severity == "info"
+    assert f.fix_class == "instrumentation"
+    assert "5 consecutive" in f.evidence
+
+
+def test_retry_loop_does_not_fire_on_three_same_name(tmp_path):
+    """3 retries is the legitimate-retry sweet spot; the threshold is 4+."""
+    path = tmp_path / "retry_off.log"
+    spans = [
+        {
+            "trace_id": "t",
+            "span_id": "wf",
+            "parent_span_id": None,
+            "name": "wf",
+            "kind": "workflow",
+            "start_time": 100,
+            "end_time": 1000,
+            "duration_ns": 900_000_000,
+            "status": {"code": "OK"},
+            "attributes": {"neatlogs.span.kind": "workflow"},
+            "events": [],
+            "instrumentation_scope": {"name": "neatlogs.core.context"},
+        },
+    ]
+    for i in range(3):
+        spans.append(
+            {
+                "trace_id": "t",
+                "span_id": f"r{i}",
+                "parent_span_id": "wf",
+                "name": "call_api",
+                "kind": "tool",
+                "start_time": 100 + i * 10,
+                "end_time": 110 + i * 10,
+                "duration_ns": 10_000_000,
+                "status": {"code": "OK"},
+                "attributes": {"neatlogs.span.kind": "tool"},
+                "events": [],
+                "instrumentation_scope": {"name": "neatlogs.core.context"},
+            }
+        )
+    _write_jsonl(path, spans)
+    report = diagnose(path)
+    assert [f for f in report.findings if f.code == "retry-loop"] == []
+
+
+# --- unbalanced-llm-usage ---
+
+
+def test_unbalanced_llm_usage_fires_on_input_only(tmp_path):
+    path = tmp_path / "unbal_in.log"
+    _write_jsonl(
+        path,
+        [
+            {
+                "trace_id": "t",
+                "span_id": "wf",
+                "parent_span_id": None,
+                "name": "wf",
+                "kind": "workflow",
+                "start_time": 100,
+                "end_time": 200,
+                "duration_ns": 100_000_000,
+                "status": {"code": "OK"},
+                "attributes": {"neatlogs.span.kind": "workflow"},
+                "events": [],
+                "instrumentation_scope": {"name": "neatlogs.core.context"},
+            },
+            {
+                "trace_id": "t",
+                "span_id": "llm",
+                "parent_span_id": "wf",
+                "name": "openai.chat",
+                "kind": "llm",
+                "start_time": 100,
+                "end_time": 200,
+                "duration_ns": 100_000_000,
+                "status": {"code": "OK"},
+                "attributes": {
+                    "neatlogs.span.kind": "llm",
+                    "gen_ai.operation.name": "chat",
+                    "gen_ai.usage.input_tokens": 100,
+                },
+                "events": [],
+                "instrumentation_scope": {"name": "neatlogs.core.context"},
+            },
+        ],
+    )
+    report = diagnose(path)
+    f = next((f for f in report.findings if f.code == "unbalanced-llm-usage"), None)
+    assert f is not None
+    assert f.severity == "warning"
+    assert f.fix_class == "data_integrity"
+    assert "input_tokens" in f.evidence
+    assert "output_tokens" in f.evidence
+
+
+def test_unbalanced_llm_usage_does_not_fire_when_both_set(tmp_path):
+    path = tmp_path / "unbal_off.log"
+    _write_jsonl(
+        path,
+        [
+            {
+                "trace_id": "t",
+                "span_id": "wf",
+                "parent_span_id": None,
+                "name": "wf",
+                "kind": "workflow",
+                "start_time": 100,
+                "end_time": 200,
+                "duration_ns": 100_000_000,
+                "status": {"code": "OK"},
+                "attributes": {"neatlogs.span.kind": "workflow"},
+                "events": [],
+                "instrumentation_scope": {"name": "neatlogs.core.context"},
+            },
+            {
+                "trace_id": "t",
+                "span_id": "llm",
+                "parent_span_id": "wf",
+                "name": "openai.chat",
+                "kind": "llm",
+                "start_time": 100,
+                "end_time": 200,
+                "duration_ns": 100_000_000,
+                "status": {"code": "OK"},
+                "attributes": {
+                    "neatlogs.span.kind": "llm",
+                    "gen_ai.operation.name": "chat",
+                    "gen_ai.usage.input_tokens": 100,
+                    "gen_ai.usage.output_tokens": 50,
+                },
+                "events": [],
+                "instrumentation_scope": {"name": "neatlogs.core.context"},
+            },
+        ],
+    )
+    report = diagnose(path)
+    assert [f for f in report.findings if f.code == "unbalanced-llm-usage"] == []
+
+
+# --- empty-trace ---
+
+
+def test_empty_trace_fires_on_single_span_trace(tmp_path):
+    path = tmp_path / "empty.log"
+    _write_jsonl(
+        path,
+        [
+            {
+                "trace_id": "t",
+                "span_id": "wf",
+                "parent_span_id": None,
+                "name": "root_workflow",
+                "kind": "workflow",
+                "start_time": 100,
+                "end_time": 200,
+                "duration_ns": 100_000_000,
+                "status": {"code": "OK"},
+                "attributes": {"neatlogs.span.kind": "workflow"},
+                "events": [],
+                "instrumentation_scope": {"name": "neatlogs.core.context"},
+            },
+        ],
+    )
+    report = diagnose(path)
+    f = next((f for f in report.findings if f.code == "empty-trace"), None)
+    assert f is not None
+    assert f.severity == "info"
+    assert f.fix_class == "instrumentation"
+    assert "root_workflow" in f.evidence
+
+
+def test_empty_trace_does_not_fire_on_two_span_trace(tmp_path):
+    path = tmp_path / "empty_off.log"
+    _write_jsonl(
+        path,
+        [
+            {
+                "trace_id": "t",
+                "span_id": "wf",
+                "parent_span_id": None,
+                "name": "root_workflow",
+                "kind": "workflow",
+                "start_time": 100,
+                "end_time": 200,
+                "duration_ns": 100_000_000,
+                "status": {"code": "OK"},
+                "attributes": {"neatlogs.span.kind": "workflow"},
+                "events": [],
+                "instrumentation_scope": {"name": "neatlogs.core.context"},
+            },
+            {
+                "trace_id": "t",
+                "span_id": "child",
+                "parent_span_id": "wf",
+                "name": "child_op",
+                "kind": "tool",
+                "start_time": 110,
+                "end_time": 150,
+                "duration_ns": 40_000_000,
+                "status": {"code": "OK"},
+                "attributes": {"neatlogs.span.kind": "tool"},
+                "events": [],
+                "instrumentation_scope": {"name": "neatlogs.core.context"},
+            },
+        ],
+    )
+    report = diagnose(path)
+    assert [f for f in report.findings if f.code == "empty-trace"] == []
+
+
+# --- context-propagation-broken ---
+
+
+def test_context_propagation_broken_fires_on_cross_trace_parent(tmp_path):
+    """Parent on a different trace_id in the same run = async context loss."""
+    path = tmp_path / "ctx_broken.log"
+    _write_jsonl(
+        path,
+        [
+            {
+                "trace_id": "t_parent",
+                "span_id": "p",
+                "parent_span_id": None,
+                "name": "parent_wf",
+                "kind": "workflow",
+                "start_time": 100,
+                "end_time": 1000,
+                "duration_ns": 900_000_000,
+                "status": {"code": "OK"},
+                "attributes": {
+                    "neatlogs.span.kind": "workflow",
+                    "session.id": "run1",
+                },
+                "events": [],
+                "instrumentation_scope": {"name": "neatlogs.core.context"},
+            },
+            {
+                "trace_id": "t_child",
+                "span_id": "c",
+                "parent_span_id": "p",
+                "name": "lost_child",
+                "kind": "tool",
+                "start_time": 200,
+                "end_time": 300,
+                "duration_ns": 100_000_000,
+                "status": {"code": "OK"},
+                "attributes": {
+                    "neatlogs.span.kind": "tool",
+                    "session.id": "run1",
+                },
+                "events": [],
+                "instrumentation_scope": {"name": "neatlogs.core.context"},
+            },
+        ],
+    )
+    report = diagnose(path)
+    f = next((f for f in report.findings if f.code == "context-propagation-broken"), None)
+    assert f is not None
+    assert f.severity == "error"
+    assert f.fix_class == "hierarchy"
+    assert "lost_child" in f.evidence
+
+
+def test_context_propagation_broken_does_not_fire_on_normal_parent(tmp_path):
+    path = tmp_path / "ctx_normal.log"
+    _write_jsonl(
+        path,
+        [
+            {
+                "trace_id": "t",
+                "span_id": "wf",
+                "parent_span_id": None,
+                "name": "wf",
+                "kind": "workflow",
+                "start_time": 100,
+                "end_time": 1000,
+                "duration_ns": 900_000_000,
+                "status": {"code": "OK"},
+                "attributes": {
+                    "neatlogs.span.kind": "workflow",
+                    "session.id": "run1",
+                },
+                "events": [],
+                "instrumentation_scope": {"name": "neatlogs.core.context"},
+            },
+            {
+                "trace_id": "t",
+                "span_id": "child",
+                "parent_span_id": "wf",
+                "name": "child_op",
+                "kind": "tool",
+                "start_time": 200,
+                "end_time": 300,
+                "duration_ns": 100_000_000,
+                "status": {"code": "OK"},
+                "attributes": {
+                    "neatlogs.span.kind": "tool",
+                    "session.id": "run1",
+                },
+                "events": [],
+                "instrumentation_scope": {"name": "neatlogs.core.context"},
+            },
+        ],
+    )
+    report = diagnose(path)
+    assert [f for f in report.findings if f.code == "context-propagation-broken"] == []
+
+
+def test_context_propagation_broken_does_not_fire_on_orphan_parent(tmp_path):
+    """Orphan-parent is a different finding. Don't double-report."""
+    path = tmp_path / "ctx_orphan.log"
+    _write_jsonl(
+        path,
+        [
+            {
+                "trace_id": "t",
+                "span_id": "child",
+                "parent_span_id": "missing_parent",
+                "name": "child_op",
+                "kind": "tool",
+                "start_time": 200,
+                "end_time": 300,
+                "duration_ns": 100_000_000,
+                "status": {"code": "OK"},
+                "attributes": {
+                    "neatlogs.span.kind": "tool",
+                    "session.id": "run1",
+                },
+                "events": [],
+                "instrumentation_scope": {"name": "neatlogs.core.context"},
+            },
+        ],
+    )
+    report = diagnose(path)
+    assert [f for f in report.findings if f.code == "context-propagation-broken"] == []
+    assert [f for f in report.findings if f.code == "orphan-parent"] != []

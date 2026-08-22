@@ -712,8 +712,8 @@ def _missing_io_findings(
                 trace_id=trace_id,
                 run_id=run_id,
                 fix_class="capture",
-                doc_url="https://docs.neatlogs.com/troubleshooting/missing-io",
-                related_codes=("instrumentation-missing",),
+                doc_url="skills/neatlogs/references/troubleshooting.md#6-common-anti-patterns-table",
+                related_codes=("foreign-instrumentation-detected",),
             )
         )
     return findings
@@ -870,6 +870,10 @@ def _cycle_findings(
     name_of: dict[str, str] = {
         s["span_id"]: s.get("name") or "<unnamed>" for s in spans if s.get("span_id")
     }
+    children_of: dict[str, list[str]] = {
+        parent: [c["span_id"] for c in kids if c.get("span_id")]
+        for parent, kids in child_map.items()
+    }
 
     def _report_cycle(back_to: str, path: list[str]) -> None:
         """Emit a cycle finding. ``path`` is the current DFS path; ``back_to``
@@ -910,10 +914,6 @@ def _cycle_findings(
         # Use a stack of "iterators" — each frame is a child index to visit
         # next. When all children are visited, pop the frame.
         # frame = (node_id, list_of_child_ids, next_index)
-        children_of: dict[str, list[str]] = {
-            parent: [c["span_id"] for c in kids if c.get("span_id")]
-            for parent, kids in child_map.items()
-        }
         frames: list[tuple[str, list[str], int]] = [(start, children_of.get(start, []), 0)]
         while frames:
             node, kids, i = frames[-1]
@@ -1287,6 +1287,8 @@ def _otel_genai_findings(
     findings: list[DoctorFinding] = []
     seen_kinds: dict[str, int] = {}
     for span in spans:
+        if _is_internal(span):
+            continue
         if not _is_llm_kind(span):
             continue
         attrs = span.get("attributes") or {}

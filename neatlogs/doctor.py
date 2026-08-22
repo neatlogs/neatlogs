@@ -322,6 +322,7 @@ def diagnose(
                     trace_spans,
                     run_id=rid,
                     read_prompt_content=read_prompt_content,
+                    run_spans=run_spans,
                 )
             )
 
@@ -576,12 +577,17 @@ def _diagnose_trace(
     *,
     run_id: str,
     read_prompt_content: bool = False,
+    run_spans: list[dict[str, Any]] | None = None,
 ) -> list[DoctorFinding]:
     """Run all per-trace checks and return the resulting findings.
 
     Visibility rule: spans with ``neatlogs.internal`` attribute set, or whose
     name is exactly ``neatlogs.trace.complete``, are internal and excluded
     from the trace-level checks. They are still counted in ``spans_read``.
+
+    ``run_spans`` is the full set of spans for the run. It is needed by
+    ``_context_propagation_broken_findings`` to look up parent spans in
+    other traces. Defaults to ``spans`` when not provided.
     """
     findings: list[DoctorFinding] = []
     visible = [s for s in spans if not _is_internal(s)]
@@ -627,6 +633,10 @@ def _diagnose_trace(
     findings.extend(
         _token_waste_findings(visible, trace_id, run_id, read_prompt_content=read_prompt_content)
     )
+    # (6) unbalanced LLM usage: input_tokens XOR output_tokens
+    findings.extend(_unbalanced_llm_usage_findings(visible, trace_id, run_id))
+    # (7) retry loop: same span name repeated 4+ times in a row
+    findings.extend(_retry_loop_findings(visible, trace_id, run_id))
 
     # --- Bug #2: rootless HTTP-only trace. ------------------------------------
     if _is_rootless_http_only(visible):
@@ -675,6 +685,14 @@ def _diagnose_trace(
 
     # --- Bug #1 / I/O check: missing input or output on LLM/tool/retriever. --
     findings.extend(_missing_io_findings(visible, trace_id, run_id))
+
+    # --- New dimensions that need the full trace shape. ---------------------
+    # (8) empty-trace: trace with exactly 1 visible span
+    findings.extend(_empty_trace_findings(visible, trace_id, run_id))
+    # (9) context-propagation-broken: parent_span_id on a different trace_id
+    findings.extend(
+        _context_propagation_broken_findings(visible, trace_id, run_id, run_spans=run_spans)
+    )
 
     return findings
 
@@ -1252,8 +1270,7 @@ OTEL_GENAI_USAGE_INPUT_TOKENS = "gen_ai.usage.input_tokens"
 OTEL_GENAI_USAGE_OUTPUT_TOKENS = "gen_ai.usage.output_tokens"
 OTEL_GENAI_RESPONSE_FINISH_REASONS = "gen_ai.response.finish_reasons"
 
-#: OTel GenAI operation-name values that correspond to a "llm" kind span
-#: (per the semconv, these are the chat-style operations).
+#: OTel GenAI operation-name values that correspond to a chat-style "llm" span.
 OTEL_GENAI_LLM_OPERATIONS = frozenset({"chat", "text_completion", "generate_content"})
 
 
@@ -1587,15 +1604,13 @@ _FIX_CLASS_TO_STAGE = {
 }
 
 
-#: Threshold for ``oversized-prompt`` — anything over this many characters in
-#: a single LLM span's prompt content is almost certainly a bug (forgot to
-#: truncate retrieved documents, leaked a long CSV, etc.).
+#: Threshold for ``oversized-prompt``. Prompts over this size usually
+#: mean a leaked document or log dump reached the LLM.
 OVERSIZED_PROMPT_CHAR_THRESHOLD = 50_000
 
-#: Threshold for ``repeated-system-prompt`` — the same system prompt content
-#: appearing this many times in the run suggests the user is sending a static
-#: prefix without leveraging prompt caching. Most providers offer caching for
-#: prefixes over 1024 tokens; 10+ repetitions is a strong signal.
+#: Threshold for ``repeated-system-prompt``. Most providers cache prefixes
+#: over ~1k tokens, so 10+ repetitions of the same system prompt
+#: indicates the user is paying full price for a static prefix.
 REPEATED_SYSTEM_PROMPT_THRESHOLD = 10
 
 
@@ -1925,11 +1940,238 @@ _STAGE_SUGGESTIONS = {
 }
 
 
+#: Threshold for ``retry-loop``. 2-3 retries are legitimate; 4+ same-name
+#: spans under the same parent is the auto-retry signature.
+RETRY_LOOP_THRESHOLD = 4
+
+
+def _retry_loop_findings(
+    spans: list[dict[str, Any]], trace_id: str, run_id: str
+) -> list[DoctorFinding]:
+    """Detect auto-retry loops: 4+ consecutive spans with the same name
+    and same parent. Internal spans excluded (SDK bookkeeping).
+    """
+    findings: list[DoctorFinding] = []
+    visible = [s for s in spans if not _is_internal(s)]
+    if not visible:
+        return findings
+
+    runs: list[tuple[str, str, list[dict[str, Any]]]] = []
+    current_key: tuple[str, str] | None = None
+    current_run: list[dict[str, Any]] = []
+    for span in visible:
+        name = str(span.get("name") or "<unnamed>")
+        pid = str(span.get("parent_span_id") or "")
+        key = (name, pid)
+        if key != current_key:
+            if current_key is not None and len(current_run) >= RETRY_LOOP_THRESHOLD:
+                runs.append((current_key[0], current_key[1], current_run))
+            current_key = key
+            current_run = [span]
+        else:
+            current_run.append(span)
+    if current_key is not None and len(current_run) >= RETRY_LOOP_THRESHOLD:
+        runs.append((current_key[0], current_key[1], current_run))
+
+    for name, pid, run in runs:
+        findings.append(
+            DoctorFinding(
+                severity="info",
+                code="retry-loop",
+                title="Same span name repeats in a tight loop — likely an auto-retry",
+                evidence=(
+                    f"{len(run)} consecutive spans named '{_truncate(name)}' "
+                    f"with the same parent ({pid or '<root>'})"
+                ),
+                suggestion=(
+                    "If this is an intentional retry, lower max_retries on the wrapper "
+                    "or add jitter. If not, the wrapper is in a busy loop — inspect the "
+                    "call site for the named span."
+                ),
+                trace_id=trace_id,
+                run_id=run_id,
+                fix_class="instrumentation",
+                related_codes=("zero-duration-span",),
+            )
+        )
+    return findings
+
+
+def _unbalanced_llm_usage_findings(
+    spans: list[dict[str, Any]], trace_id: str, run_id: str
+) -> list[DoctorFinding]:
+    """Detect LLM spans where input_tokens XOR output_tokens is set.
+
+    The OTel GenAI semconv defines them as a pair. A streaming wrapper
+    that captures the final usage chunk but misses the input count will
+    undercount the dashboard's token-cost view.
+    """
+    findings: list[DoctorFinding] = []
+    for span in spans:
+        if _is_internal(span):
+            continue
+        if not _is_llm_kind(span):
+            continue
+        attrs = span.get("attributes") or {}
+        has_input = OTEL_GENAI_USAGE_INPUT_TOKENS in attrs
+        has_output = OTEL_GENAI_USAGE_OUTPUT_TOKENS in attrs
+        if has_input == has_output:
+            continue
+        name = str(span.get("name") or "<unnamed>")
+        missing = "output" if has_input and not has_output else "input"
+        findings.append(
+            DoctorFinding(
+                severity="warning",
+                code="unbalanced-llm-usage",
+                title=(
+                    f"LLM span has {OTEL_GENAI_USAGE_INPUT_TOKENS} but no "
+                    f"{OTEL_GENAI_USAGE_OUTPUT_TOKENS} (or vice versa) — token "
+                    f"cost will be undercounted"
+                ),
+                evidence=(
+                    (
+                        f"span '{_truncate(name)}' has {OTEL_GENAI_USAGE_INPUT_TOKENS}="
+                        f"{attrs.get(OTEL_GENAI_USAGE_INPUT_TOKENS)!r} but missing "
+                        f"{OTEL_GENAI_USAGE_OUTPUT_TOKENS}"
+                    )
+                    if has_input
+                    else (
+                        f"span '{_truncate(name)}' has {OTEL_GENAI_USAGE_OUTPUT_TOKENS}="
+                        f"{attrs.get(OTEL_GENAI_USAGE_OUTPUT_TOKENS)!r} but missing "
+                        f"{OTEL_GENAI_USAGE_INPUT_TOKENS}"
+                    )
+                ),
+                suggestion=(
+                    f"Set both {OTEL_GENAI_USAGE_INPUT_TOKENS} and "
+                    f"{OTEL_GENAI_USAGE_OUTPUT_TOKENS} on every LLM span. For "
+                    f"streaming responses, the final usage chunk carries "
+                    f"both — capture the full chunk instead of just the {missing} count."
+                ),
+                trace_id=trace_id,
+                run_id=run_id,
+                fix_class="data_integrity",
+                related_codes=("otel-genai-missing",),
+            )
+        )
+    return findings
+
+
+def _empty_trace_findings(
+    visible: list[dict[str, Any]], trace_id: str, run_id: str
+) -> list[DoctorFinding]:
+    """A trace with exactly 1 visible span has no captured work.
+
+    Common cause: the instrumented section never ran, or a wrapper
+    created a span without joining the active trace context.
+    """
+    if len(visible) != 1:
+        return []
+    only = visible[0]
+    name = str(only.get("name") or "<unnamed>")
+    return [
+        DoctorFinding(
+            severity="info",
+            code="empty-trace",
+            title="Trace contains only one span — no work was captured",
+            evidence=f"only span: '{_truncate(name)}' (trace has no children)",
+            suggestion=(
+                "Either the instrumented section never ran, or the wrappers "
+                "are creating spans without joining the active trace context. "
+                "Add an @neatlogs.span(kind='WORKFLOW') around the work and "
+                "re-run the doctor."
+            ),
+            trace_id=trace_id,
+            run_id=run_id,
+            fix_class="instrumentation",
+            related_codes=("missing-root-kind",),
+        )
+    ]
+
+
+def _context_propagation_broken_findings(
+    spans: list[dict[str, Any]],
+    trace_id: str,
+    run_id: str,
+    *,
+    run_spans: list[dict[str, Any]] | None = None,
+) -> list[DoctorFinding]:
+    """A span whose ``parent_span_id`` points to a span in a different trace.
+
+    Indicates async context loss: an awaited task started a new trace
+    because the OTel context was not carried across the await boundary.
+
+    Distinct from ``orphan-parent`` (parent missing entirely): here the
+    parent exists, just on a different trace.
+
+    ``run_spans`` defaults to ``spans`` so the function works in unit
+    tests that pass only the current trace.
+    """
+    findings: list[DoctorFinding] = []
+    pool = run_spans if run_spans is not None else spans
+    # Build span_id -> trace_id map for the run. A run can have multiple
+    # trace_ids; we only flag a span when its parent is in a different
+    # trace_id than itself.
+    span_trace: dict[str, str] = {}
+    for s in pool:
+        sid = s.get("span_id")
+        tid = s.get("trace_id")
+        if isinstance(sid, str) and isinstance(tid, str):
+            span_trace[sid] = tid
+
+    broken: list[str] = []
+    for span in spans:
+        if _is_internal(span):
+            continue
+        sid = span.get("span_id")
+        pid = span.get("parent_span_id")
+        if not (isinstance(sid, str) and isinstance(pid, str)):
+            continue
+        # Self-parent is reported by the dedicated self-parent finding.
+        if sid == pid:
+            continue
+        # Parent missing entirely is orphan-parent, not this finding.
+        parent_trace = span_trace.get(pid)
+        if parent_trace is None:
+            continue
+        this_trace = span.get("trace_id")
+        if not isinstance(this_trace, str):
+            continue
+        if parent_trace != this_trace:
+            broken.append(
+                f"'{_truncate(span.get('name') or '<unnamed>')}' "
+                f"(trace={this_trace!r}, parent on trace={parent_trace!r})"
+            )
+    if not broken:
+        return findings
+    findings.append(
+        DoctorFinding(
+            severity="error",
+            code="context-propagation-broken",
+            title="Span's parent is in a different trace — async context was lost",
+            evidence=(
+                f"{len(broken)} span(s) reference parents in a different trace: "
+                f"{', '.join(broken[:3])}"
+                f"{' ...' if len(broken) > 3 else ''}"
+            ),
+            suggestion=(
+                "An awaited task started a new trace because the OTel context "
+                "did not propagate across the await boundary. Wrap the call "
+                "with neatlogs.attach_context() (or the SDK's context manager) "
+                "so the parent trace_id is carried over."
+            ),
+            trace_id=trace_id,
+            run_id=run_id,
+            fix_class="hierarchy",
+            related_codes=("orphan-parent", "multiple-roots"),
+        )
+    )
+    return findings
+
+
 #: Manual-fix snippets — printed by ``neatlogs-doctor --emit-fix <code>``.
-#: Each entry is a (description, before, after) triple the user can copy-paste.
-#: We intentionally do NOT do AST-based auto-fix: rewrites are fragile across
-#: project structures (Jupyter, K8s init, generated code). The user copy-pastes
-#: the snippet, which is correct-by-construction.
+#: Each entry is a (description, before, after) triple. We use snippets
+#: instead of AST rewrites because rewrites are fragile across project
+#: structures (Jupyter, K8s init containers, generated code).
 _FIX_SNIPPETS: dict[str, tuple[str, str, str]] = {
     "init-after-client": (
         "Move neatlogs.init() to the top of the entry point (before any LLM client is constructed).",

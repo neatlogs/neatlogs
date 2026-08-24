@@ -2029,6 +2029,9 @@ RATE_LIMIT_ERROR_CODES: dict[str, set[str]] = {
     "anthropic.error.code": {"rate_limit_error"},
     "gen_ai.error.code": {"8", "RESOURCE_EXHAUSTED"},
     "aws.error.code": {"ThrottlingException", "TooManyRequestsException"},
+    "azure.error.code": {"RequestLimitReached", "TooManyRequests"},
+    "groq.error.code": {"rate_limit_exceeded", "tokens_quota_exceeded"},
+    "openrouter.error.code": {"rate_limit_exceeded", "tokens_quota_exceeded"},
     "http.response.status_code": {"429", "503"},
 }
 

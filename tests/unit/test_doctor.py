@@ -4029,6 +4029,185 @@ def test_rate_limited_does_not_fire_on_clean_successful_call(tmp_path):
     assert [f for f in report.findings if f.code == "rate-limited"] == []
 
 
+def test_rate_limited_fires_on_azure_error_code(tmp_path):
+    path = tmp_path / "rl_azure.log"
+    wf = _span(
+        "t",
+        "wf",
+        name="wf",
+        kind="workflow",
+        start_time=100,
+        end_time=200,
+        duration_ns=100_000_000,
+        attributes={"neatlogs.span.kind": "workflow"},
+    )
+    spans = [wf]
+    spans.append(
+        _span(
+            "t",
+            "l1",
+            parent_span_id="wf",
+            name="azure",
+            kind="llm",
+            start_time=300,
+            end_time=500,
+            duration_ns=200_000_000,
+            attributes={"neatlogs.span.kind": "llm", "azure.error.code": "RequestLimitReached"},
+        )
+    )
+    _write_jsonl(path, spans)
+    report = diagnose(path)
+    f = next((f for f in report.findings if f.code == "rate-limited"), None)
+    assert f is not None
+    assert "azure.error.code" in f.evidence
+
+
+def test_rate_limited_fires_on_groq_tokens_quota_exceeded(tmp_path):
+    path = tmp_path / "rl_groq.log"
+    wf = _span(
+        "t",
+        "wf",
+        name="wf",
+        kind="workflow",
+        start_time=100,
+        end_time=200,
+        duration_ns=100_000_000,
+        attributes={"neatlogs.span.kind": "workflow"},
+    )
+    spans = [wf]
+    spans.append(
+        _span(
+            "t",
+            "l1",
+            parent_span_id="wf",
+            name="groq",
+            kind="llm",
+            start_time=300,
+            end_time=500,
+            duration_ns=200_000_000,
+            attributes={"neatlogs.span.kind": "llm", "groq.error.code": "tokens_quota_exceeded"},
+        )
+    )
+    _write_jsonl(path, spans)
+    report = diagnose(path)
+    f = next((f for f in report.findings if f.code == "rate-limited"), None)
+    assert f is not None
+    assert "groq.error.code" in f.evidence
+
+
+def test_rate_limited_fires_on_openrouter_error_code(tmp_path):
+    path = tmp_path / "rl_openrouter.log"
+    wf = _span(
+        "t",
+        "wf",
+        name="wf",
+        kind="workflow",
+        start_time=100,
+        end_time=200,
+        duration_ns=100_000_000,
+        attributes={"neatlogs.span.kind": "workflow"},
+    )
+    spans = [wf]
+    spans.append(
+        _span(
+            "t",
+            "l1",
+            parent_span_id="wf",
+            name="openrouter",
+            kind="llm",
+            start_time=300,
+            end_time=500,
+            duration_ns=200_000_000,
+            attributes={
+                "neatlogs.span.kind": "llm",
+                "openrouter.error.code": "rate_limit_exceeded",
+            },
+        )
+    )
+    _write_jsonl(path, spans)
+    report = diagnose(path)
+    f = next((f for f in report.findings if f.code == "rate-limited"), None)
+    assert f is not None
+    assert "openrouter.error.code" in f.evidence
+
+
+def test_rate_limited_substring_lock_in_for_rate_limit_remaining_keys(tmp_path):
+    """Lock in the current ``*rate_limit_remaining*`` substring behavior.
+
+    The doctor matches attribute keys by *substring* (case-insensitive):
+    both real OpenAI / Anthropic quota counters
+    (``x_ratelimit_remaining_requests``) and edge-case keys
+    (``queue_rate_limit_remaining``) are caught when their value is at
+    or below the floor. The substring approach was chosen over a
+    stricter prefix/suffix/exact match because real-world namespace is
+    heterogeneous (``x-ratelimit-remaining-tokens``,
+    ``x_ratelimit_remaining_requests``,
+    ``anthropic.ratelimit-remaining-requests`` etc.) and the
+    false-positive rate on a contrived ``queue_rate_limit_remaining``
+    is low. If you ever tighten this, update both this test and the
+    comment on ``RATE_LIMIT_REMAINING_KEY_SUBSTRINGS``.
+    """
+    path = tmp_path / "rl_substr.log"
+    wf = _span(
+        "t",
+        "wf",
+        name="wf",
+        kind="workflow",
+        start_time=100,
+        end_time=200,
+        duration_ns=100_000_000,
+        attributes={"neatlogs.span.kind": "workflow"},
+    )
+    spans = [
+        wf,
+        # Real OpenAI namespace.
+        _span(
+            "t",
+            "l1",
+            parent_span_id="wf",
+            name="openai",
+            kind="llm",
+            start_time=300,
+            end_time=500,
+            duration_ns=200_000_000,
+            attributes={"neatlogs.span.kind": "llm", "x_ratelimit_remaining_requests": 0},
+        ),
+        # Edge-case substring match — by design, also fires.
+        _span(
+            "t",
+            "l2",
+            parent_span_id="wf",
+            name="queue",
+            kind="llm",
+            start_time=600,
+            end_time=800,
+            duration_ns=200_000_000,
+            attributes={"neatlogs.span.kind": "llm", "queue_rate_limit_remaining": 1},
+        ),
+        # Negative case: rate_limit_remaining present but value above
+        # the floor (≥ 2) — must NOT fire.
+        _span(
+            "t",
+            "l3",
+            parent_span_id="wf",
+            name="warm",
+            kind="llm",
+            start_time=900,
+            end_time=1100,
+            duration_ns=200_000_000,
+            attributes={"neatlogs.span.kind": "llm", "x_ratelimit_remaining_requests": 100},
+        ),
+    ]
+    _write_jsonl(path, spans)
+    report = diagnose(path)
+    rl_findings = [f for f in report.findings if f.code == "rate-limited"]
+    # Two spans fire (l1 and l2); the warm span (l3) does not.
+    assert len(rl_findings) == 2
+    evidences = " ".join(f.evidence for f in rl_findings)
+    assert "x_ratelimit_remaining_requests" in evidences
+    assert "queue_rate_limit_remaining" in evidences
+
+
 # ============================================================================
 # H. PII detection (opt-in)
 # ============================================================================

@@ -36,6 +36,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
+import statistics
 import sys
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
@@ -230,6 +232,7 @@ def diagnose(
     run_id: Optional[str] = None,
     foreign_only: bool = False,
     read_prompt_content: bool = False,
+    check_pii: bool = False,
 ) -> DoctorReport:
     """Diagnose a processed span JSONL file.
 
@@ -244,6 +247,10 @@ def diagnose(
             Default is False; pass ``--read-prompt-content`` on the CLI to
             enable. Oversized-prompt and unused-tool-definition are always
             checked because they only read sizes / tool names.
+        check_pii: If True, the doctor scans span attributes for PII patterns
+            (email, US phone, US SSN, credit card). Off by default; pass
+            ``--check-pii`` on the CLI to enable. PII concern: false
+            positives on user IDs that look like emails.
 
     Returns:
         A :class:`DoctorReport` with the findings sorted by severity then code.
@@ -323,6 +330,7 @@ def diagnose(
                     run_id=rid,
                     read_prompt_content=read_prompt_content,
                     run_spans=run_spans,
+                    check_pii=check_pii,
                 )
             )
 
@@ -439,6 +447,15 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     parser.add_argument(
+        "--check-pii",
+        action="store_true",
+        help=(
+            "Scan span attributes for PII patterns (email, phone, SSN, credit card). "
+            "PII concern: false positives on user IDs that look like emails. "
+            "Default is off."
+        ),
+    )
+    parser.add_argument(
         "--emit-fix",
         metavar="CODE",
         default=None,
@@ -470,6 +487,7 @@ def main(argv: list[str] | None = None) -> int:
         run_id=args.run_id,
         foreign_only=args.foreign_only,
         read_prompt_content=args.read_prompt_content,
+        check_pii=args.check_pii,
     )
     if args.json:
         json.dump(report.to_dict(), sys.stdout, indent=2)
@@ -578,6 +596,7 @@ def _diagnose_trace(
     run_id: str,
     read_prompt_content: bool = False,
     run_spans: list[dict[str, Any]] | None = None,
+    check_pii: bool = False,
 ) -> list[DoctorFinding]:
     """Run all per-trace checks and return the resulting findings.
 
@@ -588,6 +607,10 @@ def _diagnose_trace(
     ``run_spans`` is the full set of spans for the run. It is needed by
     ``_context_propagation_broken_findings`` to look up parent spans in
     other traces. Defaults to ``spans`` when not provided.
+
+    ``check_pii`` is the PII-gated opt-in for the ``pii-detected``
+    check. PII scanning is off by default; pass ``--check-pii`` on the
+    CLI to enable.
     """
     findings: list[DoctorFinding] = []
     visible = [s for s in spans if not _is_internal(s)]
@@ -637,6 +660,10 @@ def _diagnose_trace(
     findings.extend(_unbalanced_llm_usage_findings(visible, trace_id, run_id))
     # (7) retry loop: same span name repeated 4+ times in a row
     findings.extend(_retry_loop_findings(visible, trace_id, run_id))
+    # (8) latency outlier: 1+ LLM span far above the per-op trace median
+    findings.extend(_latency_outlier_findings(visible, trace_id, run_id))
+    # (9) rate-limited: throttling signal on any span (429, retry-after, etc.)
+    findings.extend(_rate_limited_findings(visible, trace_id, run_id))
 
     # --- Bug #2: rootless HTTP-only trace. ------------------------------------
     if _is_rootless_http_only(visible):
@@ -693,6 +720,9 @@ def _diagnose_trace(
     findings.extend(
         _context_propagation_broken_findings(visible, trace_id, run_id, run_spans=run_spans)
     )
+    # (10) PII scan (opt-in only — spans may contain user data)
+    if check_pii:
+        findings.extend(_pii_findings(visible, trace_id, run_id))
 
     return findings
 
@@ -1945,6 +1975,68 @@ _STAGE_SUGGESTIONS = {
 RETRY_LOOP_THRESHOLD = 4
 
 
+#: Minimum LLM-kind spans per (trace, gen_ai.operation.name) to compute a
+#: latency-outlier baseline. Below this, the median is too noisy.
+LATENCY_OUTLIER_MIN_SAMPLE = 3
+
+#: Absolute floor for ``latency-outlier``. Spans under 500ms rarely
+#: matter for an outlier check — caching, embeddings, and short prompts
+#: are all in this range and a 3x ratio on a 5ms baseline is noise.
+LATENCY_OUTLIER_ABSOLUTE_FLOOR_NS = 500_000_000
+
+#: Multiplier for the latency-outlier threshold. A span > 3x the
+#: per-operation median fires the check (subject to the sample and
+#: absolute floor above).
+LATENCY_OUTLIER_MULTIPLIER = 3
+
+#: HTTP status codes that indicate rate limiting / throttling. 503
+#: covers some provider throttling proxies (Cloudflare, AWS WAF).
+RATE_LIMIT_HTTP_STATUSES = {429, 503}
+
+#: Numeric floor for ``*rate_limit_remaining*`` attrs. ≤ 1 means the
+#: caller is at the quota wall and the next call is at risk.
+RATE_LIMIT_REMAINING_FLOOR = 1
+
+
+#: PII regex set for the optional ``--check-pii`` scan. Patterns are
+#: conservative — high-recall patterns are deliberately avoided to keep
+#: the false-positive rate low (a user ID that contains digits is NOT
+#: an SSN). The credit-card alternation lists Amex (15 digits) before
+#: the 16-digit Visa/MC/Discover so a 16-digit regex can't partial-match
+#: an Amex.
+PII_PATTERNS: dict[str, re.Pattern[str]] = {
+    "email": re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"),
+    "us_phone": re.compile(r"\b[2-9]\d{2}[-.\s]?\d{3}[-.\s]?\d{4}\b"),
+    "us_ssn": re.compile(r"\b(?!000|666|9\d{2})\d{3}[-.\s]?\d{2}[-.\s]?\d{4}\b"),
+    "credit_card": re.compile(
+        r"\b(?:"
+        r"3[47]\d{2}[-.\s]?\d{6}[-.\s]?\d{5}"  # Amex 15-digit
+        r"|4\d{3}[-.\s]?\d{4}[-.\s]?\d{4}[-.\s]?\d{4}"  # Visa 16-digit
+        r"|5[1-5]\d{2}[-.\s]?\d{4}[-.\s]?\d{4}[-.\s]?\d{4}"  # Mastercard 16-digit
+        r"|6(?:011|5\d{2})[-.\s]?\d{4}[-.\s]?\d{4}[-.\s]?\d{4}"  # Discover 16-digit
+        r")\b"
+    ),
+}
+
+#: Per-provider throttling error code allowlist for ``rate-limited``.
+#: Cross-referenced against the span's attributes (any key, any value
+#: position). Strings are matched case-sensitively; the gRPC numeric
+#: code (8) is matched as a string here.
+RATE_LIMIT_ERROR_CODES: dict[str, set[str]] = {
+    "openai.error.code": {"rate_limit_exceeded", "insufficient_quota"},
+    "openai.error.type": {"rate_limit_error", "insufficient_quota_error"},
+    "anthropic.error.type": {"rate_limit_error", "overloaded_error"},
+    "anthropic.error.code": {"rate_limit_error"},
+    "gen_ai.error.code": {"8", "RESOURCE_EXHAUSTED"},
+    "aws.error.code": {"ThrottlingException", "TooManyRequestsException"},
+    "http.response.status_code": {"429", "503"},
+}
+
+#: Attribute key substrings (lowercased) that indicate a
+#: ``*rate_limit_remaining*`` quota counter. Used for the ≤ 1 check.
+RATE_LIMIT_REMAINING_KEY_SUBSTRINGS = ("rate_limit_remaining", "ratelimit_remaining")
+
+
 def _retry_loop_findings(
     spans: list[dict[str, Any]], trace_id: str, run_id: str
 ) -> list[DoctorFinding]:
@@ -2165,6 +2257,267 @@ def _context_propagation_broken_findings(
             related_codes=("orphan-parent", "multiple-roots"),
         )
     )
+    return findings
+
+
+def _span_duration_ns(span: dict[str, Any]) -> int | None:
+    """Best-effort duration_ns for a span.
+
+    Prefers the explicit ``duration_ns`` field; falls back to
+    ``end_time - start_time`` when both are numeric. Returns ``None`` when
+    neither is usable.
+    """
+    d = span.get("duration_ns")
+    if isinstance(d, (int, float)) and d > 0:
+        return int(d)
+    start = span.get("start_time")
+    end = span.get("end_time")
+    if isinstance(start, (int, float)) and isinstance(end, (int, float)) and end >= start:
+        return int(end - start)
+    return None
+
+
+def _latency_outlier_findings(
+    spans: list[dict[str, Any]], trace_id: str, run_id: str
+) -> list[DoctorFinding]:
+    """Flag LLM-kind spans whose latency is much higher than the
+    per-operation median within the same trace.
+
+    Groups LLM spans (internal spans excluded) by
+    ``gen_ai.operation.name``. For each group with at least
+    ``LATENCY_OUTLIER_MIN_SAMPLE`` spans, computes the median duration
+    and flags any span above ``LATENCY_OUTLIER_MULTIPLIER`` × median,
+    subject to the absolute floor at
+    ``LATENCY_OUTLIER_ABSOLUTE_FLOOR_NS`` and the cold-start exemption
+    on the first span in the group (by start_time).
+    """
+    findings: list[DoctorFinding] = []
+    visible = [s for s in spans if not _is_internal(s) and _is_llm_kind(s)]
+
+    # Group by op. Use a stable fallback to "unknown" so spans missing
+    # the attribute still cluster together.
+    by_op: dict[str, list[tuple[int, dict[str, Any]]]] = {}
+    for span in visible:
+        attrs = span.get("attributes") or {}
+        op = str(attrs.get(OTEL_GENAI_OPERATION_NAME) or "unknown")
+        d = _span_duration_ns(span)
+        if d is None:
+            continue
+        by_op.setdefault(op, []).append((d, span))
+
+    for op, members in by_op.items():
+        if len(members) < LATENCY_OUTLIER_MIN_SAMPLE:
+            continue
+        # Sort by start_time so rank==1 is the chronologically first call.
+        members.sort(key=lambda pair: int(pair[1].get("start_time") or 0))
+        durations = [d for d, _ in members]
+        median = statistics.median(durations)
+        threshold = max(
+            LATENCY_OUTLIER_ABSOLUTE_FLOOR_NS,
+            median * LATENCY_OUTLIER_MULTIPLIER,
+        )
+        for rank, (duration, span) in enumerate(members, start=1):
+            if rank == 1:
+                continue  # cold-start candidate
+            if duration < LATENCY_OUTLIER_ABSOLUTE_FLOOR_NS:
+                continue
+            if duration <= threshold:
+                continue
+            name = str(span.get("name") or "<unnamed>")
+            ratio = duration / median if median > 0 else float("inf")
+            findings.append(
+                DoctorFinding(
+                    severity="warning",
+                    code="latency-outlier",
+                    title="LLM span is much slower than the trace median for this operation",
+                    evidence=(
+                        f"span '{_truncate(name)}' ({op}) ran in {duration // 1_000_000}ms; "
+                        f"trace median for {op} is {int(median) // 1_000_000}ms "
+                        f"({ratio:.1f}x). Rank {rank} of {len(members)}."
+                    ),
+                    suggestion=(
+                        "Inspect the call site: this LLM call is significantly slower "
+                        "than the rest of the trace. Likely a cold cache, an oversized "
+                        "request, or a provider-side slowdown. Compare to the same call "
+                        "at other ranks and the same op across other traces."
+                    ),
+                    trace_id=trace_id,
+                    run_id=run_id,
+                    fix_class="data_integrity",
+                    related_codes=("otel-genai-missing",),
+                )
+            )
+    return findings
+
+
+def _rate_limited_findings(
+    spans: list[dict[str, Any]], trace_id: str, run_id: str
+) -> list[DoctorFinding]:
+    """Flag spans that show a throttling signal.
+
+    Surfaces 429 / 503 in any attribute (common for HTTP spans and
+    OpenTelemetry semantic conventions), ``retry-after`` /
+    ``retry-after-ms`` attributes, per-provider throttling error codes
+    (OpenAI ``rate_limit_exceeded``, Anthropic ``rate_limit_error``,
+    Google ``RESOURCE_EXHAUSTED``, Bedrock ``ThrottlingException``),
+    and any ``*rate_limit_remaining*`` attribute with a numeric value
+    at or below the quota wall.
+    """
+    findings: list[DoctorFinding] = []
+    for span in spans:
+        if _is_internal(span):
+            continue
+        signals: list[str] = []
+        attrs = span.get("attributes") or {}
+
+        # 1. HTTP 429/503 in any attribute value (most attribute keys
+        # don't carry HTTP status, but ``http.response.status_code`` and
+        # OTel GenAI convention keys do).
+        for key, value in attrs.items():
+            if isinstance(value, int) and value in RATE_LIMIT_HTTP_STATUSES:
+                signals.append(f"attribute {key}={value}")
+            elif isinstance(value, str) and value in {"429", "503"}:
+                signals.append(f"attribute {key}='{value}'")
+
+        # 2. Per-provider error code allowlist.
+        for key, value in attrs.items():
+            if not isinstance(value, str):
+                continue
+            allowed = RATE_LIMIT_ERROR_CODES.get(key)
+            if allowed and value in allowed:
+                signals.append(f"{key}='{value}'")
+
+        # 3. ``retry-after`` / ``retry-after-ms`` attribute (any value).
+        for key in ("retry-after", "retry-after-ms", "retry_after"):
+            if key in attrs:
+                signals.append(f"{key} present")
+
+        # 4. *rate_limit_remaining* numeric value at or below the floor.
+        for key, value in attrs.items():
+            if not isinstance(value, (int, float)):
+                continue
+            if not isinstance(value, int) or value > RATE_LIMIT_REMAINING_FLOOR:
+                continue
+            if any(s in key.lower() for s in RATE_LIMIT_REMAINING_KEY_SUBSTRINGS):
+                signals.append(f"{key}={value}")
+
+        if not signals:
+            continue
+        name = str(span.get("name") or "<unnamed>")
+        # Dedupe + cap the signal list for evidence.
+        uniq = list(dict.fromkeys(signals))[:3]
+        findings.append(
+            DoctorFinding(
+                severity="warning",
+                code="rate-limited",
+                title="Span shows a rate-limit or throttling signal",
+                evidence=(
+                    f"span '{_truncate(name)}': {', '.join(uniq)}"
+                    + (" ..." if len(signals) > 3 else "")
+                ),
+                suggestion=(
+                    "Reduce call rate, add jitter to retries, or contact the provider "
+                    "to raise the quota. If the call is downstream of an awaited task, "
+                    "use neatlogs.attach_context() so a retry carries the same trace_id."
+                ),
+                trace_id=trace_id,
+                run_id=run_id,
+                fix_class="instrumentation",
+                related_codes=("retry-loop", "error-status-no-event"),
+            )
+        )
+    return findings
+
+
+def _walk_pii(value: Any, _seen: set[int] | None = None) -> list[tuple[str, str]]:
+    """Recursively walk a span-attribute value and return
+    (pattern_name, matched_text) for each PII match found.
+
+    Strings are matched against every pattern in ``PII_PATTERNS``. Lists,
+    tuples, and dicts are recursed into; numeric values are stringified
+    first so SSNs stored as ints are still caught. ``bool`` is excluded
+    (its ``__str__`` is ``"True"/"False"``, not numeric). ``bytes`` and
+    ``None`` fall through without crashing.
+
+    The ``_seen`` set tracks ``id()`` of containers we've already recursed
+    into, so cyclic dicts (a['self'] = a) don't infinite-loop.
+    """
+    if _seen is None:
+        _seen = set()
+    hits: list[tuple[str, str]] = []
+    if isinstance(value, bool):
+        return hits
+    if isinstance(value, str):
+        for name, pattern in PII_PATTERNS.items():
+            for match in pattern.finditer(value):
+                hits.append((name, match.group(0)))
+    elif isinstance(value, (int, float)):
+        text = str(value)
+        for name, pattern in PII_PATTERNS.items():
+            for match in pattern.finditer(text):
+                hits.append((name, match.group(0)))
+    elif isinstance(value, dict):
+        if id(value) in _seen:
+            return hits
+        _seen.add(id(value))
+        for v in value.values():
+            hits.extend(_walk_pii(v, _seen))
+    elif isinstance(value, (list, tuple)):
+        if id(value) in _seen:
+            return hits
+        _seen.add(id(value))
+        for v in value:
+            hits.extend(_walk_pii(v, _seen))
+    return hits
+
+
+def _pii_findings(spans: list[dict[str, Any]], trace_id: str, run_id: str) -> list[DoctorFinding]:
+    """Scan span attributes for PII patterns. PII-gated; called only
+    when ``check_pii=True`` is passed to ``diagnose()``.
+
+    Walks every attribute value recursively (str / int / float / list
+    / tuple / dict). Emits ONE finding per offending span with up to 3
+    pattern-name + matched-text examples.
+    """
+    findings: list[DoctorFinding] = []
+    for span in spans:
+        if _is_internal(span):
+            continue
+        attrs = span.get("attributes") or {}
+        examples: list[str] = []
+        seen_patterns: set[str] = set()
+        for key, value in attrs.items():
+            for pattern_name, matched in _walk_pii(value):
+                if pattern_name in seen_patterns and len(examples) >= 3:
+                    continue
+                seen_patterns.add(pattern_name)
+                # Truncate the matched text to keep evidence short.
+                shown = _truncate(matched, max_len=40)
+                examples.append(f"{pattern_name}='{shown}' (key {key})")
+                if len(examples) >= 3:
+                    break
+            if len(examples) >= 3:
+                break
+        if not examples:
+            continue
+        name = str(span.get("name") or "<unnamed>")
+        findings.append(
+            DoctorFinding(
+                severity="warning",
+                code="pii-detected",
+                title="Span attribute(s) look like PII (email, phone, SSN, or credit card)",
+                evidence=(f"span '{_truncate(name)}': {', '.join(examples)}"),
+                suggestion=(
+                    "Move PII out of span attributes — use a stable identifier (e.g. "
+                    "hashed user_id) and resolve the value server-side only when "
+                    "needed. If the value is required, redact it before the span is "
+                    "exported (e.g. via an OTel span processor)."
+                ),
+                trace_id=trace_id,
+                run_id=run_id,
+                fix_class="data_integrity",
+            )
+        )
     return findings
 
 

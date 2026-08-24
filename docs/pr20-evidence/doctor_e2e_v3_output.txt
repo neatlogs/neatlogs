@@ -1,0 +1,27 @@
+E. latency-outlier
+  ✅ fires on 1 of 4 LLM spans at 5x median
+  ✅ severity is warning
+  ✅ fix_class is data_integrity
+  ✅ evidence names the 5x ratio
+
+F. rate-limited
+  ✅ fires on 3 different throttling signals (3 spans) — got 3
+  ✅ severity is warning
+  ✅ fix_class is instrumentation
+
+G. pii-detected (opt-in)
+  ✅ does NOT fire without --check-pii
+  ✅ fires with --check-pii on 2 spans (wf has email, llm has ssn+cc+phone) — got 2
+  ✅ email pattern matched
+  ✅ us_ssn pattern matched
+  ✅ credit_card pattern matched
+  ✅ us_phone pattern matched
+
+========================================================================
+E2E SUMMARY
+========================================================================
+  Total assertions: 13
+  Passed:           13 (100%)
+  Failed:           0
+
+  ✅ ALL E2E TESTS PASSED

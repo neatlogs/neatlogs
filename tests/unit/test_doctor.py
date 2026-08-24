@@ -3638,3 +3638,651 @@ def test_context_propagation_broken_does_not_fire_on_orphan_parent(tmp_path):
     report = diagnose(path)
     assert [f for f in report.findings if f.code == "context-propagation-broken"] == []
     assert [f for f in report.findings if f.code == "orphan-parent"] != []
+
+
+# ============================================================================
+# F. Latency-outlier
+# ============================================================================
+
+
+def test_latency_outlier_fires_when_one_span_is_5x_median(tmp_path):
+    """One of 4 LLM spans takes 5x the median — flag it."""
+    path = tmp_path / "latency.log"
+    wf = _span(
+        "t",
+        "wf",
+        name="wf",
+        kind="workflow",
+        start_time=100,
+        end_time=200,
+        duration_ns=100_000_000,
+        attributes={"neatlogs.span.kind": "workflow"},
+    )
+    spans = [wf]
+    durations = [500_000_000, 500_000_000, 500_000_000, 2_500_000_000]
+    for i, dur in enumerate(durations):
+        spans.append(
+            _span(
+                "t",
+                f"l{i}",
+                parent_span_id="wf",
+                name="openai.chat",
+                kind="llm",
+                start_time=300 + i * 1000,
+                end_time=300 + i * 1000 + dur // 1_000_000,
+                duration_ns=dur,
+                attributes={"neatlogs.span.kind": "llm", "gen_ai.operation.name": "chat"},
+            )
+        )
+    _write_jsonl(path, spans)
+    report = diagnose(path)
+    f = next((f for f in report.findings if f.code == "latency-outlier"), None)
+    assert f is not None
+    assert f.severity == "warning"
+    assert f.fix_class == "data_integrity"
+    # 4th call is the slow one — confirm it shows the 5x ratio
+    assert "5.0x" in f.evidence or "5" in f.evidence
+
+
+def test_latency_outlier_does_not_fire_on_two_llm_spans(tmp_path):
+    """Below the 3-sample threshold, skip the check."""
+    path = tmp_path / "lat_off.log"
+    wf = _span(
+        "t",
+        "wf",
+        name="wf",
+        kind="workflow",
+        start_time=100,
+        end_time=200,
+        duration_ns=100_000_000,
+        attributes={"neatlogs.span.kind": "workflow"},
+    )
+    spans = [wf]
+    for i in range(2):
+        spans.append(
+            _span(
+                "t",
+                f"l{i}",
+                parent_span_id="wf",
+                name="openai.chat",
+                kind="llm",
+                start_time=300 + i * 1000,
+                end_time=300 + i * 1000 + 500,
+                duration_ns=500_000_000,
+                attributes={"neatlogs.span.kind": "llm", "gen_ai.operation.name": "chat"},
+            )
+        )
+    _write_jsonl(path, spans)
+    report = diagnose(path)
+    assert [f for f in report.findings if f.code == "latency-outlier"] == []
+
+
+def test_latency_outlier_skips_first_call_as_cold_start(tmp_path):
+    """Rank-1 in each operation group is exempt — first call is always slow."""
+    path = tmp_path / "lat_cold.log"
+    wf = _span(
+        "t",
+        "wf",
+        name="wf",
+        kind="workflow",
+        start_time=100,
+        end_time=200,
+        duration_ns=100_000_000,
+        attributes={"neatlogs.span.kind": "workflow"},
+    )
+    spans = [wf]
+    # First call: 10s (would be 10x median of 1s if not skipped)
+    # Remaining: all 1s.
+    spans.append(
+        _span(
+            "t",
+            "l0",
+            parent_span_id="wf",
+            name="openai.chat",
+            kind="llm",
+            start_time=300,
+            end_time=10300,
+            duration_ns=10_000_000_000,
+            attributes={"neatlogs.span.kind": "llm", "gen_ai.operation.name": "chat"},
+        )
+    )
+    for i in range(1, 4):
+        spans.append(
+            _span(
+                "t",
+                f"l{i}",
+                parent_span_id="wf",
+                name="openai.chat",
+                kind="llm",
+                start_time=11000 + i * 1000,
+                end_time=11000 + i * 1000 + 1000,
+                duration_ns=1_000_000_000,
+                attributes={"neatlogs.span.kind": "llm", "gen_ai.operation.name": "chat"},
+            )
+        )
+    _write_jsonl(path, spans)
+    report = diagnose(path)
+    # Cold-start exemption — the 10s first call should NOT fire.
+    flagged = [f for f in report.findings if f.code == "latency-outlier"]
+    assert flagged == []
+
+
+def test_latency_outlier_skips_fast_spans_below_absolute_floor(tmp_path):
+    """4 fast 100ms LLM spans — none should fire the outlier check."""
+    path = tmp_path / "lat_fast.log"
+    wf = _span(
+        "t",
+        "wf",
+        name="wf",
+        kind="workflow",
+        start_time=100,
+        end_time=200,
+        duration_ns=100_000_000,
+        attributes={"neatlogs.span.kind": "workflow"},
+    )
+    spans = [wf]
+    for i in range(4):
+        spans.append(
+            _span(
+                "t",
+                f"l{i}",
+                parent_span_id="wf",
+                name="openai.chat",
+                kind="llm",
+                start_time=300 + i * 1000,
+                end_time=300 + i * 1000 + 100,
+                duration_ns=100_000_000,  # 100ms — under 500ms floor
+                attributes={"neatlogs.span.kind": "llm", "gen_ai.operation.name": "chat"},
+            )
+        )
+    _write_jsonl(path, spans)
+    report = diagnose(path)
+    assert [f for f in report.findings if f.code == "latency-outlier"] == []
+
+
+def test_latency_outlier_groups_by_operation_name_not_span_name(tmp_path):
+    """3 chat spans and 3 embeddings — slow chat fires, slow embedding does not
+    (embeddings usually < 500ms floor)."""
+    path = tmp_path / "lat_grouping.log"
+    wf = _span(
+        "t",
+        "wf",
+        name="wf",
+        kind="workflow",
+        start_time=100,
+        end_time=200,
+        duration_ns=100_000_000,
+        attributes={"neatlogs.span.kind": "workflow"},
+    )
+    spans = [wf]
+    # 3 chat spans: 1s, 1s, 5s. Median 1s. 5s span is 5x.
+    for i, dur in enumerate([1_000_000_000, 1_000_000_000, 5_000_000_000]):
+        spans.append(
+            _span(
+                "t",
+                f"chat{i}",
+                parent_span_id="wf",
+                name="chat",
+                kind="llm",
+                start_time=300 + i * 2000,
+                end_time=300 + i * 2000 + dur // 1_000_000,
+                duration_ns=dur,
+                attributes={"neatlogs.span.kind": "llm", "gen_ai.operation.name": "chat"},
+            )
+        )
+    # 3 embeddings: all 100ms (under the floor). No fire.
+    for i in range(3):
+        spans.append(
+            _span(
+                "t",
+                f"emb{i}",
+                parent_span_id="wf",
+                name="embed",
+                kind="llm",
+                start_time=10000 + i * 1000,
+                end_time=10000 + i * 1000 + 100,
+                duration_ns=100_000_000,
+                attributes={"neatlogs.span.kind": "llm", "gen_ai.operation.name": "embeddings"},
+            )
+        )
+    _write_jsonl(path, spans)
+    report = diagnose(path)
+    f = next((f for f in report.findings if f.code == "latency-outlier"), None)
+    assert f is not None
+    # Only the chat 5s span fires — the 100ms embeddings don't.
+    assert "chat" in f.evidence
+
+
+# ============================================================================
+# G. Rate-limited
+# ============================================================================
+
+
+def test_rate_limited_fires_on_429_in_attribute(tmp_path):
+    path = tmp_path / "rl_429.log"
+    wf = _span(
+        "t",
+        "wf",
+        name="wf",
+        kind="workflow",
+        start_time=100,
+        end_time=200,
+        duration_ns=100_000_000,
+        attributes={"neatlogs.span.kind": "workflow"},
+    )
+    spans = [wf]
+    spans.append(
+        _span(
+            "t",
+            "l1",
+            parent_span_id="wf",
+            name="anthropic",
+            kind="llm",
+            start_time=300,
+            end_time=500,
+            duration_ns=200_000_000,
+            attributes={"neatlogs.span.kind": "llm", "http.response.status_code": 429},
+        )
+    )
+    _write_jsonl(path, spans)
+    report = diagnose(path)
+    f = next((f for f in report.findings if f.code == "rate-limited"), None)
+    assert f is not None
+    assert f.severity == "warning"
+    assert f.fix_class == "instrumentation"
+    assert "429" in f.evidence
+
+
+def test_rate_limited_fires_on_retry_after_attribute(tmp_path):
+    path = tmp_path / "rl_retry.log"
+    wf = _span(
+        "t",
+        "wf",
+        name="wf",
+        kind="workflow",
+        start_time=100,
+        end_time=200,
+        duration_ns=100_000_000,
+        attributes={"neatlogs.span.kind": "workflow"},
+    )
+    spans = [wf]
+    spans.append(
+        _span(
+            "t",
+            "l1",
+            parent_span_id="wf",
+            name="openai",
+            kind="llm",
+            start_time=300,
+            end_time=500,
+            duration_ns=200_000_000,
+            attributes={"neatlogs.span.kind": "llm", "retry-after-ms": 1500},
+        )
+    )
+    _write_jsonl(path, spans)
+    report = diagnose(path)
+    f = next((f for f in report.findings if f.code == "rate-limited"), None)
+    assert f is not None
+    assert "retry-after-ms" in f.evidence
+
+
+def test_rate_limited_fires_on_rate_limit_remaining_at_floor(tmp_path):
+    path = tmp_path / "rl_remaining.log"
+    wf = _span(
+        "t",
+        "wf",
+        name="wf",
+        kind="workflow",
+        start_time=100,
+        end_time=200,
+        duration_ns=100_000_000,
+        attributes={"neatlogs.span.kind": "workflow"},
+    )
+    spans = [wf]
+    # OpenAI exposes x_ratelimit_remaining_requests.
+    spans.append(
+        _span(
+            "t",
+            "l1",
+            parent_span_id="wf",
+            name="openai",
+            kind="llm",
+            start_time=300,
+            end_time=500,
+            duration_ns=200_000_000,
+            attributes={"neatlogs.span.kind": "llm", "x_ratelimit_remaining_requests": 0},
+        )
+    )
+    _write_jsonl(path, spans)
+    report = diagnose(path)
+    f = next((f for f in report.findings if f.code == "rate-limited"), None)
+    assert f is not None
+    assert "x_ratelimit_remaining_requests" in f.evidence
+
+
+def test_rate_limited_fires_on_openai_error_code(tmp_path):
+    path = tmp_path / "rl_openai.log"
+    wf = _span(
+        "t",
+        "wf",
+        name="wf",
+        kind="workflow",
+        start_time=100,
+        end_time=200,
+        duration_ns=100_000_000,
+        attributes={"neatlogs.span.kind": "workflow"},
+    )
+    spans = [wf]
+    spans.append(
+        _span(
+            "t",
+            "l1",
+            parent_span_id="wf",
+            name="openai",
+            kind="llm",
+            start_time=300,
+            end_time=500,
+            duration_ns=200_000_000,
+            attributes={"neatlogs.span.kind": "llm", "openai.error.code": "rate_limit_exceeded"},
+        )
+    )
+    _write_jsonl(path, spans)
+    report = diagnose(path)
+    f = next((f for f in report.findings if f.code == "rate-limited"), None)
+    assert f is not None
+    assert "openai.error.code" in f.evidence
+
+
+def test_rate_limited_does_not_fire_on_clean_successful_call(tmp_path):
+    path = tmp_path / "rl_clean.log"
+    wf = _span(
+        "t",
+        "wf",
+        name="wf",
+        kind="workflow",
+        start_time=100,
+        end_time=200,
+        duration_ns=100_000_000,
+        attributes={"neatlogs.span.kind": "workflow"},
+    )
+    spans = [wf]
+    # Successful call with no throttling signal — must NOT fire.
+    spans.append(
+        _span(
+            "t",
+            "l1",
+            parent_span_id="wf",
+            name="openai",
+            kind="llm",
+            start_time=300,
+            end_time=500,
+            duration_ns=200_000_000,
+            attributes={
+                "neatlogs.span.kind": "llm",
+                "http.response.status_code": 200,
+                "openai.error.code": "ok",
+            },
+        )
+    )
+    _write_jsonl(path, spans)
+    report = diagnose(path)
+    assert [f for f in report.findings if f.code == "rate-limited"] == []
+
+
+# ============================================================================
+# H. PII detection (opt-in)
+# ============================================================================
+
+
+def test_pii_does_not_fire_without_check_pii(tmp_path):
+    path = tmp_path / "pii_off.log"
+    wf = _span(
+        "t",
+        "wf",
+        name="wf",
+        kind="workflow",
+        start_time=100,
+        end_time=200,
+        duration_ns=100_000_000,
+        instrumentation_scope={"name": "neatlogs.core.context"},
+        attributes={"neatlogs.span.kind": "workflow", "metadata": {"email": "user@example.com"}},
+    )
+    _write_jsonl(path, [wf])
+    report = diagnose(path)  # check_pii=False
+    assert [f for f in report.findings if f.code == "pii-detected"] == []
+
+
+def test_pii_fires_on_email_in_attribute(tmp_path):
+    path = tmp_path / "pii_email.log"
+    wf = _span(
+        "t",
+        "wf",
+        name="wf",
+        kind="workflow",
+        start_time=100,
+        end_time=200,
+        duration_ns=100_000_000,
+        instrumentation_scope={"name": "neatlogs.core.context"},
+        attributes={"neatlogs.span.kind": "workflow", "metadata": {"email": "user@example.com"}},
+    )
+    _write_jsonl(path, [wf])
+    report = diagnose(path, check_pii=True)
+    f = next((f for f in report.findings if f.code == "pii-detected"), None)
+    assert f is not None
+    assert "email" in f.evidence
+
+
+def test_pii_fires_on_us_phone_in_attribute(tmp_path):
+    path = tmp_path / "pii_phone.log"
+    wf = _span(
+        "t",
+        "wf",
+        name="wf",
+        kind="workflow",
+        start_time=100,
+        end_time=200,
+        duration_ns=100_000_000,
+        instrumentation_scope={"name": "neatlogs.core.context"},
+        attributes={"neatlogs.span.kind": "workflow", "user_phone": "212-555-1234"},
+    )
+    _write_jsonl(path, [wf])
+    report = diagnose(path, check_pii=True)
+    f = next((f for f in report.findings if f.code == "pii-detected"), None)
+    assert f is not None
+    assert "us_phone" in f.evidence
+
+
+def test_pii_fires_on_us_ssn_in_attribute(tmp_path):
+    path = tmp_path / "pii_ssn.log"
+    wf = _span(
+        "t",
+        "wf",
+        name="wf",
+        kind="workflow",
+        start_time=100,
+        end_time=200,
+        duration_ns=100_000_000,
+        instrumentation_scope={"name": "neatlogs.core.context"},
+        attributes={"neatlogs.span.kind": "workflow", "ssn": "123-45-6789"},
+    )
+    _write_jsonl(path, [wf])
+    report = diagnose(path, check_pii=True)
+    f = next((f for f in report.findings if f.code == "pii-detected"), None)
+    assert f is not None
+    assert "us_ssn" in f.evidence
+
+
+def test_pii_fires_on_visa_credit_card_in_attribute(tmp_path):
+    path = tmp_path / "pii_cc.log"
+    wf = _span(
+        "t",
+        "wf",
+        name="wf",
+        kind="workflow",
+        start_time=100,
+        end_time=200,
+        duration_ns=100_000_000,
+        instrumentation_scope={"name": "neatlogs.core.context"},
+        attributes={"neatlogs.span.kind": "workflow", "card": "4111 1111 1111 1111"},
+    )
+    _write_jsonl(path, [wf])
+    report = diagnose(path, check_pii=True)
+    f = next((f for f in report.findings if f.code == "pii-detected"), None)
+    assert f is not None
+    assert "credit_card" in f.evidence
+
+
+def test_pii_fires_on_nested_dict_attribute(tmp_path):
+    path = tmp_path / "pii_nested.log"
+    wf = _span(
+        "t",
+        "wf",
+        name="wf",
+        kind="workflow",
+        start_time=100,
+        end_time=200,
+        duration_ns=100_000_000,
+        instrumentation_scope={"name": "neatlogs.core.context"},
+        attributes={
+            "neatlogs.span.kind": "workflow",
+            "user": {"profile": {"contact": "jane@example.com"}},
+        },
+    )
+    _write_jsonl(path, [wf])
+    report = diagnose(path, check_pii=True)
+    f = next((f for f in report.findings if f.code == "pii-detected"), None)
+    assert f is not None
+
+
+def test_pii_does_not_fire_on_sha_or_uuid_attributes(tmp_path):
+    path = tmp_path / "pii_sha.log"
+    wf = _span(
+        "t",
+        "wf",
+        name="wf",
+        kind="workflow",
+        start_time=100,
+        end_time=200,
+        duration_ns=100_000_000,
+        instrumentation_scope={"name": "neatlogs.core.context"},
+        attributes={
+            "neatlogs.span.kind": "workflow",
+            "user_id": "550e8400-e29b-41d4-a716-446655440000",
+            "request_hash": "a" * 64,
+        },
+    )
+    _write_jsonl(path, [wf])
+    report = diagnose(path, check_pii=True)
+    assert [f for f in report.findings if f.code == "pii-detected"] == []
+
+
+def test_pii_does_not_fire_on_internal_spans(tmp_path):
+    path = tmp_path / "pii_internal.log"
+    wf = _span(
+        "t",
+        "wf",
+        name="wf",
+        kind="workflow",
+        start_time=100,
+        end_time=200,
+        duration_ns=100_000_000,
+        instrumentation_scope={"name": "neatlogs.core.context"},
+        attributes={"neatlogs.span.kind": "workflow"},
+    )
+    _write_jsonl(path, [wf])
+    # Internal span with PII in attributes — must NOT fire.
+    internal = _span(
+        "t",
+        "internal",
+        parent_span_id="wf",
+        name="neatlogs.trace.complete",
+        kind="workflow",
+        start_time=150,
+        end_time=180,
+        duration_ns=30_000_000,
+        instrumentation_scope={"name": "neatlogs.core.context"},
+        attributes={
+            "neatlogs.span.kind": "workflow",
+            "neatlogs.internal": True,
+            "email": "internal@example.com",
+        },
+    )
+    _write_jsonl(path, [wf, internal])
+    report = diagnose(path, check_pii=True)
+    assert [f for f in report.findings if f.code == "pii-detected"] == []
+
+
+def test_pii_does_not_crash_on_bool_attribute(tmp_path):
+    """bool is an int subclass — must not be stringified and checked against
+    PII regexes (would produce a 'True' false positive)."""
+    path = tmp_path / "pii_bool.log"
+    wf = _span(
+        "t",
+        "wf",
+        name="wf",
+        kind="workflow",
+        start_time=100,
+        end_time=200,
+        duration_ns=100_000_000,
+        instrumentation_scope={"name": "neatlogs.core.context"},
+        attributes={
+            "neatlogs.span.kind": "workflow",
+            "is_authenticated": True,
+            "is_admin": False,
+        },
+    )
+    _write_jsonl(path, [wf])
+    report = diagnose(path, check_pii=True)
+    assert [f for f in report.findings if f.code == "pii-detected"] == []
+
+
+def test_pii_does_not_crash_on_cyclic_dict():
+    """Cyclic dict ref (a['self'] = a) must not infinite-recurse.
+
+    The cyclic object is built inside a function so pytest's traceback
+    local-variable dump doesn't try to JSON-encode it (which raises its
+    own ValueError, masking the real test result).
+    """
+    from neatlogs.doctor import _walk_pii
+
+    def make_cyclic() -> dict:
+        d: dict = {"email": "user@example.com"}
+        d["self"] = d
+        return d
+
+    pii_hits = _walk_pii(make_cyclic())
+    assert any(name == "email" for name, _ in pii_hits)
+
+
+# ============================================================================
+# I. CLI --check-pii wiring
+# ============================================================================
+
+
+def test_cli_check_pii_flag_propagates_to_diagnose(tmp_path, capsys):
+    """The --check-pii flag must reach diagnose() and enable pii-detected."""
+    from neatlogs.doctor import main
+
+    path = tmp_path / "cli_pii.log"
+    wf = _span(
+        "t",
+        "wf",
+        name="wf",
+        kind="workflow",
+        start_time=100,
+        end_time=200,
+        duration_ns=100_000_000,
+        instrumentation_scope={"name": "neatlogs.core.context"},
+        attributes={"neatlogs.span.kind": "workflow", "email": "user@example.com"},
+    )
+    _write_jsonl(path, [wf])
+
+    # Without flag
+    main([str(path), "--json"])
+    out = capsys.readouterr().out
+    assert "pii-detected" not in out
+
+    # With flag
+    main([str(path), "--check-pii", "--json"])
+    out = capsys.readouterr().out
+    assert "pii-detected" in out

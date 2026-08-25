@@ -14,7 +14,6 @@ import respx
 # Import the new SDK
 from google import genai
 from google.genai import types
-from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 
@@ -49,8 +48,15 @@ class TestGoogleGenAIInstrumentation:
         # The SDK accesses .token or calls refresh. We make sure it behaves strings.
         mock_creds.token = "fake-oauth-token-string"
         mock_creds.valid = True
+        mock_creds.quota_project_id = None
 
-        with patch("google.auth.default", return_value=(mock_creds, "test-project")):
+        with (
+            patch("google.auth.default", return_value=(mock_creds, "test-project")),
+            patch(
+                "google.genai._api_client.get_token_from_credentials",
+                return_value="fake-oauth-token-string",
+            ),
+        ):
             yield mock_creds
 
     @respx.mock
@@ -66,11 +72,14 @@ class TestGoogleGenAIInstrumentation:
         # Setup Clean OTEL
         provider = TracerProvider()
         provider.add_span_processor(SimpleSpanProcessor(in_memory_span_exporter))
-        trace.set_tracer_provider(provider)
 
         import neatlogs
 
-        neatlogs.init(api_key="test-key", instrumentations=["google-genai"])
+        neatlogs.init(
+            api_key="test-key",
+            instrumentations=["google_genai"],
+            tracer_provider=provider,
+        )
 
         # 2. ACT
         client = genai.Client(api_key="fake-google-key")
@@ -82,16 +91,14 @@ class TestGoogleGenAIInstrumentation:
         time.sleep(0.1)
         spans = in_memory_span_exporter.get_finished_spans()
 
-        llm_spans = [s for s in spans if s.attributes.get("openinference.span.kind") == "LLM"]
+        llm_spans = [s for s in spans if s.attributes.get("neatlogs.span.kind") == "llm"]
 
         assert len(llm_spans) >= 1
         span = llm_spans[0]
 
-        # FIXED: Based on your error log, the attribute is 'llm.provider' = 'google'
-        # The specific key might vary by instrumentor version, checking what exists.
-        assert span.attributes.get("llm.provider") == "google"
+        assert span.attributes.get("neatlogs.llm.provider") == "google_genai"
         assert "gemini" in str(span.attributes)
-        assert span.attributes.get("llm.token_count.total") == 20
+        assert span.attributes.get("neatlogs.llm.token_count.total") == 20
 
     @respx.mock
     def test_gemini_vertex_mode_creates_span(
@@ -110,11 +117,14 @@ class TestGoogleGenAIInstrumentation:
 
         provider = TracerProvider()
         provider.add_span_processor(SimpleSpanProcessor(in_memory_span_exporter))
-        trace.set_tracer_provider(provider)
 
         import neatlogs
 
-        neatlogs.init(api_key="test-key", instrumentations=["google-genai"])
+        neatlogs.init(
+            api_key="test-key",
+            instrumentations=["google_genai"],
+            tracer_provider=provider,
+        )
 
         # 2. ACT
         # The client will use our mocked google.auth.default credentials
@@ -127,10 +137,9 @@ class TestGoogleGenAIInstrumentation:
 
         time.sleep(0.1)
         spans = in_memory_span_exporter.get_finished_spans()
-        llm_span = next(s for s in spans if s.attributes.get("openinference.span.kind") == "LLM")
+        llm_span = next(s for s in spans if s.attributes.get("neatlogs.span.kind") == "llm")
 
-        # In Vertex mode, provider might still be google or vertexai
-        assert llm_span.attributes.get("llm.provider") == "google"
+        assert llm_span.attributes.get("neatlogs.llm.provider") == "google_genai"
 
     @respx.mock
     def test_gemini_streaming_capture(self, in_memory_span_exporter):
@@ -150,11 +159,14 @@ class TestGoogleGenAIInstrumentation:
 
         provider = TracerProvider()
         provider.add_span_processor(SimpleSpanProcessor(in_memory_span_exporter))
-        trace.set_tracer_provider(provider)
 
         import neatlogs
 
-        neatlogs.init(api_key="test-key", instrumentations=["google-genai"])
+        neatlogs.init(
+            api_key="test-key",
+            instrumentations=["google_genai"],
+            tracer_provider=provider,
+        )
 
         client = genai.Client(api_key="fake")
 

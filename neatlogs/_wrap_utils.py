@@ -11,6 +11,7 @@ Only contains truly shared concerns:
 import inspect
 import json
 import os
+import threading
 import time
 from contextvars import ContextVar
 from typing import Any, Callable, Dict, List, Mapping, Optional
@@ -879,6 +880,10 @@ class SyncStreamWrapper:
         self._first_chunk_time: Optional[float] = None
         self._chunks: List[Any] = []
         self._finalized = False
+        self._captured_chars = 0
+        self._chunk_count = 0
+        self._lock = threading.Lock()
+        span.set_attribute("neatlogs.stream.completion_state", "not_streamed")
 
     def __iter__(self):
         return self
@@ -887,16 +892,25 @@ class SyncStreamWrapper:
         try:
             chunk = next(self._stream)
         except StopIteration:
-            self._finalize()
+            self._finalize("complete")
             raise
-        except Exception as e:
+        except BaseException as e:
             self._finalize_error(e)
             raise
 
         if self._first_chunk_time is None:
             self._first_chunk_time = time.perf_counter()
-        self._chunks.append(chunk)
+        self._chunk_count += 1
+        self._capture(chunk)
         return chunk
+
+    def _capture(self, chunk: Any) -> None:
+        size = len(serialize(chunk, max_length=100_000))
+        if self._captured_chars + size <= 100_000:
+            self._chunks.append(chunk)
+            self._captured_chars += size
+        else:
+            self._span.set_attribute("neatlogs.stream.output_truncated", True)
 
     def __enter__(self):
         if hasattr(self._stream, "__enter__"):
@@ -906,27 +920,57 @@ class SyncStreamWrapper:
     def __exit__(self, *args):
         if hasattr(self._stream, "__exit__"):
             self._stream.__exit__(*args)
-        self._finalize()
+        self._finalize("consumer_cancelled" if args and args[0] else "complete")
 
-    def _finalize(self):
-        if self._finalized:
+    def close(self):
+        try:
+            close = getattr(self._stream, "close", None)
+            if close is not None:
+                close()
+        finally:
+            self._finalize("consumer_cancelled")
+
+    def _claim_finalize(self) -> bool:
+        with self._lock:
+            if self._finalized:
+                return False
+            self._finalized = True
+            return True
+
+    def _finalize(self, state="complete"):
+        if not self._claim_finalize():
             return
-        self._finalized = True
+        self._span.set_attribute("neatlogs.stream.completion_state", state)
+        self._span.set_attribute("neatlogs.stream.chunk_count", self._chunk_count)
         elapsed_ms = (time.perf_counter() - self._start_time) * 1000
         ttft_ms = None
         if self._first_chunk_time is not None:
             ttft_ms = (self._first_chunk_time - self._start_time) * 1000
-        self._finalizer(self._span, self._chunks, elapsed_ms, ttft_ms)
+        if state == "complete":
+            self._finalizer(self._span, self._chunks, elapsed_ms, ttft_ms)
+        else:
+            self._span.set_attribute("output.value", serialize(self._chunks))
+            self._span.set_attribute("output.mime_type", "application/json")
+            self._span.end()
 
     def _finalize_error(self, error: Exception):
-        if self._finalized:
+        if not self._claim_finalize():
             return
-        self._finalized = True
+        self._span.set_attribute("neatlogs.stream.completion_state", "provider_error")
+        self._span.set_attribute("neatlogs.stream.chunk_count", self._chunk_count)
+        self._span.set_attribute("output.value", serialize(self._chunks))
+        self._span.set_attribute("output.mime_type", "application/json")
         from opentelemetry.trace import StatusCode
 
         self._span.set_status(StatusCode.ERROR, str(error))
         self._span.record_exception(error)
         self._span.end()
+
+    def __del__(self):
+        try:
+            self._finalize("consumer_cancelled")
+        except Exception:
+            pass
 
     def __getattr__(self, name):
         return getattr(self._stream, name)
@@ -945,6 +989,10 @@ class AsyncStreamWrapper:
         self._first_chunk_time: Optional[float] = None
         self._chunks: List[Any] = []
         self._finalized = False
+        self._captured_chars = 0
+        self._chunk_count = 0
+        self._lock = threading.Lock()
+        span.set_attribute("neatlogs.stream.completion_state", "not_streamed")
 
     def __aiter__(self):
         return self
@@ -953,15 +1001,21 @@ class AsyncStreamWrapper:
         try:
             chunk = await self._stream.__anext__()
         except StopAsyncIteration:
-            self._finalize()
+            self._finalize("complete")
             raise
-        except Exception as e:
+        except BaseException as e:
             self._finalize_error(e)
             raise
 
         if self._first_chunk_time is None:
             self._first_chunk_time = time.perf_counter()
-        self._chunks.append(chunk)
+        self._chunk_count += 1
+        size = len(serialize(chunk, max_length=100_000))
+        if self._captured_chars + size <= 100_000:
+            self._chunks.append(chunk)
+            self._captured_chars += size
+        else:
+            self._span.set_attribute("neatlogs.stream.output_truncated", True)
         return chunk
 
     async def __aenter__(self):
@@ -972,27 +1026,57 @@ class AsyncStreamWrapper:
     async def __aexit__(self, *args):
         if hasattr(self._stream, "__aexit__"):
             await self._stream.__aexit__(*args)
-        self._finalize()
+        self._finalize("consumer_cancelled" if args and args[0] else "complete")
 
-    def _finalize(self):
-        if self._finalized:
+    async def aclose(self):
+        try:
+            close = getattr(self._stream, "aclose", None)
+            if close is not None:
+                await close()
+        finally:
+            self._finalize("consumer_cancelled")
+
+    def _claim_finalize(self) -> bool:
+        with self._lock:
+            if self._finalized:
+                return False
+            self._finalized = True
+            return True
+
+    def _finalize(self, state="complete"):
+        if not self._claim_finalize():
             return
-        self._finalized = True
+        self._span.set_attribute("neatlogs.stream.completion_state", state)
+        self._span.set_attribute("neatlogs.stream.chunk_count", self._chunk_count)
         elapsed_ms = (time.perf_counter() - self._start_time) * 1000
         ttft_ms = None
         if self._first_chunk_time is not None:
             ttft_ms = (self._first_chunk_time - self._start_time) * 1000
-        self._finalizer(self._span, self._chunks, elapsed_ms, ttft_ms)
+        if state == "complete":
+            self._finalizer(self._span, self._chunks, elapsed_ms, ttft_ms)
+        else:
+            self._span.set_attribute("output.value", serialize(self._chunks))
+            self._span.set_attribute("output.mime_type", "application/json")
+            self._span.end()
 
     def _finalize_error(self, error: Exception):
-        if self._finalized:
+        if not self._claim_finalize():
             return
-        self._finalized = True
+        self._span.set_attribute("neatlogs.stream.completion_state", "provider_error")
+        self._span.set_attribute("neatlogs.stream.chunk_count", self._chunk_count)
+        self._span.set_attribute("output.value", serialize(self._chunks))
+        self._span.set_attribute("output.mime_type", "application/json")
         from opentelemetry.trace import StatusCode
 
         self._span.set_status(StatusCode.ERROR, str(error))
         self._span.record_exception(error)
         self._span.end()
+
+    def __del__(self):
+        try:
+            self._finalize("consumer_cancelled")
+        except Exception:
+            pass
 
     def __getattr__(self, name):
         return getattr(self._stream, name)

@@ -126,7 +126,14 @@ def _patch_models(models: Any) -> None:
 
             _set_input_attributes(span, contents, kwargs)
 
-            stream = orig_stream(*args, **kwargs)
+            try:
+                stream = orig_stream(*args, **kwargs)
+            except BaseException as exc:
+                span.set_attribute("neatlogs.stream.completion_state", "provider_error")
+                span.set_status(StatusCode.ERROR, str(exc))
+                span.record_exception(exc)
+                span.end()
+                raise
             return SyncStreamWrapper(stream, span, _finalize_stream)
 
         models.generate_content_stream = patched_generate_content_stream
@@ -209,7 +216,8 @@ def _patch_async_models(models: Any) -> None:
 
             try:
                 stream = await orig_stream(*args, **kwargs)
-            except Exception as e:
+            except BaseException as e:
+                span.set_attribute("neatlogs.stream.completion_state", "provider_error")
                 span.set_status(StatusCode.ERROR, str(e))
                 span.record_exception(e)
                 span.end()

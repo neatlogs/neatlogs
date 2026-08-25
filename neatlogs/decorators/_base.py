@@ -4,10 +4,10 @@ Decorator primitives for Neatlogs custom orchestration spans.
 
 from __future__ import annotations
 
+import asyncio
 import functools
 import inspect
 import json
-import os
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple, TypeVar, Union
 
@@ -15,13 +15,6 @@ from opentelemetry import trace as otel_trace
 from opentelemetry.trace import Status, StatusCode
 
 F = TypeVar("F", bound=Callable[..., Any])
-
-
-def _should_capture_content() -> bool:
-    v = os.getenv("NEATLOGS_TRACE_CONTENT")
-    if v is None:
-        return True
-    return v.lower() not in ("false", "0", "no")
 
 
 def _capture_code_attrs(func: Callable[..., Any]) -> Dict[str, Any]:
@@ -202,9 +195,10 @@ def _decorate_span(
 
         span_name = name or func.__name__
 
-        cap = _should_capture_content()
-        cap_in = cap if capture_input is None else capture_input
-        cap_out = cap if capture_output is None else capture_output
+        # Capture defaults are explicit SDK behavior. Privacy-sensitive callers
+        # can disable either side per span, or mask at the export boundary.
+        cap_in = True if capture_input is None else capture_input
+        cap_out = True if capture_output is None else capture_output
 
         # Capture code location once at decoration time — these are static
         # properties of the decorated function so there is no per-call overhead.
@@ -212,6 +206,116 @@ def _decorate_span(
         # that users can override auto-captured values if needed.
         code_attrs = _capture_code_attrs(func)
         merged_attrs = {**code_attrs, **(attributes or {})}
+
+        def _prepare_stream(span, args, kwargs, is_root):
+            from ..core.end_user import apply_end_user_attributes
+            from ..core.mask import register_mask
+            from ..core.session import apply_session_attributes
+
+            _set_common_span_attrs(
+                span,
+                openinference_kind=openinference_kind,
+                name=span_name,
+                version=version,
+                tags=tags,
+                metadata=metadata,
+                attributes=merged_attrs,
+            )
+            apply_session_attributes(span, session_id, is_root=is_root)
+            apply_end_user_attributes(span, end_user_id, end_user_metadata, is_root=is_root)
+            if mask is not None:
+                span.set_attribute("neatlogs.mask_id", register_mask(mask))
+            if description:
+                span.set_attribute("neatlogs.description", description)
+            bound = _bind_call_args(func, args, kwargs)
+            if cap_in:
+                span.set_attribute("input.value", _safe_json_dumps(bound))
+                span.set_attribute("input.mime_type", "application/json")
+            span.set_attribute("neatlogs.stream.completion_state", "not_streamed")
+            return bound
+
+        def _capture_chunk(span, chunks, captured_chars, chunk, index):
+            encoded = _safe_json_dumps(chunk)
+            span.add_event(
+                "neatlogs.stream.chunk",
+                {
+                    "neatlogs.stream.chunk.index": index,
+                    "neatlogs.stream.chunk.value": encoded[:100_000],
+                    "neatlogs.stream.chunk.mime_type": "application/json",
+                },
+            )
+            if captured_chars + len(encoded) <= 100_000:
+                chunks.append(chunk)
+                return captured_chars + len(encoded)
+            span.set_attribute("neatlogs.stream.output_truncated", True)
+            return captured_chars
+
+        def _finish_stream(span, chunks, bound, state, chunk_count, error=None):
+            span.set_attribute("neatlogs.stream.completion_state", state)
+            span.set_attribute("neatlogs.stream.chunk_count", chunk_count)
+            if postprocess_result is not None:
+                try:
+                    postprocess_result(span, chunks, bound)
+                except Exception:
+                    pass
+            if cap_out:
+                span.set_attribute("output.value", _safe_json_dumps(chunks)[:100_000])
+                span.set_attribute("output.mime_type", "application/json")
+            if error is not None:
+                span.record_exception(error)
+                span.set_status(Status(StatusCode.ERROR, str(error)))
+            elif state == "complete":
+                span.set_status(Status(StatusCode.OK))
+
+        if inspect.isasyncgenfunction(func):
+
+            @functools.wraps(func)
+            async def async_generator_wrapper(*args: Any, **kwargs: Any):
+                is_root = _is_root_span()
+                with neatlogs_span(__name__, span_name, kind=otel_trace.SpanKind.INTERNAL) as span:
+                    bound = _prepare_stream(span, args, kwargs, is_root)
+                    chunks, captured_chars, chunk_count = [], 0, 0
+                    try:
+                        async for chunk in func(*args, **kwargs):
+                            captured_chars = _capture_chunk(
+                                span, chunks, captured_chars, chunk, chunk_count
+                            )
+                            chunk_count += 1
+                            yield chunk
+                        _finish_stream(span, chunks, bound, "complete", chunk_count)
+                    except (GeneratorExit, asyncio.CancelledError):
+                        _finish_stream(span, chunks, bound, "consumer_cancelled", chunk_count)
+                        raise
+                    except BaseException as exc:
+                        _finish_stream(span, chunks, bound, "provider_error", chunk_count, exc)
+                        raise
+
+            return async_generator_wrapper
+
+        if inspect.isgeneratorfunction(func):
+
+            @functools.wraps(func)
+            def generator_wrapper(*args: Any, **kwargs: Any):
+                is_root = _is_root_span()
+                with neatlogs_span(__name__, span_name, kind=otel_trace.SpanKind.INTERNAL) as span:
+                    bound = _prepare_stream(span, args, kwargs, is_root)
+                    chunks, captured_chars, chunk_count = [], 0, 0
+                    try:
+                        for chunk in func(*args, **kwargs):
+                            captured_chars = _capture_chunk(
+                                span, chunks, captured_chars, chunk, chunk_count
+                            )
+                            chunk_count += 1
+                            yield chunk
+                        _finish_stream(span, chunks, bound, "complete", chunk_count)
+                    except GeneratorExit:
+                        _finish_stream(span, chunks, bound, "consumer_cancelled", chunk_count)
+                        raise
+                    except BaseException as exc:
+                        _finish_stream(span, chunks, bound, "provider_error", chunk_count, exc)
+                        raise
+
+            return generator_wrapper
 
         if inspect.iscoroutinefunction(func):
 

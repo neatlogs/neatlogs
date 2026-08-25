@@ -128,10 +128,32 @@ def test_flushing_one_client_does_not_flush_another(monkeypatch):
 
     first.flush()
 
-    assert first_flushes == [1]
+    # Client.flush touches only processors installed by Neatlogs, never every
+    # processor on a caller-owned provider.
+    assert first_flushes == []
     assert second_flushes == []
 
     first.shutdown()
+    second.shutdown()
+
+
+def test_flush_all_discovers_live_clients_and_unregisters_closed(monkeypatch):
+    first, _, _ = _client("first")
+    second, _, _ = _client("second")
+    calls = []
+    monkeypatch.setattr(first, "flush", lambda timeout_millis=30000: calls.append("first") or True)
+    monkeypatch.setattr(
+        second, "flush", lambda timeout_millis=30000: calls.append("second") or True
+    )
+    results = neatlogs.flush_all(1000)
+    assert set(calls) == {"first", "second"}
+    assert len(results) == 2 and all(results.values())
+
+    first.shutdown()
+    calls.clear()
+    results = neatlogs.flush_all(1000)
+    assert calls == ["second"]
+    assert len(results) == 1
     second.shutdown()
 
 

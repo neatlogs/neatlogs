@@ -9,9 +9,10 @@ from __future__ import annotations
 
 import atexit
 import contextlib
+import math
 import threading
 from collections.abc import Iterator
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlparse
 
 from opentelemetry import trace as otel_trace
@@ -21,6 +22,7 @@ from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 from opentelemetry.sdk.resources import SERVICE_NAME, Resource
 from opentelemetry.sdk.trace import SpanLimits, TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.sdk.trace.sampling import ParentBased, TraceIdRatioBased
 
 from ._wrap_utils import (
     _ForeignParentGuardTracer,
@@ -28,8 +30,11 @@ from ._wrap_utils import (
     activate_client,
     reset_active_client,
 )
+from .core.client_registry import register_client, unregister_client
 from .core.log_exporter import NeatlogsLogFilter
+from .core.masking_exporter import MaskingLogExporter, MaskingSpanExporter
 from .core.span_processor import CompletionMarkerSpanProcessor, NeatlogsSpanProcessor
+from .errors import NeatlogsConfigurationError
 from .version import __version__
 
 
@@ -67,6 +72,8 @@ class Client:
         capture_logs: bool = False,
         batch_size: int = 100,
         flush_interval: float = 5.0,
+        sample_rate: float = 1.0,
+        mask: Callable[[dict[str, Any]], Any] | None = None,
         disable_export: bool = False,
         tracer_provider: TracerProvider | None = None,
     ) -> None:
@@ -78,6 +85,20 @@ class Client:
             raise ValueError("workflow_name is required")
         if tags is not None and not all(isinstance(tag, str) for tag in tags):
             raise ValueError("All tags must be strings")
+        if isinstance(sample_rate, bool) or not isinstance(sample_rate, (int, float)):
+            raise NeatlogsConfigurationError("sample_rate must be a finite number from 0.0 to 1.0")
+        rate = float(sample_rate)
+        if not math.isfinite(rate) or rate < 0.0 or rate > 1.0:
+            raise NeatlogsConfigurationError("sample_rate must be a finite number from 0.0 to 1.0")
+        if tracer_provider is not None and rate != 1.0:
+            raise NeatlogsConfigurationError(
+                "sample_rate cannot configure a caller-owned tracer_provider; "
+                "configure its sampler directly or omit tracer_provider"
+            )
+        if tracer_provider is not None and tracer_provider is otel_trace.get_tracer_provider():
+            raise NeatlogsConfigurationError(
+                "tracer_provider must be private and must not be the process-global provider"
+            )
 
         self.workflow_name = name
         self._state = "running"
@@ -98,6 +119,7 @@ class Client:
 
         self.tracer_provider = tracer_provider or TracerProvider(
             resource=resource,
+            sampler=ParentBased(root=TraceIdRatioBased(rate)),
             span_limits=SpanLimits(max_span_attributes=10_000),
         )
         if tracer_provider is not None:
@@ -107,6 +129,7 @@ class Client:
                 pass
 
         self._span_processor = NeatlogsSpanProcessor(
+            mask=mask,
             emit_completion_markers=False,
             # A private provider is an isolated project pipeline. A caller-owned
             # provider may be shared with host telemetry, so ownership is marked
@@ -125,8 +148,9 @@ class Client:
                 endpoint=traces_endpoint,
                 headers={"x-api-key": key},
             )
+            masking_exporter = MaskingSpanExporter(exporter, mask)
             batch_processor = BatchSpanProcessor(
-                exporter,
+                masking_exporter,
                 max_export_batch_size=batch_size,
                 schedule_delay_millis=int(flush_interval * 1000),
             )
@@ -137,9 +161,13 @@ class Client:
             self.tracer_provider.add_span_processor(batch_processor)
             self.tracer_provider.add_span_processor(completion_processor)
             self._transport_processors = [batch_processor, completion_processor]
+            self._exporters = [masking_exporter]
             self._completion_processor = completion_processor
+        else:
+            self._exporters = []
 
         self.log_provider: LoggerProvider | None = None
+        self._log_exporters = []
         if capture_logs:
             self.log_provider = LoggerProvider(resource=resource)
             if not disable_export:
@@ -149,11 +177,14 @@ class Client:
                     endpoint=f"{base_url}/v1/logs",
                     headers={"x-api-key": key},
                 )
+                masking_log_exporter = MaskingLogExporter(log_exporter, mask)
+                self._log_exporters.append(masking_log_exporter)
                 self.log_provider.add_log_record_processor(
-                    NeatlogsLogFilter(BatchLogRecordProcessor(log_exporter))
+                    NeatlogsLogFilter(BatchLogRecordProcessor(masking_log_exporter))
                 )
 
         atexit.register(self.shutdown)
+        register_client(self)
 
     def get_tracer(self, scope: str):
         tracer = self._tracers.get(scope)
@@ -195,11 +226,16 @@ class Client:
                 self.log_provider.force_flush(timeout_millis=timeout_millis)
             except Exception:
                 success = False
-        try:
-            result = self.tracer_provider.force_flush(timeout_millis=timeout_millis)
-            success = bool(result) and success
-        except Exception:
-            success = False
+        for processor in self._transport_processors:
+            try:
+                result = processor.force_flush(timeout_millis=timeout_millis)
+                success = (result is None or bool(result)) and success
+            except Exception:
+                success = False
+        success = (
+            all(exporter.health.healthy for exporter in self._exporters + self._log_exporters)
+            and success
+        )
         return success
 
     def shutdown(
@@ -235,6 +271,7 @@ class Client:
                 atexit.unregister(self.shutdown)
             except Exception:
                 pass
+            unregister_client(self)
 
     def _perform_shutdown(self, timeout_millis: int, termination_reason: str) -> bool:
         success = True

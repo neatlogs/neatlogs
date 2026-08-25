@@ -18,7 +18,6 @@ from opentelemetry.trace import Status, StatusCode
 
 from .attribute_processor import UnifiedAttributeProcessor
 from .logger import get_logger
-from .mask import apply_mask
 
 logger = get_logger()
 
@@ -398,7 +397,13 @@ class NeatlogsSpanProcessor(SpanProcessor):
                 logger.debug(f"[SpanProcessor.on_end] Span ending: {span.name}")
 
             # 1. Log raw OTel span (before any processing)
-            if self._raw_log_file_handle and not self._raw_log_file_handle.closed:
+            per_span_mask = bool((span.attributes or {}).get("neatlogs.mask_id"))
+            if (
+                not self.mask
+                and not per_span_mask
+                and self._raw_log_file_handle
+                and not self._raw_log_file_handle.closed
+            ):
                 try:
                     self._raw_log_file_handle.write(span.to_json() + "\n")
                     self._raw_log_file_handle.flush()
@@ -554,14 +559,8 @@ class NeatlogsSpanProcessor(SpanProcessor):
             results = self._inject_crewai_task_templates([span_data])
             span_data = results[0] if results else span_data
 
-            # A per-span mask_id (from @span(mask=)/trace(mask=)) takes precedence
-            # over the global init(mask=); mask whenever either exists.
-            mask_id = (span_data.get("attributes") or {}).get("neatlogs.mask_id")
-            has_mask = bool(mask_id) or self.mask is not None
-
-            # Write normalized neatlogs.* keys onto the (still-mutable) OTel span,
-            # then mask the whole surface once so non-idempotent masks (e.g.
-            # translation) aren't applied twice.
+            # Canonicalize first. Masking happens later on a private clone at the
+            # final Neatlogs exporter boundary.
             final_attrs = span_data.get("attributes") or {}
             try:
                 span_attrs = span._attributes
@@ -574,26 +573,16 @@ class NeatlogsSpanProcessor(SpanProcessor):
                         ):
                             span_attrs[_k] = list(_v)
 
-                    if has_mask:
-                        snapshot = {
-                            "name": span_data.get("name"),
-                            "attributes": dict(span_attrs),
-                        }
-                        masked = apply_mask(snapshot, self.mask)
-                        masked_attrs = (masked or snapshot).get("attributes") or {}
-                        for _k in list(span_attrs.keys()):
-                            if _k in masked_attrs and masked_attrs[_k] != span_attrs[_k]:
-                                span_attrs[_k] = masked_attrs[_k]
-                        # Mirror masked values so the file log reuses them.
-                        for _k in list(final_attrs.keys()):
-                            if _k in masked_attrs:
-                                final_attrs[_k] = masked_attrs[_k]
-                        span_data["attributes"] = final_attrs
             except Exception as _wb_exc:
                 if self.debug:
                     logger.debug(f"[SpanProcessor] Attr write-back failed: {_wb_exc}")
 
-            if self._processed_log_file_handle and not self._processed_log_file_handle.closed:
+            if (
+                not self.mask
+                and not per_span_mask
+                and self._processed_log_file_handle
+                and not self._processed_log_file_handle.closed
+            ):
                 try:
                     self._processed_log_file_handle.write(json.dumps(span_data) + "\n")
                     self._processed_log_file_handle.flush()

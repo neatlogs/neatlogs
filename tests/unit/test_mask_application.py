@@ -1,140 +1,184 @@
-"""
-Regression tests for client-side mask application in NeatlogsSpanProcessor.
+"""Final-boundary masking contracts using real OTel providers/exporters."""
 
-Guards two bugs fixed in span_processor.on_end (§7b/§7c/§8):
-  1. A per-span mask (@span(mask=)/trace(mask=), stamped as neatlogs.mask_id)
-     must reach the EXPORTED span, not just the file log. Previously the mask
-     sites gated on self.mask (global only), so a per-span-only mask was a no-op
-     on export.
-  2. The mask must be applied EXACTLY ONCE per span. Previously §7b + §7c (+ §8)
-     applied it 2-3x, which silently double-transforms non-idempotent masks
-     (e.g. translation).
+import asyncio
+import importlib
+import time
 
-These tests drive the processor directly with a fake ReadableSpan so they run
-with no exporter/backend and no LLM calls.
-"""
-
-from types import SimpleNamespace
-
-import pytest
+from opentelemetry.sdk._logs import LoggerProvider
+from opentelemetry.sdk._logs.export import InMemoryLogRecordExporter, SimpleLogRecordProcessor
+from opentelemetry.sdk.resources import Resource
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor, SpanExportResult
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from opentelemetry.trace import Status, StatusCode
 
 from neatlogs.core.mask import register_mask
+from neatlogs.core.masking_exporter import MaskingLogExporter, MaskingSpanExporter
 from neatlogs.core.span_processor import NeatlogsSpanProcessor
 
-
-class _MutableAttrs(dict):
-    """Stand-in for OTel BoundedAttributes: a mutable mapping."""
-
-    _immutable = False
+SENTINEL = "privacy-sentinel-never-export"
 
 
-def _make_span(attrs, name="child", trace_id=0x1, span_id=0x2, parent_id=None):
-    """Minimal ReadableSpan-like object the processor's on_end reads from."""
-    ctx = SimpleNamespace(trace_id=trace_id, span_id=span_id)
-    parent = SimpleNamespace(span_id=parent_id) if parent_id is not None else None
-    status = SimpleNamespace(status_code=SimpleNamespace(name="OK"), description=None)
-    scope = SimpleNamespace(name="neatlogs.test")
-    a = _MutableAttrs(attrs)
-    return SimpleNamespace(
-        name=name,
-        attributes=a,
-        _attributes=a,
-        context=ctx,
-        parent=parent,
-        start_time=1,
-        end_time=2,
-        status=status,
-        events=[],
-        resource=SimpleNamespace(attributes={}),
-        instrumentation_scope=scope,
-        kind=None,
-    )
+def _pipeline(mask=None, exporter=None, timeout=5.0):
+    provider = TracerProvider(resource=Resource.create({"secret.resource": SENTINEL}))
+    inner = exporter or InMemorySpanExporter()
+    wrapper = MaskingSpanExporter(inner, mask, timeout_seconds=timeout)
+    provider.add_span_processor(NeatlogsSpanProcessor(mask=mask, own_all_spans=True))
+    provider.add_span_processor(SimpleSpanProcessor(wrapper))
+    return provider, inner, wrapper
 
 
-def _counting_mask(counter, tag):
-    def mask(span):
-        counter["n"] += 1
-        attrs = span.get("attributes", {}) or {}
-        for k in list(attrs):
-            v = attrs[k]
-            if isinstance(v, str) and any(h in k.lower() for h in ("input", "output", "value")):
-                attrs[k] = f"[{tag}#{counter['n']}]" + v
-        return span
-
-    return mask
+def _span(provider, name="call"):
+    span = provider.get_tracer("neatlogs.test").start_span(name)
+    span.set_attribute("openinference.span.kind", "LLM")
+    span.set_attribute("input.value", SENTINEL)
+    return span
 
 
-def test_global_mask_applied_once_and_exported():
-    counter = {"n": 0}
-    proc = NeatlogsSpanProcessor(mask=_counting_mask(counter, "G"))
-    span = _make_span(
-        {
-            "openinference.span.kind": "CHAIN",
-            "input.value": "IN",
-            "output.value": "OUT",
-        }
-    )
-    proc.on_end(span)
+def test_canonicalize_then_mask_clone_without_mutating_source():
+    def mask(snapshot):
+        # The processor has completed before the exporter takes its canonical
+        # snapshot; typed input is therefore present at the mask boundary.
+        assert snapshot["attributes"]["input.value"] == SENTINEL
+        snapshot["attributes"]["input.value"] = "***"
+        snapshot["resource"]["attributes"]["secret.resource"] = "***"
+        return snapshot
 
-    assert counter["n"] == 1, f"global mask applied {counter['n']}x, expected 1"
-    # Value on the EXPORTED span (span._attributes) is masked exactly once.
-    assert span._attributes["input.value"] == "[G#1]IN"
-    assert span._attributes["output.value"] == "[G#1]OUT"
-
-
-def test_per_span_mask_without_global_reaches_export():
-    """The bug that mattered most: per-span mask, NO global mask."""
-    counter = {"n": 0}
-    proc = NeatlogsSpanProcessor(mask=None)  # no global mask
-    mask_id = register_mask(_counting_mask(counter, "S"))
-    span = _make_span(
-        {
-            "openinference.span.kind": "CHAIN",
-            "neatlogs.mask_id": mask_id,
-            "input.value": "IN",
-            "output.value": "OUT",
-        }
-    )
-    proc.on_end(span)
-
-    assert counter["n"] == 1, f"per-span mask applied {counter['n']}x, expected 1"
-    assert (
-        span._attributes["input.value"] == "[S#1]IN"
-    ), "per-span mask did not reach the exported span"
-    assert span._attributes["output.value"] == "[S#1]OUT"
+    provider, inner, _ = _pipeline(mask)
+    span = _span(provider)
+    span.end()
+    provider.shutdown()
+    exported = inner.get_finished_spans()[0]
+    assert exported.attributes["input.value"] == "***"
+    assert exported.resource.attributes["secret.resource"] == "***"
+    assert span.attributes["input.value"] == SENTINEL
 
 
-def test_per_span_mask_takes_precedence_over_global():
-    gcount, scount = {"n": 0}, {"n": 0}
-    proc = NeatlogsSpanProcessor(mask=_counting_mask(gcount, "G"))
-    mask_id = register_mask(_counting_mask(scount, "S"))
-    span = _make_span(
-        {
-            "openinference.span.kind": "CHAIN",
-            "neatlogs.mask_id": mask_id,
-            "input.value": "IN",
-        }
-    )
-    proc.on_end(span)
+def test_events_exceptions_and_status_are_maskable_without_source_mutation():
+    def mask(snapshot):
+        for event in snapshot["events"]:
+            event["attributes"] = {key: "***" for key in event["attributes"]}
+        snapshot["status"]["description"] = "***"
+        return snapshot
 
-    assert scount["n"] == 1, "per-span mask should run exactly once"
-    assert gcount["n"] == 0, "global mask must NOT run when a per-span mask exists"
-    assert span._attributes["input.value"] == "[S#1]IN"
-
-
-def test_no_mask_leaves_values_untouched():
-    proc = NeatlogsSpanProcessor(mask=None)
-    span = _make_span(
-        {
-            "openinference.span.kind": "CHAIN",
-            "input.value": "IN",
-        }
-    )
-    proc.on_end(span)
-    assert span._attributes["input.value"] == "IN"
+    provider, inner, _ = _pipeline(mask)
+    span = _span(provider, "failure")
+    try:
+        raise RuntimeError(SENTINEL)
+    except RuntimeError as exc:
+        span.record_exception(exc)
+        span.set_status(Status(StatusCode.ERROR, SENTINEL))
+    span.end()
+    provider.shutdown()
+    exported = inner.get_finished_spans()[0]
+    assert all(SENTINEL not in str(dict(event.attributes)) for event in exported.events)
+    assert exported.status.description == "***"
+    assert any(SENTINEL in str(dict(event.attributes)) for event in span.events)
 
 
-if __name__ == "__main__":
-    import sys
+def test_per_span_precedence_and_internal_id_removal():
+    calls = []
 
-    sys.exit(pytest.main([__file__, "-v", "-p", "no:logfire"]))
+    def global_mask(snapshot):
+        calls.append("global")
+        return snapshot
+
+    def local_mask(snapshot):
+        calls.append("local")
+        snapshot["attributes"]["input.value"] = "***"
+        return snapshot
+
+    provider, inner, _ = _pipeline(global_mask)
+    span = _span(provider)
+    span.set_attribute("neatlogs.mask_id", register_mask(local_mask))
+    span.end()
+    provider.shutdown()
+    exported = inner.get_finished_spans()[0]
+    assert calls == ["local"]
+    assert exported.attributes["input.value"] == "***"
+    assert "neatlogs.mask_id" not in exported.attributes
+
+
+def test_async_mask_and_null_drop():
+    async def mask(snapshot):
+        await asyncio.sleep(0)
+        snapshot["attributes"]["input.value"] = "***"
+        return snapshot
+
+    provider, inner, wrapper = _pipeline(mask)
+    _span(provider).end()
+    provider.shutdown()
+    assert inner.get_finished_spans()[0].attributes["input.value"] == "***"
+    assert wrapper.health.healthy
+
+    provider, inner, wrapper = _pipeline(lambda _: None)
+    _span(provider).end()
+    provider.shutdown()
+    assert inner.get_finished_spans() == ()
+    assert not wrapper.health.healthy
+    assert wrapper.health.drops == 1
+
+
+def test_exception_and_timeout_fail_closed():
+    def broken(_):
+        raise RuntimeError(SENTINEL)
+
+    provider, inner, wrapper = _pipeline(broken)
+    _span(provider).end()
+    provider.shutdown()
+    assert inner.get_finished_spans() == ()
+    assert not wrapper.health.healthy
+
+    def slow(snapshot):
+        time.sleep(0.1)
+        return snapshot
+
+    provider, inner, wrapper = _pipeline(slow, timeout=0.01)
+    _span(provider).end()
+    provider.shutdown()
+    assert inner.get_finished_spans() == ()
+    assert not wrapper.health.healthy
+
+
+class _FailingExporter(InMemorySpanExporter):
+    def export(self, spans):
+        return SpanExportResult.FAILURE
+
+
+def test_transport_failure_exposed_by_health_and_flush():
+    provider, _, wrapper = _pipeline(lambda snapshot: snapshot, _FailingExporter())
+    _span(provider).end()
+    assert not wrapper.health.healthy
+    assert wrapper.force_flush() is False
+    provider.shutdown()
+
+
+def test_public_flush_reports_mask_drop_health(monkeypatch):
+    init_module = importlib.import_module("neatlogs.init")
+    provider, _, wrapper = _pipeline(lambda _: None)
+    _span(provider).end()
+    monkeypatch.setattr(init_module, "_tracer_provider", None)
+    monkeypatch.setattr(init_module, "_meter_provider", None)
+    monkeypatch.setattr(init_module, "_log_provider", None)
+    monkeypatch.setattr(init_module, "_export_health", [wrapper])
+    assert init_module.flush() is False
+    provider.shutdown()
+
+
+def test_log_body_attributes_and_resource_are_masked():
+    def mask(snapshot):
+        snapshot["body"] = "***"
+        snapshot["attributes"]["secret"] = "***"
+        snapshot["resource"]["attributes"]["secret.resource"] = "***"
+        return snapshot
+
+    provider = LoggerProvider(resource=Resource.create({"secret.resource": SENTINEL}))
+    inner = InMemoryLogRecordExporter()
+    wrapper = MaskingLogExporter(inner, mask)
+    provider.add_log_record_processor(SimpleLogRecordProcessor(wrapper))
+    provider.get_logger("test").emit(body=SENTINEL, attributes={"secret": SENTINEL})
+    provider.shutdown()
+    exported = inner.get_finished_logs()[0]
+    assert exported.log_record.body == "***"
+    assert exported.log_record.attributes["secret"] == "***"
+    assert exported.resource.attributes["secret.resource"] == "***"

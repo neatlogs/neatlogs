@@ -44,6 +44,15 @@ pip install "neatlogs[google-genai]"
 
 Requires **Python >= 3.10, < 3.14**.
 
+Before initialization, run the local doctor to validate the installed package,
+schema hash, endpoint, sampler, private-provider contract, and observable export
+health without sending telemetry or changing SDK state:
+
+```bash
+python -m neatlogs doctor --json
+# or: neatlogs-doctor --json
+```
+
 ---
 
 ## Quickstart

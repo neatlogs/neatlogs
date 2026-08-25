@@ -74,6 +74,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+schema-validation = [
+    "jsonschema>=4.18.0,<5.0.0",
+]
 # Each extra installs only the heavy underlying library.
 # All openinference-instrumentation-* adapters are in base deps — no need to list them here.
 azure-ai-inference = [
@@ -194,6 +197,9 @@ Repository = "https://github.com/NeatLogs/neatlogs.git"
 Issues = "https://github.com/NeatLogs/neatlogs/issues"
 Documentation = "https://docs.neatlogs.com/"
 
+[project.scripts]
+neatlogs-doctor = "neatlogs.__main__:doctor_main"
+
 [tool.setuptools]
 include-package-data = false
 
@@ -208,6 +214,7 @@ exclude = [
 [tool.setuptools.package-data]
 neatlogs = [
     "config/*.json",
+    "contracts/v2/*.json",
 ]
 
 [tool.setuptools.exclude-package-data]

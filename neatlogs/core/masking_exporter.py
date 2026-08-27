@@ -181,6 +181,16 @@ class MaskingSpanExporter(SpanExporter):
         if not kept:
             return SpanExportResult.FAILURE if spans else SpanExportResult.SUCCESS
         try:
+            # Doctor observes only the finished post-mask batch. Capture is
+            # bounded, local, and must never affect telemetry delivery.
+            try:
+                from ..doctor_v2 import capture_prepared_spans
+
+                capture_prepared_spans(kept)
+            except Exception:
+                # Do not interpolate exception text: user-defined attribute
+                # containers may include sensitive values in their messages.
+                logger.error("[neatlogs] doctor capture failed safely")
             result = self._inner.export(kept)
         except Exception:
             self.health.fail()

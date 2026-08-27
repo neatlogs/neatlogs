@@ -44,14 +44,20 @@ pip install "neatlogs[google-genai]"
 
 Requires **Python >= 3.10, < 3.14**.
 
-Before initialization, run the local doctor to validate the installed package,
-schema hash, endpoint, sampler, private-provider contract, and observable export
-health without sending telemetry or changing SDK state:
+Before initialization, run the local Doctor. It sends generated non-user workflow
+and tool spans through an isolated instance of the installed SDK's normalization,
+masking, capture, and flush pipeline. It performs no backend request and requires
+no API key:
 
 ```bash
-python -m neatlogs doctor --json
-# or: neatlogs-doctor --json
+python -m neatlogs doctor --local --json
+# or: neatlogs-doctor --local --json
 ```
+
+A passing local result proves that this installed SDK pipeline works. It does not
+prove that an application's own instrumentors or backend export are working. Use
+`doctor_captured_local_v2()` inside the instrumented application to validate its
+actual final masked envelope, or `doctor --probe` for authenticated backend stages.
 
 ---
 

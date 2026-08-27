@@ -198,6 +198,7 @@ Issues = "https://github.com/NeatLogs/neatlogs/issues"
 Documentation = "https://docs.neatlogs.com/"
 
 [project.scripts]
+neatlogs = "neatlogs.__main__:main"
 neatlogs-doctor = "neatlogs.__main__:doctor_main"
 
 [tool.setuptools]

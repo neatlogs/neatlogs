@@ -35,6 +35,13 @@ from .core.log import log
 from .core.propagation import extract_trace_context, inject_trace_context
 from .decorators import span
 from .doctor import DOCTOR_FORMAT_VERSION, DoctorCheck, DoctorResult, doctor
+from .doctor_v2 import (
+    DOCTOR_V2_FORMAT_VERSION,
+    doctor_captured_local_v2,
+    doctor_local_v2,
+    doctor_probe_v2,
+    doctor_semantic_digest,
+)
 from .errors import NeatlogsConfigurationError, NeatlogsError
 from .init import flush, flush_all, init, shutdown
 from .prompt.client import (
@@ -295,6 +302,11 @@ __all__ = [
     "DoctorCheck",
     "DoctorResult",
     "DOCTOR_FORMAT_VERSION",
+    "DOCTOR_V2_FORMAT_VERSION",
+    "doctor_local_v2",
+    "doctor_captured_local_v2",
+    "doctor_probe_v2",
+    "doctor_semantic_digest",
     "NeatlogsError",
     "NeatlogsConfigurationError",
     "TELEMETRY_CONTRACT_VERSION",

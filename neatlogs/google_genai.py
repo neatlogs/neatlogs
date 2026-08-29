@@ -761,9 +761,12 @@ def _patch_google_genai_module() -> None:
     global _PATCHED, _ORIG_INIT
     if _PATCHED:
         return
-    _PATCHED = True
-
-    from google import genai as _genai
+    try:
+        from google import genai as _genai
+    except (ImportError, ModuleNotFoundError):
+        # The integration module remains importable without the optional
+        # google-genai distribution so duck-typed wrappers and helpers work.
+        return
 
     _ORIG_INIT = _genai.Client.__init__
 
@@ -772,6 +775,7 @@ def _patch_google_genai_module() -> None:
         wrap_google_genai_client(self)
 
     _genai.Client.__init__ = _patched_init
+    _PATCHED = True
 
 
 def _unpatch_google_genai_module() -> None:
@@ -779,7 +783,12 @@ def _unpatch_google_genai_module() -> None:
     if not _PATCHED:
         return
 
-    from google import genai as _genai
+    try:
+        from google import genai as _genai
+    except (ImportError, ModuleNotFoundError):
+        _PATCHED = False
+        _ORIG_INIT = None
+        return
 
     if _ORIG_INIT is not None:
         _genai.Client.__init__ = _ORIG_INIT
@@ -790,4 +799,7 @@ def _unpatch_google_genai_module() -> None:
 
 _patch_google_genai_module()
 
-from google import genai  # noqa: E402
+try:
+    from google import genai  # type: ignore[attr-defined] # noqa: E402
+except (ImportError, ModuleNotFoundError):
+    genai = None  # type: ignore[assignment]

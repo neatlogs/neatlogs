@@ -986,9 +986,15 @@ def _patch_openai_module() -> None:
     global _PATCHED, _ORIG_INIT, _ORIG_ASYNC_INIT
     if _PATCHED:
         return
-    _PATCHED = True
+    try:
+        import openai as _openai
+    except ImportError:
+        # ``neatlogs.wrap()`` also supports OpenAI-compatible/duck-typed
+        # clients.  Importing this wrapper must therefore not make the
+        # optional upstream package mandatory.
+        return
 
-    import openai as _openai
+    _PATCHED = True
 
     _ORIG_INIT = _openai.OpenAI.__init__
     _ORIG_ASYNC_INIT = _openai.AsyncOpenAI.__init__
@@ -1025,4 +1031,7 @@ def _unpatch_openai_module() -> None:
 
 _patch_openai_module()
 
-import openai  # noqa: E402
+try:
+    import openai  # noqa: E402
+except ImportError:  # pragma: no cover - covered through neatlogs.wrap()
+    openai = None  # type: ignore[assignment]

@@ -4408,6 +4408,9 @@ portkey = [
 pydantic-ai = [
     { name = "pydantic-ai" },
 ]
+schema-validation = [
+    { name = "jsonschema" },
+]
 smolagents = [
     { name = "smolagents" },
 ]
@@ -4457,6 +4460,7 @@ requires-dist = [
     { name = "hermes-agent", marker = "python_full_version >= '3.11' and extra == 'hermes'", specifier = ">=0.15.1" },
     { name = "httpx", specifier = ">=0.27.0" },
     { name = "instructor", marker = "extra == 'instructor'", specifier = ">=1.0.0" },
+    { name = "jsonschema", marker = "extra == 'schema-validation'", specifier = ">=4.18.0,<5.0.0" },
     { name = "langchain", marker = "extra == 'langchain'", specifier = ">=1.1.2" },
     { name = "langchain-classic", marker = "extra == 'langchain'", specifier = ">=1.0.0" },
     { name = "langchain-community", marker = "extra == 'langchain'", specifier = ">=0.4.1" },
@@ -4519,7 +4523,7 @@ requires-dist = [
     { name = "smolagents", marker = "extra == 'smolagents'", specifier = ">=1.0.0" },
     { name = "wrapt", specifier = ">=1.0.0" },
 ]
-provides-extras = ["azure-ai-inference", "openai", "azure-openai", "anthropic", "langchain", "langgraph", "crewai", "llama-index", "google-adk", "groq", "agno", "bedrock", "dspy", "litellm", "google-genai", "openai-agents", "guardrails", "haystack", "instructor", "mcp", "mistralai", "portkey", "pydantic-ai", "smolagents", "hermes", "vertexai", "vertex-ai", "autogen-agentchat", "milvus"]
+provides-extras = ["schema-validation", "azure-ai-inference", "openai", "azure-openai", "anthropic", "langchain", "langgraph", "crewai", "llama-index", "google-adk", "groq", "agno", "bedrock", "dspy", "litellm", "google-genai", "openai-agents", "guardrails", "haystack", "instructor", "mcp", "mistralai", "portkey", "pydantic-ai", "smolagents", "hermes", "vertexai", "vertex-ai", "autogen-agentchat", "milvus"]
 
 [package.metadata.requires-dev]
 dev = [

@@ -32,6 +32,8 @@ _latest_trace_id: str | None = None
 
 _REMEDIATION = {
     "CREDENTIAL_MISSING": "SET_CREDENTIAL",
+    "AUTH_FAILED": "CHECK_INGEST_CREDENTIAL",
+    "BACKEND_PROBE_UNAVAILABLE": "CHECK_DIAGNOSTIC_ENDPOINT",
     "PROVIDER_OWNERSHIP_AMBIGUOUS": "USE_PRIVATE_PROVIDER",
     "TRACE_ID_INVALID": "RECREATE_TRACE",
     "SPAN_ID_INVALID": "RECREATE_SPAN",
@@ -587,7 +589,14 @@ def doctor_probe_v2(
     session_id = None
     try:
         created_response = requests.post(
-            url, headers=headers, json={}, timeout=min(5.0, timeout_seconds)
+            url,
+            headers=headers,
+            json={
+                "envelope_digest": capture["semantic_digest"],
+                "fixture_version": "doctor-v2",
+                "trace_id": capture["trace_id"],
+            },
+            timeout=min(5.0, timeout_seconds),
         )
         created_response.raise_for_status()
         created = created_response.json()
@@ -683,12 +692,19 @@ def doctor_probe_v2(
             },
             "checks": [check],
         }
-    except (requests.RequestException, ValueError, TypeError, json.JSONDecodeError):
+    except (requests.RequestException, ValueError, TypeError, json.JSONDecodeError) as exc:
+        response = getattr(exc, "response", None)
+        response_status = getattr(response, "status_code", None)
+        reason_code = (
+            "AUTH_FAILED"
+            if response_status in {401, 403}
+            else "BACKEND_PROBE_UNAVAILABLE"
+        )
         return {
             "format_version": DOCTOR_V2_FORMAT_VERSION,
             "mode": "probe",
             "status": "fail",
-            "first_failure": "DIAGNOSTIC_NOT_VISIBLE",
+            "first_failure": reason_code,
             "runtime": {
                 "language": "python",
                 "sdk_version": __version__,
@@ -700,8 +716,12 @@ def doctor_probe_v2(
                 _check(
                     "probe",
                     "fail",
-                    "DIAGNOSTIC_NOT_VISIBLE",
-                    "The backend diagnostic session is unavailable",
+                    reason_code,
+                    (
+                        "The authenticated diagnostic session was rejected"
+                        if reason_code == "AUTH_FAILED"
+                        else "The backend diagnostic session is unavailable"
+                    ),
                 )
             ],
         }

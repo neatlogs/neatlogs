@@ -164,7 +164,11 @@ def test_probe_polling_never_passes_on_auth_receipt_only(monkeypatch):
     response = lambda value, ok=True: SimpleNamespace(
         ok=ok, json=lambda: value, raise_for_status=lambda: None
     )
-    monkeypatch.setattr("neatlogs.doctor_v2.requests.post", lambda *a, **k: response(created))
+    posted = {}
+    def post(*args, **kwargs):
+        posted.update(kwargs.get("json") or {})
+        return response(created)
+    monkeypatch.setattr("neatlogs.doctor_v2.requests.post", post)
     monkeypatch.setattr("neatlogs.doctor_v2.requests.get", lambda *a, **k: response(receipt))
     monkeypatch.setattr("neatlogs.doctor_v2.requests.delete", lambda *a, **k: response({}))
     monkeypatch.setattr("neatlogs.doctor_v2.time.sleep", lambda *_: None)
@@ -177,6 +181,9 @@ def test_probe_polling_never_passes_on_auth_receipt_only(monkeypatch):
     assert result["first_failure"] == "STAGE_PENDING"
     assert result["probe"]["receipt_status"] == "pending"
     assert result["checks"][0]["remediation_code"] == "WAIT_FOR_RECEIPT"
+    assert posted["trace_id"] == result["capture"]["trace_id"]
+    assert posted["envelope_digest"] == result["capture"]["semantic_digest"]
+    assert posted["fixture_version"] == "doctor-v2"
     assert "probe_token" not in json.dumps(result)
 
 

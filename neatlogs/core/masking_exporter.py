@@ -10,8 +10,15 @@ import logging
 from collections.abc import Mapping, Sequence
 from typing import Any, Callable
 
-from opentelemetry.sdk._logs import ReadableLogRecord
-from opentelemetry.sdk._logs.export import LogRecordExporter, LogRecordExportResult
+try:
+    from opentelemetry.sdk._logs import ReadableLogRecord
+    from opentelemetry.sdk._logs.export import LogRecordExporter, LogRecordExportResult
+except ImportError:  # OpenTelemetry 1.35-1.38 compatibility
+    from opentelemetry.sdk._logs import LogData as ReadableLogRecord
+    from opentelemetry.sdk._logs.export import (
+        LogExporter as LogRecordExporter,
+        LogExportResult as LogRecordExportResult,
+    )
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import Event, ReadableSpan
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
@@ -179,12 +186,13 @@ class MaskingSpanExporter(SpanExporter):
 
 def _log_snapshot(item: ReadableLogRecord) -> dict[str, Any]:
     record = item.log_record
+    resource = getattr(item, "resource", None) or getattr(record, "resource", None)
     return {
         "signal": "log",
         "name": item.instrumentation_scope.name if item.instrumentation_scope else "log",
         "body": record.body,
         "attributes": dict(record.attributes or {}),
-        "resource": {"attributes": dict(item.resource.attributes or {})},
+        "resource": {"attributes": dict(resource.attributes or {}) if resource else {}},
         "severity_text": record.severity_text,
         "event_name": record.event_name,
     }
@@ -219,15 +227,31 @@ class MaskingLogExporter(LogRecordExporter):
                 if isinstance(resource_data, Mapping)
                 else {}
             )
-            object.__setattr__(
-                clone,
-                "resource",
-                Resource(resource_attrs, schema_url=item.resource.schema_url),
+            original_resource = getattr(item, "resource", None) or getattr(
+                item.log_record, "resource", None
             )
+            masked_resource = Resource(
+                resource_attrs,
+                schema_url=original_resource.schema_url if original_resource else None,
+            )
+            if hasattr(clone, "resource"):
+                object.__setattr__(clone, "resource", masked_resource)
+            elif hasattr(clone_record, "resource"):
+                object.__setattr__(clone_record, "resource", masked_resource)
             kept.append(clone)
         if not kept:
             return LogRecordExportResult.SUCCESS
         return self._inner.export(kept)
+
+    def force_flush(self, timeout_millis: int = 10000) -> bool:
+        # LogRecordExporter.force_flush became abstract in OpenTelemetry 1.44.
+        # NeatLogs still supports earlier SDK releases whose exporters do not
+        # expose it, so absence means there is no exporter-level buffer to flush.
+        force_flush = getattr(self._inner, "force_flush", None)
+        if force_flush is None:
+            return True
+        result = force_flush(timeout_millis)
+        return True if result is None else bool(result)
 
     def shutdown(self) -> None:
         self._runner.shutdown()

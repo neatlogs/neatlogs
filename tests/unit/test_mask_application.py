@@ -138,3 +138,35 @@ def test_global_mask_covers_logs_and_drops_failed_items():
     provider.get_logger("test").emit(body="must-not-export")
     provider.shutdown()
     assert inner.get_finished_logs() == ()
+
+
+def test_masking_log_exporter_force_flush_delegates(monkeypatch):
+    inner = InMemoryLogRecordExporter()
+    calls = []
+    monkeypatch.setattr(
+        inner,
+        "force_flush",
+        lambda timeout_millis=10000: calls.append(timeout_millis) or True,
+        raising=False,
+    )
+    exporter = MaskingLogExporter(inner, mask=None)
+
+    assert exporter.force_flush(1234) is True
+    assert calls == [1234]
+
+    exporter.shutdown()
+
+
+def test_masking_log_exporter_force_flush_supports_legacy_exporters():
+    class LegacyLogExporter:
+        def export(self, _batch):
+            return None
+
+        def shutdown(self):
+            return None
+
+    exporter = MaskingLogExporter(LegacyLogExporter(), mask=None)
+
+    assert exporter.force_flush() is True
+
+    exporter.shutdown()

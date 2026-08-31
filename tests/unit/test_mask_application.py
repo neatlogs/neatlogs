@@ -2,6 +2,7 @@
 
 import asyncio
 import importlib
+import json
 import time
 
 from opentelemetry.sdk._logs import LoggerProvider
@@ -74,6 +75,69 @@ def test_events_exceptions_and_status_are_maskable_without_source_mutation():
     assert all(SENTINEL not in str(dict(event.attributes)) for event in exported.events)
     assert exported.status.description == "***"
     assert any(SENTINEL in str(dict(event.attributes)) for event in span.events)
+
+
+def test_serialized_json_attributes_are_materialized_and_restored():
+    encoded = json.dumps({"request": {"api_key": SENTINEL, "safe": True}})
+
+    def mask(snapshot):
+        snapshot["attributes"]["input.value"]["request"]["api_key"] = "***"
+        return snapshot
+
+    provider, inner, _ = _pipeline(mask)
+    span = _span(provider)
+    span.set_attribute("input.value", encoded)
+    span.end()
+    provider.shutdown()
+
+    exported = inner.get_finished_spans()[0]
+    assert json.loads(exported.attributes["input.value"]) == {
+        "request": {"api_key": "***", "safe": True}
+    }
+    assert span.attributes["input.value"] == encoded
+
+
+def test_serialized_json_attribute_can_be_replaced_as_a_whole_string():
+    replacement = '{"email":"[REDACTED]"}'
+
+    def mask(snapshot):
+        snapshot["attributes"]["input.value"] = replacement
+        return snapshot
+
+    provider, inner, _ = _pipeline(mask)
+    span = _span(provider)
+    span.set_attribute("input.value", '{"email":"secret@example.com"}')
+    span.end()
+    provider.shutdown()
+
+    assert inner.get_finished_spans()[0].attributes["input.value"] == replacement
+
+
+def test_mask_does_not_receive_source_references_beyond_depth_limit():
+    source = {"next": {}}
+    current = source["next"]
+    for _ in range(40):
+        current["next"] = {}
+        current = current["next"]
+    current["secret"] = SENTINEL
+
+    def mask(snapshot):
+        candidate = snapshot["attributes"]["deep"]
+        while "next" in candidate:
+            candidate = candidate["next"]
+        candidate["secret"] = "***"
+        return snapshot
+
+    # Exercise the boundary helper directly because OTel attributes reject
+    # arbitrary nested mappings before they reach an exporter.
+    from neatlogs.core.masking_exporter import _MaskRunner
+
+    runner = _MaskRunner(5.0)
+    try:
+        assert runner.apply(mask, {"attributes": {"deep": source}}) is not None
+    finally:
+        runner.shutdown()
+    assert current["secret"] == SENTINEL
 
 
 def test_per_span_precedence_and_internal_id_removal():

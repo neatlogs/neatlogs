@@ -6,6 +6,7 @@ import asyncio
 import concurrent.futures
 import copy
 import inspect
+import json
 import logging
 import threading
 from collections.abc import Mapping, Sequence
@@ -21,6 +22,59 @@ from opentelemetry.trace import Link, Status, StatusCode
 from .mask import effective_mask
 
 logger = logging.getLogger(__name__)
+
+_MAX_MASK_VALUE_DEPTH = 32
+
+
+def _prepare_mask_value(value: Any, depth: int = 0):
+    """Detach values and expose JSON-encoded OTel attributes to redactors."""
+    if depth >= _MAX_MASK_VALUE_DEPTH:
+        # Never leak an application-owned mutable reference to user callbacks.
+        # Values beyond the traversal budget stay opaque but detached.
+        return copy.deepcopy(value), ("scalar", None)
+    if isinstance(value, str) and value.lstrip().startswith(("{", "[")):
+        try:
+            prepared, shape = _prepare_mask_value(json.loads(value), depth + 1)
+            return prepared, ("json", shape)
+        except (TypeError, ValueError):
+            pass
+    if isinstance(value, Mapping):
+        prepared, children = {}, {}
+        for key, item in value.items():
+            prepared_item, shape = _prepare_mask_value(item, depth + 1)
+            prepared[key] = prepared_item
+            children[key] = shape
+        return prepared, ("mapping", children)
+    if isinstance(value, list):
+        pairs = [_prepare_mask_value(item, depth + 1) for item in value]
+        return [item for item, _ in pairs], ("list", [shape for _, shape in pairs])
+    if isinstance(value, tuple):
+        pairs = [_prepare_mask_value(item, depth + 1) for item in value]
+        return [item for item, _ in pairs], ("list", [shape for _, shape in pairs])
+    return copy.deepcopy(value), ("scalar", None)
+
+
+def _restore_mask_value(value: Any, shape, depth: int = 0):
+    if depth >= _MAX_MASK_VALUE_DEPTH:
+        return value
+    kind, detail = shape
+    if kind == "json":
+        # A callback may intentionally replace the complete serialized value.
+        # Preserve that public wire-type operation instead of double-encoding it.
+        if isinstance(value, str):
+            return value
+        return json.dumps(_restore_mask_value(value, detail, depth + 1), separators=(",", ":"))
+    if kind == "mapping" and isinstance(value, Mapping):
+        return {
+            key: _restore_mask_value(item, detail.get(key, ("scalar", None)), depth + 1)
+            for key, item in value.items()
+        }
+    if kind == "list" and isinstance(value, (list, tuple)):
+        return [
+            _restore_mask_value(item, detail[index] if index < len(detail) else ("scalar", None), depth + 1)
+            for index, item in enumerate(value)
+        ]
+    return value
 
 
 def _invoke(mask: Callable, snapshot: dict[str, Any], timeout: float):
@@ -38,7 +92,7 @@ class _MaskRunner:
         )
 
     def apply(self, mask: Callable, snapshot: dict[str, Any]) -> dict[str, Any] | None:
-        candidate = copy.deepcopy(snapshot)
+        candidate, shape = _prepare_mask_value(snapshot)
         future = self._executor.submit(_invoke, mask, candidate, self.timeout_seconds)
         try:
             result = future.result(timeout=self.timeout_seconds)
@@ -53,7 +107,15 @@ class _MaskRunner:
         if not isinstance(result, Mapping):
             logger.error("[neatlogs] mask returned non-mapping; telemetry item dropped")
             return None
-        return dict(result)
+        try:
+            restored = _restore_mask_value(result, shape)
+        except (TypeError, ValueError, RecursionError):
+            logger.error("[neatlogs] mask produced unserializable telemetry; item dropped")
+            return None
+        if not isinstance(restored, Mapping):
+            logger.error("[neatlogs] mask produced invalid restored telemetry; item dropped")
+            return None
+        return dict(restored)
 
     def shutdown(self) -> None:
         self._executor.shutdown(wait=False, cancel_futures=True)

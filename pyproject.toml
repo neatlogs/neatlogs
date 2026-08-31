@@ -208,6 +208,7 @@ exclude = [
 [tool.setuptools.package-data]
 neatlogs = [
     "config/*.json",
+    "contracts/v2/*.json",
 ]
 
 [tool.setuptools.exclude-package-data]

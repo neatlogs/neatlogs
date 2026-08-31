@@ -4,10 +4,10 @@ Decorator primitives for Neatlogs custom orchestration spans.
 
 from __future__ import annotations
 
+import asyncio
 import functools
 import inspect
 import json
-import os
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple, TypeVar, Union
 
@@ -15,13 +15,6 @@ from opentelemetry import trace as otel_trace
 from opentelemetry.trace import Status, StatusCode
 
 F = TypeVar("F", bound=Callable[..., Any])
-
-
-def _should_capture_content() -> bool:
-    v = os.getenv("NEATLOGS_TRACE_CONTENT")
-    if v is None:
-        return True
-    return v.lower() not in ("false", "0", "no")
 
 
 def _capture_code_attrs(func: Callable[..., Any]) -> Dict[str, Any]:
@@ -202,9 +195,13 @@ def _decorate_span(
 
         span_name = name or func.__name__
 
-        cap = _should_capture_content()
-        cap_in = cap if capture_input is None else capture_input
-        cap_out = cap if capture_output is None else capture_output
+        # Full-fidelity capture is the SDK default. Privacy-sensitive callers
+        # can disable either side explicitly on this decorator, while the
+        # exporter-level mask remains the global privacy boundary. A process
+        # environment switch cannot truthfully protect provider wrappers that
+        # do not consult it, so decorators must not pretend otherwise.
+        cap_in = True if capture_input is None else capture_input
+        cap_out = True if capture_output is None else capture_output
 
         # Capture code location once at decoration time — these are static
         # properties of the decorated function so there is no per-call overhead.
@@ -212,6 +209,134 @@ def _decorate_span(
         # that users can override auto-captured values if needed.
         code_attrs = _capture_code_attrs(func)
         merged_attrs = {**code_attrs, **(attributes or {})}
+
+        def _prepare_stream_span(span, args, kwargs, *, is_root: bool):
+            from ..core.end_user import apply_end_user_attributes
+            from ..core.mask import register_mask
+            from ..core.session import apply_session_attributes
+
+            _set_common_span_attrs(
+                span,
+                openinference_kind=openinference_kind,
+                name=span_name,
+                version=version,
+                tags=tags,
+                metadata=metadata,
+                attributes=merged_attrs,
+            )
+            apply_session_attributes(span, session_id, is_root=is_root)
+            apply_end_user_attributes(span, end_user_id, end_user_metadata, is_root=is_root)
+            if mask is not None:
+                span.set_attribute("neatlogs.mask_id", register_mask(mask))
+            if description:
+                span.set_attribute("neatlogs.description", description)
+            bound = _bind_call_args(func, args, kwargs)
+            if cap_in:
+                span.set_attribute("input.value", _safe_json_dumps(bound))
+                span.set_attribute("input.mime_type", "application/json")
+            return bound
+
+        def _record_stream_chunk(span, index: int, value: Any) -> None:
+            span.add_event(
+                "neatlogs.stream.chunk",
+                {
+                    "neatlogs.stream.chunk.index": index,
+                    "neatlogs.stream.chunk.value": _safe_json_dumps(value),
+                    "neatlogs.stream.chunk.mime_type": "application/json",
+                },
+            )
+
+        def _finish_stream(span, chunks: list[Any], bound_inputs: Dict[str, Any]) -> None:
+            span.set_attribute("neatlogs.stream.chunk_count", len(chunks))
+            if postprocess_result is not None:
+                try:
+                    postprocess_result(span, chunks, bound_inputs)
+                except Exception:
+                    pass
+            if cap_out:
+                span.set_attribute("output.value", _safe_json_dumps(chunks))
+                span.set_attribute("output.mime_type", "application/json")
+            span.set_status(Status(StatusCode.OK))
+
+        if inspect.isasyncgenfunction(func):
+
+            @functools.wraps(func)
+            async def async_generator_wrapper(*args: Any, **kwargs: Any):
+                from ..core.log import _CaptureStdoutContext
+
+                is_root = _is_root_span()
+                with neatlogs_span(__name__, span_name, kind=otel_trace.SpanKind.INTERNAL) as span:
+                    bound_inputs = _prepare_stream_span(span, args, kwargs, is_root=is_root)
+                    chunks: list[Any] = []
+                    stdout_ctx = _CaptureStdoutContext() if capture_stdout else None
+                    if stdout_ctx:
+                        stdout_ctx.__enter__()
+                    try:
+                        async for chunk in func(*args, **kwargs):
+                            _record_stream_chunk(span, len(chunks), chunk)
+                            chunks.append(chunk)
+                            yield chunk
+                        _finish_stream(span, chunks, bound_inputs)
+                    except (GeneratorExit, asyncio.CancelledError):
+                        span.set_attribute("neatlogs.stream.cancelled", True)
+                        span.set_attribute("neatlogs.stream.chunk_count", len(chunks))
+                        if cap_out:
+                            span.set_attribute("output.value", _safe_json_dumps(chunks))
+                            span.set_attribute("output.mime_type", "application/json")
+                        raise
+                    except Exception as exc:
+                        span.set_attribute("neatlogs.stream.chunk_count", len(chunks))
+                        if cap_out:
+                            span.set_attribute("output.value", _safe_json_dumps(chunks))
+                            span.set_attribute("output.mime_type", "application/json")
+                        span.record_exception(exc)
+                        span.set_status(Status(StatusCode.ERROR, str(exc)))
+                        raise
+                    finally:
+                        if stdout_ctx:
+                            stdout_ctx.__exit__(None, None, None)
+
+            return async_generator_wrapper
+
+        if inspect.isgeneratorfunction(func):
+
+            @functools.wraps(func)
+            def generator_wrapper(*args: Any, **kwargs: Any):
+                from ..core.log import _CaptureStdoutContext
+
+                is_root = _is_root_span()
+                with neatlogs_span(__name__, span_name, kind=otel_trace.SpanKind.INTERNAL) as span:
+                    bound_inputs = _prepare_stream_span(span, args, kwargs, is_root=is_root)
+                    chunks: list[Any] = []
+                    stdout_ctx = _CaptureStdoutContext() if capture_stdout else None
+                    if stdout_ctx:
+                        stdout_ctx.__enter__()
+                    try:
+                        for chunk in func(*args, **kwargs):
+                            _record_stream_chunk(span, len(chunks), chunk)
+                            chunks.append(chunk)
+                            yield chunk
+                        _finish_stream(span, chunks, bound_inputs)
+                    except GeneratorExit:
+                        span.set_attribute("neatlogs.stream.cancelled", True)
+                        span.set_attribute("neatlogs.stream.chunk_count", len(chunks))
+                        if cap_out:
+                            span.set_attribute("output.value", _safe_json_dumps(chunks))
+                            span.set_attribute("output.mime_type", "application/json")
+                        raise
+                    except Exception as exc:
+                        span.set_attribute("neatlogs.stream.chunk_count", len(chunks))
+                        if cap_out:
+                            span.set_attribute("output.value", _safe_json_dumps(chunks))
+                            span.set_attribute("output.mime_type", "application/json")
+                        span.record_exception(exc)
+                        span.set_status(Status(StatusCode.ERROR, str(exc)))
+                        raise
+                    finally:
+                        if stdout_ctx:
+                            stdout_ctx.__exit__(None, None, None)
+
+            return generator_wrapper
 
         if inspect.iscoroutinefunction(func):
 

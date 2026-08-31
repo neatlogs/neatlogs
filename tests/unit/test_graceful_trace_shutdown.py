@@ -177,7 +177,6 @@ def test_shutdown_is_same_thread_reentrant(monkeypatch):
 
     monkeypatch.setattr(init_module, "_span_processor", ReentrantProcessor())
     monkeypatch.setattr(init_module, "_tracer_provider", None)
-    monkeypatch.setattr(init_module, "_meter_provider", None)
     monkeypatch.setattr(init_module, "_log_provider", None)
     monkeypatch.setattr(init_module, "_instrumentation_manager", None)
 
@@ -214,7 +213,6 @@ def test_shutdown_drains_logs_before_trace_completion(monkeypatch):
     monkeypatch.setattr(init_module, "_tracer_provider", Provider())
     monkeypatch.setattr(init_module, "_owns_tracer_provider", True)
     monkeypatch.setattr(init_module, "_log_provider", Logs())
-    monkeypatch.setattr(init_module, "_meter_provider", None)
     monkeypatch.setattr(init_module, "_span_processor", Lifecycle())
     monkeypatch.setattr(init_module, "_completion_span_processor", None)
     monkeypatch.setattr(init_module, "_instrumentation_manager", None)

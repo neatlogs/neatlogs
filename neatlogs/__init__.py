@@ -34,7 +34,8 @@ from .core.llm_binder import bind_templates
 from .core.log import log
 from .core.propagation import extract_trace_context, inject_trace_context
 from .decorators import span
-from .init import flush, init, shutdown
+from .errors import NeatlogsConfigurationError, NeatlogsError
+from .init import flush, flush_all, init, shutdown
 from .prompt.client import (
     AsyncPromptClient,
     CachedPrompt,
@@ -54,6 +55,14 @@ from .prompt.client import (
     update_prompt,
 )
 from .prompt.template import PromptTemplate, SystemPromptTemplate, UserPromptTemplate
+from .schema_v2 import (
+    TELEMETRY_CONTRACT_VERSION,
+    TELEMETRY_SCHEMA_SHA256,
+    TELEMETRY_SCHEMA_VERSION,
+    telemetry_schema,
+    telemetry_schema_bytes,
+    verify_telemetry_schema,
+)
 from .version import __version__
 
 
@@ -278,6 +287,9 @@ __all__ = [
     "init",
     "flush",
     "shutdown",
+    "flush_all",
+    "NeatlogsError",
+    "NeatlogsConfigurationError",
     "span",
     "trace",
     "identify",

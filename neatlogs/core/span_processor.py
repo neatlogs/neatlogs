@@ -5,7 +5,6 @@ Transport is handled by BatchSpanProcessor + OTLPSpanExporter (added in init.py)
 
 import json
 import os
-import random
 import threading
 import time
 from typing import Any, Callable, Dict, List, Optional
@@ -18,7 +17,6 @@ from opentelemetry.trace import Status, StatusCode
 
 from .attribute_processor import UnifiedAttributeProcessor
 from .logger import get_logger
-from .mask import apply_mask
 
 logger = get_logger()
 
@@ -140,13 +138,11 @@ def is_rootless_infra_http(span) -> bool:
 class NeatlogsSpanProcessor(SpanProcessor):
     def __init__(
         self,
-        sample_rate: float = 1.0,
         debug: bool = False,
         mask: Optional[Callable[[Dict[str, Any]], Any]] = None,
         emit_completion_markers: bool = True,
         own_all_spans: bool = False,
     ):
-        self.sample_rate = sample_rate
         self.debug = debug
         self.mask = mask
         self.emit_completion_markers = emit_completion_markers
@@ -398,15 +394,18 @@ class NeatlogsSpanProcessor(SpanProcessor):
                 logger.debug(f"[SpanProcessor.on_end] Span ending: {span.name}")
 
             # 1. Log raw OTel span (before any processing)
-            if self._raw_log_file_handle and not self._raw_log_file_handle.closed:
+            per_span_mask = bool((span.attributes or {}).get("neatlogs.mask_id"))
+            if (
+                not self.mask
+                and not per_span_mask
+                and self._raw_log_file_handle
+                and not self._raw_log_file_handle.closed
+            ):
                 try:
                     self._raw_log_file_handle.write(span.to_json() + "\n")
                     self._raw_log_file_handle.flush()
                 except Exception as e:
                     logger.warning(f"Failed to write span to raw log file: {e}")
-
-            if self.sample_rate < 1.0 and random.random() > self.sample_rate:
-                return
 
             # 1b. Root I/O backfill. Children close before their root (nested spans),
             # so by the time a root span ends we've already seen every descendant's
@@ -554,14 +553,8 @@ class NeatlogsSpanProcessor(SpanProcessor):
             results = self._inject_crewai_task_templates([span_data])
             span_data = results[0] if results else span_data
 
-            # A per-span mask_id (from @span(mask=)/trace(mask=)) takes precedence
-            # over the global init(mask=); mask whenever either exists.
-            mask_id = (span_data.get("attributes") or {}).get("neatlogs.mask_id")
-            has_mask = bool(mask_id) or self.mask is not None
-
-            # Write normalized neatlogs.* keys onto the (still-mutable) OTel span,
-            # then mask the whole surface once so non-idempotent masks (e.g.
-            # translation) aren't applied twice.
+            # Write normalized neatlogs.* keys onto the still-mutable OTel span.
+            # Masking happens later, once, on a clone in the batched exporter worker.
             final_attrs = span_data.get("attributes") or {}
             try:
                 span_attrs = span._attributes
@@ -574,26 +567,16 @@ class NeatlogsSpanProcessor(SpanProcessor):
                         ):
                             span_attrs[_k] = list(_v)
 
-                    if has_mask:
-                        snapshot = {
-                            "name": span_data.get("name"),
-                            "attributes": dict(span_attrs),
-                        }
-                        masked = apply_mask(snapshot, self.mask)
-                        masked_attrs = (masked or snapshot).get("attributes") or {}
-                        for _k in list(span_attrs.keys()):
-                            if _k in masked_attrs and masked_attrs[_k] != span_attrs[_k]:
-                                span_attrs[_k] = masked_attrs[_k]
-                        # Mirror masked values so the file log reuses them.
-                        for _k in list(final_attrs.keys()):
-                            if _k in masked_attrs:
-                                final_attrs[_k] = masked_attrs[_k]
-                        span_data["attributes"] = final_attrs
             except Exception as _wb_exc:
                 if self.debug:
                     logger.debug(f"[SpanProcessor] Attr write-back failed: {_wb_exc}")
 
-            if self._processed_log_file_handle and not self._processed_log_file_handle.closed:
+            if (
+                not self.mask
+                and not per_span_mask
+                and self._processed_log_file_handle
+                and not self._processed_log_file_handle.closed
+            ):
                 try:
                     self._processed_log_file_handle.write(json.dumps(span_data) + "\n")
                     self._processed_log_file_handle.flush()

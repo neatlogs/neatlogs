@@ -124,12 +124,6 @@ def log(msg_template: str, /, level: str = "info", **data: Any) -> None:
     for key, value in data.items():
         attributes[f"log.{key}"] = _safe_json_dumps(value)
 
-    # Emit via OTel Logs API — trace_id + span_id are auto-populated from active context
-    try:
-        from opentelemetry import logs as otel_logs
-    except ImportError:
-        from opentelemetry import _logs as otel_logs  # type: ignore[no-redef]
-
     from .._wrap_utils import active_neatlogs_context, get_active_client
 
     client = get_active_client()
@@ -141,8 +135,13 @@ def log(msg_template: str, /, level: str = "info", **data: Any) -> None:
         otel_logger = client.log_provider.get_logger(__name__)
         log_context = active_neatlogs_context()
     else:
-        otel_logger = otel_logs.get_logger(__name__)
-        log_context = None
+        from ..init import get_log_provider
+
+        provider = get_log_provider()
+        if provider is None:
+            return
+        otel_logger = provider.get_logger(__name__)
+        log_context = active_neatlogs_context()
     record_kwargs: dict[str, Any] = {
         "timestamp": time.time_ns(),
         "severity_number": _SEVERITY_MAP.get(level.lower(), SeverityNumber.INFO),

@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from opentelemetry import trace
 
 import neatlogs
+from neatlogs._wrap_utils import set_neatlogs_provider
 from neatlogs.core.context import trace as nl_trace
 from neatlogs.core.end_user import END_USER_ID_KEY
 from neatlogs.core.identity import identify
@@ -18,6 +19,7 @@ from neatlogs.decorators.orchestration import span as neatlogs_span
 
 def _install(tracer_provider):
     trace.set_tracer_provider(tracer_provider)
+    set_neatlogs_provider(tracer_provider)
 
 
 # ---------------------------------------------------------------------------

@@ -17,10 +17,7 @@ Example::
     neatlogs.init(mask=redact)
 """
 
-import logging
 from typing import Any, Callable, Dict, Optional
-
-logger = logging.getLogger(__name__)
 
 # Module-level registry: str(id(fn)) -> callable
 # Entries are permanent for the lifetime of the callable object; no cleanup needed.
@@ -55,14 +52,15 @@ def apply_mask(
     if mask_fn is None:
         return span_data
 
-    try:
-        result = mask_fn(span_data)
-        return result if result is not None else span_data
-    except Exception as exc:
-        logger.warning(
-            "[neatlogs] mask callable raised an exception for span '%s': %s — "
-            "original span data will be exported unchanged.",
-            span_data.get("name"),
-            exc,
-        )
-        return span_data
+    result = mask_fn(span_data)
+    return result if result is not None else span_data
+
+
+def effective_mask(span_data: Dict[str, Any], global_mask: Optional[Callable]):
+    """Return the per-span mask when registered, otherwise the global mask."""
+    mask_id = (span_data.get("attributes") or {}).get("neatlogs.mask_id")
+    if mask_id:
+        mask_fn = _MASK_REGISTRY.get(str(mask_id))
+        if mask_fn is not None:
+            return mask_fn
+    return global_mask

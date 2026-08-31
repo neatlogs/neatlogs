@@ -70,8 +70,8 @@ from opentelemetry.trace import (
 )
 
 from ._wrap_utils import configure, get_tracer, serialize
-from .core.logger import get_logger
 from .constants import DEFAULT_INGEST_ENDPOINT
+from .core.logger import get_logger
 
 
 class _FixedIdGen(RandomIdGenerator):

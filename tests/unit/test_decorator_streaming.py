@@ -1,5 +1,6 @@
-import pytest
 import asyncio
+
+import pytest
 from opentelemetry import trace as otel_trace
 
 import neatlogs

@@ -9,8 +9,8 @@ import logging
 import queue
 import threading
 import time
-from dataclasses import dataclass
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any, Callable
 
 try:
@@ -22,13 +22,14 @@ except ImportError:  # OpenTelemetry 1.35-1.38 compatibility
         LogExporter as LogRecordExporter,
         LogExportResult as LogRecordExportResult,
     )
+
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import Event, ReadableSpan
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
 from opentelemetry.trace import Link, Status, StatusCode
 
-from .mask import effective_mask
 from .delivery import DeliveryDiagnostics
+from .mask import effective_mask
 
 logger = logging.getLogger(__name__)
 

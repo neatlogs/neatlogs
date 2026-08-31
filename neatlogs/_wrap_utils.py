@@ -16,12 +16,11 @@ from contextvars import ContextVar
 from typing import Any, Callable, Dict, List, Mapping, Optional
 from urllib.parse import urlparse
 
-from .constants import DEFAULT_INGEST_ENDPOINT
-
 from opentelemetry import context as context_api
 from opentelemetry import trace as otel_trace
 from opentelemetry.sdk.trace import TracerProvider
 
+from .constants import DEFAULT_INGEST_ENDPOINT
 from .core.logger import get_logger
 
 logger = get_logger()
@@ -434,6 +433,7 @@ def _bootstrap_from_env(api_key: str) -> None:
     from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
     from opentelemetry.sdk.resources import SERVICE_NAME, Resource
     from opentelemetry.sdk.trace import SpanLimits
+
     from .core.byte_limited_exporter import ByteLimitedSpanExporter
     from .core.delivery import DeliveryDiagnostics, ObservableBatchSpanProcessor
     from .core.transport import build_otlp_session

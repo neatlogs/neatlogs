@@ -11,9 +11,9 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
+from neatlogs.core.delivery import DeliveryDiagnostics
 from neatlogs.core.mask import register_mask
 from neatlogs.core.masking_exporter import MaskingLogExporter, MaskingSpanExporter, _MaskRunner
-from neatlogs.core.delivery import DeliveryDiagnostics
 from neatlogs.core.span_processor import NeatlogsSpanProcessor
 
 

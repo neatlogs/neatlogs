@@ -983,12 +983,15 @@ def _perform_shutdown(
                     success = False
 
     def uninstrument_logging() -> None:
-        try:
-            from opentelemetry.instrumentation.logging import LoggingInstrumentor
+        # Only undo the logging patch NeatLogs installed. Touching an
+        # unconfigured or foreign instrumentor violates provider ownership.
+        if log_provider is not None:
+            try:
+                from opentelemetry.instrumentation.logging import LoggingInstrumentor
 
-            LoggingInstrumentor().uninstrument()
-        except Exception:
-            pass
+                LoggingInstrumentor().uninstrument()
+            except Exception:
+                pass
 
     completed, result = bounded_call(
         uninstrument_logging,

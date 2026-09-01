@@ -1,5 +1,6 @@
 # Direct unit-test dependencies, pinned to the versions resolved in poetry.lock.
 google-genai==1.57.0
+jsonschema==4.25.1
 langchain-core==1.2.7
 openai==2.15.0
 pytest==9.0.2

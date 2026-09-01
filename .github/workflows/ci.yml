@@ -27,6 +27,8 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
+    env:
+      PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
     strategy:
       fail-fast: false
       matrix:
@@ -45,4 +47,76 @@ jobs:
           python -m pip install -r .github/requirements-test.txt
 
       - name: Unit tests
-        run: pytest -q tests/unit
+        # Keep third-party distribution entry points from changing collection.
+        # pytest-asyncio is the one plugin the unit suite intentionally enables.
+        run: python -m pytest -p pytest_asyncio.plugin -q
+
+  compatibility:
+    runs-on: ubuntu-latest
+    env:
+      PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+      NEATLOGS_COMPAT_MODULE: ${{ matrix.module }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - package: logfire
+            module: logfire
+          - package: langfuse
+            module: langfuse
+          - package: lmnr
+            module: lmnr
+          - package: openlit
+            module: openlit
+          - package: traceloop-sdk
+            module: traceloop.sdk
+          - package: arize-phoenix-otel
+            module: phoenix.otel
+          - package: braintrust
+            module: braintrust
+          - package: ddtrace
+            module: ddtrace
+          - package: newrelic
+            module: newrelic
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install NeatLogs and compatibility peer
+        run: |
+          python -m pip install -e .
+          python -m pip install -r .github/requirements-test.txt
+          python -m pip install "${{ matrix.package }}"
+
+      - name: Import and private-provider coexistence
+        run: python -m pytest -p pytest_asyncio.plugin -q tests/compatibility
+
+  wheel-smoke:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Build wheel and source distribution
+        run: |
+          python -m pip install build
+          python -m build
+
+      - name: Run quick starts from the installed wheel outside the checkout
+        run: |
+          python -m venv "${RUNNER_TEMP}/neatlogs-wheel"
+          "${RUNNER_TEMP}/neatlogs-wheel/bin/python" -m pip install dist/*.whl
+          cd "${RUNNER_TEMP}"
+          "${RUNNER_TEMP}/neatlogs-wheel/bin/python" "${GITHUB_WORKSPACE}/tests/release/wheel_smoke.py"

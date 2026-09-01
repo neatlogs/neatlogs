@@ -5,6 +5,7 @@ from opentelemetry import trace as otel_trace
 
 import neatlogs
 from neatlogs._wrap_utils import set_neatlogs_provider
+from neatlogs.core.span_processor import NeatlogsSpanProcessor
 
 
 def test_sync_generator_span_stays_open_and_records_every_chunk(
@@ -106,3 +107,50 @@ async def test_cancelled_coroutine_is_interrupted_not_error(
     assert len(finished) == 1
     assert finished[0].attributes["neatlogs.stream.cancelled"] is True
     assert finished[0].status.status_code.name == "UNSET"
+
+
+def test_shutdown_of_active_sync_generator_exports_partial_output_without_fake_status(
+    tracer_provider, in_memory_span_exporter
+):
+    lifecycle = NeatlogsSpanProcessor(emit_completion_markers=False)
+    tracer_provider.add_span_processor(lifecycle)
+    set_neatlogs_provider(tracer_provider)
+
+    @neatlogs.span(kind="CHAIN")
+    def stream():
+        yield "first"
+        yield "never-consumed"
+
+    result = stream()
+    assert next(result) == "first"
+    assert lifecycle.end_active_spans("shutdown") == 1
+    finished = in_memory_span_exporter.get_finished_spans()[0]
+    assert finished.attributes["output.value"] == '["first"]'
+    assert finished.attributes["neatlogs.trace.interrupted"] is True
+    assert finished.status.status_code.name == "UNSET"
+    result.close()
+    assert len(in_memory_span_exporter.get_finished_spans()) == 1
+
+
+@pytest.mark.asyncio
+async def test_shutdown_of_active_async_generator_exports_partial_output_without_fake_status(
+    tracer_provider, in_memory_span_exporter
+):
+    lifecycle = NeatlogsSpanProcessor(emit_completion_markers=False)
+    tracer_provider.add_span_processor(lifecycle)
+    set_neatlogs_provider(tracer_provider)
+
+    @neatlogs.span(kind="CHAIN")
+    async def stream():
+        yield "first"
+        yield "never-consumed"
+
+    result = stream()
+    assert await anext(result) == "first"
+    assert lifecycle.end_active_spans("shutdown") == 1
+    finished = in_memory_span_exporter.get_finished_spans()[0]
+    assert finished.attributes["output.value"] == '["first"]'
+    assert finished.attributes["neatlogs.trace.interrupted"] is True
+    assert finished.status.status_code.name == "UNSET"
+    await result.aclose()
+    assert len(in_memory_span_exporter.get_finished_spans()) == 1

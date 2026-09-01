@@ -235,10 +235,10 @@ def test_end_active_spans_closes_children_then_root_and_emits_completion_marker(
         finished_child = next(span for span in spans if span.name == "agent")
         assert finished_root.parent is None
         assert finished_child.parent.span_id == finished_root.context.span_id
-        # OTel treats an explicit OK as terminal; preserve it, but convert the
-        # usual open-span UNSET state to ERROR on interruption.
+        # Interruption metadata is explicit without inventing an application
+        # failure or success status.
         assert finished_root.status.status_code is StatusCode.OK
-        assert finished_child.status.status_code is StatusCode.ERROR
+        assert finished_child.status.status_code is StatusCode.UNSET
         assert finished_root.attributes["neatlogs.trace.interrupted"] is True
         assert finished_root.attributes["neatlogs.trace.termination.reason"] == "SIGTERM"
         assert finished_child.attributes["neatlogs.trace.interrupted"] is True
@@ -347,7 +347,7 @@ def test_cached_tracer_span_started_during_shutdown_is_closed_and_sanitized():
         late = tracer.start_span("late")
         assert not late.is_recording()
         finished = next(span for span in exporter.get_finished_spans() if span.name == "late")
-        assert finished.status.status_code is StatusCode.ERROR
+        assert finished.status.status_code is StatusCode.UNSET
         assert finished.attributes["neatlogs.trace.termination.reason"] == "SIGTERM forged=value"
     finally:
         provider.shutdown()
@@ -549,3 +549,56 @@ def test_shutdown_waits_for_root_already_inside_downstream_processors():
     waiter.join(1)
     assert wait_result == [True]
     provider.shutdown()
+
+
+def test_root_io_backfill_preserves_full_payload_and_late_child_cannot_reopen_bucket():
+    provider = TracerProvider()
+    lifecycle = NeatlogsSpanProcessor(emit_completion_markers=False, own_all_spans=True)
+    exporter = InMemorySpanExporter()
+    provider.add_span_processor(lifecycle)
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    tracer = provider.get_tracer("neatlogs.test")
+
+    try:
+        root = tracer.start_span("workflow")
+        root_context = otel_trace.set_span_in_context(root)
+        child = tracer.start_span("child", context=root_context)
+        payload = "x" * 12000
+        child.set_attribute("input.value", payload)
+        child.set_attribute("output.value", payload)
+        child.end()
+        root.end()
+
+        finished_root = next(
+            span for span in exporter.get_finished_spans() if span.name == "workflow"
+        )
+        assert finished_root.attributes["input.value"] == payload
+        assert finished_root.attributes["output.value"] == payload
+        assert lifecycle._trace_child_io == {}
+
+        late_root = tracer.start_span("late-root")
+        late_context = otel_trace.set_span_in_context(late_root)
+        late_child = tracer.start_span("late-child", context=late_context)
+        late_root.end()
+        late_child.set_attribute("input.value", "too-late")
+        late_child.end()
+        assert lifecycle._trace_child_io == {}
+    finally:
+        provider.shutdown()
+
+
+def test_debug_off_does_not_materialize_event_dictionaries(monkeypatch):
+    provider = TracerProvider()
+    lifecycle = NeatlogsSpanProcessor(debug=False, emit_completion_markers=False)
+    provider.add_span_processor(lifecycle)
+    monkeypatch.setattr(
+        lifecycle,
+        "_serialize_span_events",
+        lambda _span: (_ for _ in ()).throw(AssertionError("events were eagerly serialized")),
+    )
+    try:
+        span = provider.get_tracer("neatlogs.test").start_span("hot-path")
+        span.add_event("event", {"large": "value"})
+        span.end()
+    finally:
+        provider.shutdown()

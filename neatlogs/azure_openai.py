@@ -35,6 +35,7 @@ from ._wrap_utils import (
     is_suppressed,
     serialize,
 )
+from .core.choice_accumulator import ChoiceAccumulator, OpenAIStreamFinalizer
 
 _PROVIDER = "azure"
 _SYSTEM = "azure"
@@ -184,7 +185,7 @@ def _patch_completions(completions: Any) -> None:
             raise
 
         if is_stream:
-            return SyncStreamWrapper(response, span, _finalize_stream)
+            return SyncStreamWrapper(response, span, OpenAIStreamFinalizer())
 
         _finalize_response(span, response, (time.perf_counter() - start) * 1000)
         return response
@@ -223,7 +224,7 @@ def _patch_async_completions(completions: Any) -> None:
             raise
 
         if is_stream:
-            return AsyncStreamWrapper(response, span, _finalize_stream)
+            return AsyncStreamWrapper(response, span, OpenAIStreamFinalizer())
 
         _finalize_response(span, response, (time.perf_counter() - start) * 1000)
         return response
@@ -370,44 +371,9 @@ def _patch_embeddings(embeddings: Any, sync: bool = True) -> None:
 
 def _finalize_response(span: Any, response: Any, duration_ms: float) -> None:
     """Extract attributes from a non-streaming ChatCompletion response."""
-    choices = getattr(response, "choices", []) or []
-    for i, choice in enumerate(choices):
-        message = getattr(choice, "message", None)
-        if not message:
-            continue
-        span.set_attribute(f"neatlogs.llm.output_messages.{i}.role", "assistant")
-        if getattr(message, "content", None):
-            span.set_attribute(f"neatlogs.llm.output_messages.{i}.content", message.content)
-        if getattr(message, "tool_calls", None):
-            for j, tc in enumerate(message.tool_calls):
-                span.set_attribute(f"neatlogs.llm.tool_calls.{j}.id", tc.id)
-                span.set_attribute(f"neatlogs.llm.tool_calls.{j}.name", tc.function.name)
-                span.set_attribute(f"neatlogs.llm.tool_calls.{j}.arguments", tc.function.arguments)
-        finish_reason = getattr(choice, "finish_reason", None)
-        if finish_reason:
-            span.set_attribute("neatlogs.llm.finish_reason", finish_reason)
-
-    usage = getattr(response, "usage", None)
-    if usage:
-        if getattr(usage, "prompt_tokens", None) is not None:
-            span.set_attribute("neatlogs.llm.token_count.prompt", usage.prompt_tokens)
-        if getattr(usage, "completion_tokens", None) is not None:
-            span.set_attribute("neatlogs.llm.token_count.completion", usage.completion_tokens)
-        total = getattr(usage, "total_tokens", None)
-        if total is not None:
-            span.set_attribute("neatlogs.llm.token_count.total", total)
-        if getattr(usage, "prompt_tokens_details", None):
-            cached = getattr(usage.prompt_tokens_details, "cached_tokens", None)
-            if cached is not None:
-                span.set_attribute("neatlogs.llm.token_count.cache_read", cached)
-        if getattr(usage, "completion_tokens_details", None):
-            reasoning = getattr(usage.completion_tokens_details, "reasoning_tokens", None)
-            if reasoning is not None:
-                span.set_attribute("neatlogs.llm.token_count.reasoning", reasoning)
-
-    model = getattr(response, "model", None)
-    if model:
-        span.set_attribute("neatlogs.llm.model_name", model)
+    accumulator = ChoiceAccumulator()
+    accumulator.add_response(response)
+    accumulator.apply(span)
 
     span.set_attribute("neatlogs.llm.metrics.duration_ms", round(duration_ms, 3))
     span.set_status(StatusCode.OK)

@@ -244,7 +244,6 @@ class InstrumentationManager:
                     self._patch_openinference_langchain_finish_reason()
                     self._patch_openinference_langchain_streaming_timing()
                     self._patch_openinference_langchain_suppress_internal()
-                    self._patch_openinference_langchain_suppress_internal()
                 elif library == "litellm":
                     self._patch_openinference_litellm_ignore_instrumentation_suppression()
                     self._patch_openinference_litellm_streaming_timing()

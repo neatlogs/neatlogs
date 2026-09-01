@@ -5,7 +5,11 @@ import pytest
 from opentelemetry.trace import StatusCode
 
 from neatlogs._wrap_utils import AsyncStreamWrapper, SyncStreamWrapper
-from neatlogs.core.choice_accumulator import ChoiceAccumulator, OpenAIStreamFinalizer
+from neatlogs.core.choice_accumulator import (
+    ChoiceAccumulator,
+    GoogleStreamFinalizer,
+    OpenAIStreamFinalizer,
+)
 from neatlogs.openai import _finalize_responses_stream
 
 
@@ -303,3 +307,97 @@ def test_flattened_callback_can_report_capture_fidelity_explicitly(
 
     attributes = in_memory_span_exporter.get_finished_spans()[0].attributes
     assert attributes["neatlogs.capture_fidelity"] == "flattened"
+
+
+def test_google_candidates_share_the_same_multi_choice_and_tool_schema(
+    tracer_provider, in_memory_span_exporter
+):
+    span = tracer_provider.get_tracer("neatlogs.google_genai").start_span("gemini")
+    accumulator = ChoiceAccumulator()
+    accumulator.add_google_response(
+        {
+            "model_version": "gemini-test",
+            "response_id": "google-response-1",
+            "candidates": [
+                {
+                    "index": 0,
+                    "finish_reason": "STOP",
+                    "content": {"role": "model", "parts": [{"text": "first"}]},
+                },
+                {
+                    "index": 1,
+                    "finish_reason": "TOOL_CALL",
+                    "content": {
+                        "role": "model",
+                        "parts": [
+                            {"text": "thinking", "thought": True},
+                            {
+                                "function_call": {
+                                    "name": "lookup",
+                                    "args": {"query": "weather"},
+                                }
+                            },
+                        ],
+                    },
+                },
+            ],
+            "usage_metadata": {
+                "prompt_token_count": 4,
+                "candidates_token_count": 2,
+                "total_token_count": 6,
+                "thoughts_token_count": 1,
+            },
+        }
+    )
+    accumulator.apply(span)
+    span.end()
+
+    attributes = in_memory_span_exporter.get_finished_spans()[0].attributes
+    assert attributes["neatlogs.llm.output_messages.0.content"] == "first"
+    assert attributes["neatlogs.llm.output_messages.1.thinking"] == "thinking"
+    assert attributes["neatlogs.llm.choices.0.finish_reason"] == "STOP"
+    assert attributes["neatlogs.llm.choices.1.finish_reason"] == "TOOL_CALL"
+    assert attributes["neatlogs.llm.tool_calls.0.choice_index"] == 1
+    assert attributes["neatlogs.llm.tool_calls.0.tool_call_index"] == 0
+    assert attributes["neatlogs.llm.tool_calls.0.name"] == "lookup"
+    assert attributes["neatlogs.llm.token_count.total"] == 6
+    assert attributes["neatlogs.llm.token_count.reasoning"] == 1
+
+
+def test_single_choice_flattened_family_reports_limitation_without_inventing_choices(
+    tracer_provider, in_memory_span_exporter
+):
+    span = tracer_provider.get_tracer("neatlogs.callback").start_span("callback")
+    accumulator = ChoiceAccumulator(capture_fidelity="flattened")
+    accumulator.add_single_response("only output", finish_reason="stop", model="callback-model")
+    accumulator.apply(span)
+    span.end()
+
+    attributes = in_memory_span_exporter.get_finished_spans()[0].attributes
+    assert attributes["neatlogs.llm.output_messages.0.content"] == "only output"
+    assert "neatlogs.llm.output_messages.1.content" not in attributes
+    assert attributes["neatlogs.capture_fidelity"] == "flattened"
+
+
+def test_google_stream_finalizer_is_incremental_and_preserves_partial_candidate(
+    tracer_provider, in_memory_span_exporter
+):
+    span = tracer_provider.get_tracer("neatlogs.google_genai").start_span("gemini-stream")
+    chunks = iter(
+        [
+            {
+                "candidates": [
+                    {"index": 1, "content": {"role": "model", "parts": [{"text": "partial"}]}}
+                ]
+            }
+        ]
+    )
+    wrapper = SyncStreamWrapper(chunks, span, GoogleStreamFinalizer())
+    next(wrapper)
+    assert not wrapper._chunks
+    wrapper.close()
+
+    finished = in_memory_span_exporter.get_finished_spans()[0]
+    assert finished.attributes["neatlogs.llm.output_messages.1.content"] == "partial"
+    assert finished.attributes["neatlogs.stream.cancelled"] is True
+    assert finished.status.status_code.name == "UNSET"

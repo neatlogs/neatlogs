@@ -719,6 +719,9 @@ def _unpatch_vertex_ai_module() -> None:
     _ORIG_INIT = None
 
 
-_patch_vertex_ai_module()
-
-from google import genai  # noqa: E402
+try:  # noqa: E402 - optional import-replacement surface
+    from google import genai  # type: ignore  # noqa: E402
+except ImportError:  # pragma: no cover - exercised by clean-collection CI
+    genai = None
+else:
+    _patch_vertex_ai_module()

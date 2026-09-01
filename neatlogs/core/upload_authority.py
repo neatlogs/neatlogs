@@ -287,12 +287,13 @@ class AuthenticatedUploadAuthority:
         self._lock = threading.RLock()
 
     def export_overflow(self, payload: OverflowPayload) -> OverflowExportReceipt:
-        self._validate_payload(payload)
+        deadline = time.monotonic() + self._deadline_seconds
+        self._validate_payload(payload, deadline)
         if payload.signal != "span":
             # The v1 backend contract intentionally defines only an OTLP trace
             # envelope. Never guess a log schema or submit it as trace bytes.
             raise UploadError("prepare", "overflow_signal_unsupported")
-        receipt = self._upload(payload, payload_schema="otlp.traces.v1")
+        receipt = self._upload(payload, payload_schema="otlp.traces.v1", deadline=deadline)
         return OverflowExportReceipt(
             upload_id=receipt.upload_id,
             state=receipt.state,
@@ -301,10 +302,17 @@ class AuthenticatedUploadAuthority:
         )
 
     def export_media(self, payload: MediaPayload) -> MediaExportReceipt:
-        self._validate_payload(payload)
-        return self._upload(payload, payload_schema="neatlogs.media.v1")
+        deadline = time.monotonic() + self._deadline_seconds
+        self._validate_payload(payload, deadline)
+        return self._upload(payload, payload_schema="neatlogs.media.v1", deadline=deadline)
 
-    def _validate_payload(self, payload: Any) -> None:
+    @staticmethod
+    def _check_deadline(deadline: float, stage: str = "prepare") -> None:
+        if time.monotonic() >= deadline:
+            raise UploadError(stage, "deadline_exceeded", retryable=True)
+
+    def _validate_payload(self, payload: Any, deadline: float) -> None:
+        self._check_deadline(deadline)
         if payload.purpose not in {"typed_media", "otlp_overflow"}:
             raise UploadError("prepare", "invalid_purpose")
         if not isinstance(payload.content, bytes) or not payload.content:
@@ -326,6 +334,7 @@ class AuthenticatedUploadAuthority:
             hashlib.sha256(payload.content).hexdigest() != payload.sha256
         ):
             raise UploadError("prepare", "invalid_sha256")
+        self._check_deadline(deadline)
         if (
             not isinstance(payload.mime_type, str)
             or len(payload.mime_type) > 160
@@ -346,6 +355,7 @@ class AuthenticatedUploadAuthority:
             try:
                 with gzip.GzipFile(fileobj=io.BytesIO(payload.content), mode="rb") as compressed:
                     while True:
+                        self._check_deadline(deadline)
                         chunk = compressed.read(
                             min(64 * 1024, self.max_overflow_expanded_bytes - expanded + 1)
                         )
@@ -354,6 +364,7 @@ class AuthenticatedUploadAuthority:
                         expanded += len(chunk)
                         if expanded > self.max_overflow_expanded_bytes:
                             raise UploadError("prepare", "overflow_expanded_too_large")
+                        self._check_deadline(deadline)
             except UploadError:
                 raise
             except (EOFError, OSError) as exc:
@@ -361,7 +372,13 @@ class AuthenticatedUploadAuthority:
             if expanded <= 0:
                 raise UploadError("prepare", "overflow_gzip_invalid")
 
-    def _upload(self, payload: Any, *, payload_schema: str | None) -> MediaExportReceipt:
+    def _upload(
+        self,
+        payload: Any,
+        *,
+        payload_schema: str | None,
+        deadline: float,
+    ) -> MediaExportReceipt:
         material = ":".join(
             (
                 "1",
@@ -384,7 +401,7 @@ class AuthenticatedUploadAuthority:
                     raise UploadError("complete", "cached_reference_missing")
                 return MediaExportReceipt(cached.upload_id, cached.state, cached.reference)
 
-        deadline = time.monotonic() + self._deadline_seconds
+        self._check_deadline(deadline)
         request_body: dict[str, Any] = {
             "version": 1,
             "purpose": payload.purpose,
@@ -536,7 +553,7 @@ class AuthenticatedUploadAuthority:
             raise UploadError("complete", "invalid_state")
         if (
             (state == "validating" and status not in {200, 202})
-            or (state == "uploaded" and status != 200)
+            or (state == "uploaded" and status not in {200, 202})
             or (state in {"ready", "rejected"} and status != 200)
         ):
             raise UploadError("complete", "invalid_status_for_state")

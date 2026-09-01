@@ -16,7 +16,13 @@ from neatlogs._wrap_utils import serialize
 from neatlogs.core.delivery import DeliveryDiagnostics
 from neatlogs.core.masking_exporter import MaskingLogExporter, MaskingSpanExporter
 from neatlogs.core.media import PendingMediaStore, set_default_media_store, set_media_attributes
-from neatlogs.core.media_exporter import TypedMediaLogExporter, TypedMediaSpanExporter
+from neatlogs.core.media_exporter import (
+    TypedMediaLogExporter,
+    TypedMediaSpanExporter,
+    _has_unresolved_pending,
+    _replace,
+    release_removed_media,
+)
 from neatlogs.core.upload_authority import (
     MediaExportReceipt,
     UploadError,
@@ -60,6 +66,19 @@ def _large_image():
         "image_url": {"url": f"data:image/png;base64,{base64.b64encode(raw).decode()}"},
     }
     return raw, value
+
+
+def test_cyclic_post_mask_values_are_bounded_and_do_not_break_release_or_rewrite():
+    cyclic = {}
+    cyclic["self"] = cyclic
+    store = PendingMediaStore(max_bytes=1024)
+
+    release_removed_media(store, cyclic, cyclic)
+    replaced = _replace(cyclic, {}, {})
+
+    assert _has_unresolved_pending(cyclic, set()) is False
+    assert replaced["self"]["neatlogs_media"]["state"] == "failed"
+    assert "traversal_cycle" in replaced["self"]["neatlogs_media"]["safe_preview"]
 
 
 def test_span_media_is_staged_then_resolved_after_mask_to_canonical_reference():

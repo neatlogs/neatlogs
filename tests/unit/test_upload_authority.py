@@ -238,7 +238,8 @@ def test_validating_completion_retry_exhaustion_is_explicit_and_bounded():
     assert len(session.calls) == 5
 
 
-def test_uploaded_completion_is_retryable_and_can_become_ready():
+@pytest.mark.parametrize("uploaded_status", [200, 202])
+def test_uploaded_completion_is_retryable_and_can_become_ready(uploaded_status):
     payload = _media()
     uploaded = _completed(
         payload,
@@ -249,7 +250,7 @@ def test_uploaded_completion_is_retryable_and_can_become_ready():
         [
             Response(201, _prepared(payload)),
             Response(204),
-            Response(200, uploaded),
+            Response(uploaded_status, uploaded),
             Response(200, _completed(payload)),
         ]
     )
@@ -537,6 +538,38 @@ def test_total_deadline_is_checked_after_a_slow_request_returns():
         authority.export_media(_media())
 
     assert caught.value.reason_code == "deadline_exceeded"
+
+
+def test_total_deadline_includes_incremental_gzip_validation(monkeypatch):
+    original_gzip_file = gzip.GzipFile
+
+    class SlowGzipFile(original_gzip_file):
+        def read(self, *args, **kwargs):
+            time.sleep(0.02)
+            return super().read(*args, **kwargs)
+
+    monkeypatch.setattr("neatlogs.core.upload_authority.gzip.GzipFile", SlowGzipFile)
+    content = gzip.compress(b"complete masked trace")
+    payload = OverflowPayload(
+        content=content,
+        sha256=hashlib.sha256(content).hexdigest(),
+        byte_length=len(content),
+        signal="span",
+        content_encoding="gzip",
+    )
+    session = Session([])
+    authority = AuthenticatedUploadAuthority(
+        base_url="https://ingest.example",
+        api_key="project-secret",
+        session=session,
+        deadline_seconds=0.005,
+    )
+
+    with pytest.raises(UploadError) as caught:
+        authority.export_overflow(payload)
+
+    assert caught.value.reason_code == "deadline_exceeded"
+    assert session.calls == []
 
 
 def test_log_overflow_is_not_mislabeled_as_the_trace_schema():

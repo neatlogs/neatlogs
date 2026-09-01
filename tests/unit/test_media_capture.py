@@ -1,8 +1,12 @@
 import base64
 import hashlib
 import json
+from collections.abc import Mapping
+
+import pytest
 
 from neatlogs._wrap_utils import serialize
+from neatlogs.core import media as media_module
 from neatlogs.core.media import (
     PendingMediaStore,
     media_references,
@@ -263,6 +267,102 @@ def test_malformed_and_case_varied_data_uris_fail_closed():
     assert "invalid_media_encoding" in invalid_capture
     assert base64.b64encode(b"private" * 20_000).decode()[:100] not in mixed_capture
     assert "neatlogs_media" in mixed_capture
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        lambda value: {"type": "image", "url": value},
+        lambda value: {"type": "image", "source": {"type": "url", "url": value}},
+        lambda value: {"type": "document", "file_uri": value},
+    ],
+)
+def test_data_uris_in_generic_reference_fields_never_escape_as_raw_media(payload):
+    raw = b"private-generic-media" * 8_000
+    encoded = base64.b64encode(raw).decode()
+    for data_uri in (
+        f"DaTa:image/png;BASE64,{encoded}",
+        f" \tdata :image/png;base64,{encoded}",
+    ):
+        value = payload(data_uri)
+        captured = serialize(value)
+        records = media_references(value, "input")
+
+        assert encoded[:100] not in captured
+        assert encoded[:100] not in json.dumps(records)
+        assert records[0]["sha256"] == hashlib.sha256(raw).hexdigest()
+        assert records[0]["state"] == "failed"
+
+
+@pytest.mark.parametrize(
+    "reference",
+    [
+        "https:////user:password@host.example/path?sig=secret",
+        "https:/user:password@host.example/path?sig=secret",
+        "https:\\\\user:password@host.example/path?sig=secret",
+        "https://user:password@[broken/path?sig=secret",
+    ],
+)
+def test_malformed_remote_references_fail_closed_without_userinfo(reference):
+    captured = serialize({"type": "image", "url": reference})
+    record = media_references({"type": "image", "url": reference}, "input")[0]
+
+    assert "user" not in captured
+    assert "password" not in captured
+    assert "secret" not in captured
+    assert "user" not in record["reference"]
+    assert "password" not in record["reference"]
+
+
+def test_oversized_or_malformed_inline_media_is_rejected_before_unbounded_processing(
+    monkeypatch,
+):
+    monkeypatch.setattr(media_module, "DEFAULT_MAX_MEDIA_UPLOAD_BYTES", 8)
+    monkeypatch.setattr(
+        media_module,
+        "_base64_metadata",
+        lambda *_args, **_kwargs: pytest.fail("oversized base64 must be rejected before decoding"),
+    )
+
+    record = media_references(
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64," + ("YQ==" * 4)}},
+        "input",
+    )[0]
+    malformed = media_module._inline(
+        "data:image/png;base64," + ("!" * 128),
+        "image/png",
+        "image",
+        "input",
+    )
+
+    assert record["state"] == "failed"
+    assert record["safe_preview"].endswith("media_too_large")
+    assert malformed["state"] == "failed"
+    assert malformed["safe_preview"].endswith("media_too_large")
+
+
+def test_hostile_mapping_and_string_hooks_cannot_escape_instrumentation():
+    class HostileMapping(Mapping):
+        def __getitem__(self, _key):
+            raise RuntimeError("hostile getitem")
+
+        def __iter__(self):
+            raise RuntimeError("hostile iter")
+
+        def __len__(self):
+            return 1
+
+    class HostileString:
+        def __str__(self):
+            raise RuntimeError("hostile str")
+
+    mapping_capture = serialize(HostileMapping())
+    string_capture = serialize(HostileString())
+
+    assert "hostile" not in mapping_capture
+    assert "traversal_error" in mapping_capture
+    assert "hostile" not in string_capture
+    assert "serialization_error" in string_capture
 
 
 def test_media_walkers_are_bounded_and_provider_serializers_cannot_escape():

@@ -16,10 +16,11 @@ from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 from .capture import DEFAULT_MAX_CAPTURE_VALUE_BYTES, UPLOAD_UNAVAILABLE_REASON
-from .upload_authority import MediaPayload
+from .upload_authority import DEFAULT_MAX_MEDIA_UPLOAD_BYTES, MediaPayload
 
 _MEDIA_KINDS = {"image", "audio", "video", "document", "file", "input_file"}
 _MESSAGE_CONTENT = re.compile(r"^neatlogs\.llm\.(input|output)_messages\.(\d+)\.content$")
+_DATA_URI_PREFIX = re.compile(r"^\s*data\s*:", re.IGNORECASE)
 _MAX_MEDIA_TRAVERSAL_DEPTH = 64
 _MAX_MEDIA_TRAVERSAL_NODES = 10_000
 _CURRENT_STORE = object()
@@ -240,7 +241,12 @@ def _kind(mime_type: str, declared: str = "") -> str:
     return "media"
 
 
-def _base64_metadata(encoded: str) -> tuple[int, str, bytes] | None:
+def _base64_metadata(
+    encoded: str,
+    *,
+    start: int = 0,
+    max_decoded_bytes: int = DEFAULT_MAX_MEDIA_UPLOAD_BYTES,
+) -> tuple[int, str, bytes] | None:
     """Validate/digest base64 incrementally without duplicating the full media."""
 
     digest = hashlib.sha256()
@@ -248,12 +254,14 @@ def _base64_metadata(encoded: str) -> tuple[int, str, bytes] | None:
     prefix = b""
     chunk_size = 64 * 1024  # divisible by four, so quartets never cross chunks
     try:
-        for offset in range(0, len(encoded), chunk_size):
+        for offset in range(start, len(encoded), chunk_size):
             decoded = base64.b64decode(encoded[offset : offset + chunk_size], validate=True)
             if not prefix:
                 prefix = decoded[:12]
             digest.update(decoded)
             byte_length += len(decoded)
+            if byte_length > max_decoded_bytes:
+                return None
     except (binascii.Error, ValueError, TypeError):
         return None
     return byte_length, digest.hexdigest(), prefix
@@ -264,7 +272,50 @@ def _resolved_store(store: PendingMediaStore | None | object) -> PendingMediaSto
 
 
 def _is_data_uri(value: str) -> bool:
-    return value[:5].lower() == "data:"
+    return _DATA_URI_PREFIX.match(value[:1024]) is not None
+
+
+def _failed_inline(
+    *,
+    mime_type: str,
+    declared: str,
+    purpose: str,
+    reason: str,
+    byte_length: int | None = None,
+    digest: str | None = None,
+) -> dict[str, Any]:
+    identity = (
+        digest
+        or hashlib.sha256(
+            f"{reason}:{mime_type}:{declared}:{byte_length or 0}".encode("utf-8")
+        ).hexdigest()
+    )
+    actual_mime = normalize_media_mime(mime_type, declared) or "application/octet-stream"
+    return {
+        "id": f"nl_media_{identity[:24]}",
+        "type": _kind(actual_mime, declared),
+        "source": "inline",
+        "mime_type": actual_mime,
+        **({"byte_length": byte_length} if byte_length is not None else {}),
+        **({"sha256": digest} if digest is not None else {}),
+        "purpose": purpose,
+        "state": "failed",
+        "safe_preview": f"upload unavailable: {reason}",
+    }
+
+
+def _utf8_metadata(value: str, *, max_bytes: int) -> tuple[int, str] | None:
+    """Digest malformed inline text without allocating one unbounded byte string."""
+
+    digest = hashlib.sha256()
+    byte_length = 0
+    for offset in range(0, len(value), 64 * 1024):
+        chunk = value[offset : offset + 64 * 1024].encode("utf-8", errors="replace")
+        byte_length += len(chunk)
+        if byte_length > max_bytes:
+            return None
+        digest.update(chunk)
+    return byte_length, digest.hexdigest()
 
 
 def _inline(
@@ -274,29 +325,48 @@ def _inline(
     purpose: str,
     store: PendingMediaStore | None | object = _CURRENT_STORE,
 ) -> dict[str, Any]:
-    encoded = data
+    encoded_start = 0
     malformed_data_uri = False
     if _is_data_uri(data):
-        header, separator, encoded = data.partition(",")
-        if not separator or "base64" not in {part.lower() for part in header.split(";")[1:]}:
+        prefix = _DATA_URI_PREFIX.match(data[:1024])
+        assert prefix is not None
+        # A media type and parameters are tiny. Searching only a bounded prefix
+        # prevents a hostile, comma-free value from forcing a full-size split.
+        separator = data.find(",", prefix.end(), 1024)
+        header = data[prefix.end() : separator] if separator >= 0 else data[prefix.end() : 1024]
+        if separator < 0 or "base64" not in {part.lower() for part in header.split(";")[1:]}:
             malformed_data_uri = True
-        mime_type = header[5:].split(";", 1)[0] or mime_type
-    metadata = None if malformed_data_uri else _base64_metadata(encoded)
+        else:
+            encoded_start = separator + 1
+        mime_type = header.split(";", 1)[0] or mime_type
+    encoded_length = len(data) - encoded_start
+    max_encoded_characters = ((DEFAULT_MAX_MEDIA_UPLOAD_BYTES + 2) // 3) * 4
+    if not malformed_data_uri and encoded_length > max_encoded_characters:
+        return _failed_inline(
+            mime_type=mime_type,
+            declared=declared,
+            purpose=purpose,
+            reason="media_too_large",
+        )
+    metadata = None if malformed_data_uri else _base64_metadata(data, start=encoded_start)
     if metadata is None:
-        raw = data.encode("utf-8", errors="replace")
-        digest = hashlib.sha256(raw).hexdigest()
-        actual_mime = normalize_media_mime(mime_type, declared) or "application/octet-stream"
-        return {
-            "id": f"nl_media_{digest[:24]}",
-            "type": _kind(actual_mime, declared),
-            "source": "inline",
-            "mime_type": actual_mime,
-            "byte_length": len(raw),
-            "sha256": digest,
-            "purpose": purpose,
-            "state": "failed",
-            "safe_preview": "upload unavailable: invalid_media_encoding",
-        }
+        raw_metadata = _utf8_metadata(data, max_bytes=DEFAULT_MAX_MEDIA_UPLOAD_BYTES)
+        if raw_metadata is None:
+            return _failed_inline(
+                mime_type=mime_type,
+                declared=declared,
+                purpose=purpose,
+                reason="media_too_large",
+            )
+        raw_length, raw_digest = raw_metadata
+        return _failed_inline(
+            mime_type=mime_type,
+            declared=declared,
+            purpose=purpose,
+            reason="invalid_media_encoding",
+            byte_length=raw_length,
+            digest=raw_digest,
+        )
     byte_length, digest, prefix = metadata
     mime_type = normalize_media_mime(mime_type, declared, content=prefix)
     record = {
@@ -308,12 +378,12 @@ def _inline(
         "sha256": digest,
         "purpose": purpose,
     }
-    if len(data.encode("utf-8")) > DEFAULT_MAX_CAPTURE_VALUE_BYTES:
+    if len(data) > DEFAULT_MAX_CAPTURE_VALUE_BYTES:
         store = _resolved_store(store)
         token = None
         if store is not None and byte_length <= store.max_bytes:
             try:
-                content = base64.b64decode(encoded, validate=True)
+                content = base64.b64decode(data[encoded_start:], validate=True)
             except (binascii.Error, ValueError, TypeError):
                 content = b""
             if content:
@@ -341,16 +411,21 @@ def _inline(
 def _sanitized_reference(reference: str) -> str:
     """Remove credentials and bearer material from a captured media locator."""
 
+    if _is_data_uri(reference):
+        return "data:[redacted]"
+    if reference[:1].isspace():
+        return "invalid-reference"
     try:
         parsed = urlsplit(reference)
     except ValueError:
-        # Malformed bracketed hosts must still fail closed instead of falling
-        # back to serializing their credential-bearing original value.
-        safe = reference.split("#", 1)[0].split("?", 1)[0]
-        if "://" in safe:
-            scheme, remainder = safe.split("://", 1)
-            safe = f"{scheme}://{remainder.rsplit('@', 1)[-1]}"
-        return safe
+        return "invalid-reference"
+    if parsed.scheme.lower() in {"http", "https"}:
+        try:
+            valid_authority = bool(parsed.netloc and parsed.hostname)
+        except ValueError:
+            valid_authority = False
+        if not valid_authority:
+            return f"{parsed.scheme.lower()}://invalid.invalid/"
     # ``urlsplit`` leaves opaque provider IDs in ``path``. Preserve those, but
     # never retain URL userinfo, query credentials, or fragments in telemetry.
     netloc = parsed.netloc.rsplit("@", 1)[-1]
@@ -449,7 +524,10 @@ def sanitize_media_payload(
         if is_container:
             active.add(identity)
         try:
-            return sanitize_node(node, inherited_declared, inherited_mime_type, depth)
+            try:
+                return sanitize_node(node, inherited_declared, inherited_mime_type, depth)
+            except Exception:
+                return unavailable("traversal_error")
         finally:
             if is_container:
                 active.discard(identity)
@@ -606,7 +684,34 @@ def sanitize_media_payload(
                 if isinstance(reference, str) and (
                     declared.lower() == "url" or media_declared or mime_type
                 ):
-                    result[reference_key] = _sanitized_reference(reference)
+                    if _is_data_uri(reference):
+                        record = _inline(
+                            reference,
+                            mime_type,
+                            media_declared or declared or "document",
+                            purpose,
+                            resolved_store,
+                        )
+                        result[reference_key] = (
+                            _unavailable_placeholder(record)
+                            if record.get("state") in {"failed", "pending-upload"}
+                            else reference
+                        )
+                    else:
+                        result[reference_key] = _sanitized_reference(reference)
+            if "image_generation_call" in declared.lower():
+                for key in ("result",):
+                    encoded_image = node.get(key)
+                    if isinstance(encoded_image, str):
+                        record = _inline(
+                            encoded_image,
+                            mime_type or "image/unknown",
+                            "image",
+                            purpose,
+                            resolved_store,
+                        )
+                        if record.get("state") in {"failed", "pending-upload"}:
+                            result[key] = _unavailable_placeholder(record)
             for key in ("b64_json", "b64Json"):
                 encoded_image = node.get(key)
                 if isinstance(encoded_image, str):
@@ -668,7 +773,10 @@ def media_references(
         if is_container:
             active.add(identity)
         try:
-            visit_node(node, inherited_declared, inherited_mime_type, depth)
+            try:
+                visit_node(node, inherited_declared, inherited_mime_type, depth)
+            except Exception:
+                return
         finally:
             if is_container:
                 active.discard(identity)
@@ -802,6 +910,19 @@ def media_references(
                             resolved_store,
                         )
                     )
+            if "image_generation_call" in declared.lower():
+                for key in ("result",):
+                    encoded_image = node.get(key)
+                    if isinstance(encoded_image, str):
+                        found.append(
+                            _inline(
+                                encoded_image,
+                                mime_type or "image/unknown",
+                                "image",
+                                purpose,
+                                resolved_store,
+                            )
+                        )
             reference = (
                 node.get("file_id")
                 or node.get("file_uri")
@@ -812,7 +933,20 @@ def media_references(
                 declared.lower() == "url" or media_declared or mime_type
             ):
                 found.append(
-                    _reference(reference, mime_type, media_declared or "document", purpose)
+                    _inline(
+                        reference,
+                        mime_type,
+                        media_declared or declared or "document",
+                        purpose,
+                        resolved_store,
+                    )
+                    if _is_data_uri(reference)
+                    else _reference(
+                        reference,
+                        mime_type,
+                        media_declared or "document",
+                        purpose,
+                    )
                 )
             for key, child in node.items():
                 if budget_exhausted:

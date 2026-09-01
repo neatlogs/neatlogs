@@ -27,6 +27,8 @@ from .media import PendingMediaStore, sanitize_media_attributes, sanitize_media_
 from .upload_authority import MediaExportReceipt, UploadAuthority, UploadError
 
 logger = logging.getLogger(__name__)
+_MAX_MEDIA_REWRITE_DEPTH = 64
+_MAX_MEDIA_REWRITE_NODES = 10_000
 
 
 def _json_container(value: str) -> Any | None:
@@ -35,7 +37,7 @@ def _json_container(value: str) -> Any | None:
         return None
     try:
         parsed = json.loads(value)
-    except (TypeError, ValueError):
+    except Exception:
         return None
     return parsed if isinstance(parsed, (dict, list)) else None
 
@@ -54,36 +56,56 @@ def _is_pending_media_record(value: Mapping[str, Any]) -> bool:
 
 def _token_counts(value: Any, *, pending_only: bool) -> Counter[str]:
     found: Counter[str] = Counter()
+    active: set[int] = set()
+    visited = 0
 
-    def visit(node: Any) -> None:
-        if isinstance(node, Mapping):
-            token = node.get("upload_token")
-            if (
-                isinstance(token, str)
-                and token.startswith("nl_pending_media_")
-                and (not pending_only or _is_pending_media_record(node))
-            ):
-                found[token] += 1
-            for key, item in node.items():
-                prefix = key[: -len(".upload_token")] if isinstance(key, str) else ""
+    def visit(node: Any, depth: int = 0) -> None:
+        nonlocal visited
+        visited += 1
+        if visited > _MAX_MEDIA_REWRITE_NODES or depth > _MAX_MEDIA_REWRITE_DEPTH:
+            return
+        is_container = isinstance(node, Mapping) or (
+            isinstance(node, Sequence) and not isinstance(node, (str, bytes, bytearray))
+        )
+        identity = id(node)
+        if is_container and identity in active:
+            return
+        if is_container:
+            active.add(identity)
+        try:
+            if isinstance(node, Mapping):
+                token = node.get("upload_token")
                 if (
-                    isinstance(key, str)
-                    and key.endswith(".upload_token")
-                    and isinstance(item, str)
-                    and item.startswith("nl_pending_media_")
-                    and (not pending_only or node.get(f"{prefix}.state") == "pending-upload")
-                    and isinstance(node.get(f"{prefix}.id"), str)
-                    and node[f"{prefix}.id"].startswith("nl_media_")
+                    isinstance(token, str)
+                    and token.startswith("nl_pending_media_")
+                    and (not pending_only or _is_pending_media_record(node))
                 ):
-                    found[item] += 1
-                visit(item)
-        elif isinstance(node, Sequence) and not isinstance(node, (str, bytes, bytearray)):
-            for item in node:
-                visit(item)
-        elif isinstance(node, str):
-            parsed = _json_container(node)
-            if parsed is not None:
-                visit(parsed)
+                    found[token] += 1
+                for key, item in node.items():
+                    prefix = key[: -len(".upload_token")] if isinstance(key, str) else ""
+                    if (
+                        isinstance(key, str)
+                        and key.endswith(".upload_token")
+                        and isinstance(item, str)
+                        and item.startswith("nl_pending_media_")
+                        and (not pending_only or node.get(f"{prefix}.state") == "pending-upload")
+                        and isinstance(node.get(f"{prefix}.id"), str)
+                        and node[f"{prefix}.id"].startswith("nl_media_")
+                    ):
+                        found[item] += 1
+                    visit(item, depth + 1)
+            elif isinstance(node, Sequence) and not isinstance(node, (str, bytes, bytearray)):
+                for item in node:
+                    visit(item, depth + 1)
+            elif isinstance(node, str):
+                parsed = _json_container(node)
+                if parsed is not None:
+                    visit(parsed, depth + 1)
+        except Exception:
+            return
+        finally:
+            if is_container:
+                active.discard(identity)
 
     visit(value)
     return found
@@ -101,38 +123,60 @@ def release_removed_media(store: PendingMediaStore | None, before: Any, after: A
 
 
 def _has_unresolved_pending(value: Any, known_tokens: set[str]) -> bool:
-    if isinstance(value, Mapping):
-        token = value.get("upload_token")
-        if (
-            _is_pending_media_record(value)
-            and "upload_token" in value
-            and token not in known_tokens
-        ):
-            return True
-        if _is_pending_media_record(value) and token not in known_tokens:
-            return True
-        for key, item in value.items():
-            if isinstance(key, str) and key.endswith(".upload_token"):
-                if item not in known_tokens:
+    active: set[int] = set()
+    visited = 0
+
+    def visit(node: Any, depth: int = 0) -> bool:
+        nonlocal visited
+        visited += 1
+        if visited > _MAX_MEDIA_REWRITE_NODES or depth > _MAX_MEDIA_REWRITE_DEPTH:
+            # Candidates have already passed through the bounded sanitizer,
+            # which replaces anything beyond this boundary with a safe marker.
+            return False
+        is_container = isinstance(node, Mapping) or (
+            isinstance(node, Sequence) and not isinstance(node, (str, bytes, bytearray))
+        )
+        identity = id(node)
+        if is_container and identity in active:
+            return False
+        if is_container:
+            active.add(identity)
+        try:
+            if isinstance(node, Mapping):
+                token = node.get("upload_token")
+                if _is_pending_media_record(node) and token not in known_tokens:
                     return True
-            if isinstance(key, str) and key.endswith(".state") and item == "pending-upload":
-                prefix = key[: -len(".state")]
-                identifier = value.get(f"{prefix}.id")
-                if (
-                    isinstance(identifier, str)
-                    and identifier.startswith("nl_media_")
-                    and value.get(f"{prefix}.upload_token") not in known_tokens
-                ):
-                    return True
-            if _has_unresolved_pending(item, known_tokens):
-                return True
-        return False
-    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
-        return any(_has_unresolved_pending(item, known_tokens) for item in value)
-    if isinstance(value, str):
-        parsed = _json_container(value)
-        return parsed is not None and _has_unresolved_pending(parsed, known_tokens)
-    return False
+                for key, item in node.items():
+                    if isinstance(key, str) and key.endswith(".upload_token"):
+                        if item not in known_tokens:
+                            return True
+                    if isinstance(key, str) and key.endswith(".state") and item == "pending-upload":
+                        prefix = key[: -len(".state")]
+                        identifier = node.get(f"{prefix}.id")
+                        if (
+                            isinstance(identifier, str)
+                            and identifier.startswith("nl_media_")
+                            and node.get(f"{prefix}.upload_token") not in known_tokens
+                        ):
+                            return True
+                    if visit(item, depth + 1):
+                        return True
+                return False
+            if isinstance(node, Sequence) and not isinstance(node, (str, bytes, bytearray)):
+                return any(visit(item, depth + 1) for item in node)
+            if isinstance(node, str):
+                parsed = _json_container(node)
+                return parsed is not None and visit(parsed, depth + 1)
+            return False
+        except Exception:
+            # The sanitizer likewise replaces hostile containers before the
+            # resolver sees them; do not create a false upload failure here.
+            return False
+        finally:
+            if is_container:
+                active.discard(identity)
+
+    return visit(value)
 
 
 def _reference_record(receipt: MediaExportReceipt) -> dict[str, Any]:
@@ -149,11 +193,24 @@ def _reference_record(receipt: MediaExportReceipt) -> dict[str, Any]:
 
 
 def _failed_record(original: Mapping[str, Any], reason: str) -> dict[str, Any]:
-    return {
-        key: value
-        for key, value in original.items()
-        if key != "upload_token" and key != "safe_preview"
-    } | {"state": "failed", "safe_preview": f"upload failed: {reason}"}
+    safe_fields = {
+        "id",
+        "type",
+        "source",
+        "mime_type",
+        "byte_length",
+        "sha256",
+        "purpose",
+    }
+    try:
+        retained = {
+            key: value
+            for key, value in original.items()
+            if key in safe_fields and isinstance(value, (str, int, float, bool))
+        }
+    except Exception:
+        retained = {}
+    return retained | {"state": "failed", "safe_preview": f"upload failed: {reason}"}
 
 
 def _replace(
@@ -161,37 +218,71 @@ def _replace(
     replacements: Mapping[str, dict[str, Any]],
     failures: Mapping[str, str],
 ) -> Any:
-    if isinstance(value, Mapping):
-        token = value.get("upload_token")
-        if isinstance(token, str) and token.startswith("nl_pending_media_"):
-            if token in replacements:
-                replacement = dict(value)
-                replacement.pop("upload_token", None)
-                replacement.pop("safe_preview", None)
-                replacement.update(replacements[token])
-                return replacement
-            if token in failures:
-                return _failed_record(value, failures[token])
-        if _is_pending_media_record(value) or (
-            isinstance(token, str) and token.startswith("nl_pending_media_")
-        ):
-            return _failed_record(value, "upload_token_missing")
-        return {key: _replace(item, replacements, failures) for key, item in value.items()}
-    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
-        return [_replace(item, replacements, failures) for item in value]
-    if isinstance(value, str):
-        if (
-            "nl_pending_media_" not in value
-            and "upload_token" not in value
-            and "pending-upload" not in value
-        ):
-            return value
-        parsed = _json_container(value)
-        if parsed is None:
-            return value
-        transformed = _replace(parsed, replacements, failures)
-        return json.dumps(transformed, ensure_ascii=False, separators=(",", ":"))
-    return value
+    active: set[int] = set()
+    visited = 0
+
+    def unavailable(reason: str) -> dict[str, Any]:
+        return {
+            "neatlogs_media": {
+                "state": "failed",
+                "safe_preview": f"upload failed: {reason}",
+            }
+        }
+
+    def replace(node: Any, depth: int = 0) -> Any:
+        nonlocal visited
+        visited += 1
+        if visited > _MAX_MEDIA_REWRITE_NODES:
+            return unavailable("traversal_limit")
+        if depth > _MAX_MEDIA_REWRITE_DEPTH:
+            return unavailable("traversal_depth")
+        is_container = isinstance(node, Mapping) or (
+            isinstance(node, Sequence) and not isinstance(node, (str, bytes, bytearray))
+        )
+        identity = id(node)
+        if is_container and identity in active:
+            return unavailable("traversal_cycle")
+        if is_container:
+            active.add(identity)
+        try:
+            if isinstance(node, Mapping):
+                token = node.get("upload_token")
+                if isinstance(token, str) and token.startswith("nl_pending_media_"):
+                    if token in replacements:
+                        replacement = dict(node)
+                        replacement.pop("upload_token", None)
+                        replacement.pop("safe_preview", None)
+                        replacement.update(replacements[token])
+                        return replacement
+                    if token in failures:
+                        return _failed_record(node, failures[token])
+                if _is_pending_media_record(node) or (
+                    isinstance(token, str) and token.startswith("nl_pending_media_")
+                ):
+                    return _failed_record(node, "upload_token_missing")
+                return {key: replace(item, depth + 1) for key, item in node.items()}
+            if isinstance(node, Sequence) and not isinstance(node, (str, bytes, bytearray)):
+                return [replace(item, depth + 1) for item in node]
+            if isinstance(node, str):
+                if (
+                    "nl_pending_media_" not in node
+                    and "upload_token" not in node
+                    and "pending-upload" not in node
+                ):
+                    return node
+                parsed = _json_container(node)
+                if parsed is None:
+                    return node
+                transformed = replace(parsed, depth + 1)
+                return json.dumps(transformed, ensure_ascii=False, separators=(",", ":"))
+            return node
+        except Exception:
+            return unavailable("traversal_error")
+        finally:
+            if is_container:
+                active.discard(identity)
+
+    return replace(value)
 
 
 def _replace_attributes(

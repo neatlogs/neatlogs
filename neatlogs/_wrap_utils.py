@@ -932,8 +932,11 @@ def serialize(obj: Any, max_length: Optional[int] = DEFAULT_MAX_CAPTURE_VALUE_BY
 
     try:
         s = json.dumps(sanitize_media_payload(obj), default=str, ensure_ascii=False)
-    except (TypeError, ValueError):
-        s = str(obj)
+    except Exception:
+        # Provider objects are untrusted instrumentation inputs: mapping hooks,
+        # serializers, and ``__str__`` may all raise or expose unsanitized media.
+        # A fixed marker preserves provider behavior and fails closed.
+        s = '{"neatlogs_capture_unavailable":"serialization_error"}'
     return s if max_length is None else bound_text(s, max_length)
 
 

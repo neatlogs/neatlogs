@@ -458,6 +458,7 @@ def _bootstrap_from_env(api_key: str) -> None:
 
     from .core.byte_limited_exporter import ByteLimitedSpanExporter
     from .core.delivery import DeliveryDiagnostics, ObservableBatchSpanProcessor
+    from .core.masking_exporter import MaskingSpanExporter
     from .core.media import PendingMediaStore, set_default_media_store
     from .core.media_exporter import TypedMediaSpanExporter
     from .core.transport import build_otlp_session
@@ -507,16 +508,20 @@ def _bootstrap_from_env(api_key: str) -> None:
         diagnostics=diagnostics,
         upload_authority=authority,
     )
-    if media_store is not None:
-        limited_exporter = TypedMediaSpanExporter(
-            limited_exporter,
-            authority,
-            media_store,
-            diagnostics=diagnostics,
-        )
+    limited_exporter = TypedMediaSpanExporter(
+        limited_exporter,
+        authority,
+        media_store,
+        diagnostics=diagnostics,
+    )
     provider.add_span_processor(
         ObservableBatchSpanProcessor(
-            limited_exporter,
+            MaskingSpanExporter(
+                limited_exporter,
+                mask=None,
+                diagnostics=diagnostics,
+                media_store=media_store,
+            ),
             diagnostics=diagnostics,
         )
     )

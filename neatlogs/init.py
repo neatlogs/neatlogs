@@ -572,13 +572,12 @@ def init(
             diagnostics=_delivery_diagnostics,
             upload_authority=_upload_authority,
         )
-        if _media_store is not None:
-            limited_span_exporter = TypedMediaSpanExporter(
-                limited_span_exporter,
-                _upload_authority,
-                _media_store,
-                diagnostics=_delivery_diagnostics,
-            )
+        limited_span_exporter = TypedMediaSpanExporter(
+            limited_span_exporter,
+            _upload_authority,
+            _media_store,
+            diagnostics=_delivery_diagnostics,
+        )
         batch_processor = ObservableBatchSpanProcessor(
             _FilteredOTLPExporter(
                 MaskingSpanExporter(
@@ -638,13 +637,12 @@ def init(
             diagnostics=_delivery_diagnostics,
             upload_authority=_upload_authority,
         )
-        if _media_store is not None:
-            limited_log_exporter = TypedMediaLogExporter(
-                limited_log_exporter,
-                _upload_authority,
-                _media_store,
-                diagnostics=_delivery_diagnostics,
-            )
+        limited_log_exporter = TypedMediaLogExporter(
+            limited_log_exporter,
+            _upload_authority,
+            _media_store,
+            diagnostics=_delivery_diagnostics,
+        )
         _log_provider.add_log_record_processor(
             NeatlogsLogFilter(
                 ObservableBatchLogRecordProcessor(

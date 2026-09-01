@@ -1,11 +1,13 @@
 import base64
 import hashlib
+import json
 
 from neatlogs._wrap_utils import serialize
 from neatlogs.core.media import (
     PendingMediaStore,
     media_references,
     promote_message_media_attributes,
+    sanitize_media_payload,
     set_default_media_store,
     set_media_attributes,
 )
@@ -248,3 +250,48 @@ def test_serialized_provider_media_is_promoted_to_canonical_message_attributes()
     assert attributes[f"{prefix}.mime_type"] == "image/png"
     assert attributes[f"{prefix}.state"] == "pending-upload"
     assert attributes[f"{prefix}.purpose"] == "input"
+
+
+def test_malformed_and_case_varied_data_uris_fail_closed():
+    invalid = "data:image/png;base64," + ("not-base64-SECRET" * 6_000)
+    mixed_case = "DATA:image/png;base64," + base64.b64encode(b"private" * 20_000).decode()
+
+    invalid_capture = serialize({"type": "image_url", "image_url": {"url": invalid}})
+    mixed_capture = serialize({"type": "image_url", "image_url": {"url": mixed_case}})
+
+    assert "not-base64-SECRET" not in invalid_capture
+    assert "invalid_media_encoding" in invalid_capture
+    assert base64.b64encode(b"private" * 20_000).decode()[:100] not in mixed_capture
+    assert "neatlogs_media" in mixed_capture
+
+
+def test_media_walkers_are_bounded_and_provider_serializers_cannot_escape():
+    cyclic = {"type": "image"}
+    cyclic["source"] = cyclic
+
+    class BrokenModel:
+        def model_dump(self, **_kwargs):
+            raise RuntimeError("provider serializer failed")
+
+    assert media_references(cyclic, "input") == []
+    assert media_references(BrokenModel(), "input") == []
+    captured = serialize(cyclic)
+    assert "traversal_cycle" in captured
+    assert "provider serializer failed" not in serialize(BrokenModel())
+
+    bounded = sanitize_media_payload([{"value": index} for index in range(20_000)])
+    assert len(bounded) <= 10_001
+    assert "traversal_limit" in repr(bounded[-1])
+
+
+def test_image_generation_base64_is_discovered_as_typed_output():
+    raw = b"generated-image" * 8_000
+    records = media_references(
+        [{"b64_json": base64.b64encode(raw).decode()}],
+        "output",
+    )
+
+    assert len(records) == 1
+    assert records[0]["type"] == "image"
+    assert records[0]["sha256"] == hashlib.sha256(raw).hexdigest()
+    assert "b64_json" not in json.dumps(records)

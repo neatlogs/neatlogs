@@ -20,6 +20,9 @@ from .upload_authority import MediaPayload
 
 _MEDIA_KINDS = {"image", "audio", "video", "document", "file", "input_file"}
 _MESSAGE_CONTENT = re.compile(r"^neatlogs\.llm\.(input|output)_messages\.(\d+)\.content$")
+_MAX_MEDIA_TRAVERSAL_DEPTH = 64
+_MAX_MEDIA_TRAVERSAL_NODES = 10_000
+_CURRENT_STORE = object()
 _MIME_ALIASES = {
     "audio/mp3": "audio/mpeg",
     "audio/x-flac": "audio/flac",
@@ -93,12 +96,15 @@ def _model_mapping(value: Any) -> Mapping[str, Any] | None:
     """Read provider model data through documented mapping serializers only."""
 
     for name in ("model_dump", "to_json_dict", "dict"):
-        method = getattr(value, name, None)
+        try:
+            method = getattr(value, name, None)
+        except Exception:
+            continue
         if not callable(method):
             continue
         try:
             candidate = method(exclude_none=True) if name == "model_dump" else method()
-        except (TypeError, ValueError):
+        except Exception:
             continue
         if isinstance(candidate, Mapping):
             return candidate
@@ -253,16 +259,44 @@ def _base64_metadata(encoded: str) -> tuple[int, str, bytes] | None:
     return byte_length, digest.hexdigest(), prefix
 
 
-def _inline(data: str, mime_type: str, declared: str, purpose: str) -> dict[str, Any] | None:
+def _resolved_store(store: PendingMediaStore | None | object) -> PendingMediaStore | None:
+    return current_media_store() if store is _CURRENT_STORE else store  # type: ignore[return-value]
+
+
+def _is_data_uri(value: str) -> bool:
+    return value[:5].lower() == "data:"
+
+
+def _inline(
+    data: str,
+    mime_type: str,
+    declared: str,
+    purpose: str,
+    store: PendingMediaStore | None | object = _CURRENT_STORE,
+) -> dict[str, Any]:
     encoded = data
-    if data.startswith("data:"):
+    malformed_data_uri = False
+    if _is_data_uri(data):
         header, separator, encoded = data.partition(",")
-        if not separator:
-            return None
+        if not separator or "base64" not in {part.lower() for part in header.split(";")[1:]}:
+            malformed_data_uri = True
         mime_type = header[5:].split(";", 1)[0] or mime_type
-    metadata = _base64_metadata(encoded)
+    metadata = None if malformed_data_uri else _base64_metadata(encoded)
     if metadata is None:
-        return None
+        raw = data.encode("utf-8", errors="replace")
+        digest = hashlib.sha256(raw).hexdigest()
+        actual_mime = normalize_media_mime(mime_type, declared) or "application/octet-stream"
+        return {
+            "id": f"nl_media_{digest[:24]}",
+            "type": _kind(actual_mime, declared),
+            "source": "inline",
+            "mime_type": actual_mime,
+            "byte_length": len(raw),
+            "sha256": digest,
+            "purpose": purpose,
+            "state": "failed",
+            "safe_preview": "upload unavailable: invalid_media_encoding",
+        }
     byte_length, digest, prefix = metadata
     mime_type = normalize_media_mime(mime_type, declared, content=prefix)
     record = {
@@ -275,7 +309,7 @@ def _inline(data: str, mime_type: str, declared: str, purpose: str) -> dict[str,
         "purpose": purpose,
     }
     if len(data.encode("utf-8")) > DEFAULT_MAX_CAPTURE_VALUE_BYTES:
-        store = current_media_store()
+        store = _resolved_store(store)
         token = None
         if store is not None and byte_length <= store.max_bytes:
             try:
@@ -364,7 +398,12 @@ def _unavailable_placeholder(record: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def sanitize_media_payload(value: Any, purpose: str = "capture") -> Any:
+def sanitize_media_payload(
+    value: Any,
+    purpose: str = "capture",
+    *,
+    store: PendingMediaStore | None | object = _CURRENT_STORE,
+) -> Any:
     """Clone provider-shaped media while removing unsafe inline/URL secrets.
 
     Small inline values remain available to ordinary capture. Large inline
@@ -372,10 +411,54 @@ def sanitize_media_payload(value: Any, purpose: str = "capture") -> Any:
     upload authority exists yet. Remote locators retain only scheme/host/path.
     """
 
+    resolved_store = _resolved_store(store)
+    active: set[int] = set()
+    visited = 0
+    budget_exhausted = False
+
+    def unavailable(reason: str) -> dict[str, Any]:
+        return {
+            "neatlogs_media": {
+                "type": "media",
+                "source": "inline",
+                "purpose": purpose,
+                "state": "failed",
+                "safe_preview": f"media capture unavailable: {reason}",
+            }
+        }
+
     def sanitize(
         node: Any,
         inherited_declared: str = "",
         inherited_mime_type: str = "",
+        depth: int = 0,
+    ) -> Any:
+        nonlocal budget_exhausted, visited
+        visited += 1
+        if visited > _MAX_MEDIA_TRAVERSAL_NODES:
+            budget_exhausted = True
+            return unavailable("traversal_limit")
+        if depth > _MAX_MEDIA_TRAVERSAL_DEPTH:
+            return unavailable("traversal_depth")
+        is_container = isinstance(node, Mapping) or (
+            isinstance(node, Sequence) and not isinstance(node, (str, bytes, bytearray))
+        )
+        identity = id(node)
+        if is_container and identity in active:
+            return unavailable("traversal_cycle")
+        if is_container:
+            active.add(identity)
+        try:
+            return sanitize_node(node, inherited_declared, inherited_mime_type, depth)
+        finally:
+            if is_container:
+                active.discard(identity)
+
+    def sanitize_node(
+        node: Any,
+        inherited_declared: str,
+        inherited_mime_type: str,
+        depth: int,
     ) -> Any:
         if isinstance(node, Mapping):
             declared = str(node.get("type") or "")
@@ -392,17 +475,20 @@ def sanitize_media_payload(value: Any, purpose: str = "capture") -> Any:
             )
             result = {}
             for key, item in node.items():
+                if budget_exhausted:
+                    result["neatlogs_media_truncated"] = unavailable("traversal_limit")
+                    break
                 keyed_kind = str(key).lower().replace("input_", "")
                 child_declared = keyed_kind if keyed_kind in _MEDIA_KINDS else media_declared
-                result[key] = sanitize(item, child_declared, mime_type)
+                result[key] = sanitize(item, child_declared, mime_type, depth + 1)
 
             for key in ("image_url", "imageUrl"):
                 image = node.get(key)
                 if isinstance(image, Mapping) and isinstance(image.get("url"), str):
                     original = image["url"]
                     record = (
-                        _inline(original, mime_type, "image", purpose)
-                        if original.startswith("data:")
+                        _inline(original, mime_type, "image", purpose, resolved_store)
+                        if _is_data_uri(original)
                         else _reference(original, mime_type, "image", purpose)
                     )
                     image_result = dict(result[key])
@@ -413,8 +499,8 @@ def sanitize_media_payload(value: Any, purpose: str = "capture") -> Any:
                     result[key] = image_result
                 elif isinstance(image, str):
                     record = (
-                        _inline(image, mime_type, "image", purpose)
-                        if image.startswith("data:")
+                        _inline(image, mime_type, "image", purpose, resolved_store)
+                        if _is_data_uri(image)
                         else _reference(image, mime_type, "image", purpose)
                     )
                     if record is not None and record.get("state") in {"failed", "pending-upload"}:
@@ -431,6 +517,7 @@ def sanitize_media_payload(value: Any, purpose: str = "capture") -> Any:
                         mime_type or (f"audio/{fmt}" if fmt else "audio/unknown"),
                         "audio",
                         purpose,
+                        resolved_store,
                     )
                     if record is not None and record.get("state") in {"failed", "pending-upload"}:
                         audio_result = dict(result[key])
@@ -447,6 +534,7 @@ def sanitize_media_payload(value: Any, purpose: str = "capture") -> Any:
                         ),
                         declared,
                         purpose,
+                        resolved_store,
                     )
                     if record is not None and record.get("state") in {
                         "failed",
@@ -458,7 +546,9 @@ def sanitize_media_payload(value: Any, purpose: str = "capture") -> Any:
 
             file_data = node.get("file_data") or node.get("fileData")
             if isinstance(file_data, str):
-                record = _inline(file_data, mime_type, declared or "document", purpose)
+                record = _inline(
+                    file_data, mime_type, declared or "document", purpose, resolved_store
+                )
                 if record is not None and record.get("state") in {"failed", "pending-upload"}:
                     key = "file_data" if "file_data" in node else "fileData"
                     result[key] = _unavailable_placeholder(record)
@@ -466,7 +556,7 @@ def sanitize_media_payload(value: Any, purpose: str = "capture") -> Any:
             raw_key = "data" if "data" in node else "bytes" if "bytes" in node else None
             raw_data = node.get(raw_key) if raw_key is not None else None
             if isinstance(raw_data, str) and (media_declared or mime_type):
-                record = _inline(raw_data, mime_type, media_declared, purpose)
+                record = _inline(raw_data, mime_type, media_declared, purpose, resolved_store)
                 if record is not None and record.get("state") in {"failed", "pending-upload"}:
                     result[raw_key] = _unavailable_placeholder(record)
             if (
@@ -475,18 +565,17 @@ def sanitize_media_payload(value: Any, purpose: str = "capture") -> Any:
                 and len(raw_data) > DEFAULT_MAX_CAPTURE_VALUE_BYTES
             ):
                 digest = hashlib.sha256(raw_data).hexdigest()
-                store = current_media_store()
                 actual_mime = (
                     normalize_media_mime(mime_type, media_declared, content=raw_data)
                     or "application/octet-stream"
                 )
                 token = (
-                    store.stage(
+                    resolved_store.stage(
                         bytes(raw_data),
                         actual_mime,
                         purpose,
                     )
-                    if store is not None and len(raw_data) <= store.max_bytes
+                    if resolved_store is not None and len(raw_data) <= resolved_store.max_bytes
                     else None
                 )
                 result[raw_key] = _unavailable_placeholder(
@@ -518,24 +607,77 @@ def sanitize_media_payload(value: Any, purpose: str = "capture") -> Any:
                     declared.lower() == "url" or media_declared or mime_type
                 ):
                     result[reference_key] = _sanitized_reference(reference)
+            for key in ("b64_json", "b64Json"):
+                encoded_image = node.get(key)
+                if isinstance(encoded_image, str):
+                    record = _inline(
+                        encoded_image,
+                        mime_type or "image/unknown",
+                        "image",
+                        purpose,
+                        resolved_store,
+                    )
+                    if record.get("state") in {"failed", "pending-upload"}:
+                        result[key] = _unavailable_placeholder(record)
             return result
         if isinstance(node, Sequence) and not isinstance(node, (str, bytes, bytearray)):
-            return [sanitize(item) for item in node]
+            result = []
+            for item in node:
+                if budget_exhausted:
+                    result.append(unavailable("traversal_limit"))
+                    break
+                result.append(sanitize(item, inherited_declared, inherited_mime_type, depth + 1))
+            return result
         modeled = _model_mapping(node)
         if modeled is not None:
-            return sanitize(modeled, inherited_declared, inherited_mime_type)
+            return sanitize(modeled, inherited_declared, inherited_mime_type, depth + 1)
         return node
 
     return sanitize(value)
 
 
-def media_references(value: Any, purpose: str) -> list[dict[str, Any]]:
+def media_references(
+    value: Any,
+    purpose: str,
+    *,
+    store: PendingMediaStore | None | object = _CURRENT_STORE,
+) -> list[dict[str, Any]]:
     found: list[dict[str, Any]] = []
+    resolved_store = _resolved_store(store)
+    active: set[int] = set()
+    visited = 0
+    budget_exhausted = False
 
     def visit(
         node: Any,
         inherited_declared: str = "",
         inherited_mime_type: str = "",
+        depth: int = 0,
+    ) -> None:
+        nonlocal budget_exhausted, visited
+        visited += 1
+        if visited > _MAX_MEDIA_TRAVERSAL_NODES or depth > _MAX_MEDIA_TRAVERSAL_DEPTH:
+            budget_exhausted = visited > _MAX_MEDIA_TRAVERSAL_NODES
+            return
+        is_container = isinstance(node, Mapping) or (
+            isinstance(node, Sequence) and not isinstance(node, (str, bytes, bytearray))
+        )
+        identity = id(node)
+        if is_container and identity in active:
+            return
+        if is_container:
+            active.add(identity)
+        try:
+            visit_node(node, inherited_declared, inherited_mime_type, depth)
+        finally:
+            if is_container:
+                active.discard(identity)
+
+    def visit_node(
+        node: Any,
+        inherited_declared: str,
+        inherited_mime_type: str,
+        depth: int,
     ) -> None:
         if isinstance(node, Mapping):
             declared = str(node.get("type") or "")
@@ -558,8 +700,8 @@ def media_references(value: Any, purpose: str) -> list[dict[str, Any]]:
                 image = image.get("url")
             if isinstance(image, str):
                 record = (
-                    _inline(image, mime_type, "image", purpose)
-                    if image.startswith("data:")
+                    _inline(image, mime_type, "image", purpose, resolved_store)
+                    if _is_data_uri(image)
                     else _reference(image, mime_type, "image", purpose)
                 )
                 if record:
@@ -572,6 +714,7 @@ def media_references(value: Any, purpose: str) -> list[dict[str, Any]]:
                     mime_type or (f"audio/{fmt}" if fmt else "audio/unknown"),
                     "audio",
                     purpose,
+                    resolved_store,
                 )
                 if record:
                     found.append(record)
@@ -582,18 +725,21 @@ def media_references(value: Any, purpose: str) -> list[dict[str, Any]]:
                     str(inline_data.get("mime_type") or inline_data.get("mimeType") or mime_type),
                     declared,
                     purpose,
+                    resolved_store,
                 )
                 if record:
                     found.append(record)
             file_data = node.get("file_data") or node.get("fileData")
             if isinstance(file_data, str):
-                record = _inline(file_data, mime_type, declared or "document", purpose)
+                record = _inline(
+                    file_data, mime_type, declared or "document", purpose, resolved_store
+                )
                 if record:
                     found.append(record)
             raw_key = "data" if "data" in node else "bytes" if "bytes" in node else None
             raw_data = node.get(raw_key) if raw_key is not None else None
             if isinstance(raw_data, str) and (media_declared or mime_type):
-                record = _inline(raw_data, mime_type, media_declared, purpose)
+                record = _inline(raw_data, mime_type, media_declared, purpose, resolved_store)
                 if record:
                     found.append(record)
             if isinstance(raw_data, (bytes, bytearray)) and (media_declared or mime_type):
@@ -603,17 +749,16 @@ def media_references(value: Any, purpose: str) -> list[dict[str, Any]]:
                     content=raw_data,
                 )
                 digest = hashlib.sha256(raw_data).hexdigest()
-                store = current_media_store()
                 token = (
-                    store.stage(
+                    resolved_store.stage(
                         bytes(raw_data),
                         mime_type or "application/octet-stream",
                         purpose,
                     )
                     if (
-                        store is not None
+                        resolved_store is not None
                         and len(raw_data) > DEFAULT_MAX_CAPTURE_VALUE_BYTES
-                        and len(raw_data) <= store.max_bytes
+                        and len(raw_data) <= resolved_store.max_bytes
                     )
                     else None
                 )
@@ -645,6 +790,18 @@ def media_references(value: Any, purpose: str) -> list[dict[str, Any]]:
                         ),
                     }
                 )
+            for key in ("b64_json", "b64Json"):
+                encoded_image = node.get(key)
+                if isinstance(encoded_image, str):
+                    found.append(
+                        _inline(
+                            encoded_image,
+                            mime_type or "image/unknown",
+                            "image",
+                            purpose,
+                            resolved_store,
+                        )
+                    )
             reference = (
                 node.get("file_id")
                 or node.get("file_uri")
@@ -658,18 +815,22 @@ def media_references(value: Any, purpose: str) -> list[dict[str, Any]]:
                     _reference(reference, mime_type, media_declared or "document", purpose)
                 )
             for key, child in node.items():
+                if budget_exhausted:
+                    break
                 if key == "neatlogs_media":
                     continue
                 keyed_kind = str(key).lower().replace("input_", "")
                 child_declared = keyed_kind if keyed_kind in _MEDIA_KINDS else media_declared
-                visit(child, child_declared, mime_type)
+                visit(child, child_declared, mime_type, depth + 1)
         elif isinstance(node, Sequence) and not isinstance(node, (str, bytes, bytearray)):
             for child in node:
-                visit(child, inherited_declared, inherited_mime_type)
+                if budget_exhausted:
+                    break
+                visit(child, inherited_declared, inherited_mime_type, depth + 1)
         else:
             modeled = _model_mapping(node)
             if modeled is not None:
-                visit(modeled, inherited_declared, inherited_mime_type)
+                visit(modeled, inherited_declared, inherited_mime_type, depth + 1)
 
     visit(value)
     unique: dict[tuple[Any, ...], dict[str, Any]] = {}
@@ -678,21 +839,28 @@ def media_references(value: Any, purpose: str) -> list[dict[str, Any]]:
             key = (record.get("sha256"), record.get("reference"), record.get("type"))
             if key in unique:
                 token = record.get("upload_token")
-                store = current_media_store()
-                if isinstance(token, str) and store is not None:
-                    store.release(token)
+                if isinstance(token, str) and resolved_store is not None:
+                    resolved_store.release(token)
                 continue
             unique[key] = record
     return list(unique.values())
 
 
 def set_media_attributes(span: Any, prefix: str, value: Any, purpose: str) -> None:
-    for index, record in enumerate(media_references(value, purpose)):
-        for key, item in record.items():
-            span.set_attribute(f"{prefix}.media.{index}.{key}", item)
+    try:
+        for index, record in enumerate(media_references(value, purpose)):
+            for key, item in record.items():
+                span.set_attribute(f"{prefix}.media.{index}.{key}", item)
+    except Exception:
+        # Instrumentation must never change the provider call's outcome.
+        return
 
 
-def promote_message_media_attributes(attributes: Mapping[str, Any]) -> dict[str, Any]:
+def promote_message_media_attributes(
+    attributes: Mapping[str, Any],
+    *,
+    store: PendingMediaStore | None | object = _CURRENT_STORE,
+) -> dict[str, Any]:
     """Promote provider-shaped message content into canonical media attributes.
 
     This is a shared fallback for existing adapters. Adapters may still emit the
@@ -717,12 +885,74 @@ def promote_message_media_attributes(attributes: Mapping[str, Any]) -> dict[str,
                 parsed = json.loads(value)
             except (TypeError, ValueError):
                 continue
-        records = media_references(parsed, "input" if direction == "input" else "output")
+        records = media_references(
+            parsed,
+            "input" if direction == "input" else "output",
+            store=store,
+        )
         for media_index, record in enumerate(records):
             token = record.get("upload_token")
-            store = current_media_store()
-            if isinstance(token, str) and store is not None:
-                store.retain(token)
+            resolved_store = _resolved_store(store)
+            if isinstance(token, str) and resolved_store is not None:
+                resolved_store.retain(token)
             for field, item in record.items():
                 result[f"{prefix}.media.{media_index}.{field}"] = item
     return result
+
+
+def sanitize_media_attributes(
+    attributes: Mapping[str, Any],
+    *,
+    store: PendingMediaStore | None,
+) -> dict[str, Any]:
+    """Sanitize provider-normalized attributes at the post-mask boundary."""
+
+    result: dict[str, Any] = {}
+    for key, value in attributes.items():
+        normalized_key = str(key)
+        lowered_key = normalized_key.lower()
+        parsed = None
+        if isinstance(value, str):
+            stripped = value.lstrip()
+            if stripped.startswith(("{", "[")):
+                try:
+                    parsed = json.loads(value)
+                except (TypeError, ValueError):
+                    parsed = None
+            if _is_data_uri(value):
+                record = _inline(value, "", "image", "capture", store)
+                result[normalized_key] = value
+                if record.get("state") in {"failed", "pending-upload"}:
+                    result[normalized_key] = json.dumps(
+                        _unavailable_placeholder(record),
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    )
+                continue
+            encoded_kind = ""
+            if lowered_key.endswith((".b64_json", ".b64json")):
+                encoded_kind = "image"
+            elif lowered_key.endswith((".input_audio.data", ".inputaudio.data")):
+                encoded_kind = "audio"
+            elif lowered_key.endswith((".inline_data.data", ".inlinedata.data")):
+                encoded_kind = "media"
+            elif lowered_key.endswith((".file_data", ".filedata")):
+                encoded_kind = "document"
+            if encoded_kind:
+                record = _inline(value, "", encoded_kind, "capture", store)
+                result[normalized_key] = value
+                if record.get("state") in {"failed", "pending-upload"}:
+                    result[normalized_key] = json.dumps(
+                        _unavailable_placeholder(record),
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    )
+                continue
+        if parsed is not None:
+            sanitized = sanitize_media_payload(parsed, store=store)
+            result[normalized_key] = json.dumps(
+                sanitized, ensure_ascii=False, separators=(",", ":")
+            )
+        else:
+            result[normalized_key] = sanitize_media_payload(value, store=store)
+    return promote_message_media_attributes(result, store=store)

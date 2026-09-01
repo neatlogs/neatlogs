@@ -384,6 +384,7 @@ def _finalize_stream(
 ) -> None:
     """Finalize a streaming response span from accumulated chunks."""
     text_parts: List[str] = []
+    set_media_attributes(span, "neatlogs.llm.output_messages.0", chunks, "output")
     thinking_parts: List[str] = []
     tool_calls_acc: List[dict] = []
     finish_reason = None

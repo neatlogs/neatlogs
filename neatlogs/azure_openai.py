@@ -462,6 +462,12 @@ def _finalize_stream(
 
 
 def _finalize_responses_response(span: Any, response: Any, duration_ms: float) -> None:
+    set_media_attributes(
+        span,
+        "neatlogs.llm.output_messages.0",
+        getattr(response, "output", None) or [],
+        "output",
+    )
     output_text = getattr(response, "output_text", None)
     if output_text:
         span.set_attribute("neatlogs.llm.output_messages.0.role", "assistant")
@@ -491,6 +497,7 @@ def _finalize_responses_stream(
     interrupted: bool = False,
 ) -> None:
     text_parts: List[str] = []
+    set_media_attributes(span, "neatlogs.llm.output_messages.0", chunks, "output")
     model = None
     usage = None
     for ev in chunks:
@@ -739,6 +746,7 @@ def _patch_images(images: Any, sync: bool = True) -> None:
             def finalize(span, response, duration_ms):
                 data = getattr(response, "data", None)
                 if data is not None:
+                    set_media_attributes(span, "neatlogs.llm.output_messages.0", data, "output")
                     try:
                         span.set_attribute("neatlogs.image.count", len(data))
                     except TypeError:

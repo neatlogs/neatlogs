@@ -183,13 +183,12 @@ class Client:
                 diagnostics=self._delivery_diagnostics,
                 upload_authority=self._upload_authority,
             )
-            if self._media_store is not None:
-                limited_span_exporter = TypedMediaSpanExporter(
-                    limited_span_exporter,
-                    self._upload_authority,
-                    self._media_store,
-                    diagnostics=self._delivery_diagnostics,
-                )
+            limited_span_exporter = TypedMediaSpanExporter(
+                limited_span_exporter,
+                self._upload_authority,
+                self._media_store,
+                diagnostics=self._delivery_diagnostics,
+            )
             batch_processor = ObservableBatchSpanProcessor(
                 MaskingSpanExporter(
                     limited_span_exporter,
@@ -228,13 +227,12 @@ class Client:
                     diagnostics=self._delivery_diagnostics,
                     upload_authority=self._upload_authority,
                 )
-                if self._media_store is not None:
-                    limited_log_exporter = TypedMediaLogExporter(
-                        limited_log_exporter,
-                        self._upload_authority,
-                        self._media_store,
-                        diagnostics=self._delivery_diagnostics,
-                    )
+                limited_log_exporter = TypedMediaLogExporter(
+                    limited_log_exporter,
+                    self._upload_authority,
+                    self._media_store,
+                    diagnostics=self._delivery_diagnostics,
+                )
                 self.log_provider.add_log_record_processor(
                     NeatlogsLogFilter(
                         ObservableBatchLogRecordProcessor(

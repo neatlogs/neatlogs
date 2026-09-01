@@ -480,6 +480,12 @@ def _extract_responses_text(response: Any) -> Optional[str]:
 
 
 def _finalize_responses(span: Any, response: Any, duration_ms: float) -> None:
+    set_media_attributes(
+        span,
+        "neatlogs.llm.output_messages.0",
+        _get(response, "output", None) or [],
+        "output",
+    )
     text = _extract_responses_text(response)
     if text:
         span.set_attribute("neatlogs.llm.output_messages.0.role", "assistant")
@@ -507,6 +513,7 @@ def _finalize_responses_stream(
     interrupted: bool = False,
 ) -> None:
     text_parts: List[str] = []
+    set_media_attributes(span, "neatlogs.llm.output_messages.0", chunks, "output")
     model = None
     usage = None
     for ev in chunks:

@@ -19,6 +19,7 @@ from urllib.parse import quote, urlparse
 from uuid import UUID
 
 import requests
+from urllib3.util import Timeout
 
 from .capture import UPLOAD_UNAVAILABLE_REASON
 
@@ -502,17 +503,18 @@ class AuthenticatedUploadAuthority:
     ) -> MediaExportReceipt:
         last_error: UploadError | None = None
         for attempt in range(self._max_attempts):
-            status, completed = self._json_request(
-                "POST",
-                f"{self._base_url}/v1/telemetry/uploads/{quote(upload_id, safe='')}/complete",
-                deadline,
-                stage="complete",
-                expected_status={200, 202},
-                return_status=True,
-                headers=self._api_headers,
-                json={"sha256": payload.sha256, "byte_length": payload.byte_length},
-            )
             try:
+                status, completed = self._json_request(
+                    "POST",
+                    f"{self._base_url}/v1/telemetry/uploads/{quote(upload_id, safe='')}/complete",
+                    deadline,
+                    stage="complete",
+                    expected_status={200, 202},
+                    return_status=True,
+                    request_attempts=1,
+                    headers=self._api_headers,
+                    json={"sha256": payload.sha256, "byte_length": payload.byte_length},
+                )
                 return self._validate_complete(status, completed, upload_id, expected)
             except UploadError as exc:
                 if not exc.retryable or attempt + 1 >= self._max_attempts:
@@ -530,10 +532,12 @@ class AuthenticatedUploadAuthority:
         if not isinstance(value, Mapping) or value.get("upload_id") != upload_id:
             raise UploadError("complete", "invalid_response")
         state = value.get("state")
-        if state not in {"ready", "validating", "rejected"}:
+        if state not in {"uploaded", "ready", "validating", "rejected"}:
             raise UploadError("complete", "invalid_state")
-        if (state == "validating" and status != 202) or (
-            state in {"ready", "rejected"} and status != 200
+        if (
+            (state == "validating" and status not in {200, 202})
+            or (state == "uploaded" and status != 200)
+            or (state in {"ready", "rejected"} and status != 200)
         ):
             raise UploadError("complete", "invalid_status_for_state")
         reference = _strict_reference(value.get("reference"), expected)
@@ -544,7 +548,7 @@ class AuthenticatedUploadAuthority:
                 value.get("diagnostic"),
                 stage="complete",
                 fallback_reason=f"upload_{state}",
-                fallback_retryable=state == "validating",
+                fallback_retryable=state in {"uploaded", "validating"},
             )
             raise UploadError("complete", reason, retryable=retryable)
         _strict_diagnostic(
@@ -583,9 +587,12 @@ class AuthenticatedUploadAuthority:
         stage: str,
         expected_status: set[int],
         return_status: bool = False,
+        request_attempts: int | None = None,
         **kwargs: Any,
     ) -> Any:
-        response = self._request(method, url, deadline, stage=stage, **kwargs)
+        response = self._request(
+            method, url, deadline, stage=stage, attempts=request_attempts, **kwargs
+        )
         try:
             try:
                 value = self._bounded_json(response, stage, deadline)
@@ -646,11 +653,19 @@ class AuthenticatedUploadAuthority:
             raise UploadError(stage, "invalid_json") from exc
 
     def _request(
-        self, method: str, url: str, deadline: float, *, stage: str, **kwargs: Any
+        self,
+        method: str,
+        url: str,
+        deadline: float,
+        *,
+        stage: str,
+        attempts: int | None = None,
+        **kwargs: Any,
     ) -> requests.Response:
         kwargs.setdefault("allow_redirects", False)
         kwargs.setdefault("stream", True)
-        for attempt in range(self._max_attempts):
+        max_attempts = self._max_attempts if attempts is None else max(1, attempts)
+        for attempt in range(max_attempts):
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise UploadError(stage, "deadline_exceeded", retryable=True)
@@ -658,19 +673,35 @@ class AuthenticatedUploadAuthority:
                 response = self._session.request(
                     method,
                     url,
-                    timeout=min(remaining, 1.0),
+                    timeout=Timeout(
+                        connect=min(remaining, 5.0),
+                        read=remaining,
+                        total=remaining,
+                    ),
                     **kwargs,
                 )
             except requests.RequestException as exc:
-                if attempt + 1 == self._max_attempts:
+                if attempt + 1 == max_attempts:
                     raise UploadError(stage, "transport_error", retryable=True) from exc
+                time.sleep(min(0.05 * (2**attempt), max(0.0, deadline - time.monotonic())))
                 continue
             if time.monotonic() >= deadline:
                 response.close()
                 raise UploadError(stage, "deadline_exceeded", retryable=True)
-            if response.status_code not in _RETRYABLE_STATUS or attempt + 1 == self._max_attempts:
+            if response.status_code not in _RETRYABLE_STATUS or attempt + 1 == max_attempts:
                 return response
+            retry_after = 0.0
+            try:
+                retry_after = max(
+                    0.0, float(getattr(response, "headers", {}).get("retry-after", 0))
+                )
+            except (TypeError, ValueError):
+                retry_after = 0.0
             response.close()
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise UploadError(stage, "deadline_exceeded", retryable=True)
+            time.sleep(min(max(retry_after, 0.05 * (2**attempt)), remaining))
         raise UploadError(stage, "retry_exhausted", retryable=True)
 
     def close(self) -> None:

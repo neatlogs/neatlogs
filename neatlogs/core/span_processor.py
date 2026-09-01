@@ -17,7 +17,6 @@ from opentelemetry.sdk.trace import ReadableSpan, Span, SpanProcessor
 
 from .attribute_processor import UnifiedAttributeProcessor
 from .logger import get_logger
-from .media import promote_message_media_attributes
 
 logger = get_logger()
 
@@ -427,7 +426,6 @@ class NeatlogsSpanProcessor(SpanProcessor):
 
             # 2. Process and normalize attributes
             unified_attrs = self.unified_processor.process(span)
-            unified_attrs = promote_message_media_attributes(unified_attrs)
 
             # 3. Filter large tokenized arrays for EMBEDDING/VECTOR_STORE spans
             nl_kind = unified_attrs.get("neatlogs.span.kind")

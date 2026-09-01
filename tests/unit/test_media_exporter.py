@@ -1,6 +1,7 @@
 import base64
 import json
 
+import pytest
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk._logs.export import (
     InMemoryLogRecordExporter,
@@ -290,3 +291,90 @@ def test_repeated_token_across_batches_retains_bytes_until_last_reference():
         set_default_media_store(None)
 
     assert len(authority.payloads) == 2
+
+
+@pytest.mark.parametrize("provider", ["cohere", "groq", "mistral", "litellm", "together"])
+def test_generic_provider_content_is_sanitized_and_promoted_after_mask(provider):
+    original = b"unmasked-private-image" * 5_000
+    masked = b"masked-private-image" * 5_000
+    original_value = {
+        "type": "image_url",
+        "image_url": {"url": f"data:image/png;base64,{base64.b64encode(original).decode()}"},
+    }
+    masked_value = {
+        "type": "image_url",
+        "image_url": {"url": f"data:image/png;base64,{base64.b64encode(masked).decode()}"},
+    }
+    store = PendingMediaStore(max_bytes=25 * 1024 * 1024)
+    authority = Authority()
+    sink = InMemorySpanExporter()
+    capture = InMemorySpanExporter()
+    provider_instance = TracerProvider()
+    provider_instance.add_span_processor(SimpleSpanProcessor(capture))
+    span = provider_instance.get_tracer("generic-media").start_span("provider-media")
+    span.set_attribute("gen_ai.system", provider)
+    span.set_attribute(
+        "neatlogs.llm.input_messages.0.content",
+        json.dumps(original_value),
+    )
+    span.end()
+
+    def mask(snapshot):
+        snapshot["attributes"]["neatlogs.llm.input_messages.0.content"] = json.dumps(masked_value)
+        return snapshot
+
+    exporter = MaskingSpanExporter(
+        TypedMediaSpanExporter(sink, authority, store),
+        mask,
+        media_store=store,
+    )
+    assert exporter.export(capture.get_finished_spans()) is SpanExportResult.SUCCESS
+
+    assert len(authority.payloads) == 1
+    assert authority.payloads[0].content == masked
+    rendered = repr(sink.get_finished_spans()[0].attributes)
+    assert base64.b64encode(original).decode()[:100] not in rendered
+    assert base64.b64encode(masked).decode()[:100] not in rendered
+    assert UPLOAD_ID in rendered
+
+
+def test_generic_provider_media_fails_closed_when_uploads_are_disabled():
+    raw = b"disabled-upload-private-image" * 5_000
+    value = {
+        "type": "image_url",
+        "image_url": {"url": f"data:image/png;base64,{base64.b64encode(raw).decode()}"},
+    }
+    capture = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(capture))
+    span = provider.get_tracer("generic-media").start_span("disabled-media")
+    span.set_attribute("neatlogs.llm.input_messages.0.content", json.dumps(value))
+    span.end()
+    sink = InMemorySpanExporter()
+
+    result = TypedMediaSpanExporter(sink, authority=None, store=None).export(
+        capture.get_finished_spans()
+    )
+
+    assert result is SpanExportResult.SUCCESS
+    rendered = repr(sink.get_finished_spans()[0].attributes)
+    assert base64.b64encode(raw).decode()[:100] not in rendered
+    assert "backend_upload_contract_unavailable" in rendered
+    assert "nl_pending_media_" not in rendered
+
+
+def test_flattened_image_generation_base64_fails_closed():
+    encoded = base64.b64encode(b"generated-private-image" * 5_000).decode()
+    capture = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(capture))
+    span = provider.get_tracer("generated-media").start_span("generated-image")
+    span.set_attribute("gen_ai.response.images.0.b64_json", encoded)
+    span.end()
+    sink = InMemorySpanExporter()
+
+    TypedMediaSpanExporter(sink, authority=None, store=None).export(capture.get_finished_spans())
+
+    rendered = repr(sink.get_finished_spans()[0].attributes)
+    assert encoded[:100] not in rendered
+    assert "backend_upload_contract_unavailable" in rendered

@@ -103,6 +103,31 @@ def test_injectable_upload_authority_receives_complete_masked_envelope():
     assert snapshot["span_upload_authority_available"] is True
 
 
+def test_upload_opt_in_keeps_phase3_limits_for_non_overflow_spans():
+    spans = _finished_spans(count=1, payload_size=150_000)
+
+    class Authority:
+        available = True
+        unavailable_reason = ""
+
+        def export_overflow(self, _payload):
+            raise AssertionError("ordinary bounded span must not use overflow")
+
+    sink = RecordingExporter()
+    diagnostics = DeliveryDiagnostics()
+    exporter = ByteLimitedSpanExporter(
+        sink,
+        max_export_bytes=4 * 1024 * 1024,
+        diagnostics=diagnostics,
+        upload_authority=Authority(),
+    )
+
+    assert exporter.export(spans) is SpanExportResult.SUCCESS
+    exported = sink.batches[0][0]
+    assert len(exported.attributes["neatlogs.llm.input"]) < 150_000
+    assert diagnostics.snapshot()["span_capture_truncations"] >= 1
+
+
 def test_oversized_upload_contains_the_complete_masked_span_and_is_not_sent_twice():
     from neatlogs.core.masking_exporter import MaskingSpanExporter
 

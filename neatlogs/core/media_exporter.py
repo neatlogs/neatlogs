@@ -23,7 +23,7 @@ except ImportError:  # OpenTelemetry 1.35-1.38 compatibility
     )
 
 from .delivery import DeliveryDiagnostics
-from .media import PendingMediaStore
+from .media import PendingMediaStore, sanitize_media_attributes, sanitize_media_payload
 from .upload_authority import MediaExportReceipt, UploadAuthority, UploadError
 
 logger = logging.getLogger(__name__)
@@ -300,32 +300,40 @@ class _MediaResolver:
 
 
 class TypedMediaSpanExporter(SpanExporter):
-    """Resolve pending media only after the outer masking exporter has run."""
+    """Sanitize and resolve media only after the outer mask has run."""
 
     def __init__(
         self,
         inner: SpanExporter,
-        authority: UploadAuthority,
-        store: PendingMediaStore,
+        authority: UploadAuthority | None,
+        store: PendingMediaStore | None,
         diagnostics: DeliveryDiagnostics | None = None,
     ) -> None:
         self._inner = inner
-        self._resolver = _MediaResolver(authority, store, diagnostics, "span")
+        self._store = store
+        self._resolver = (
+            _MediaResolver(authority, store, diagnostics, "span")
+            if authority is not None and authority.available and store is not None
+            else None
+        )
 
     def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
-        candidates = [
-            {
-                "attributes": dict(span.attributes or {}),
-                "events": [dict(event.attributes or {}) for event in span.events],
-            }
-            for span in spans
-        ]
-        replacements, failures = self._resolver.resolve(candidates)
-        if not replacements and not failures:
-            return self._inner.export(spans)
-        prepared = []
+        sanitized: list[tuple[ReadableSpan, dict[str, Any], list[dict[str, Any]]]] = []
         for span in spans:
-            attributes = dict(span.attributes or {})
+            attributes = sanitize_media_attributes(span.attributes or {}, store=self._store)
+            events = [
+                sanitize_media_attributes(event.attributes or {}, store=self._store)
+                for event in span.events
+            ]
+            sanitized.append((span, attributes, events))
+        candidates = [
+            {"attributes": attributes, "events": events} for _, attributes, events in sanitized
+        ]
+        replacements, failures = (
+            self._resolver.resolve(candidates) if self._resolver is not None else ({}, {})
+        )
+        prepared: list[ReadableSpan] = []
+        for span, attributes, events in sanitized:
             prepared.append(
                 ReadableSpan(
                     name=span.name,
@@ -337,11 +345,11 @@ class TypedMediaSpanExporter(SpanExporter):
                         Event(
                             event.name,
                             attributes=_replace_attributes(
-                                event.attributes or {}, replacements, failures
+                                event_attributes, replacements, failures
                             ),
                             timestamp=event.timestamp,
                         )
-                        for event in span.events
+                        for event, event_attributes in zip(span.events, events)
                     ],
                     links=span.links,
                     kind=span.kind,
@@ -366,34 +374,49 @@ class TypedMediaLogExporter(LogRecordExporter):
     def __init__(
         self,
         inner: LogRecordExporter,
-        authority: UploadAuthority,
-        store: PendingMediaStore,
+        authority: UploadAuthority | None,
+        store: PendingMediaStore | None,
         diagnostics: DeliveryDiagnostics | None = None,
     ) -> None:
         self._inner = inner
-        self._resolver = _MediaResolver(authority, store, diagnostics, "log")
+        self._resolver = (
+            _MediaResolver(authority, store, diagnostics, "log")
+            if authority is not None and authority.available and store is not None
+            else None
+        )
         self._store = store
 
     def export(self, batch: Sequence[ReadableLogRecord]) -> LogRecordExportResult:
-        candidates = [
-            {
-                "body": item.log_record.body,
-                "attributes": dict(item.log_record.attributes or {}),
-            }
-            for item in batch
-        ]
-        replacements, failures = self._resolver.resolve(candidates)
-        if not replacements and not failures:
-            return self._inner.export(batch)
-        prepared = []
+        sanitized: list[tuple[ReadableLogRecord, Any, dict[str, Any]]] = []
         for item in batch:
+            body = item.log_record.body
+            if isinstance(body, str):
+                parsed = _json_container(body)
+                if parsed is not None:
+                    body = json.dumps(
+                        sanitize_media_payload(parsed, store=self._store),
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    )
+                else:
+                    body = sanitize_media_payload(body, store=self._store)
+            else:
+                body = sanitize_media_payload(body, store=self._store)
+            attributes = sanitize_media_attributes(
+                item.log_record.attributes or {}, store=self._store
+            )
+            sanitized.append((item, body, attributes))
+        candidates = [{"body": body, "attributes": attributes} for _, body, attributes in sanitized]
+        replacements, failures = (
+            self._resolver.resolve(candidates) if self._resolver is not None else ({}, {})
+        )
+        prepared = []
+        for item, body, attributes in sanitized:
             record = item.log_record
             clone = copy.copy(item)
             clone_record = copy.copy(record)
-            clone_record.body = _replace(record.body, replacements, failures)
-            clone_record.attributes = _replace_attributes(
-                record.attributes or {}, replacements, failures
-            )
+            clone_record.body = _replace(body, replacements, failures)
+            clone_record.attributes = _replace_attributes(attributes, replacements, failures)
             object.__setattr__(clone, "log_record", clone_record)
             prepared.append(clone)
         result = self._inner.export(prepared)

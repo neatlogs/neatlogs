@@ -18,9 +18,10 @@ UPLOAD_ID = "123e4567-e89b-12d3-a456-426614174000"
 
 
 class Response:
-    def __init__(self, status_code, body=None):
+    def __init__(self, status_code, body=None, headers=None):
         self.status_code = status_code
         self._body = body
+        self.headers = headers or {}
         self.closed = False
 
     def json(self):
@@ -235,6 +236,52 @@ def test_validating_completion_retry_exhaustion_is_explicit_and_bounded():
     assert caught.value.reason_code == "still_validating"
     assert caught.value.retryable is True
     assert len(session.calls) == 5
+
+
+def test_uploaded_completion_is_retryable_and_can_become_ready():
+    payload = _media()
+    uploaded = _completed(
+        payload,
+        "uploaded",
+        diagnostic={"stage": "validation", "reason_code": "object_uploaded", "retryable": True},
+    )
+    session = Session(
+        [
+            Response(201, _prepared(payload)),
+            Response(204),
+            Response(200, uploaded),
+            Response(200, _completed(payload)),
+        ]
+    )
+
+    assert _authority(session).export_media(payload).complete
+    assert len(session.calls) == 4
+
+
+def test_complete_transport_retries_are_not_multiplied_and_timeout_uses_deadline():
+    payload = _media()
+    session = Session(
+        [
+            Response(201, _prepared(payload)),
+            Response(204),
+            Response(503, {"reason_code": "temporarily_unavailable", "retryable": True}),
+            Response(503, {"reason_code": "temporarily_unavailable", "retryable": True}),
+            Response(503, {"reason_code": "temporarily_unavailable", "retryable": True}),
+        ]
+    )
+    authority = AuthenticatedUploadAuthority(
+        base_url="https://ingest.example",
+        api_key="project-secret",
+        session=session,
+        deadline_seconds=5,
+    )
+
+    with pytest.raises(UploadError) as caught:
+        authority.export_media(payload)
+
+    assert caught.value.reason_code == "temporarily_unavailable"
+    assert len(session.calls) == 5
+    assert session.calls[1][2]["timeout"].total > 1
 
 
 def test_prepare_in_progress_still_requires_a_matching_reference():

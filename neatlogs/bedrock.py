@@ -362,6 +362,8 @@ def _decode_body(body: Any) -> dict:
 
 def _set_invoke_input(span: Any, vendor: str, body: dict) -> None:
     idx = 0
+    if not isinstance(body.get("messages"), list):
+        set_media_attributes(span, "neatlogs.llm.input_messages.0", body, "input")
     # Claude messages format
     if body.get("system"):
         span.set_attribute(f"neatlogs.llm.input_messages.{idx}.role", "system")
@@ -412,6 +414,7 @@ def _set_invoke_input(span: Any, vendor: str, body: dict) -> None:
 
 
 def _finalize_invoke(span: Any, vendor: str, body: dict, duration_ms: float) -> None:
+    set_media_attributes(span, "neatlogs.llm.output_messages.0", body, "output")
     text = None
     prompt_tokens = completion_tokens = None
     finish_reason = None

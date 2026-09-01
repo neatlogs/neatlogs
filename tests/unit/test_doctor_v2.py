@@ -19,7 +19,7 @@ from neatlogs.doctor_v2 import (
     get_captured_envelope,
 )
 
-FIXTURES = Path("/Users/shyam-neatlogs/neatlogs-chotu/contracts/doctor/v2/fixtures")
+FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "doctor-v2"
 
 
 def envelope():

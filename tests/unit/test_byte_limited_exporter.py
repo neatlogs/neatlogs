@@ -1,3 +1,4 @@
+import gzip
 import hashlib
 
 import pytest
@@ -95,6 +96,8 @@ def test_injectable_upload_authority_receives_complete_masked_envelope():
     assert payload.purpose == "otlp_overflow"
     assert payload.byte_length == len(payload.content)
     assert payload.sha256 == hashlib.sha256(payload.content).hexdigest()
+    assert payload.content_encoding == "gzip"
+    assert b"xxxxxxxx" in gzip.decompress(payload.content)
     snapshot = diagnostics.snapshot()
     assert snapshot["span_overflow_exports"] == 1
     assert snapshot["span_upload_authority_available"] is True
@@ -134,8 +137,9 @@ def test_oversized_upload_contains_the_complete_masked_span_and_is_not_sent_twic
     assert exporter.export(spans) is SpanExportResult.SUCCESS
     assert ordinary.batches == []
     assert len(authority.payloads) == 1
-    assert b"MASKED" in authority.payloads[0].content
-    assert b"xxxxxxxx" not in authority.payloads[0].content
+    expanded = gzip.decompress(authority.payloads[0].content)
+    assert b"MASKED" in expanded
+    assert b"xxxxxxxx" not in expanded
 
 
 def test_upload_authority_boolean_does_not_falsely_claim_delivery():
@@ -160,6 +164,28 @@ def test_upload_authority_boolean_does_not_falsely_claim_delivery():
     snapshot = diagnostics.snapshot()
     assert snapshot["span_overflow_exports"] == 0
     assert snapshot["span_overflow_failures"] == 1
+
+
+def test_backend_oversize_is_rejected_before_allocating_serialized_payload(monkeypatch):
+    spans = _finished_spans(count=1, payload_size=16)
+
+    class Authority:
+        available = True
+        unavailable_reason = ""
+        max_overflow_bytes = 20 * 1024 * 1024
+        max_overflow_expanded_bytes = 50 * 1024 * 1024
+
+        def export_overflow(self, _payload):
+            raise AssertionError("oversize payload must not reach upload authority")
+
+    monkeypatch.setattr(
+        ByteLimitedSpanExporter,
+        "_encoded_upper_bound",
+        staticmethod(lambda _span: 50 * 1024 * 1024 + 1),
+    )
+
+    exporter = ByteLimitedSpanExporter(RecordingExporter(), upload_authority=Authority())
+    assert exporter.export(spans) is SpanExportResult.FAILURE
 
 
 def test_exposes_final_export_failure_count():

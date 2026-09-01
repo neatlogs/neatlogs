@@ -28,6 +28,7 @@ from ._wrap_utils import (
     serialize,
 )
 from .core.choice_accumulator import ChoiceAccumulator, GoogleStreamFinalizer
+from .core.media import set_media_attributes
 
 _PATCHED = False
 _ORIG_INIT = None
@@ -304,6 +305,9 @@ def _set_input_attributes(span: Any, contents: Any, kwargs: dict) -> None:
                 span.set_attribute(
                     f"neatlogs.llm.input_messages.{idx}.content", serialize(system_instruction)
                 )
+                set_media_attributes(
+                    span, f"neatlogs.llm.input_messages.{idx}", system_instruction, "input"
+                )
             idx += 1
 
     # Contents — a single string, or a list of turns (str / dict / typed Content).
@@ -315,12 +319,14 @@ def _set_input_attributes(span: Any, contents: Any, kwargs: dict) -> None:
             role, text = _normalize_content_item(item)
             span.set_attribute(f"neatlogs.llm.input_messages.{idx}.role", role)
             span.set_attribute(f"neatlogs.llm.input_messages.{idx}.content", text)
+            set_media_attributes(span, f"neatlogs.llm.input_messages.{idx}", item, "input")
             idx += 1
     else:
         # A single typed Content (or anything else) — normalize it too.
         role, text = _normalize_content_item(contents)
         span.set_attribute(f"neatlogs.llm.input_messages.{idx}.role", role)
         span.set_attribute(f"neatlogs.llm.input_messages.{idx}.content", text)
+        set_media_attributes(span, f"neatlogs.llm.input_messages.{idx}", contents, "input")
 
     # Tools
     tools = None

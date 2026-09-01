@@ -314,11 +314,13 @@ class MaskingSpanExporter(SpanExporter):
         mask: Callable | None,
         timeout_seconds: float = 5.0,
         diagnostics: DeliveryDiagnostics | None = None,
+        media_store: Any | None = None,
     ) -> None:
         self._inner = inner
         self._global_mask = mask
         self._runner = _MaskRunner(timeout_seconds)
         self._diagnostics = diagnostics
+        self._media_store = media_store
 
     def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
         prepared: list[ReadableSpan | None] = [None] * len(spans)
@@ -332,7 +334,16 @@ class MaskingSpanExporter(SpanExporter):
                 continue
             masked_inputs.append((mask, snapshot))
             masked_indexes.append(index)
-        for index, masked in zip(masked_indexes, self._runner.apply_many(masked_inputs)):
+        masked_results = self._runner.apply_many(masked_inputs)
+        from .media import current_media_store
+        from .media_exporter import release_removed_media
+
+        for index, (_, original), masked in zip(masked_indexes, masked_inputs, masked_results):
+            release_removed_media(
+                self._media_store or current_media_store(),
+                original,
+                masked,
+            )
             if masked is not None:
                 prepared[index] = _masked_span(spans[index], masked)
             elif self._diagnostics is not None:
@@ -374,18 +385,25 @@ class MaskingLogExporter(LogRecordExporter):
         mask: Callable | None,
         timeout_seconds: float = 5.0,
         diagnostics: DeliveryDiagnostics | None = None,
+        media_store: Any | None = None,
     ) -> None:
         self._inner = inner
         self._mask = mask
         self._runner = _MaskRunner(timeout_seconds)
         self._diagnostics = diagnostics
+        self._media_store = media_store
 
     def export(self, batch: Sequence[ReadableLogRecord]) -> LogRecordExportResult:
         if self._mask is None:
             return self._inner.export(batch)
         kept = []
         snapshots = [(self._mask, _log_snapshot(item)) for item in batch]
-        for item, masked in zip(batch, self._runner.apply_many(snapshots)):
+        masked_results = self._runner.apply_many(snapshots)
+        from .media import current_media_store
+        from .media_exporter import release_removed_media
+
+        for item, (_, original), masked in zip(batch, snapshots, masked_results):
+            release_removed_media(self._media_store or current_media_store(), original, masked)
             if masked is None:
                 if self._diagnostics is not None:
                     self._diagnostics.record_masked_drop("log")

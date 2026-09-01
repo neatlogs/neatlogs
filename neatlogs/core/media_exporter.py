@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import json
 import logging
+from collections import Counter
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -51,18 +52,18 @@ def _is_pending_media_record(value: Mapping[str, Any]) -> bool:
     )
 
 
-def _tokens(value: Any) -> set[str]:
-    found: set[str] = set()
+def _token_counts(value: Any, *, pending_only: bool) -> Counter[str]:
+    found: Counter[str] = Counter()
 
     def visit(node: Any) -> None:
         if isinstance(node, Mapping):
             token = node.get("upload_token")
             if (
-                _is_pending_media_record(node)
-                and isinstance(token, str)
+                isinstance(token, str)
                 and token.startswith("nl_pending_media_")
+                and (not pending_only or _is_pending_media_record(node))
             ):
-                found.add(token)
+                found[token] += 1
             for key, item in node.items():
                 prefix = key[: -len(".upload_token")] if isinstance(key, str) else ""
                 if (
@@ -70,11 +71,11 @@ def _tokens(value: Any) -> set[str]:
                     and key.endswith(".upload_token")
                     and isinstance(item, str)
                     and item.startswith("nl_pending_media_")
-                    and node.get(f"{prefix}.state") == "pending-upload"
+                    and (not pending_only or node.get(f"{prefix}.state") == "pending-upload")
                     and isinstance(node.get(f"{prefix}.id"), str)
                     and node[f"{prefix}.id"].startswith("nl_media_")
                 ):
-                    found.add(item)
+                    found[item] += 1
                 visit(item)
         elif isinstance(node, Sequence) and not isinstance(node, (str, bytes, bytearray)):
             for item in node:
@@ -86,6 +87,17 @@ def _tokens(value: Any) -> set[str]:
 
     visit(value)
     return found
+
+
+def release_removed_media(store: PendingMediaStore | None, before: Any, after: Any | None) -> None:
+    """Release staged bytes whose internal token was removed by masking."""
+
+    if store is None:
+        return
+    before_counts = _token_counts(before, pending_only=False)
+    after_counts = _token_counts(after, pending_only=False) if after is not None else Counter()
+    for token, count in (before_counts - after_counts).items():
+        store.release(token, count)
 
 
 def _has_unresolved_pending(value: Any, known_tokens: set[str]) -> bool:
@@ -123,7 +135,7 @@ def _has_unresolved_pending(value: Any, known_tokens: set[str]) -> bool:
     return False
 
 
-def _reference_record(receipt: MediaExportReceipt, media_purpose: str) -> dict[str, Any]:
+def _reference_record(receipt: MediaExportReceipt) -> dict[str, Any]:
     reference = receipt.reference
     return {
         "id": reference.id,
@@ -131,7 +143,6 @@ def _reference_record(receipt: MediaExportReceipt, media_purpose: str) -> dict[s
         "mime_type": reference.mime_type,
         "byte_length": reference.byte_length,
         "sha256": reference.sha256,
-        "purpose": media_purpose,
         "state": "available",
         "safe_preview": "authenticated upload ready",
     }
@@ -152,7 +163,7 @@ def _replace(
 ) -> Any:
     if isinstance(value, Mapping):
         token = value.get("upload_token")
-        if _is_pending_media_record(value) and isinstance(token, str):
+        if isinstance(token, str) and token.startswith("nl_pending_media_"):
             if token in replacements:
                 replacement = dict(value)
                 replacement.pop("upload_token", None)
@@ -161,7 +172,9 @@ def _replace(
                 return replacement
             if token in failures:
                 return _failed_record(value, failures[token])
-        if _is_pending_media_record(value):
+        if _is_pending_media_record(value) or (
+            isinstance(token, str) and token.startswith("nl_pending_media_")
+        ):
             return _failed_record(value, "upload_token_missing")
         return {key: _replace(item, replacements, failures) for key, item in value.items()}
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
@@ -190,18 +203,21 @@ def _replace_attributes(
         str(key): _replace(value, replacements, failures) for key, value in attributes.items()
     }
     for key, token in list(result.items()):
-        if not key.endswith(".upload_token") or not isinstance(token, str):
+        if (
+            not key.endswith(".upload_token")
+            or not isinstance(token, str)
+            or not token.startswith("nl_pending_media_")
+        ):
             continue
         prefix = key[: -len(".upload_token")]
         identifier = result.get(f"{prefix}.id")
-        if (
-            result.get(f"{prefix}.state") != "pending-upload"
-            or not isinstance(identifier, str)
-            or not identifier.startswith("nl_media_")
-        ):
+        if not isinstance(identifier, str) or not identifier.startswith("nl_media_"):
             continue
         result.pop(key, None)
-        if token in replacements:
+        if result.get(f"{prefix}.state") != "pending-upload":
+            result[f"{prefix}.state"] = "failed"
+            result[f"{prefix}.safe_preview"] = "upload failed: masked_pending_state"
+        elif token in replacements:
             result.pop(f"{prefix}.safe_preview", None)
             for field, item in replacements[token].items():
                 result[f"{prefix}.{field}"] = item
@@ -242,8 +258,13 @@ class _MediaResolver:
     def resolve(self, value: Any) -> tuple[dict[str, dict[str, Any]], dict[str, str]]:
         replacements: dict[str, dict[str, Any]] = {}
         failures: dict[str, str] = {}
-        tokens = _tokens(value)
-        for token in sorted(tokens):
+        all_tokens = _token_counts(value, pending_only=False)
+        pending_tokens = set(_token_counts(value, pending_only=True))
+        for token in sorted(all_tokens):
+            if token not in pending_tokens:
+                failures[token] = "masked_pending_state"
+                self._store.release(token, all_tokens[token])
+                continue
             payload = self._store.get(token)
             if payload is None:
                 failures[token] = "staged_payload_missing"
@@ -253,21 +274,21 @@ class _MediaResolver:
                     if not isinstance(receipt, MediaExportReceipt) or not receipt.complete:
                         failures[token] = "incomplete_receipt"
                     else:
-                        replacements[token] = _reference_record(receipt, payload.media_purpose)
+                        replacements[token] = _reference_record(receipt)
                 except UploadError as exc:
                     failures[token] = f"{exc.stage}:{exc.reason_code}"
                 except Exception as exc:
                     logger.error("[neatlogs] typed media upload failed (%s)", type(exc).__name__)
                     failures[token] = "unexpected_error"
                 finally:
-                    self._store.release(token)
+                    self._store.release(token, all_tokens[token])
             if self._diagnostics is not None:
                 self._diagnostics.record_media_upload(
                     self._signal,
                     succeeded=token in replacements,
                     reason=failures.get(token, ""),
                 )
-        if _has_unresolved_pending(value, tokens):
+        if _has_unresolved_pending(value, set(all_tokens)):
             failures["__unresolved_pending__"] = "upload_token_missing"
             if self._diagnostics is not None:
                 self._diagnostics.record_media_upload(

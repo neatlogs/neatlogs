@@ -35,6 +35,7 @@ from ._wrap_utils import (
     serialize,
 )
 from .core.choice_accumulator import ChoiceAccumulator, OpenAIStreamFinalizer
+from .core.media import set_media_attributes
 
 _PROVIDER = "openrouter"
 
@@ -154,6 +155,7 @@ def _set_chat_input(span: Any, kwargs: dict) -> None:
             f"neatlogs.llm.input_messages.{i}.content",
             content if isinstance(content, str) else serialize(content),
         )
+        set_media_attributes(span, f"neatlogs.llm.input_messages.{i}", content, "input")
         tool_call_id = _get(msg, "tool_call_id", None)
         if tool_call_id:
             span.set_attribute(f"neatlogs.llm.input_messages.{i}.tool_call_id", tool_call_id)

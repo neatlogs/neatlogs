@@ -1,4 +1,6 @@
+import gzip
 import hashlib
+import time
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -148,6 +150,8 @@ def test_media_prepare_put_complete_uses_exact_contract_and_scoped_headers():
     }
     assert "x-api-key" not in session.calls[1][2]["headers"]
     assert session.calls[1][2]["data"] == payload.content
+    assert all(call[2]["allow_redirects"] is False for call in session.calls)
+    assert all(call[2]["stream"] is True for call in session.calls)
     assert session.calls[2][2]["json"] == {
         "sha256": payload.sha256,
         "byte_length": payload.byte_length,
@@ -168,22 +172,69 @@ def test_ready_prepare_replay_short_circuits_put_and_complete_and_is_cached():
     assert len(session.calls) == 1
 
 
-@pytest.mark.parametrize("status,state", [(200, "validating"), (202, "validating")])
-def test_prepare_in_progress_is_retryable_but_never_success(status, state):
+@pytest.mark.parametrize("status,state", [(200, "uploaded"), (202, "validating")])
+def test_prepare_in_progress_resumes_completion_without_reuploading(status, state):
     payload = _media()
     body = _completed(
         payload,
         state,
         diagnostic={"stage": "validation", "reason_code": "still_validating", "retryable": True},
     )
-    authority = _authority(Session([Response(status, body)]))
+    session = Session(
+        [
+            Response(status, body),
+            Response(
+                202,
+                _completed(
+                    payload,
+                    "validating",
+                    diagnostic={
+                        "stage": "validation",
+                        "reason_code": "still_validating",
+                        "retryable": True,
+                    },
+                ),
+            ),
+            Response(200, _completed(payload)),
+        ]
+    )
+    authority = _authority(session)
+
+    receipt = authority.export_media(payload)
+
+    assert receipt.complete
+    assert [call[0] for call in session.calls] == ["POST", "POST", "POST"]
+    assert all("/complete" in call[1] for call in session.calls[1:])
+
+
+def test_validating_completion_retry_exhaustion_is_explicit_and_bounded():
+    payload = _media()
+    validating = _completed(
+        payload,
+        "validating",
+        diagnostic={
+            "stage": "validation",
+            "reason_code": "still_validating",
+            "retryable": True,
+        },
+    )
+    session = Session(
+        [
+            Response(201, _prepared(payload)),
+            Response(204),
+            Response(202, validating),
+            Response(202, validating),
+            Response(202, validating),
+        ]
+    )
+    authority = _authority(session)
 
     with pytest.raises(UploadError) as caught:
         authority.export_media(payload)
 
-    assert caught.value.stage == "prepare"
     assert caught.value.reason_code == "still_validating"
     assert caught.value.retryable is True
+    assert len(session.calls) == 5
 
 
 def test_prepare_in_progress_still_requires_a_matching_reference():
@@ -269,6 +320,35 @@ def test_retryable_http_is_bounded_and_closes_intermediate_responses():
     assert first.closed and second.closed and third.closed
 
 
+def test_retryable_backend_500_is_retried_before_success():
+    payload = _media()
+    session = Session(
+        [
+            Response(500, {"reason_code": "UPLOAD_PREPARE_FAILED", "retryable": True}),
+            Response(201, _prepared(payload)),
+            Response(204),
+            Response(200, _completed(payload)),
+        ]
+    )
+
+    assert _authority(session).export_media(payload).complete
+    assert len(session.calls) == 4
+
+
+def test_complete_status_must_match_state():
+    payload = _media()
+    authority = _authority(
+        Session(
+            [Response(201, _prepared(payload)), Response(204), Response(202, _completed(payload))]
+        )
+    )
+
+    with pytest.raises(UploadError) as caught:
+        authority.export_media(payload)
+
+    assert caught.value.reason_code == "invalid_status_for_state"
+
+
 def test_payload_bounds_and_digest_are_checked_before_network():
     session = Session([])
     authority = _authority(session, max_upload_bytes=4)
@@ -344,6 +424,72 @@ def test_backend_specific_media_and_overflow_limits_are_enforced_locally():
     authority = _authority(Session([]))
     assert authority.max_upload_bytes == 25 * 1024 * 1024
     assert authority.max_overflow_bytes == 20 * 1024 * 1024
+    with pytest.raises(ValueError):
+        _authority(Session([]), max_upload_bytes=25 * 1024 * 1024 + 1)
+    with pytest.raises(ValueError):
+        _authority(Session([]), max_overflow_bytes=20 * 1024 * 1024 + 1)
+
+
+def test_gzip_overflow_expanded_size_and_integrity_are_checked_before_network():
+    compressed = gzip.compress(b"12345", mtime=0)
+    payload = OverflowPayload(
+        content=compressed,
+        sha256=hashlib.sha256(compressed).hexdigest(),
+        byte_length=len(compressed),
+        signal="span",
+        content_encoding="gzip",
+    )
+    authority = _authority(Session([]))
+    authority.max_overflow_expanded_bytes = 4
+
+    with pytest.raises(UploadError) as caught:
+        authority.export_overflow(payload)
+    assert caught.value.reason_code == "overflow_expanded_too_large"
+
+    invalid = OverflowPayload(
+        content=b"not-gzip",
+        sha256=hashlib.sha256(b"not-gzip").hexdigest(),
+        byte_length=len(b"not-gzip"),
+        signal="span",
+        content_encoding="gzip",
+    )
+    with pytest.raises(UploadError) as caught:
+        _authority(Session([])).export_overflow(invalid)
+    assert caught.value.reason_code == "overflow_gzip_invalid"
+
+
+def test_json_response_body_is_bounded():
+    class StreamingResponse(Response):
+        def iter_content(self, chunk_size):
+            del chunk_size
+            yield b"x" * 33
+            yield b"y" * 33
+
+    authority = _authority(Session([StreamingResponse(201)]), max_response_bytes=64)
+
+    with pytest.raises(UploadError) as caught:
+        authority.export_media(_media())
+
+    assert caught.value.reason_code == "response_too_large"
+
+
+def test_total_deadline_is_checked_after_a_slow_request_returns():
+    class SlowSession(Session):
+        def request(self, method, url, **kwargs):
+            time.sleep(0.02)
+            return super().request(method, url, **kwargs)
+
+    authority = AuthenticatedUploadAuthority(
+        base_url="https://ingest.example",
+        api_key="project-secret",
+        session=SlowSession([Response(201, _prepared(_media()))]),
+        deadline_seconds=0.005,
+    )
+
+    with pytest.raises(UploadError) as caught:
+        authority.export_media(_media())
+
+    assert caught.value.reason_code == "deadline_exceeded"
 
 
 def test_log_overflow_is_not_mislabeled_as_the_trace_schema():

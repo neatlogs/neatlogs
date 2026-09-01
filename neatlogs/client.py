@@ -118,6 +118,12 @@ class Client:
             raise NeatlogsConfigurationError(
                 "tracer_provider must be private and must not be the process-global provider"
             )
+        traces_endpoint = _normalize_traces_endpoint(endpoint)
+        parsed = urlparse(traces_endpoint)
+        base_url = f"{parsed.scheme}://{parsed.netloc}"
+        enable_uploads = resolve_uploads_enabled(
+            uploads_enabled, os.getenv("NEATLOGS_UPLOADS_ENABLED")
+        )
 
         self.workflow_name = name
         self._state = "running"
@@ -160,12 +166,6 @@ class Client:
         self._transport_processors: list[Any] = []
         self._completion_processor: CompletionMarkerSpanProcessor | None = None
 
-        traces_endpoint = _normalize_traces_endpoint(endpoint)
-        parsed = urlparse(traces_endpoint)
-        base_url = f"{parsed.scheme}://{parsed.netloc}"
-        enable_uploads = resolve_uploads_enabled(
-            uploads_enabled, os.getenv("NEATLOGS_UPLOADS_ENABLED")
-        )
         self._upload_authority = DisabledUploadAuthority()
         self._media_store = None
         if enable_uploads and not disable_export:
@@ -195,6 +195,7 @@ class Client:
                     limited_span_exporter,
                     mask,
                     diagnostics=self._delivery_diagnostics,
+                    media_store=self._media_store,
                 ),
                 max_export_batch_size=batch_size,
                 max_queue_size=export_queue_capacity(batch_size),
@@ -241,6 +242,7 @@ class Client:
                                 limited_log_exporter,
                                 mask,
                                 diagnostics=self._delivery_diagnostics,
+                                media_store=self._media_store,
                             ),
                             max_export_batch_size=batch_size,
                             max_queue_size=export_queue_capacity(batch_size),

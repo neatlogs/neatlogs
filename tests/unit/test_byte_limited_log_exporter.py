@@ -144,3 +144,22 @@ def test_unsupported_log_overflow_exposes_a_safe_failure_reason():
     snapshot = diagnostics.snapshot()
     assert snapshot["log_overflow_failures"] == 1
     assert snapshot["upload_last_failure_reason"] == "prepare:overflow_signal_unsupported"
+
+
+def test_enabling_trace_uploads_does_not_remove_log_capture_bounds():
+    records = _finished_logs(count=1, payload_size=200_000)
+
+    class Authority:
+        available = True
+        unavailable_reason = ""
+
+        def export_overflow(self, _payload):
+            raise AssertionError("bounded log should use ordinary ingest")
+
+    sink = RecordingExporter()
+    exporter = ByteLimitedLogExporter(sink, upload_authority=Authority())
+
+    assert exporter.export(records) is LogRecordExportResult.SUCCESS
+    body = sink.batches[0][0].log_record.body
+    assert len(body.encode()) <= 100_000
+    assert "neatlogs-truncated" in body

@@ -36,6 +36,7 @@ from ._wrap_utils import (
     serialize,
 )
 from .core.choice_accumulator import ChoiceAccumulator, OpenAIStreamFinalizer
+from .core.media import set_media_attributes
 
 _PROVIDER = "azure"
 _SYSTEM = "azure"
@@ -135,6 +136,7 @@ def _set_chat_input(span: Any, kwargs: dict) -> None:
             span.set_attribute(f"neatlogs.llm.input_messages.{i}.content", content)
         else:
             span.set_attribute(f"neatlogs.llm.input_messages.{i}.content", serialize(content))
+        set_media_attributes(span, f"neatlogs.llm.input_messages.{i}", content, "input")
         if msg.get("tool_call_id"):
             span.set_attribute(f"neatlogs.llm.input_messages.{i}.tool_call_id", msg["tool_call_id"])
 

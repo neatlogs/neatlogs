@@ -16,9 +16,11 @@ from neatlogs._wrap_utils import set_neatlogs_provider
 from neatlogs.client import Client
 from neatlogs.core.deadline import DeadlineWorker, bounded_call
 from neatlogs.core.masking_exporter import _MaskRunner
+from neatlogs.core.media import PendingMediaStore, current_media_store, set_default_media_store
 from neatlogs.core.span_processor import CompletionMarkerSpanProcessor, NeatlogsSpanProcessor
 
 init_module = importlib.import_module("neatlogs.init")
+wrap_module = importlib.import_module("neatlogs._wrap_utils")
 
 
 @pytest.mark.parametrize("pipeline", ["default", "client"])
@@ -206,6 +208,59 @@ def test_concurrent_default_shutdown_wait_is_deadline_bounded(monkeypatch):
 
     release.set()
     owner.join(1)
+
+
+def test_shutdown_owns_wrapper_only_bootstrap_resources(monkeypatch):
+    calls = []
+
+    class Provider:
+        def shutdown(self):
+            calls.append("provider")
+
+    class Authority:
+        def close(self):
+            calls.append("authority")
+
+    provider = Provider()
+    authority = Authority()
+    store = PendingMediaStore(max_bytes=1024)
+    store.stage(b"private", "image/png", "input")
+    monkeypatch.setattr(wrap_module, "_bootstrap_provider", provider)
+    monkeypatch.setattr(wrap_module, "_bootstrap_upload_authority", authority)
+    monkeypatch.setattr(wrap_module, "_bootstrap_media_store", store)
+    set_neatlogs_provider(provider)
+    set_default_media_store(store)
+
+    assert init_module.shutdown(timeout_millis=1000)
+
+    assert calls == ["provider", "authority"]
+    assert current_media_store() is None
+    assert wrap_module.get_neatlogs_provider() is None
+
+
+def test_shutdown_closes_distinct_initialized_and_wrapper_providers(monkeypatch):
+    calls = []
+
+    class Provider:
+        def __init__(self, name):
+            self.name = name
+
+        def shutdown(self):
+            calls.append(self.name)
+
+    initialized_provider = Provider("initialized")
+    bootstrap_provider = Provider("bootstrap")
+    monkeypatch.setattr(init_module, "_tracer_provider", initialized_provider)
+    monkeypatch.setattr(init_module, "_owns_tracer_provider", True)
+    monkeypatch.setattr(init_module, "_log_provider", None)
+    monkeypatch.setattr(init_module, "_span_processor", None)
+    monkeypatch.setattr(init_module, "_completion_span_processor", None)
+    monkeypatch.setattr(init_module, "_instrumentation_manager", None)
+    monkeypatch.setattr(wrap_module, "_bootstrap_provider", bootstrap_provider)
+
+    assert init_module.shutdown(timeout_millis=1000)
+
+    assert calls == ["initialized", "bootstrap"]
 
 
 def test_end_active_spans_closes_children_then_root_and_emits_completion_marker():

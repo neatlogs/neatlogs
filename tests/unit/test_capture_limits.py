@@ -1,3 +1,5 @@
+import gzip
+
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk._logs.export import InMemoryLogRecordExporter, SimpleLogRecordProcessor
 from opentelemetry.sdk.resources import Resource
@@ -132,8 +134,10 @@ def test_masking_precedes_injected_overflow_authority():
     provider.shutdown()
 
     assert authority.payload is not None
-    assert b"must-not-cross-authority" not in authority.payload.content
-    assert b"masked" in authority.payload.content
+    expanded = gzip.decompress(authority.payload.content)
+    assert b"must-not-cross-authority" not in expanded
+    assert b"masked" in expanded
+    assert authority.payload.content_encoding == "gzip"
     assert sink.spans == []
 
 

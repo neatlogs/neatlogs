@@ -6,6 +6,7 @@ from opentelemetry.trace import StatusCode
 
 from neatlogs._wrap_utils import AsyncStreamWrapper, SyncStreamWrapper
 from neatlogs.core.choice_accumulator import (
+    MAX_MEDIA_RECORDS_PER_CHOICE,
     ChoiceAccumulator,
     GoogleStreamFinalizer,
     OpenAIStreamFinalizer,
@@ -401,3 +402,26 @@ def test_google_stream_finalizer_is_incremental_and_preserves_partial_candidate(
     assert finished.attributes["neatlogs.llm.output_messages.1.content"] == "partial"
     assert finished.attributes["neatlogs.stream.cancelled"] is True
     assert finished.status.status_code.name == "UNSET"
+
+
+def test_streamed_media_accumulation_is_deduplicated_and_bounded(
+    tracer_provider, in_memory_span_exporter
+):
+    span = tracer_provider.get_tracer("neatlogs.test").start_span("media-stream")
+    accumulator = ChoiceAccumulator()
+    repeated = {"type": "image_url", "image_url": {"url": "https://media.test/same.png"}}
+    for _ in range(50):
+        accumulator.add_chunk(span, _chunk([{"index": 0, "delta": {"content": [repeated]}}]))
+    for index in range(MAX_MEDIA_RECORDS_PER_CHOICE + 5):
+        media = {
+            "type": "image_url",
+            "image_url": {"url": f"https://media.test/{index}.png"},
+        }
+        accumulator.add_chunk(span, _chunk([{"index": 0, "delta": {"content": [media]}}]))
+    assert len(accumulator.choices[0].media_records) == MAX_MEDIA_RECORDS_PER_CHOICE
+    assert accumulator.choices[0].media_records_dropped == 6
+    accumulator.apply(span)
+    span.end()
+
+    attributes = in_memory_span_exporter.get_finished_spans()[0].attributes
+    assert attributes["neatlogs.llm.output_messages.0.media_dropped_count"] == 6

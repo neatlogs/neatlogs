@@ -36,6 +36,7 @@ from ._wrap_utils import (
     is_suppressed,
     serialize,
 )
+from .core.media import set_media_attributes
 
 _PROVIDER = "vertex_ai"
 _SYSTEM = "vertexai"
@@ -214,6 +215,9 @@ def _set_input_attributes(span: Any, contents: Any, kwargs: dict) -> None:
                 span.set_attribute(
                     f"neatlogs.llm.input_messages.{idx}.content", serialize(system_instruction)
                 )
+                set_media_attributes(
+                    span, f"neatlogs.llm.input_messages.{idx}", system_instruction, "input"
+                )
             idx += 1
 
     if isinstance(contents, str):
@@ -243,6 +247,7 @@ def _set_input_attributes(span: Any, contents: Any, kwargs: dict) -> None:
                     span.set_attribute(
                         f"neatlogs.llm.input_messages.{idx}.content", serialize(parts)
                     )
+                set_media_attributes(span, f"neatlogs.llm.input_messages.{idx}", item, "input")
                 idx += 1
             else:
                 span.set_attribute(f"neatlogs.llm.input_messages.{idx}.role", "user")
@@ -251,6 +256,7 @@ def _set_input_attributes(span: Any, contents: Any, kwargs: dict) -> None:
     else:
         span.set_attribute(f"neatlogs.llm.input_messages.{idx}.role", "user")
         span.set_attribute(f"neatlogs.llm.input_messages.{idx}.content", serialize(contents))
+        set_media_attributes(span, f"neatlogs.llm.input_messages.{idx}", contents, "input")
 
     tools = None
     if config:
@@ -334,6 +340,7 @@ def _finalize_response(span: Any, response: Any, duration_ms: float) -> None:
     if text_parts:
         span.set_attribute("neatlogs.llm.output_messages.0.role", "assistant")
         span.set_attribute("neatlogs.llm.output_messages.0.content", "".join(text_parts))
+    set_media_attributes(span, "neatlogs.llm.output_messages.0", candidates, "output")
 
     usage = getattr(response, "usage_metadata", None)
     if usage:

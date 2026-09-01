@@ -26,6 +26,7 @@ from ._wrap_utils import (
     is_suppressed,
     serialize,
 )
+from .core.media import set_media_attributes
 
 _PATCHED = False
 _ORIG_INIT = None
@@ -241,6 +242,7 @@ def _set_input_attributes(span: Any, messages: list, system: Any, kwargs: dict) 
             span.set_attribute(f"neatlogs.llm.input_messages.{idx}.content", system)
         else:
             span.set_attribute(f"neatlogs.llm.input_messages.{idx}.content", serialize(system))
+            set_media_attributes(span, f"neatlogs.llm.input_messages.{idx}", system, "input")
         idx += 1
 
     for msg in messages:
@@ -251,6 +253,7 @@ def _set_input_attributes(span: Any, messages: list, system: Any, kwargs: dict) 
             span.set_attribute(f"neatlogs.llm.input_messages.{idx}.content", content)
         else:
             span.set_attribute(f"neatlogs.llm.input_messages.{idx}.content", serialize(content))
+        set_media_attributes(span, f"neatlogs.llm.input_messages.{idx}", content, "input")
         if msg.get("tool_call_id"):
             span.set_attribute(
                 f"neatlogs.llm.input_messages.{idx}.tool_call_id", msg["tool_call_id"]
@@ -303,6 +306,7 @@ def _finalize_response(span: Any, response: Any, duration_ms: float) -> None:
     if text_parts:
         span.set_attribute("neatlogs.llm.output_messages.0.role", "assistant")
         span.set_attribute("neatlogs.llm.output_messages.0.content", "".join(text_parts))
+    set_media_attributes(span, "neatlogs.llm.output_messages.0", content, "output")
 
     stop_reason = getattr(response, "stop_reason", None)
     if stop_reason:

@@ -5,7 +5,9 @@ from __future__ import annotations
 import base64
 import binascii
 import hashlib
+import json
 import mimetypes
+import re
 import threading
 from collections import OrderedDict
 from collections.abc import Mapping, Sequence
@@ -17,6 +19,90 @@ from .capture import DEFAULT_MAX_CAPTURE_VALUE_BYTES, UPLOAD_UNAVAILABLE_REASON
 from .upload_authority import MediaPayload
 
 _MEDIA_KINDS = {"image", "audio", "video", "document", "file", "input_file"}
+_MESSAGE_CONTENT = re.compile(r"^neatlogs\.llm\.(input|output)_messages\.(\d+)\.content$")
+_MIME_ALIASES = {
+    "audio/mp3": "audio/mpeg",
+    "audio/x-flac": "audio/flac",
+    "audio/x-wav": "audio/wav",
+    "image/jpg": "image/jpeg",
+    "image/pjpeg": "image/jpeg",
+}
+_FORMAT_MIME_TYPES = {
+    ("audio", "flac"): "audio/flac",
+    ("audio", "mp3"): "audio/mpeg",
+    ("audio", "mpeg"): "audio/mpeg",
+    ("audio", "ogg"): "audio/ogg",
+    ("audio", "wav"): "audio/wav",
+    ("document", "pdf"): "application/pdf",
+    ("file", "pdf"): "application/pdf",
+    ("image", "gif"): "image/gif",
+    ("image", "jpeg"): "image/jpeg",
+    ("image", "jpg"): "image/jpeg",
+    ("image", "png"): "image/png",
+    ("image", "webp"): "image/webp",
+}
+
+
+def _sniff_media_mime(content: bytes | bytearray) -> str:
+    """Match the backend's bounded typed-media signature detection."""
+
+    prefix = bytes(content[:12])
+    if prefix.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if prefix.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if prefix.startswith((b"GIF87a", b"GIF89a")):
+        return "image/gif"
+    if prefix.startswith(b"RIFF") and prefix[8:12] == b"WEBP":
+        return "image/webp"
+    if prefix.startswith(b"%PDF-"):
+        return "application/pdf"
+    if prefix.startswith(b"fLaC"):
+        return "audio/flac"
+    if prefix.startswith(b"OggS"):
+        return "audio/ogg"
+    if prefix.startswith(b"RIFF") and prefix[8:12] == b"WAVE":
+        return "audio/wav"
+    if prefix.startswith(b"ID3") or (
+        len(prefix) >= 2 and prefix[0] == 0xFF and prefix[1] & 0xE0 == 0xE0
+    ):
+        return "audio/mpeg"
+    return ""
+
+
+def normalize_media_mime(
+    mime_type: str,
+    declared: str = "",
+    format_name: str = "",
+    content: bytes | bytearray = b"",
+) -> str:
+    """Return the backend-contract MIME spelling, preferring byte signatures."""
+
+    value = str(mime_type or "").strip().lower().split(";", 1)[0]
+    sniffed = _sniff_media_mime(content) if content else ""
+    if sniffed:
+        return sniffed
+    if value:
+        return _MIME_ALIASES.get(value, value)
+    kind = str(declared or "").lower().replace("input_", "")
+    fmt = str(format_name or "").strip().lower().lstrip(".")
+    return _FORMAT_MIME_TYPES.get((kind, fmt), "")
+
+
+def _model_mapping(value: Any) -> Mapping[str, Any] | None:
+    """Read provider model data through documented mapping serializers only."""
+
+    for name in ("model_dump", "to_json_dict", "dict"):
+        method = getattr(value, name, None)
+        if not callable(method):
+            continue
+        try:
+            candidate = method(exclude_none=True) if name == "model_dump" else method()
+        except (TypeError, ValueError):
+            continue
+        if isinstance(candidate, Mapping):
+            return candidate
+    return None
 
 
 @dataclass(frozen=True)
@@ -34,6 +120,7 @@ class PendingMediaStore:
         self.max_bytes = max_bytes
         self.max_items = max_items
         self._items: OrderedDict[str, MediaPayload] = OrderedDict()
+        self._references: dict[str, int] = {}
         self._retained_bytes = 0
         self._lock = threading.RLock()
 
@@ -41,9 +128,8 @@ class PendingMediaStore:
         if not content or len(content) > self.max_bytes:
             return None
         digest = hashlib.sha256(content).hexdigest()
-        identity = hashlib.sha256(
-            f"{digest}:{mime_type}:{media_purpose}".encode("utf-8")
-        ).hexdigest()[:24]
+        mime_type = normalize_media_mime(mime_type, content=content)
+        identity = hashlib.sha256(f"{digest}:{mime_type}".encode("utf-8")).hexdigest()[:24]
         token = f"nl_pending_media_{identity}"
         payload = MediaPayload(
             content=content,
@@ -55,6 +141,7 @@ class PendingMediaStore:
         with self._lock:
             if token in self._items:
                 self._items.move_to_end(token)
+                self._references[token] += 1
                 return token
             if (
                 len(self._items) >= self.max_items
@@ -62,6 +149,7 @@ class PendingMediaStore:
             ):
                 return None
             self._items[token] = payload
+            self._references[token] = 1
             self._retained_bytes += len(content)
         return token
 
@@ -69,8 +157,25 @@ class PendingMediaStore:
         with self._lock:
             return self._items.get(token)
 
-    def release(self, token: str) -> None:
+    def retain(self, token: str, count: int = 1) -> bool:
+        if count <= 0:
+            return False
         with self._lock:
+            if token not in self._items:
+                return False
+            self._references[token] += count
+            self._items.move_to_end(token)
+            return True
+
+    def release(self, token: str, count: int = 1) -> None:
+        if count <= 0:
+            return
+        with self._lock:
+            references = self._references.get(token, 0)
+            if references > count:
+                self._references[token] = references - count
+                return
+            self._references.pop(token, None)
             payload = self._items.pop(token, None)
             if payload is not None:
                 self._retained_bytes -= payload.byte_length
@@ -78,6 +183,7 @@ class PendingMediaStore:
     def clear(self) -> None:
         with self._lock:
             self._items.clear()
+            self._references.clear()
             self._retained_bytes = 0
 
     def snapshot(self) -> dict[str, int]:
@@ -128,20 +234,23 @@ def _kind(mime_type: str, declared: str = "") -> str:
     return "media"
 
 
-def _base64_metadata(encoded: str) -> tuple[int, str] | None:
+def _base64_metadata(encoded: str) -> tuple[int, str, bytes] | None:
     """Validate/digest base64 incrementally without duplicating the full media."""
 
     digest = hashlib.sha256()
     byte_length = 0
+    prefix = b""
     chunk_size = 64 * 1024  # divisible by four, so quartets never cross chunks
     try:
         for offset in range(0, len(encoded), chunk_size):
             decoded = base64.b64decode(encoded[offset : offset + chunk_size], validate=True)
+            if not prefix:
+                prefix = decoded[:12]
             digest.update(decoded)
             byte_length += len(decoded)
     except (binascii.Error, ValueError, TypeError):
         return None
-    return byte_length, digest.hexdigest()
+    return byte_length, digest.hexdigest(), prefix
 
 
 def _inline(data: str, mime_type: str, declared: str, purpose: str) -> dict[str, Any] | None:
@@ -154,7 +263,8 @@ def _inline(data: str, mime_type: str, declared: str, purpose: str) -> dict[str,
     metadata = _base64_metadata(encoded)
     if metadata is None:
         return None
-    byte_length, digest = metadata
+    byte_length, digest, prefix = metadata
+    mime_type = normalize_media_mime(mime_type, declared, content=prefix)
     record = {
         "id": f"nl_media_{digest[:24]}",
         "type": _kind(mime_type, declared),
@@ -217,7 +327,8 @@ def _reference(reference: str, mime_type: str, declared: str, purpose: str) -> d
     safe_reference = _sanitized_reference(reference)
     digest = hashlib.sha256(safe_reference.encode()).hexdigest()
     parsed = urlsplit(safe_reference)
-    guessed = mimetypes.guess_type(parsed.path)[0] or ""
+    guessed = normalize_media_mime(mimetypes.guess_type(parsed.path)[0] or "", declared)
+    mime_type = normalize_media_mime(mime_type, declared)
     source = "provider" if not parsed.scheme or parsed.scheme in {"gs", "s3"} else "url"
     return {
         "id": f"nl_media_{digest[:24]}",
@@ -275,6 +386,9 @@ def sanitize_media_payload(value: Any, purpose: str = "capture") -> Any:
                 or node.get("media_type")
                 or node.get("mediaType")
                 or inherited_mime_type
+            )
+            mime_type = normalize_media_mime(
+                mime_type, media_declared, str(node.get("format") or "")
             )
             result = {}
             for key, item in node.items():
@@ -362,21 +476,25 @@ def sanitize_media_payload(value: Any, purpose: str = "capture") -> Any:
             ):
                 digest = hashlib.sha256(raw_data).hexdigest()
                 store = current_media_store()
+                actual_mime = (
+                    normalize_media_mime(mime_type, media_declared, content=raw_data)
+                    or "application/octet-stream"
+                )
                 token = (
                     store.stage(
                         bytes(raw_data),
-                        mime_type or "application/octet-stream",
+                        actual_mime,
                         purpose,
                     )
-                    if store is not None
+                    if store is not None and len(raw_data) <= store.max_bytes
                     else None
                 )
                 result[raw_key] = _unavailable_placeholder(
                     {
                         "id": f"nl_media_{digest[:24]}",
-                        "type": _kind(mime_type, media_declared),
+                        "type": _kind(actual_mime, media_declared),
                         "source": "inline",
-                        "mime_type": mime_type or "application/octet-stream",
+                        "mime_type": actual_mime,
                         "byte_length": len(raw_data),
                         "sha256": digest,
                         "purpose": purpose,
@@ -403,6 +521,9 @@ def sanitize_media_payload(value: Any, purpose: str = "capture") -> Any:
             return result
         if isinstance(node, Sequence) and not isinstance(node, (str, bytes, bytearray)):
             return [sanitize(item) for item in node]
+        modeled = _model_mapping(node)
+        if modeled is not None:
+            return sanitize(modeled, inherited_declared, inherited_mime_type)
         return node
 
     return sanitize(value)
@@ -426,6 +547,12 @@ def media_references(value: Any, purpose: str) -> list[dict[str, Any]]:
                 or node.get("mediaType")
                 or inherited_mime_type
             )
+            mime_type = normalize_media_mime(
+                mime_type, media_declared, str(node.get("format") or "")
+            )
+            wrapped = node.get("neatlogs_media")
+            if isinstance(wrapped, Mapping):
+                found.append(dict(wrapped) | {"purpose": purpose})
             image = node.get("image_url") or node.get("imageUrl")
             if isinstance(image, Mapping):
                 image = image.get("url")
@@ -470,6 +597,11 @@ def media_references(value: Any, purpose: str) -> list[dict[str, Any]]:
                 if record:
                     found.append(record)
             if isinstance(raw_data, (bytes, bytearray)) and (media_declared or mime_type):
+                mime_type = normalize_media_mime(
+                    mime_type,
+                    media_declared,
+                    content=raw_data,
+                )
                 digest = hashlib.sha256(raw_data).hexdigest()
                 store = current_media_store()
                 token = (
@@ -478,7 +610,11 @@ def media_references(value: Any, purpose: str) -> list[dict[str, Any]]:
                         mime_type or "application/octet-stream",
                         purpose,
                     )
-                    if store is not None and len(raw_data) > DEFAULT_MAX_CAPTURE_VALUE_BYTES
+                    if (
+                        store is not None
+                        and len(raw_data) > DEFAULT_MAX_CAPTURE_VALUE_BYTES
+                        and len(raw_data) <= store.max_bytes
+                    )
                     else None
                 )
                 found.append(
@@ -522,18 +658,30 @@ def media_references(value: Any, purpose: str) -> list[dict[str, Any]]:
                     _reference(reference, mime_type, media_declared or "document", purpose)
                 )
             for key, child in node.items():
+                if key == "neatlogs_media":
+                    continue
                 keyed_kind = str(key).lower().replace("input_", "")
                 child_declared = keyed_kind if keyed_kind in _MEDIA_KINDS else media_declared
                 visit(child, child_declared, mime_type)
         elif isinstance(node, Sequence) and not isinstance(node, (str, bytes, bytearray)):
             for child in node:
                 visit(child, inherited_declared, inherited_mime_type)
+        else:
+            modeled = _model_mapping(node)
+            if modeled is not None:
+                visit(modeled, inherited_declared, inherited_mime_type)
 
     visit(value)
     unique: dict[tuple[Any, ...], dict[str, Any]] = {}
     for record in found:
         if record is not None:
             key = (record.get("sha256"), record.get("reference"), record.get("type"))
+            if key in unique:
+                token = record.get("upload_token")
+                store = current_media_store()
+                if isinstance(token, str) and store is not None:
+                    store.release(token)
+                continue
             unique[key] = record
     return list(unique.values())
 
@@ -542,3 +690,39 @@ def set_media_attributes(span: Any, prefix: str, value: Any, purpose: str) -> No
     for index, record in enumerate(media_references(value, purpose)):
         for key, item in record.items():
             span.set_attribute(f"{prefix}.media.{index}.{key}", item)
+
+
+def promote_message_media_attributes(attributes: Mapping[str, Any]) -> dict[str, Any]:
+    """Promote provider-shaped message content into canonical media attributes.
+
+    This is a shared fallback for existing adapters. Adapters may still emit the
+    fields directly; direct fields always win.
+    """
+
+    result = {str(key): value for key, value in attributes.items()}
+    for key, value in list(result.items()):
+        match = _MESSAGE_CONTENT.fullmatch(key)
+        if match is None:
+            continue
+        direction, index = match.groups()
+        prefix = f"neatlogs.llm.{direction}_messages.{index}"
+        if any(existing.startswith(f"{prefix}.media.") for existing in result):
+            continue
+        parsed = value
+        if isinstance(value, str):
+            stripped = value.lstrip()
+            if not stripped.startswith(("{", "[")):
+                continue
+            try:
+                parsed = json.loads(value)
+            except (TypeError, ValueError):
+                continue
+        records = media_references(parsed, "input" if direction == "input" else "output")
+        for media_index, record in enumerate(records):
+            token = record.get("upload_token")
+            store = current_media_store()
+            if isinstance(token, str) and store is not None:
+                store.retain(token)
+            for field, item in record.items():
+                result[f"{prefix}.media.{media_index}.{field}"] = item
+    return result

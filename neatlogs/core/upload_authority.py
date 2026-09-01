@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import gzip
 import hashlib
+import io
+import json
 import logging
 import re
 import threading
@@ -27,12 +30,25 @@ ContentEncoding = Literal["identity", "gzip"]
 _DIGEST = re.compile(r"^[0-9a-f]{64}$")
 _MIME_TYPE = re.compile(r"^[a-z0-9][a-z0-9!#$&^_.+-]*/[a-z0-9][a-z0-9!#$&^_.+-]*$")
 _REASON_CODE = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
-_RETRYABLE_STATUS = {429, 502, 503, 504}
+_RETRYABLE_STATUS = {408, 425, 429, 500, 502, 503, 504}
+_MEDIA_MIME_TYPES = {
+    "application/pdf",
+    "audio/flac",
+    "audio/mpeg",
+    "audio/ogg",
+    "audio/wav",
+    "image/gif",
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+}
 DEFAULT_UPLOAD_DEADLINE_SECONDS = 10.0
 DEFAULT_MAX_MEDIA_UPLOAD_BYTES = 25 * 1024 * 1024
 DEFAULT_MAX_OVERFLOW_UPLOAD_BYTES = 20 * 1024 * 1024
+DEFAULT_MAX_OVERFLOW_EXPANDED_BYTES = 50 * 1024 * 1024
 DEFAULT_MAX_UPLOAD_BYTES = DEFAULT_MAX_MEDIA_UPLOAD_BYTES
 DEFAULT_MAX_UPLOAD_ATTEMPTS = 3
+DEFAULT_MAX_UPLOAD_RESPONSE_BYTES = 64 * 1024
 
 
 class UploadError(RuntimeError):
@@ -237,6 +253,7 @@ class AuthenticatedUploadAuthority:
         max_upload_bytes: int = DEFAULT_MAX_UPLOAD_BYTES,
         max_overflow_bytes: int = DEFAULT_MAX_OVERFLOW_UPLOAD_BYTES,
         max_attempts: int = DEFAULT_MAX_UPLOAD_ATTEMPTS,
+        max_response_bytes: int = DEFAULT_MAX_UPLOAD_RESPONSE_BYTES,
     ) -> None:
         parsed = urlparse(str(base_url).rstrip("/"))
         if parsed.scheme not in {"http", "https"} or not parsed.netloc:
@@ -248,8 +265,13 @@ class AuthenticatedUploadAuthority:
             or max_upload_bytes <= 0
             or max_overflow_bytes <= 0
             or max_attempts <= 0
+            or max_response_bytes <= 0
         ):
             raise ValueError("upload bounds must be greater than zero")
+        if max_upload_bytes > DEFAULT_MAX_MEDIA_UPLOAD_BYTES:
+            raise ValueError("max_upload_bytes cannot exceed the backend 25 MiB limit")
+        if max_overflow_bytes > DEFAULT_MAX_OVERFLOW_UPLOAD_BYTES:
+            raise ValueError("max_overflow_bytes cannot exceed the backend 20 MiB limit")
         self._base_url = f"{parsed.scheme}://{parsed.netloc}"
         self._api_headers = {"x-api-key": str(api_key).strip()}
         self._session = session or requests.Session()
@@ -257,7 +279,9 @@ class AuthenticatedUploadAuthority:
         self._deadline_seconds = float(deadline_seconds)
         self.max_upload_bytes = int(max_upload_bytes)
         self.max_overflow_bytes = int(max_overflow_bytes)
+        self.max_overflow_expanded_bytes = DEFAULT_MAX_OVERFLOW_EXPANDED_BYTES
         self._max_attempts = int(max_attempts)
+        self._max_response_bytes = int(max_response_bytes)
         self._cache: OrderedDict[str, MediaExportReceipt | OverflowExportReceipt] = OrderedDict()
         self._lock = threading.RLock()
 
@@ -309,6 +333,32 @@ class AuthenticatedUploadAuthority:
             raise UploadError("prepare", "invalid_mime_type")
         if payload.content_encoding not in {"identity", "gzip"}:
             raise UploadError("prepare", "invalid_content_encoding")
+        if payload.purpose == "typed_media":
+            if payload.content_encoding != "identity":
+                raise UploadError("prepare", "media_encoding_unsupported")
+            if payload.mime_type not in _MEDIA_MIME_TYPES:
+                raise UploadError("prepare", "media_type_unsupported")
+        elif payload.mime_type != "application/x-protobuf":
+            raise UploadError("prepare", "overflow_mime_unsupported")
+        elif payload.content_encoding == "gzip":
+            expanded = 0
+            try:
+                with gzip.GzipFile(fileobj=io.BytesIO(payload.content), mode="rb") as compressed:
+                    while True:
+                        chunk = compressed.read(
+                            min(64 * 1024, self.max_overflow_expanded_bytes - expanded + 1)
+                        )
+                        if not chunk:
+                            break
+                        expanded += len(chunk)
+                        if expanded > self.max_overflow_expanded_bytes:
+                            raise UploadError("prepare", "overflow_expanded_too_large")
+            except UploadError:
+                raise
+            except (EOFError, OSError) as exc:
+                raise UploadError("prepare", "overflow_gzip_invalid") from exc
+            if expanded <= 0:
+                raise UploadError("prepare", "overflow_gzip_invalid")
 
     def _upload(self, payload: Any, *, payload_schema: str | None) -> MediaExportReceipt:
         material = ":".join(
@@ -356,25 +406,17 @@ class AuthenticatedUploadAuthority:
             headers=self._api_headers,
             json=request_body,
         )
-        upload_id, upload, prepared_reference, replay_receipt = self._validate_prepare(
-            prepare_status, prepared, request_body
+        upload_id, upload, prepared_reference, replay_receipt, resume_state = (
+            self._validate_prepare(prepare_status, prepared, request_body)
         )
         if replay_receipt is not None:
             with self._lock:
                 self._cache[idempotency_key] = replay_receipt
             return replay_receipt
-        assert upload is not None
-        self._put_object(upload, payload, deadline)
-        completed = self._json_request(
-            "POST",
-            f"{self._base_url}/v1/telemetry/uploads/{quote(upload_id, safe='')}/complete",
-            deadline,
-            stage="complete",
-            expected_status={200, 202},
-            headers=self._api_headers,
-            json={"sha256": payload.sha256, "byte_length": payload.byte_length},
-        )
-        receipt = self._validate_complete(completed, upload_id, request_body)
+        if resume_state is None:
+            assert upload is not None
+            self._put_object(upload, payload, deadline)
+        receipt = self._complete_until_ready(upload_id, request_body, payload, deadline)
         if receipt.reference.id != prepared_reference.id:
             raise UploadError("complete", "reference_id_mismatch")
         with self._lock:
@@ -389,6 +431,7 @@ class AuthenticatedUploadAuthority:
         Mapping[str, Any] | None,
         UploadReference,
         MediaExportReceipt | None,
+        str | None,
     ]:
         if not isinstance(value, Mapping):
             raise UploadError("prepare", "invalid_response")
@@ -405,7 +448,7 @@ class AuthenticatedUploadAuthority:
             if reference.id != upload_id or reference.state != "ready":
                 raise UploadError("prepare", "reference_mismatch")
             receipt = MediaExportReceipt(upload_id, "ready", reference)
-            return upload_id, None, reference, receipt
+            return upload_id, None, reference, receipt, None
         if status != 201 or state != "prepared":
             if status not in {200, 202} or state not in {"uploaded", "validating", "rejected"}:
                 raise UploadError("prepare", "invalid_state")
@@ -418,7 +461,11 @@ class AuthenticatedUploadAuthority:
                 fallback_reason=f"upload_{state or 'not_prepared'}",
                 fallback_retryable=state in {"uploaded", "validating"},
             )
-            raise UploadError("prepare", reason, retryable=retryable)
+            if state == "rejected":
+                raise UploadError("prepare", reason, retryable=retryable)
+            if not retryable:
+                raise UploadError("prepare", reason, retryable=False)
+            return upload_id, None, reference, None, state
         expires_at = _strict_string(value.get("expires_at"), "expires_at")
         try:
             parsed_expiry = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
@@ -448,16 +495,47 @@ class AuthenticatedUploadAuthority:
         reference = _strict_reference(value.get("reference"), expected)
         if reference.state != "prepared" or reference.id != upload_id:
             raise UploadError("prepare", "invalid_reference_state")
-        return upload_id, upload, reference, None
+        return upload_id, upload, reference, None, None
+
+    def _complete_until_ready(
+        self, upload_id: str, expected: Mapping[str, Any], payload: Any, deadline: float
+    ) -> MediaExportReceipt:
+        last_error: UploadError | None = None
+        for attempt in range(self._max_attempts):
+            status, completed = self._json_request(
+                "POST",
+                f"{self._base_url}/v1/telemetry/uploads/{quote(upload_id, safe='')}/complete",
+                deadline,
+                stage="complete",
+                expected_status={200, 202},
+                return_status=True,
+                headers=self._api_headers,
+                json={"sha256": payload.sha256, "byte_length": payload.byte_length},
+            )
+            try:
+                return self._validate_complete(status, completed, upload_id, expected)
+            except UploadError as exc:
+                if not exc.retryable or attempt + 1 >= self._max_attempts:
+                    raise
+                last_error = exc
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise UploadError("complete", "deadline_exceeded", retryable=True) from exc
+                time.sleep(min(0.05 * (2**attempt), remaining))
+        raise last_error or UploadError("complete", "retry_exhausted", retryable=True)
 
     def _validate_complete(
-        self, value: Any, upload_id: str, expected: Mapping[str, Any]
+        self, status: int, value: Any, upload_id: str, expected: Mapping[str, Any]
     ) -> MediaExportReceipt:
         if not isinstance(value, Mapping) or value.get("upload_id") != upload_id:
             raise UploadError("complete", "invalid_response")
         state = value.get("state")
         if state not in {"ready", "validating", "rejected"}:
             raise UploadError("complete", "invalid_state")
+        if (state == "validating" and status != 202) or (
+            state in {"ready", "rejected"} and status != 200
+        ):
+            raise UploadError("complete", "invalid_status_for_state")
         reference = _strict_reference(value.get("reference"), expected)
         if reference.id != upload_id or reference.state != state:
             raise UploadError("complete", "reference_mismatch")
@@ -509,45 +587,87 @@ class AuthenticatedUploadAuthority:
     ) -> Any:
         response = self._request(method, url, deadline, stage=stage, **kwargs)
         try:
+            try:
+                value = self._bounded_json(response, stage, deadline)
+            except UploadError:
+                if response.status_code in expected_status:
+                    raise
+                value = None
             if response.status_code not in expected_status:
                 reason_code = f"http_{response.status_code}"
                 retryable = response.status_code in _RETRYABLE_STATUS
-                try:
-                    error = response.json()
-                    if isinstance(error, Mapping):
-                        candidate = error.get("reason_code")
-                        if isinstance(candidate, str) and _REASON_CODE.fullmatch(candidate):
-                            reason_code = candidate
-                        if isinstance(error.get("retryable"), bool):
-                            retryable = error["retryable"]
-                except (TypeError, ValueError):
-                    pass
+                if isinstance(value, Mapping):
+                    candidate = value.get("reason_code")
+                    if isinstance(candidate, str) and _REASON_CODE.fullmatch(candidate):
+                        reason_code = candidate
+                    if isinstance(value.get("retryable"), bool):
+                        retryable = value["retryable"]
                 raise UploadError(
                     stage,
                     reason_code,
                     retryable=retryable,
                 )
-            try:
-                value = response.json()
-                return (response.status_code, value) if return_status else value
-            except (TypeError, ValueError) as exc:
-                raise UploadError(stage, "invalid_json") from exc
+            return (response.status_code, value) if return_status else value
         finally:
             response.close()
+
+    def _bounded_json(self, response: requests.Response, stage: str, deadline: float) -> Any:
+        iterator = getattr(response, "iter_content", None)
+        if not callable(iterator):
+            try:
+                return response.json()
+            except (TypeError, ValueError) as exc:
+                raise UploadError(stage, "invalid_json") from exc
+        chunks: list[bytes] = []
+        total = 0
+        content_length = getattr(response, "headers", {}).get("content-length")
+        if content_length is not None:
+            try:
+                if int(content_length) > self._max_response_bytes:
+                    raise UploadError(stage, "response_too_large")
+            except ValueError:
+                raise UploadError(stage, "invalid_content_length") from None
+        try:
+            for chunk in iterator(chunk_size=8192):
+                if time.monotonic() >= deadline:
+                    raise UploadError(stage, "deadline_exceeded", retryable=True)
+                if not chunk:
+                    continue
+                total += len(chunk)
+                if total > self._max_response_bytes:
+                    raise UploadError(stage, "response_too_large")
+                chunks.append(chunk)
+            return json.loads(b"".join(chunks).decode("utf-8"))
+        except UploadError:
+            raise
+        except requests.RequestException as exc:
+            raise UploadError(stage, "transport_error", retryable=True) from exc
+        except (UnicodeDecodeError, TypeError, ValueError) as exc:
+            raise UploadError(stage, "invalid_json") from exc
 
     def _request(
         self, method: str, url: str, deadline: float, *, stage: str, **kwargs: Any
     ) -> requests.Response:
+        kwargs.setdefault("allow_redirects", False)
+        kwargs.setdefault("stream", True)
         for attempt in range(self._max_attempts):
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise UploadError(stage, "deadline_exceeded", retryable=True)
             try:
-                response = self._session.request(method, url, timeout=remaining, **kwargs)
+                response = self._session.request(
+                    method,
+                    url,
+                    timeout=min(remaining, 1.0),
+                    **kwargs,
+                )
             except requests.RequestException as exc:
                 if attempt + 1 == self._max_attempts:
                     raise UploadError(stage, "transport_error", retryable=True) from exc
                 continue
+            if time.monotonic() >= deadline:
+                response.close()
+                raise UploadError(stage, "deadline_exceeded", retryable=True)
             if response.status_code not in _RETRYABLE_STATUS or attempt + 1 == self._max_attempts:
                 return response
             response.close()

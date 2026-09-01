@@ -424,23 +424,6 @@ def init(
     _parsed = _urlparse(traces_endpoint)
     _base_url = f"{_parsed.scheme}://{_parsed.netloc}"
 
-    global _upload_authority, _media_store
-    _upload_authority = DisabledUploadAuthority()
-    _media_store = None
-    if uploads_enabled_resolved and not disable_export_resolved:
-        _upload_authority = AuthenticatedUploadAuthority(
-            base_url=_base_url,
-            api_key=resolved_key,
-        )
-        _media_store = PendingMediaStore(max_bytes=_upload_authority.max_upload_bytes)
-    set_default_media_store(_media_store)
-
-    global _session_config
-    _session_config["user_id"] = user_id
-    _session_config["workflow_name"] = resolved_workflow_name
-    _session_config["_api_key"] = resolved_key
-    _session_config["_base_url"] = _base_url
-
     # Session and end-user identity are deliberately NOT resource attributes:
     # they are per-request, set at the trace root (trace()/@span) or via
     # neatlogs.identify(). Only the operator user.id is process-global here.
@@ -473,6 +456,25 @@ def init(
     if pii_span_types is not None:
         resource_attrs["neatlogs.pii.span_types"] = ",".join(pii_span_types)
     resource = Resource.create(resource_attrs)
+
+    global _session_config
+    _session_config["user_id"] = user_id
+    _session_config["workflow_name"] = resolved_workflow_name
+    _session_config["_api_key"] = resolved_key
+    _session_config["_base_url"] = _base_url
+
+    # Create and publish upload resources only after all user input validation
+    # succeeds. A failed init must not leave raw-media storage or an HTTP session.
+    global _upload_authority, _media_store
+    _upload_authority = DisabledUploadAuthority()
+    _media_store = None
+    if uploads_enabled_resolved and not disable_export_resolved:
+        _upload_authority = AuthenticatedUploadAuthority(
+            base_url=_base_url,
+            api_key=resolved_key,
+        )
+        _media_store = PendingMediaStore(max_bytes=_upload_authority.max_upload_bytes)
+    set_default_media_store(_media_store)
 
     global _tracer_provider, _owns_tracer_provider
     if tracer_provider is not None:
@@ -583,6 +585,7 @@ def init(
                     limited_span_exporter,
                     mask,
                     diagnostics=_delivery_diagnostics,
+                    media_store=_media_store,
                 )
             ),
             max_export_batch_size=batch_size,
@@ -649,6 +652,7 @@ def init(
                         limited_log_exporter,
                         mask,
                         diagnostics=_delivery_diagnostics,
+                        media_store=_media_store,
                     ),
                     max_export_batch_size=batch_size,
                     max_queue_size=export_queue_capacity(batch_size),
@@ -911,6 +915,12 @@ def _perform_shutdown(
     transport_span_processors = list(_transport_span_processors)
     instrumentation_manager = _instrumentation_manager
     shutdown_worker = _shutdown_worker
+    from ._wrap_utils import take_bootstrap_resources
+
+    bootstrap_provider, bootstrap_authority, bootstrap_media_store = take_bootstrap_resources()
+    if tracer_provider is None and bootstrap_provider is not None:
+        tracer_provider = bootstrap_provider
+        owns_tracer_provider = True
     if completion_span_processor is not None:
         completion_span_processor.begin_shutdown()
     if span_processor is not None:
@@ -1032,6 +1042,22 @@ def _perform_shutdown(
                     )
                     success = False
 
+    # Wrapper-only auto-bootstrap owns a distinct provider. If regular init()
+    # subsequently installed another provider, both pipelines still need a
+    # bounded shutdown; never strand the earlier wrapper exporter/session.
+    if bootstrap_provider is not None and bootstrap_provider is not tracer_provider:
+        completed, result = bounded_call(
+            bootstrap_provider.shutdown,
+            deadline,
+            synchronous=synchronous,
+            worker=shutdown_worker,
+        )
+        if completed:
+            success = (result is None or bool(result)) and success
+        else:
+            logger.error("Wrapper bootstrap shutdown failed or timed out: %s", result)
+            success = False
+
     def uninstrument_logging() -> None:
         # Only undo the logging patch NeatLogs installed. Touching an
         # unconfigured or foreign instrumentor violates provider ownership.
@@ -1082,9 +1108,14 @@ def _perform_shutdown(
     set_default_media_store(None)
     if _media_store is not None:
         _media_store.clear()
+    if bootstrap_media_store is not None:
+        bootstrap_media_store.clear()
     close_uploads = getattr(_upload_authority, "close", None)
     if callable(close_uploads):
         close_uploads()
+    close_bootstrap_uploads = getattr(bootstrap_authority, "close", None)
+    if callable(close_bootstrap_uploads):
+        close_bootstrap_uploads()
     _media_store = None
     _upload_authority = None
 

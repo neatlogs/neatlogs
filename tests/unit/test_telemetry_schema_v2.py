@@ -112,6 +112,42 @@ def test_diagnostic_exporter_normalizes_post_processor_llm_span():
         provider.shutdown()
 
 
+def test_canonical_llm_messages_include_typed_media_parts():
+    provider = TracerProvider()
+    diagnostic = neatlogs.InMemoryDiagnosticSpanExporter(max_spans=1)
+    provider.add_span_processor(SimpleSpanProcessor(diagnostic))
+    span = provider.get_tracer("neatlogs.openai").start_span("chat")
+    span.set_attribute("neatlogs.span.kind", "llm")
+    span.set_attribute("neatlogs.llm.input_messages.0.role", "user")
+    prefix = "neatlogs.llm.input_messages.0.media.0"
+    span.set_attribute(f"{prefix}.id", "123e4567-e89b-12d3-a456-426614174000")
+    span.set_attribute(f"{prefix}.type", "image")
+    span.set_attribute(f"{prefix}.sha256", "a" * 64)
+    span.set_attribute(f"{prefix}.mime_type", "image/png")
+    span.set_attribute(f"{prefix}.byte_length", 123)
+    span.set_attribute(f"{prefix}.source", "uploaded")
+    span.set_attribute(f"{prefix}.state", "available")
+    span.end()
+    provider.shutdown()
+
+    message = diagnostic.get_finished_envelopes()[0].to_dict()["semantic"]["request"]["messages"][0]
+    assert message["content"] == [
+        {
+            "type": "image",
+            "reference": {
+                "id": "123e4567-e89b-12d3-a456-426614174000",
+                "sha256": "a" * 64,
+                "mime_type": "image/png",
+                "byte_length": 123,
+                "source": "uploaded",
+                "purpose": "input",
+                "state": "available",
+                "safe_preview": None,
+            },
+        }
+    ]
+
+
 def test_diagnostic_exporter_is_bounded_and_reports_eviction():
     provider = TracerProvider()
     diagnostic = neatlogs.InMemoryDiagnosticSpanExporter(max_spans=2)

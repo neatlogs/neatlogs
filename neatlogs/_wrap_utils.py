@@ -39,6 +39,9 @@ _bootstrap_warned = False
 # Single source of truth for the private provider Neatlogs emits into. Every
 # Neatlogs tracer resolves from it; the process-global provider is never adopted.
 _neatlogs_provider: Optional[TracerProvider] = None
+_bootstrap_provider: Optional[TracerProvider] = None
+_bootstrap_upload_authority: Any = None
+_bootstrap_media_store: Any = None
 
 # Optional secondary Client selected only for the current async/thread context.
 # The process-wide provider configured by neatlogs.init() remains the default.
@@ -66,6 +69,17 @@ def get_neatlogs_provider() -> Optional[TracerProvider]:
     if client is not None:
         return client.tracer_provider
     return _neatlogs_provider
+
+
+def take_bootstrap_resources() -> tuple[Optional[TracerProvider], Any, Any]:
+    """Detach resources owned by wrapper-only auto bootstrap for bounded shutdown."""
+
+    global _bootstrap_provider, _bootstrap_upload_authority, _bootstrap_media_store
+    resources = (_bootstrap_provider, _bootstrap_upload_authority, _bootstrap_media_store)
+    _bootstrap_provider = None
+    _bootstrap_upload_authority = None
+    _bootstrap_media_store = None
+    return resources
 
 
 def get_active_client() -> Optional[Any]:
@@ -436,6 +450,7 @@ def neatlogs_span(scope: str, name: str, **start_kwargs: Any) -> "_NeatlogsSpanC
 
 
 def _bootstrap_from_env(api_key: str) -> None:
+    global _bootstrap_provider, _bootstrap_upload_authority, _bootstrap_media_store
     from opentelemetry.exporter.otlp.proto.http import Compression
     from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
     from opentelemetry.sdk.resources import SERVICE_NAME, Resource
@@ -505,6 +520,9 @@ def _bootstrap_from_env(api_key: str) -> None:
             diagnostics=diagnostics,
         )
     )
+    _bootstrap_provider = provider
+    _bootstrap_upload_authority = authority
+    _bootstrap_media_store = media_store
     set_neatlogs_provider(provider)
     logger.debug(f"neatlogs wrapper: auto-bootstrapped private TracerProvider → {endpoint}")
 

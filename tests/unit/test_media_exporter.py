@@ -87,10 +87,9 @@ def test_span_media_is_staged_then_resolved_after_mask_to_canonical_reference():
     finally:
         set_default_media_store(None)
 
-    # The captured body and flattened semantic media attributes intentionally
-    # retain different purposes; a production authority deduplicates their
-    # identical bytes with its deterministic idempotency key.
-    assert len(authority.payloads) == 2
+    # The body, canonical attributes, and event share one staged object and one
+    # authority call while preserving their individual telemetry purposes.
+    assert len(authority.payloads) == 1
     assert all(payload.content == raw for payload in authority.payloads)
     assert store.snapshot() == {"items": 0, "bytes": 0}
     exported = sink.get_finished_spans()[0]
@@ -103,7 +102,7 @@ def test_span_media_is_staged_then_resolved_after_mask_to_canonical_reference():
     prefix = "neatlogs.llm.input_messages.0.media.0"
     assert exported.attributes[f"{prefix}.source"] == "uploaded"
     assert exported.attributes[f"{prefix}.state"] == "available"
-    assert diagnostics.snapshot()["span_media_uploads"] == 2
+    assert diagnostics.snapshot()["span_media_uploads"] == 1
 
 
 def test_mask_can_remove_media_before_any_upload_occurs():
@@ -130,11 +129,13 @@ def test_mask_can_remove_media_before_any_upload_occurs():
         span.set_attribute("input.value", serialize(value))
         span.end()
         provider.shutdown()
+        retained_after_export = store.snapshot()
     finally:
         set_default_media_store(None)
 
     assert authority.payloads == []
     assert sink.get_finished_spans()[0].attributes == {}
+    assert retained_after_export == {"items": 0, "bytes": 0}
 
 
 def test_masked_upload_token_fails_closed_without_uploading_or_exporting_token():
@@ -164,6 +165,7 @@ def test_masked_upload_token_fails_closed_without_uploading_or_exporting_token()
         span.set_attribute("input.value", serialize(value))
         span.end()
         provider.shutdown()
+        retained_after_export = store.snapshot()
     finally:
         set_default_media_store(None)
 
@@ -172,6 +174,7 @@ def test_masked_upload_token_fails_closed_without_uploading_or_exporting_token()
     assert '"state":"failed"' in rendered
     assert "upload_token" not in json.loads(rendered)["image_url"]["url"]["neatlogs_media"]
     assert "***" not in rendered
+    assert retained_after_export == {"items": 0, "bytes": 0}
     assert diagnostics.snapshot()["span_media_upload_failures"] == 1
 
 
@@ -262,3 +265,28 @@ def test_repeated_token_in_one_batch_uploads_once_and_resolves_every_span():
     for span in sink.get_finished_spans():
         assert UPLOAD_ID in span.attributes["input.value"]
         assert "nl_pending_media_" not in span.attributes["input.value"]
+
+
+def test_repeated_token_across_batches_retains_bytes_until_last_reference():
+    _, value = _large_image()
+    store = PendingMediaStore(max_bytes=25 * 1024 * 1024)
+    authority = Authority()
+    capture = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(capture))
+    set_default_media_store(store)
+    try:
+        for index in range(2):
+            span = provider.get_tracer("media-test").start_span(f"media-{index}")
+            span.set_attribute("input.value", serialize(value))
+            span.end()
+        exporter = TypedMediaSpanExporter(InMemorySpanExporter(), authority, store)
+        first, second = capture.get_finished_spans()
+        assert exporter.export((first,)) is SpanExportResult.SUCCESS
+        assert store.snapshot()["items"] == 1
+        assert exporter.export((second,)) is SpanExportResult.SUCCESS
+        assert store.snapshot() == {"items": 0, "bytes": 0}
+    finally:
+        set_default_media_store(None)
+
+    assert len(authority.payloads) == 2

@@ -10,9 +10,10 @@ from typing import Any
 from opentelemetry.trace import StatusCode
 
 from .capture import BoundedTextAccumulator
-from .media import media_references, sanitize_media_payload
+from .media import current_media_store, media_references, sanitize_media_payload
 
 MAX_SEMANTIC_STREAM_EVENTS = 128
+MAX_MEDIA_RECORDS_PER_CHOICE = 32
 
 
 def _get(value: Any, name: str, default=None):
@@ -51,6 +52,7 @@ class _Choice:
     content: BoundedTextAccumulator = field(default_factory=BoundedTextAccumulator)
     reasoning: BoundedTextAccumulator = field(default_factory=BoundedTextAccumulator)
     media_records: list[dict[str, Any]] = field(default_factory=list)
+    media_records_dropped: int = 0
     finish_reason: str | None = None
     tool_calls: dict[int, _ToolCall] = field(default_factory=dict)
 
@@ -83,7 +85,7 @@ class ChoiceAccumulator:
             if content is not None:
                 choice.content.append(_string(content))
                 if not isinstance(content, str):
-                    choice.media_records.extend(media_references(content, "output"))
+                    self._add_media(choice, media_references(content, "output"))
             reasoning = _get(message, "reasoning_content", None)
             if reasoning is not None:
                 choice.reasoning.append(_string(reasoning))
@@ -159,7 +161,7 @@ class ChoiceAccumulator:
                         tool_index += 1
                     inline_data = _get(part, "inline_data", None) or _get(part, "file_data", None)
                     if inline_data is not None:
-                        choice.media_records.extend(media_references(inline_data, "output"))
+                        self._add_media(choice, media_references(inline_data, "output"))
             finish_reason = _get(candidate, "finish_reason", None)
             if finish_reason is not None:
                 choice.finish_reason = str(finish_reason)
@@ -227,7 +229,7 @@ class ChoiceAccumulator:
                 choice.content.append(content)
             raw_content = _get(delta, "content", None)
             if raw_content is not None and not isinstance(raw_content, str):
-                choice.media_records.extend(media_references(raw_content, "output"))
+                self._add_media(choice, media_references(raw_content, "output"))
             if reasoning:
                 choice.reasoning.append(reasoning)
             tools = _get(delta, "tool_calls", None) or []
@@ -275,6 +277,8 @@ class ChoiceAccumulator:
             for media_index, record in enumerate(unique_media.values()):
                 for key, item in record.items():
                     span.set_attribute(f"{prefix}.media.{media_index}.{key}", item)
+            if choice.media_records_dropped:
+                span.set_attribute(f"{prefix}.media_dropped_count", choice.media_records_dropped)
             if choice.finish_reason is not None:
                 span.set_attribute(
                     f"neatlogs.llm.choices.{choice_index}.finish_reason",
@@ -319,6 +323,30 @@ class ChoiceAccumulator:
                     "neatlogs.stream.events_dropped",
                     self.chunk_count - MAX_SEMANTIC_STREAM_EVENTS,
                 )
+
+    @staticmethod
+    def _add_media(choice: _Choice, records: list[dict[str, Any]]) -> None:
+        identities = {
+            (record.get("sha256"), record.get("reference"), record.get("type"))
+            for record in choice.media_records
+        }
+        for record in records:
+            identity = (record.get("sha256"), record.get("reference"), record.get("type"))
+            if identity in identities:
+                token = record.get("upload_token")
+                store = current_media_store()
+                if isinstance(token, str) and store is not None:
+                    store.release(token)
+                continue
+            if len(choice.media_records) >= MAX_MEDIA_RECORDS_PER_CHOICE:
+                choice.media_records_dropped += 1
+                token = record.get("upload_token")
+                store = current_media_store()
+                if isinstance(token, str) and store is not None:
+                    store.release(token)
+                continue
+            choice.media_records.append(record)
+            identities.add(identity)
 
     def _choice(self, index: int) -> _Choice:
         return self.choices.setdefault(index, _Choice())

@@ -154,8 +154,9 @@ def _typed_value(attrs: Mapping[str, Any], kind: str, direction: str) -> dict[st
     return {"type": value_type, "value": value, "media": media}
 
 
-def _media(attrs: Mapping[str, Any], prefix: str, purpose: str) -> list[dict[str, Any]]:
-    records = _indexed(attrs, f"{prefix}.media")
+def _normalize_media_records(
+    records: Mapping[int, Mapping[str, Any]], purpose: str
+) -> list[dict[str, Any]]:
     normalized = []
     for index, record in sorted(records.items()):
         reference = str(record.get("reference") or "")
@@ -183,6 +184,10 @@ def _media(attrs: Mapping[str, Any], prefix: str, purpose: str) -> list[dict[str
     return normalized
 
 
+def _media(attrs: Mapping[str, Any], prefix: str, purpose: str) -> list[dict[str, Any]]:
+    return _normalize_media_records(_indexed(attrs, f"{prefix}.media"), purpose)
+
+
 def _content(value: Any) -> list[dict[str, Any]]:
     if value is None:
         return []
@@ -198,16 +203,29 @@ def _content(value: Any) -> list[dict[str, Any]]:
     return [{"type": "text", "text": str(value)}]
 
 
-def _message(record: Mapping[str, Any], tool_calls: list[dict[str, Any]]) -> dict[str, Any]:
+def _message(
+    record: Mapping[str, Any], tool_calls: list[dict[str, Any]], purpose: str
+) -> dict[str, Any]:
     role = str(record.get("role") or "assistant").lower()
     if role == "model":
         role = "assistant"
     if role not in {"system", "developer", "user", "assistant", "tool"}:
         role = "assistant"
+    content = _content(_decode(record.get("content")))
+    raw_media = _indexed(record, "media")
+    for index, media in sorted(raw_media.items()):
+        references = _normalize_media_records({index: media}, purpose)
+        if not references:
+            continue
+        reference = references[0]
+        media_type = str(media.get("type") or "document")
+        if media_type not in {"image", "audio", "document", "video"}:
+            media_type = "document"
+        content.append({"type": media_type, "reference": reference})
     return {
         "role": role,
         "name": str(record["name"]) if record.get("name") else None,
-        "content": _content(_decode(record.get("content"))),
+        "content": content,
         "tool_calls": tool_calls,
         "tool_call_id": str(record["tool_call_id"]) if record.get("tool_call_id") else None,
     }
@@ -243,7 +261,7 @@ def _llm_semantic(span: ReadableSpan, attrs: Mapping[str, Any]) -> dict[str, Any
         )
 
     input_messages = [
-        _message(record, [])
+        _message(record, [], "input")
         for _, record in sorted(_indexed(attrs, "neatlogs.llm.input_messages").items())
     ]
     output_messages = _indexed(attrs, "neatlogs.llm.output_messages")
@@ -254,7 +272,7 @@ def _llm_semantic(span: ReadableSpan, attrs: Mapping[str, Any]) -> dict[str, Any
         choices.append(
             {
                 "choice_index": index,
-                "message": _message(record, tool_calls_by_choice.get(index, [])),
+                "message": _message(record, tool_calls_by_choice.get(index, []), "output"),
                 "finish_reason": (
                     str(attrs[f"neatlogs.llm.choices.{index}.finish_reason"])
                     if attrs.get(f"neatlogs.llm.choices.{index}.finish_reason") is not None

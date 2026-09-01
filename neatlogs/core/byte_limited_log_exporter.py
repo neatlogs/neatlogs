@@ -62,10 +62,9 @@ class ByteLimitedLogExporter(LogRecordExporter):
     def export(self, batch: Sequence[ReadableLogRecord]) -> LogRecordExportResult:
         bounded = []
         for item in batch:
-            if self._upload_authority.available:
-                clone, truncations = item, 0
-            else:
-                clone, truncations = limit_log_capture(item)
+            # The v1 upload contract only accepts OTLP trace envelopes. Preserve
+            # the Phase 3 bounded log path even when trace/media uploads are on.
+            clone, truncations = limit_log_capture(item)
             bounded.append(clone)
             if truncations and self._diagnostics is not None:
                 self._diagnostics.record_capture_truncation("log", truncations)

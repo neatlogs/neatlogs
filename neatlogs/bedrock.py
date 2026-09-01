@@ -24,6 +24,7 @@ from typing import Any, List, Optional
 from opentelemetry.trace import StatusCode
 
 from ._wrap_utils import get_provider_tracer, is_suppressed, serialize
+from .core.media import set_media_attributes
 
 _PROVIDER = "bedrock"
 
@@ -148,6 +149,7 @@ def _set_converse_input(span: Any, kwargs: dict) -> None:
         span.set_attribute(
             f"neatlogs.llm.input_messages.{idx}.content", _converse_blocks_to_text(content)
         )
+        set_media_attributes(span, f"neatlogs.llm.input_messages.{idx}", content, "input")
         idx += 1
 
     cfg = kwargs.get("inferenceConfig") or {}
@@ -219,6 +221,7 @@ def _finalize_converse(span: Any, response: dict, duration_ms: float) -> None:
     if text_parts:
         span.set_attribute("neatlogs.llm.output_messages.0.role", "assistant")
         span.set_attribute("neatlogs.llm.output_messages.0.content", "".join(text_parts))
+    set_media_attributes(span, "neatlogs.llm.output_messages.0", content, "output")
 
     if response.get("stopReason"):
         span.set_attribute("neatlogs.llm.finish_reason", str(response["stopReason"]))
@@ -375,6 +378,7 @@ def _set_invoke_input(span: Any, vendor: str, body: dict) -> None:
                 f"neatlogs.llm.input_messages.{idx}.content",
                 content if isinstance(content, str) else serialize(content),
             )
+            set_media_attributes(span, f"neatlogs.llm.input_messages.{idx}", content, "input")
             idx += 1
     elif body.get("prompt"):  # Claude legacy / Llama
         span.set_attribute(f"neatlogs.llm.input_messages.{idx}.role", "user")

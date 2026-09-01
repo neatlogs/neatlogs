@@ -188,6 +188,10 @@ milvus = [
 [project.entry-points."hermes_agent.plugins"]
 neatlogs = "neatlogs.hermes_plugin"
 
+[project.scripts]
+neatlogs = "neatlogs.__main__:main"
+neatlogs-doctor = "neatlogs.__main__:doctor_main"
+
 [project.urls]
 Homepage = "https://github.com/NeatLogs/neatlogs"
 Repository = "https://github.com/NeatLogs/neatlogs.git"

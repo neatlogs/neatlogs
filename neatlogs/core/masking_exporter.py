@@ -351,6 +351,12 @@ class MaskingSpanExporter(SpanExporter):
         kept = [span for span in prepared if span is not None]
         if not kept:
             return SpanExportResult.SUCCESS
+        try:
+            from ..doctor_v2 import capture_prepared_spans
+
+            capture_prepared_spans(kept)
+        except Exception:
+            logger.error("[neatlogs] doctor capture failed safely")
         return self._inner.export(kept)
 
     def force_flush(self, timeout_millis: int = 30000) -> bool:

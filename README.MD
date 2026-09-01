@@ -227,6 +227,24 @@ NEATLOGS_ENDPOINT=https://ingest.neatlogs.com   # optional — this is the defau
 
 Get your API key from the [NeatLogs dashboard](https://app.neatlogs.com). Full `init()` options: [reference](https://docs.neatlogs.com/reference/init-reference).
 
+### Doctor diagnostics
+
+Validate the SDK's final normalized and masked telemetry envelope without sending data:
+
+```bash
+neatlogs doctor --local
+# or
+neatlogs-doctor --local --json
+```
+
+To verify the complete ingestion path through the hosted diagnostic receipt endpoint:
+
+```bash
+NEATLOGS_API_KEY=your-api-key neatlogs doctor --probe --json
+```
+
+Local mode is network-free and uses generated diagnostic data. Probe mode reports the first failing backend stage with a stable reason code and never prints the API key.
+
 ---
 
 ## Examples

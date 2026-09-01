@@ -249,3 +249,40 @@ def test_custom_client_tracer_is_closed_and_finalized():
     assert not active.is_recording()
     names = [span.name for span in exporter.get_finished_spans()]
     assert "custom-root" in names
+
+
+def test_client_upload_opt_in_uses_context_scoped_store_and_closes_authority(monkeypatch):
+    import neatlogs.client as client_module
+    from neatlogs.core.media import current_media_store
+
+    class Authority:
+        available = True
+        unavailable_reason = ""
+        max_upload_bytes = 25 * 1024 * 1024
+
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.closed = False
+
+        def close(self):
+            self.closed = True
+
+    monkeypatch.setenv("NEATLOGS_DISABLE_EXPORT", "false")
+    monkeypatch.setattr(client_module, "AuthenticatedUploadAuthority", Authority)
+    client = neatlogs.Client(
+        api_key="secondary-key",
+        workflow_name="secondary-uploads",
+        uploads_enabled=True,
+    )
+    authority = client._upload_authority
+    try:
+        assert current_media_store() is None
+        with client.activate():
+            assert current_media_store() is client._media_store
+        assert authority.kwargs == {
+            "base_url": "https://ingest.neatlogs.com",
+            "api_key": "secondary-key",
+        }
+    finally:
+        client.shutdown()
+    assert authority.closed is True

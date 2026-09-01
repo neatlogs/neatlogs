@@ -443,7 +443,14 @@ def _bootstrap_from_env(api_key: str) -> None:
 
     from .core.byte_limited_exporter import ByteLimitedSpanExporter
     from .core.delivery import DeliveryDiagnostics, ObservableBatchSpanProcessor
+    from .core.media import PendingMediaStore, set_default_media_store
+    from .core.media_exporter import TypedMediaSpanExporter
     from .core.transport import build_otlp_session
+    from .core.upload_authority import (
+        AuthenticatedUploadAuthority,
+        DisabledUploadAuthority,
+        uploads_enabled,
+    )
 
     endpoint = _wrapper_config.get("endpoint") or os.environ.get(
         "NEATLOGS_ENDPOINT", DEFAULT_INGEST_ENDPOINT
@@ -472,9 +479,29 @@ def _bootstrap_from_env(api_key: str) -> None:
         session=build_otlp_session(),
     )
     diagnostics = DeliveryDiagnostics()
+    parsed = urlparse(endpoint)
+    base_url = f"{parsed.scheme}://{parsed.netloc}"
+    authority = DisabledUploadAuthority()
+    media_store = None
+    if uploads_enabled(None, os.environ.get("NEATLOGS_UPLOADS_ENABLED")):
+        authority = AuthenticatedUploadAuthority(base_url=base_url, api_key=api_key)
+        media_store = PendingMediaStore(max_bytes=authority.max_upload_bytes)
+    set_default_media_store(media_store)
+    limited_exporter = ByteLimitedSpanExporter(
+        exporter,
+        diagnostics=diagnostics,
+        upload_authority=authority,
+    )
+    if media_store is not None:
+        limited_exporter = TypedMediaSpanExporter(
+            limited_exporter,
+            authority,
+            media_store,
+            diagnostics=diagnostics,
+        )
     provider.add_span_processor(
         ObservableBatchSpanProcessor(
-            ByteLimitedSpanExporter(exporter, diagnostics=diagnostics),
+            limited_exporter,
             diagnostics=diagnostics,
         )
     )

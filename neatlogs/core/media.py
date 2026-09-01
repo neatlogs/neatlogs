@@ -6,13 +6,111 @@ import base64
 import binascii
 import hashlib
 import mimetypes
+import threading
+from collections import OrderedDict
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 from .capture import DEFAULT_MAX_CAPTURE_VALUE_BYTES, UPLOAD_UNAVAILABLE_REASON
+from .upload_authority import MediaPayload
 
 _MEDIA_KINDS = {"image", "audio", "video", "document", "file", "input_file"}
+
+
+@dataclass(frozen=True)
+class PendingMedia:
+    token: str
+    payload: MediaPayload
+
+
+class PendingMediaStore:
+    """Bounded in-memory handoff from provider capture to post-mask export."""
+
+    def __init__(self, *, max_bytes: int, max_items: int = 32) -> None:
+        if max_bytes <= 0 or max_items <= 0:
+            raise ValueError("pending media bounds must be greater than zero")
+        self.max_bytes = max_bytes
+        self.max_items = max_items
+        self._items: OrderedDict[str, MediaPayload] = OrderedDict()
+        self._retained_bytes = 0
+        self._lock = threading.RLock()
+
+    def stage(self, content: bytes, mime_type: str, media_purpose: str) -> str | None:
+        if not content or len(content) > self.max_bytes:
+            return None
+        digest = hashlib.sha256(content).hexdigest()
+        identity = hashlib.sha256(
+            f"{digest}:{mime_type}:{media_purpose}".encode("utf-8")
+        ).hexdigest()[:24]
+        token = f"nl_pending_media_{identity}"
+        payload = MediaPayload(
+            content=content,
+            sha256=digest,
+            byte_length=len(content),
+            mime_type=mime_type or "application/octet-stream",
+            media_purpose=media_purpose,
+        )
+        with self._lock:
+            if token in self._items:
+                self._items.move_to_end(token)
+                return token
+            if (
+                len(self._items) >= self.max_items
+                or self._retained_bytes + len(content) > self.max_bytes
+            ):
+                return None
+            self._items[token] = payload
+            self._retained_bytes += len(content)
+        return token
+
+    def get(self, token: str) -> MediaPayload | None:
+        with self._lock:
+            return self._items.get(token)
+
+    def release(self, token: str) -> None:
+        with self._lock:
+            payload = self._items.pop(token, None)
+            if payload is not None:
+                self._retained_bytes -= payload.byte_length
+
+    def clear(self) -> None:
+        with self._lock:
+            self._items.clear()
+            self._retained_bytes = 0
+
+    def snapshot(self) -> dict[str, int]:
+        with self._lock:
+            return {"items": len(self._items), "bytes": self._retained_bytes}
+
+
+_default_media_store: PendingMediaStore | None = None
+_default_media_store_lock = threading.RLock()
+
+
+def set_default_media_store(store: PendingMediaStore | None) -> None:
+    global _default_media_store
+    with _default_media_store_lock:
+        previous = _default_media_store
+        _default_media_store = store
+    if previous is not None and previous is not store:
+        previous.clear()
+
+
+def current_media_store() -> PendingMediaStore | None:
+    # A secondary Client is context-scoped; its staging store must follow the
+    # same routing decision as its private tracer/exporter pipeline.
+    try:
+        from .._wrap_utils import get_active_client
+
+        client = get_active_client()
+        if client is not None:
+            return getattr(client, "_media_store", None)
+    except Exception:
+        pass
+    with _default_media_store_lock:
+        return _default_media_store
 
 
 def _kind(mime_type: str, declared: str = "") -> str:
@@ -67,12 +165,30 @@ def _inline(data: str, mime_type: str, declared: str, purpose: str) -> dict[str,
         "purpose": purpose,
     }
     if len(data.encode("utf-8")) > DEFAULT_MAX_CAPTURE_VALUE_BYTES:
-        record.update(
-            {
-                "state": "failed",
-                "safe_preview": f"upload unavailable: {UPLOAD_UNAVAILABLE_REASON}",
-            }
-        )
+        store = current_media_store()
+        token = None
+        if store is not None and byte_length <= store.max_bytes:
+            try:
+                content = base64.b64decode(encoded, validate=True)
+            except (binascii.Error, ValueError, TypeError):
+                content = b""
+            if content:
+                token = store.stage(content, record["mime_type"], purpose)
+        if token is not None:
+            record.update(
+                {
+                    "state": "pending-upload",
+                    "upload_token": token,
+                    "safe_preview": "pending authenticated upload",
+                }
+            )
+        else:
+            record.update(
+                {
+                    "state": "failed",
+                    "safe_preview": f"upload unavailable: {UPLOAD_UNAVAILABLE_REASON}",
+                }
+            )
     else:
         record["state"] = "inline"
     return record
@@ -130,6 +246,7 @@ def _unavailable_placeholder(record: Mapping[str, Any]) -> dict[str, Any]:
                 "purpose",
                 "state",
                 "safe_preview",
+                "upload_token",
             )
             if key in record
         }
@@ -175,7 +292,7 @@ def sanitize_media_payload(value: Any, purpose: str = "capture") -> Any:
                         else _reference(original, mime_type, "image", purpose)
                     )
                     image_result = dict(result[key])
-                    if record is not None and record.get("state") == "failed":
+                    if record is not None and record.get("state") in {"failed", "pending-upload"}:
                         image_result["url"] = _unavailable_placeholder(record)
                     elif record is not None:
                         image_result["url"] = record.get("reference", original)
@@ -186,7 +303,7 @@ def sanitize_media_payload(value: Any, purpose: str = "capture") -> Any:
                         if image.startswith("data:")
                         else _reference(image, mime_type, "image", purpose)
                     )
-                    if record is not None and record.get("state") == "failed":
+                    if record is not None and record.get("state") in {"failed", "pending-upload"}:
                         result[key] = _unavailable_placeholder(record)
                     elif record is not None:
                         result[key] = record.get("reference", image)
@@ -201,7 +318,7 @@ def sanitize_media_payload(value: Any, purpose: str = "capture") -> Any:
                         "audio",
                         purpose,
                     )
-                    if record is not None and record.get("state") == "failed":
+                    if record is not None and record.get("state") in {"failed", "pending-upload"}:
                         audio_result = dict(result[key])
                         audio_result["data"] = _unavailable_placeholder(record)
                         result[key] = audio_result
@@ -217,7 +334,10 @@ def sanitize_media_payload(value: Any, purpose: str = "capture") -> Any:
                         declared,
                         purpose,
                     )
-                    if record is not None and record.get("state") == "failed":
+                    if record is not None and record.get("state") in {
+                        "failed",
+                        "pending-upload",
+                    }:
                         inline_result = dict(result[key])
                         inline_result["data"] = _unavailable_placeholder(record)
                         result[key] = inline_result
@@ -225,7 +345,7 @@ def sanitize_media_payload(value: Any, purpose: str = "capture") -> Any:
             file_data = node.get("file_data") or node.get("fileData")
             if isinstance(file_data, str):
                 record = _inline(file_data, mime_type, declared or "document", purpose)
-                if record is not None and record.get("state") == "failed":
+                if record is not None and record.get("state") in {"failed", "pending-upload"}:
                     key = "file_data" if "file_data" in node else "fileData"
                     result[key] = _unavailable_placeholder(record)
 
@@ -233,7 +353,7 @@ def sanitize_media_payload(value: Any, purpose: str = "capture") -> Any:
             raw_data = node.get(raw_key) if raw_key is not None else None
             if isinstance(raw_data, str) and (media_declared or mime_type):
                 record = _inline(raw_data, mime_type, media_declared, purpose)
-                if record is not None and record.get("state") == "failed":
+                if record is not None and record.get("state") in {"failed", "pending-upload"}:
                     result[raw_key] = _unavailable_placeholder(record)
             if (
                 isinstance(raw_data, (bytes, bytearray))
@@ -241,6 +361,16 @@ def sanitize_media_payload(value: Any, purpose: str = "capture") -> Any:
                 and len(raw_data) > DEFAULT_MAX_CAPTURE_VALUE_BYTES
             ):
                 digest = hashlib.sha256(raw_data).hexdigest()
+                store = current_media_store()
+                token = (
+                    store.stage(
+                        bytes(raw_data),
+                        mime_type or "application/octet-stream",
+                        purpose,
+                    )
+                    if store is not None
+                    else None
+                )
                 result[raw_key] = _unavailable_placeholder(
                     {
                         "id": f"nl_media_{digest[:24]}",
@@ -250,8 +380,13 @@ def sanitize_media_payload(value: Any, purpose: str = "capture") -> Any:
                         "byte_length": len(raw_data),
                         "sha256": digest,
                         "purpose": purpose,
-                        "state": "failed",
-                        "safe_preview": f"upload unavailable: {UPLOAD_UNAVAILABLE_REASON}",
+                        "state": "pending-upload" if token else "failed",
+                        "safe_preview": (
+                            "pending authenticated upload"
+                            if token
+                            else f"upload unavailable: {UPLOAD_UNAVAILABLE_REASON}"
+                        ),
+                        **({"upload_token": token} if token else {}),
                     }
                 )
 
@@ -336,6 +471,16 @@ def media_references(value: Any, purpose: str) -> list[dict[str, Any]]:
                     found.append(record)
             if isinstance(raw_data, (bytes, bytearray)) and (media_declared or mime_type):
                 digest = hashlib.sha256(raw_data).hexdigest()
+                store = current_media_store()
+                token = (
+                    store.stage(
+                        bytes(raw_data),
+                        mime_type or "application/octet-stream",
+                        purpose,
+                    )
+                    if store is not None and len(raw_data) > DEFAULT_MAX_CAPTURE_VALUE_BYTES
+                    else None
+                )
                 found.append(
                     {
                         "id": f"nl_media_{digest[:24]}",
@@ -348,13 +493,18 @@ def media_references(value: Any, purpose: str) -> list[dict[str, Any]]:
                         "state": (
                             "inline"
                             if len(raw_data) <= DEFAULT_MAX_CAPTURE_VALUE_BYTES
-                            else "failed"
+                            else "pending-upload" if token else "failed"
                         ),
                         **(
                             {}
                             if len(raw_data) <= DEFAULT_MAX_CAPTURE_VALUE_BYTES
                             else {
-                                "safe_preview": (f"upload unavailable: {UPLOAD_UNAVAILABLE_REASON}")
+                                "safe_preview": (
+                                    "pending authenticated upload"
+                                    if token
+                                    else f"upload unavailable: {UPLOAD_UNAVAILABLE_REASON}"
+                                ),
+                                **({"upload_token": token} if token else {}),
                             }
                         ),
                     }

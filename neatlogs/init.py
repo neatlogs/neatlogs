@@ -39,8 +39,15 @@ from .core.delivery import (
     ObservableBatchSpanProcessor,
 )
 from .core.logger import get_logger
+from .core.media import PendingMediaStore, set_default_media_store
+from .core.media_exporter import TypedMediaLogExporter, TypedMediaSpanExporter
 from .core.span_processor import CompletionMarkerSpanProcessor, NeatlogsSpanProcessor
 from .core.transport import build_otlp_session
+from .core.upload_authority import (
+    AuthenticatedUploadAuthority,
+    DisabledUploadAuthority,
+)
+from .core.upload_authority import uploads_enabled as resolve_uploads_enabled
 from .errors import NeatlogsConfigurationError
 from .instrumentation.manager import InstrumentationManager
 from .version import __version__
@@ -61,6 +68,8 @@ _completion_span_processor = None
 _instrumentation_manager = None
 _debug_mode = False
 _delivery_diagnostics = DeliveryDiagnostics()
+_upload_authority = None
+_media_store = None
 _signal_handlers = {}
 _signal_shutdown_in_progress = False
 _shutdown_condition = threading.Condition(threading.RLock())
@@ -234,6 +243,7 @@ def init(
     tracer_provider: Optional[Any] = None,
     isolate: Optional[bool] = None,
     register_shutdown_handlers: bool = True,
+    uploads_enabled: Optional[bool] = None,
 ) -> None:
     """
     Initialize Neatlogs SDK.
@@ -305,9 +315,15 @@ def init(
               active Neatlogs spans child-first and flush before preserving normal
               signal termination. Defaults to True. Set False only when the host
               application owns signal handling and calls ``neatlogs.shutdown()``.
+        uploads_enabled: Enable the authenticated typed-media and oversized OTLP
+              upload contract. Defaults to ``NEATLOGS_UPLOADS_ENABLED``, which
+              is false when unset.
     """
     global _initialized, _init_signature, _shutdown_worker
 
+    uploads_enabled_resolved = resolve_uploads_enabled(
+        uploads_enabled, os.getenv("NEATLOGS_UPLOADS_ENABLED")
+    )
     candidate_signature = _configuration_signature(
         api_key=api_key,
         endpoint=endpoint,
@@ -329,6 +345,7 @@ def init(
         tracer_provider=tracer_provider,
         isolate=isolate,
         register_shutdown_handlers=register_shutdown_handlers,
+        uploads_enabled=uploads_enabled_resolved,
     )
 
     if _initialized:
@@ -406,6 +423,17 @@ def init(
     traces_endpoint = _normalize_traces_endpoint(endpoint)
     _parsed = _urlparse(traces_endpoint)
     _base_url = f"{_parsed.scheme}://{_parsed.netloc}"
+
+    global _upload_authority, _media_store
+    _upload_authority = DisabledUploadAuthority()
+    _media_store = None
+    if uploads_enabled_resolved and not disable_export_resolved:
+        _upload_authority = AuthenticatedUploadAuthority(
+            base_url=_base_url,
+            api_key=resolved_key,
+        )
+        _media_store = PendingMediaStore(max_bytes=_upload_authority.max_upload_bytes)
+    set_default_media_store(_media_store)
 
     global _session_config
     _session_config["user_id"] = user_id
@@ -537,10 +565,22 @@ def init(
             def force_flush(self, timeout_millis: int = 30000):
                 return self._inner.force_flush(timeout_millis)
 
+        limited_span_exporter = ByteLimitedSpanExporter(
+            otlp_exporter,
+            diagnostics=_delivery_diagnostics,
+            upload_authority=_upload_authority,
+        )
+        if _media_store is not None:
+            limited_span_exporter = TypedMediaSpanExporter(
+                limited_span_exporter,
+                _upload_authority,
+                _media_store,
+                diagnostics=_delivery_diagnostics,
+            )
         batch_processor = ObservableBatchSpanProcessor(
             _FilteredOTLPExporter(
                 MaskingSpanExporter(
-                    ByteLimitedSpanExporter(otlp_exporter, diagnostics=_delivery_diagnostics),
+                    limited_span_exporter,
                     mask,
                     diagnostics=_delivery_diagnostics,
                 )
@@ -590,14 +630,23 @@ def init(
         _log_provider = LoggerProvider(resource=resource)
         # NeatlogsLogFilter drops external-module and no-trace records before
         # BatchLogRecordProcessor batches and sends them via OTLPLogExporter.
+        limited_log_exporter = ByteLimitedLogExporter(
+            _otlp_log_exporter,
+            diagnostics=_delivery_diagnostics,
+            upload_authority=_upload_authority,
+        )
+        if _media_store is not None:
+            limited_log_exporter = TypedMediaLogExporter(
+                limited_log_exporter,
+                _upload_authority,
+                _media_store,
+                diagnostics=_delivery_diagnostics,
+            )
         _log_provider.add_log_record_processor(
             NeatlogsLogFilter(
                 ObservableBatchLogRecordProcessor(
                     MaskingLogExporter(
-                        ByteLimitedLogExporter(
-                            _otlp_log_exporter,
-                            diagnostics=_delivery_diagnostics,
-                        ),
+                        limited_log_exporter,
                         mask,
                         diagnostics=_delivery_diagnostics,
                     ),
@@ -843,6 +892,7 @@ def _perform_shutdown(
     global _init_signature
     global _instrumentation_manager, _transport_span_processors, _completion_span_processor
     global _debug_mode, _shutdown_worker
+    global _upload_authority, _media_store
 
     try:
         atexit.unregister(_atexit_shutdown)
@@ -1028,6 +1078,15 @@ def _perform_shutdown(
         set_neatlogs_provider(None)
     except Exception:
         pass
+
+    set_default_media_store(None)
+    if _media_store is not None:
+        _media_store.clear()
+    close_uploads = getattr(_upload_authority, "close", None)
+    if callable(close_uploads):
+        close_uploads()
+    _media_store = None
+    _upload_authority = None
 
     _initialized = False
     _init_signature = None

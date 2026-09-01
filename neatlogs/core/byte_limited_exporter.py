@@ -17,6 +17,7 @@ from .upload_authority import (
     OverflowExportReceipt,
     OverflowPayload,
     UploadAuthority,
+    UploadError,
 )
 
 DEFAULT_MAX_EXPORT_BYTES = 4 * 1024 * 1024
@@ -29,9 +30,8 @@ class ByteLimitedSpanExporter(SpanExporter):
     Encoding each span as a one-span OTLP request repeats resource and scope
     framing that a combined request deduplicates. Summing those sizes is
     therefore a safe upper bound without repeatedly encoding every growing
-    candidate batch. A single oversized span crosses an injectable upload
-    authority boundary; the production default rejects it explicitly until the
-    authenticated backend Phase 8 contract is deployed.
+    candidate batch. A single oversized span crosses the upload-authority
+    boundary when explicitly enabled; the default-off path rejects it.
     """
 
     def __init__(
@@ -61,7 +61,10 @@ class ByteLimitedSpanExporter(SpanExporter):
     def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
         bounded_spans: list[ReadableSpan] = []
         for span in spans:
-            bounded, truncations = limit_span_capture(span)
+            if self._upload_authority.available:
+                bounded, truncations = span, 0
+            else:
+                bounded, truncations = limit_span_capture(span)
             bounded_spans.append(bounded)
             if truncations and self._diagnostics is not None:
                 self._diagnostics.record_capture_truncation("span", truncations)
@@ -119,7 +122,17 @@ class ByteLimitedSpanExporter(SpanExporter):
                     continue
                 try:
                     result = self._upload_authority.export_overflow(candidate)
+                except UploadError as exc:
+                    if self._diagnostics is not None:
+                        self._diagnostics.record_upload_failure(f"{exc.stage}:{exc.reason_code}")
+                    logger.error(
+                        "[neatlogs] oversized span upload failed (%s)",
+                        type(exc).__name__,
+                    )
+                    result = SpanExportResult.FAILURE
                 except Exception as exc:
+                    if self._diagnostics is not None:
+                        self._diagnostics.record_upload_failure("unexpected_error")
                     logger.error(
                         "[neatlogs] oversized span upload failed (%s)",
                         type(exc).__name__,

@@ -100,6 +100,44 @@ def test_injectable_upload_authority_receives_complete_masked_envelope():
     assert snapshot["span_upload_authority_available"] is True
 
 
+def test_oversized_upload_contains_the_complete_masked_span_and_is_not_sent_twice():
+    from neatlogs.core.masking_exporter import MaskingSpanExporter
+
+    spans = _finished_spans(count=1, payload_size=16_384)
+
+    class Authority:
+        available = True
+        unavailable_reason = ""
+
+        def __init__(self):
+            self.payloads = []
+
+        def export_overflow(self, payload):
+            self.payloads.append(payload)
+            return OverflowExportReceipt(upload_id="upload-1")
+
+    def mask(snapshot):
+        snapshot["attributes"]["neatlogs.llm.input"] = "MASKED" * 3_000
+        return snapshot
+
+    authority = Authority()
+    ordinary = RecordingExporter()
+    exporter = MaskingSpanExporter(
+        ByteLimitedSpanExporter(
+            ordinary,
+            max_export_bytes=128,
+            upload_authority=authority,
+        ),
+        mask,
+    )
+
+    assert exporter.export(spans) is SpanExportResult.SUCCESS
+    assert ordinary.batches == []
+    assert len(authority.payloads) == 1
+    assert b"MASKED" in authority.payloads[0].content
+    assert b"xxxxxxxx" not in authority.payloads[0].content
+
+
 def test_upload_authority_boolean_does_not_falsely_claim_delivery():
     spans = _finished_spans(count=1, payload_size=16_384)
 

@@ -11,17 +11,17 @@ import atexit
 import contextlib
 import math
 import threading
+import time
 from collections.abc import Iterator
 from typing import Any, Callable
 from urllib.parse import urlparse
 
 from opentelemetry import trace as otel_trace
+from opentelemetry.exporter.otlp.proto.http import Compression
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk._logs import LoggerProvider
-from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 from opentelemetry.sdk.resources import SERVICE_NAME, Resource
 from opentelemetry.sdk.trace import SpanLimits, TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.sdk.trace.sampling import ParentBased, TraceIdRatioBased
 
 from ._wrap_utils import (
@@ -30,10 +30,20 @@ from ._wrap_utils import (
     activate_client,
     reset_active_client,
 )
+from .constants import DEFAULT_INGEST_ENDPOINT, export_queue_capacity
+from .core.byte_limited_exporter import ByteLimitedSpanExporter
+from .core.byte_limited_log_exporter import ByteLimitedLogExporter
 from .core.client_registry import register_client, unregister_client
+from .core.deadline import DeadlineWorker, bounded_call
+from .core.delivery import (
+    DeliveryDiagnostics,
+    ObservableBatchLogRecordProcessor,
+    ObservableBatchSpanProcessor,
+)
 from .core.log_exporter import NeatlogsLogFilter
 from .core.masking_exporter import MaskingLogExporter, MaskingSpanExporter
 from .core.span_processor import CompletionMarkerSpanProcessor, NeatlogsSpanProcessor
+from .core.transport import build_otlp_session
 from .errors import NeatlogsConfigurationError
 from .version import __version__
 
@@ -67,7 +77,7 @@ class Client:
         *,
         api_key: str,
         workflow_name: str,
-        endpoint: str = "https://ingest.neatlogs.com",
+        endpoint: str = DEFAULT_INGEST_ENDPOINT,
         tags: list[str] | None = None,
         capture_logs: bool = False,
         batch_size: int = 100,
@@ -107,6 +117,7 @@ class Client:
         self._state_changed = threading.Condition(threading.RLock())
         self._owns_provider = tracer_provider is None
         self._tracers: dict[str, Any] = {}
+        self._delivery_diagnostics = DeliveryDiagnostics()
 
         resource_attrs: dict[str, Any] = {
             SERVICE_NAME: name,
@@ -147,11 +158,19 @@ class Client:
             exporter = OTLPSpanExporter(
                 endpoint=traces_endpoint,
                 headers={"x-api-key": key},
+                compression=Compression.Gzip,
+                session=build_otlp_session(),
             )
-            batch_processor = BatchSpanProcessor(
-                MaskingSpanExporter(exporter, mask),
+            batch_processor = ObservableBatchSpanProcessor(
+                MaskingSpanExporter(
+                    ByteLimitedSpanExporter(exporter, diagnostics=self._delivery_diagnostics),
+                    mask,
+                    diagnostics=self._delivery_diagnostics,
+                ),
                 max_export_batch_size=batch_size,
+                max_queue_size=export_queue_capacity(batch_size),
                 schedule_delay_millis=int(flush_interval * 1000),
+                diagnostics=self._delivery_diagnostics,
             )
             completion_processor = CompletionMarkerSpanProcessor(
                 self._span_processor,
@@ -171,14 +190,33 @@ class Client:
                 log_exporter = OTLPLogExporter(
                     endpoint=f"{base_url}/v1/logs",
                     headers={"x-api-key": key},
+                    compression=Compression.Gzip,
+                    session=build_otlp_session(),
                 )
                 self.log_provider.add_log_record_processor(
                     NeatlogsLogFilter(
-                        BatchLogRecordProcessor(MaskingLogExporter(log_exporter, mask))
+                        ObservableBatchLogRecordProcessor(
+                            MaskingLogExporter(
+                                ByteLimitedLogExporter(
+                                    log_exporter,
+                                    diagnostics=self._delivery_diagnostics,
+                                ),
+                                mask,
+                                diagnostics=self._delivery_diagnostics,
+                            ),
+                            max_export_batch_size=batch_size,
+                            max_queue_size=export_queue_capacity(batch_size),
+                            schedule_delay_millis=int(flush_interval * 1000),
+                            diagnostics=self._delivery_diagnostics,
+                        )
                     )
                 )
 
-        atexit.register(self.shutdown)
+        # Start the shutdown worker only after construction succeeds, but before
+        # registering the atexit hook that depends on it. Python 3.12 forbids
+        # starting a new thread once interpreter finalization has begun.
+        self._shutdown_worker = DeadlineWorker(f"neatlogs-client-shutdown-{id(self):x}")
+        atexit.register(self._atexit_shutdown)
         register_client(self)
 
     def get_tracer(self, scope: str):
@@ -195,6 +233,9 @@ class Client:
     def _is_running(self) -> bool:
         with self._state_changed:
             return self._state == "running"
+
+    def get_delivery_diagnostics(self) -> dict[str, Any]:
+        return self._delivery_diagnostics.snapshot()
 
     @contextlib.contextmanager
     def activate(self) -> Iterator[Client]:
@@ -233,15 +274,23 @@ class Client:
         self,
         timeout_millis: int = 30000,
         termination_reason: str = "shutdown",
+        *,
+        _synchronous: bool = False,
     ) -> bool:
         with self._state_changed:
             if self._state == "closed":
                 return self._shutdown_result
             if self._state == "closing":
-                if self._shutdown_owner == threading.get_ident():
+                if (
+                    self._shutdown_owner == threading.get_ident()
+                    or self._shutdown_worker.is_current()
+                ):
                     return self._shutdown_result
-                self._state_changed.wait_for(lambda: self._state == "closed")
-                return self._shutdown_result
+                completed = self._state_changed.wait_for(
+                    lambda: self._state == "closed",
+                    timeout=max(0, timeout_millis) / 1000,
+                )
+                return self._shutdown_result if completed else False
             self._state = "closing"
             self._shutdown_owner = threading.get_ident()
 
@@ -250,7 +299,11 @@ class Client:
         self._span_processor.begin_shutdown(termination_reason)
         success = False
         try:
-            success = self._perform_shutdown(timeout_millis, termination_reason)
+            success = self._perform_shutdown(
+                timeout_millis,
+                termination_reason,
+                synchronous=_synchronous,
+            )
             return success
         finally:
             with self._state_changed:
@@ -259,50 +312,88 @@ class Client:
                 self._shutdown_owner = None
                 self._state_changed.notify_all()
             try:
-                atexit.unregister(self.shutdown)
+                atexit.unregister(self._atexit_shutdown)
             except Exception:
                 pass
+            self._shutdown_worker.close()
             unregister_client(self)
 
-    def _perform_shutdown(self, timeout_millis: int, termination_reason: str) -> bool:
+    def _atexit_shutdown(self) -> None:
+        """Synchronous interpreter-exit cleanup (Python 3.12 forbids new threads)."""
+
+        self.shutdown(_synchronous=True)
+
+    def _perform_shutdown(
+        self,
+        timeout_millis: int,
+        termination_reason: str,
+        *,
+        synchronous: bool = False,
+    ) -> bool:
         success = True
+        deadline = time.monotonic() + max(0, timeout_millis) / 1000
         # Drain logs before ending roots: root end creates the completion marker.
         if self.log_provider is not None:
-            try:
-                self.log_provider.shutdown()
-            except Exception:
-                success = False
-        try:
-            self._span_processor.end_active_spans(termination_reason)
-        except Exception:
+            completed, _ = bounded_call(
+                self.log_provider.shutdown,
+                deadline,
+                synchronous=synchronous,
+                worker=self._shutdown_worker,
+            )
+            success = completed and success
+        completed, _ = bounded_call(
+            lambda: self._span_processor.end_active_spans(termination_reason),
+            deadline,
+            synchronous=synchronous,
+            worker=self._shutdown_worker,
+        )
+        if not completed:
             success = False
-        if not self._span_processor.wait_for_downstream(timeout_millis):
+        remaining_millis = max(0, int((deadline - time.monotonic()) * 1000))
+        if not self._span_processor.wait_for_downstream(remaining_millis):
             success = False
         if self._completion_processor is not None:
-            try:
-                self._completion_processor.emit_deferred()
-            except Exception:
+            completed, _ = bounded_call(
+                self._completion_processor.emit_deferred,
+                deadline,
+                synchronous=synchronous,
+                worker=self._shutdown_worker,
+            )
+            if not completed:
                 success = False
         if self._owns_provider:
-            try:
-                self.tracer_provider.shutdown()
-            except Exception:
-                success = False
+            completed, _ = bounded_call(
+                self.tracer_provider.shutdown,
+                deadline,
+                synchronous=synchronous,
+                worker=self._shutdown_worker,
+            )
+            success = completed and success
         else:
-            try:
-                result = self.tracer_provider.force_flush(timeout_millis=timeout_millis)
-                success = bool(result) and success
-            except Exception:
-                success = False
+            completed, result = bounded_call(
+                lambda: self.tracer_provider.force_flush(
+                    timeout_millis=max(0, int((deadline - time.monotonic()) * 1000))
+                ),
+                deadline,
+                synchronous=synchronous,
+                worker=self._shutdown_worker,
+            )
+            success = completed and (result is None or bool(result)) and success
             for processor in reversed(self._transport_processors):
-                try:
-                    processor.shutdown()
-                except Exception:
-                    success = False
-            try:
-                self._span_processor.shutdown()
-            except Exception:
-                success = False
+                completed, _ = bounded_call(
+                    processor.shutdown,
+                    deadline,
+                    synchronous=synchronous,
+                    worker=self._shutdown_worker,
+                )
+                success = completed and success
+            completed, _ = bounded_call(
+                self._span_processor.shutdown,
+                deadline,
+                synchronous=synchronous,
+                worker=self._shutdown_worker,
+            )
+            success = completed and success
 
         return success
 

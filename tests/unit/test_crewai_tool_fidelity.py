@@ -31,7 +31,7 @@ def _finished_span(in_memory_span_exporter, name: str):
     return next(span for span in in_memory_span_exporter.get_finished_spans() if span.name == name)
 
 
-def test_base_tool_preserves_long_structured_input_output_and_return_value(
+def test_base_tool_bounds_long_structured_input_output_without_changing_return_value(
     in_memory_span_exporter,
 ) -> None:
     _install_test_tracer(in_memory_span_exporter)
@@ -60,12 +60,13 @@ def test_base_tool_preserves_long_structured_input_output_and_return_value(
     tool_span = _finished_span(in_memory_span_exporter, "crewai.tool.long_tool")
     captured_input = tool_span.attributes["input.value"]
     captured_output = tool_span.attributes["output.value"]
-    assert input_tail in captured_input
-    assert output_tail in captured_output
-    assert len(captured_input) > 100_000
-    assert len(captured_output) > 100_000
-    assert json.loads(captured_input) == {"payload": argument}
-    assert json.loads(captured_output) == result
+    assert input_tail not in captured_input
+    assert output_tail not in captured_output
+    assert len(captured_input.encode()) <= 100_000
+    assert len(captured_output.encode()) <= 100_000
+    assert "...[neatlogs-truncated" in captured_input
+    assert "overflow=backend_upload_contract_unavailable" in captured_input
+    assert "...[neatlogs-truncated" in captured_output
     assert tool_span.attributes["neatlogs.framework"] == "crewai"
     assert tool_span.attributes["neatlogs.span.kind"] == "tool"
 

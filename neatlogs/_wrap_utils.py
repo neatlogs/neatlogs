@@ -11,6 +11,7 @@ Only contains truly shared concerns:
 import inspect
 import json
 import os
+import sys
 import time
 from contextvars import ContextVar
 from typing import Any, Callable, Dict, List, Mapping, Optional
@@ -20,9 +21,16 @@ from opentelemetry import context as context_api
 from opentelemetry import trace as otel_trace
 from opentelemetry.sdk.trace import TracerProvider
 
+from .constants import DEFAULT_INGEST_ENDPOINT
+from .core.capture import (
+    DEFAULT_MAX_CAPTURE_VALUE_BYTES,
+    UPLOAD_UNAVAILABLE_REASON,
+    bound_text,
+)
 from .core.logger import get_logger
 
 logger = get_logger()
+_MAX_LEGACY_STREAM_BYTES = 1_000_000
 
 _wrapper_tracer: Optional[otel_trace.Tracer] = None
 _wrapper_bootstrapped = False
@@ -103,7 +111,7 @@ def _normalize_traces_endpoint(endpoint: str) -> str:
     """Convert a Neatlogs base endpoint into the OTLP traces endpoint."""
     raw = (endpoint or "").strip().rstrip("/")
     if not raw:
-        raw = "https://ingest.neatlogs.com"
+        raw = DEFAULT_INGEST_ENDPOINT
 
     if raw.endswith("/v1/traces"):
         return raw
@@ -428,13 +436,17 @@ def neatlogs_span(scope: str, name: str, **start_kwargs: Any) -> "_NeatlogsSpanC
 
 
 def _bootstrap_from_env(api_key: str) -> None:
+    from opentelemetry.exporter.otlp.proto.http import Compression
     from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
     from opentelemetry.sdk.resources import SERVICE_NAME, Resource
     from opentelemetry.sdk.trace import SpanLimits
-    from opentelemetry.sdk.trace.export import BatchSpanProcessor
+
+    from .core.byte_limited_exporter import ByteLimitedSpanExporter
+    from .core.delivery import DeliveryDiagnostics, ObservableBatchSpanProcessor
+    from .core.transport import build_otlp_session
 
     endpoint = _wrapper_config.get("endpoint") or os.environ.get(
-        "NEATLOGS_ENDPOINT", "https://ingest.neatlogs.com"
+        "NEATLOGS_ENDPOINT", DEFAULT_INGEST_ENDPOINT
     )
     endpoint = _normalize_traces_endpoint(endpoint)
 
@@ -456,8 +468,16 @@ def _bootstrap_from_env(api_key: str) -> None:
     exporter = OTLPSpanExporter(
         endpoint=endpoint,
         headers={"x-api-key": api_key},
+        compression=Compression.Gzip,
+        session=build_otlp_session(),
     )
-    provider.add_span_processor(BatchSpanProcessor(exporter))
+    diagnostics = DeliveryDiagnostics()
+    provider.add_span_processor(
+        ObservableBatchSpanProcessor(
+            ByteLimitedSpanExporter(exporter, diagnostics=diagnostics),
+            diagnostics=diagnostics,
+        )
+    )
     set_neatlogs_provider(provider)
     logger.debug(f"neatlogs wrapper: auto-bootstrapped private TracerProvider → {endpoint}")
 
@@ -856,15 +876,100 @@ def get_provider_tracer() -> "_AutoRootTracer":
     return _AutoRootTracer(get_tracer())
 
 
-def serialize(obj: Any, max_length: int = 100_000) -> str:
-    """Safe JSON serialization with truncation."""
+def serialize(obj: Any, max_length: Optional[int] = DEFAULT_MAX_CAPTURE_VALUE_BYTES) -> str:
+    """Safe JSON serialization with explicit, byte-aware overflow diagnostics."""
+    from .core.media import sanitize_media_payload
+
     try:
-        s = json.dumps(obj, default=str, ensure_ascii=False)
+        s = json.dumps(sanitize_media_payload(obj), default=str, ensure_ascii=False)
     except (TypeError, ValueError):
         s = str(obj)
-    if len(s) > max_length:
-        return s[:max_length] + "...[truncated]"
-    return s
+    return s if max_length is None else bound_text(s, max_length)
+
+
+def _accepts_keyword(callback: Callable, name: str) -> bool:
+    try:
+        parameters = inspect.signature(callback).parameters
+    except (TypeError, ValueError):
+        return False
+    parameter = parameters.get(name)
+    return bool(
+        parameter
+        and parameter.kind
+        in {inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY}
+    ) or any(item.kind is inspect.Parameter.VAR_KEYWORD for item in parameters.values())
+
+
+class _InterruptedSpanProxy:
+    """Keep legacy finalizers from turning an interrupted stream into success."""
+
+    def __init__(self, span: otel_trace.Span) -> None:
+        self._span = span
+
+    def set_status(self, status_or_status_code, *args: Any, **kwargs: Any) -> None:
+        from opentelemetry.trace import Status, StatusCode
+
+        code = (
+            status_or_status_code.status_code
+            if isinstance(status_or_status_code, Status)
+            else status_or_status_code
+        )
+        if code is StatusCode.OK:
+            return
+        self._span.set_status(status_or_status_code, *args, **kwargs)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._span, name)
+
+
+def _bounded_object_size(value: Any, limit: int, seen: Optional[set[int]] = None) -> int:
+    """Estimate retained chunk bytes without materializing an unbounded serialization."""
+
+    if limit < 0:
+        return 0
+    if seen is None:
+        seen = set()
+    if isinstance(value, str):
+        total = 0
+        for offset in range(0, len(value), 4096):
+            total += len(value[offset : offset + 4096].encode("utf-8"))
+            if total > limit:
+                return limit + 1
+        return total
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return min(len(value), limit + 1)
+    if value is None or isinstance(value, (bool, int, float)):
+        return min(sys.getsizeof(value), limit + 1)
+
+    identity = id(value)
+    if identity in seen:
+        return 0
+    seen.add(identity)
+    total = min(sys.getsizeof(value), limit + 1)
+    if total > limit:
+        return total
+
+    if isinstance(value, Mapping):
+        children = value.items()
+    elif isinstance(value, (list, tuple, set, frozenset)):
+        children = ((None, item) for item in value)
+    elif hasattr(value, "__dict__"):
+        children = vars(value).items()
+    else:
+        slots = getattr(type(value), "__slots__", ())
+        if isinstance(slots, str):
+            slots = (slots,)
+        children = ((slot, getattr(value, slot)) for slot in slots if hasattr(value, slot))
+
+    for key, item in children:
+        if key is not None:
+            total += _bounded_object_size(key, limit - total, seen)
+        if total > limit:
+            return limit + 1
+        total += _bounded_object_size(item, limit - total, seen)
+        if total > limit:
+            return limit + 1
+    return total
 
 
 class SyncStreamWrapper:
@@ -879,38 +984,98 @@ class SyncStreamWrapper:
         self._finalizer = finalizer
         self._start_time = time.perf_counter()
         self._first_chunk_time: Optional[float] = None
+        self._incremental = hasattr(finalizer, "on_chunk") and hasattr(finalizer, "finish")
         self._chunks: List[Any] = []
+        self._chunk_bytes = 0
+        self._dropped_chunks = 0
         self._finalized = False
+        self._exhausted = False
 
     def __iter__(self):
-        return self
+        def consume():
+            try:
+                while True:
+                    try:
+                        yield self.__next__()
+                    except StopIteration:
+                        return
+            finally:
+                if not self._finalized:
+                    # A loop break abandons this iterator, not the provider-owned
+                    # stream. Finalize telemetry but leave the source resumable.
+                    self._finalize(interrupted=True)
+
+        return consume()
 
     def __next__(self):
         try:
             chunk = next(self._stream)
         except StopIteration:
-            self._finalize()
+            self._exhausted = True
+            self._finalize(interrupted=False)
             raise
-        except Exception as e:
+        except BaseException as e:
             self._finalize_error(e)
             raise
 
         if self._first_chunk_time is None:
             self._first_chunk_time = time.perf_counter()
-        self._chunks.append(chunk)
+        if self._finalized:
+            return chunk
+        if self._incremental:
+            self._finalizer.on_chunk(self._span, chunk)
+        else:
+            chunk_bytes = _bounded_object_size(
+                chunk,
+                _MAX_LEGACY_STREAM_BYTES - self._chunk_bytes,
+            )
+            if self._chunk_bytes + chunk_bytes <= _MAX_LEGACY_STREAM_BYTES:
+                self._chunks.append(chunk)
+                self._chunk_bytes += chunk_bytes
+            else:
+                self._dropped_chunks += 1
+                self._mark_chunk_overflow()
         return chunk
+
+    def _mark_chunk_overflow(self) -> None:
+        self._span.set_attribute("neatlogs.capture.truncated", True)
+        self._span.set_attribute("neatlogs.capture.truncated_count", self._dropped_chunks)
+        self._span.set_attribute("neatlogs.stream.chunks_dropped", self._dropped_chunks)
+        self._span.set_attribute("neatlogs.stream.capture_incomplete", True)
+        self._span.set_attribute("neatlogs.stream.bytes_retained", self._chunk_bytes)
+        self._span.set_attribute("neatlogs.capture.overflow.state", "disabled")
+        self._span.set_attribute(
+            "neatlogs.capture.overflow.reason",
+            UPLOAD_UNAVAILABLE_REASON,
+        )
 
     def __enter__(self):
         if hasattr(self._stream, "__enter__"):
             self._stream.__enter__()
         return self
 
-    def __exit__(self, *args):
-        if hasattr(self._stream, "__exit__"):
-            self._stream.__exit__(*args)
-        self._finalize()
+    def __exit__(self, exc_type, exc, tb):
+        try:
+            if hasattr(self._stream, "__exit__"):
+                self._stream.__exit__(exc_type, exc, tb)
+        except BaseException as close_error:
+            self._finalize_error(close_error)
+            raise
+        if exc is not None:
+            self._finalize_error(exc)
+        else:
+            self._finalize(interrupted=not self._exhausted)
 
-    def _finalize(self):
+    def close(self):
+        try:
+            if hasattr(self._stream, "close"):
+                self._stream.close()
+        except BaseException as close_error:
+            self._finalize_error(close_error)
+            raise
+        self._finalize(interrupted=not self._exhausted)
+
+    def _finalize(self, *, interrupted: bool):
         if self._finalized:
             return
         self._finalized = True
@@ -918,16 +1083,53 @@ class SyncStreamWrapper:
         ttft_ms = None
         if self._first_chunk_time is not None:
             ttft_ms = (self._first_chunk_time - self._start_time) * 1000
-        self._finalizer(self._span, self._chunks, elapsed_ms, ttft_ms)
+        if self._incremental:
+            self._finalizer.finish(
+                self._span,
+                elapsed_ms,
+                ttft_ms,
+                interrupted=interrupted,
+            )
+        else:
+            if interrupted:
+                self._span.set_attribute("neatlogs.stream.cancelled", True)
+            finalizer_span = (
+                _InterruptedSpanProxy(self._span)
+                if interrupted or self._dropped_chunks
+                else self._span
+            )
+            if _accepts_keyword(self._finalizer, "interrupted"):
+                self._finalizer(
+                    finalizer_span,
+                    self._chunks,
+                    elapsed_ms,
+                    ttft_ms,
+                    interrupted=interrupted,
+                )
+            else:
+                self._finalizer(
+                    finalizer_span,
+                    self._chunks,
+                    elapsed_ms,
+                    ttft_ms,
+                )
 
-    def _finalize_error(self, error: Exception):
+    def _finalize_error(self, error: BaseException):
         if self._finalized:
             return
         self._finalized = True
+        if self._incremental and hasattr(self._finalizer, "fail"):
+            self._finalizer.fail(self._span, error)
+            return
         from opentelemetry.trace import StatusCode
 
-        self._span.set_status(StatusCode.ERROR, str(error))
-        self._span.record_exception(error)
+        if error.__class__.__name__ in {"CancelledError", "GeneratorExit"}:
+            self._span.set_attribute("neatlogs.stream.cancelled", True)
+            self._span.set_status(StatusCode.UNSET)
+        else:
+            self._span.set_status(StatusCode.ERROR, str(error))
+            if isinstance(error, Exception):
+                self._span.record_exception(error)
         self._span.end()
 
     def __getattr__(self, name):
@@ -945,38 +1147,98 @@ class AsyncStreamWrapper:
         self._finalizer = finalizer
         self._start_time = time.perf_counter()
         self._first_chunk_time: Optional[float] = None
+        self._incremental = hasattr(finalizer, "on_chunk") and hasattr(finalizer, "finish")
         self._chunks: List[Any] = []
+        self._chunk_bytes = 0
+        self._dropped_chunks = 0
         self._finalized = False
+        self._exhausted = False
 
     def __aiter__(self):
-        return self
+        async def consume():
+            try:
+                while True:
+                    try:
+                        yield await self.__anext__()
+                    except StopAsyncIteration:
+                        return
+            finally:
+                if not self._finalized:
+                    # Do not transfer ownership of the provider stream to the
+                    # temporary async iterator created for ``async for``.
+                    self._finalize(interrupted=True)
+
+        return consume()
 
     async def __anext__(self):
         try:
             chunk = await self._stream.__anext__()
         except StopAsyncIteration:
-            self._finalize()
+            self._exhausted = True
+            self._finalize(interrupted=False)
             raise
-        except Exception as e:
+        except BaseException as e:
             self._finalize_error(e)
             raise
 
         if self._first_chunk_time is None:
             self._first_chunk_time = time.perf_counter()
-        self._chunks.append(chunk)
+        if self._finalized:
+            return chunk
+        if self._incremental:
+            self._finalizer.on_chunk(self._span, chunk)
+        else:
+            chunk_bytes = _bounded_object_size(
+                chunk,
+                _MAX_LEGACY_STREAM_BYTES - self._chunk_bytes,
+            )
+            if self._chunk_bytes + chunk_bytes <= _MAX_LEGACY_STREAM_BYTES:
+                self._chunks.append(chunk)
+                self._chunk_bytes += chunk_bytes
+            else:
+                self._dropped_chunks += 1
+                self._mark_chunk_overflow()
         return chunk
+
+    def _mark_chunk_overflow(self) -> None:
+        self._span.set_attribute("neatlogs.capture.truncated", True)
+        self._span.set_attribute("neatlogs.capture.truncated_count", self._dropped_chunks)
+        self._span.set_attribute("neatlogs.stream.chunks_dropped", self._dropped_chunks)
+        self._span.set_attribute("neatlogs.stream.capture_incomplete", True)
+        self._span.set_attribute("neatlogs.stream.bytes_retained", self._chunk_bytes)
+        self._span.set_attribute("neatlogs.capture.overflow.state", "disabled")
+        self._span.set_attribute(
+            "neatlogs.capture.overflow.reason",
+            UPLOAD_UNAVAILABLE_REASON,
+        )
 
     async def __aenter__(self):
         if hasattr(self._stream, "__aenter__"):
             await self._stream.__aenter__()
         return self
 
-    async def __aexit__(self, *args):
-        if hasattr(self._stream, "__aexit__"):
-            await self._stream.__aexit__(*args)
-        self._finalize()
+    async def __aexit__(self, exc_type, exc, tb):
+        try:
+            if hasattr(self._stream, "__aexit__"):
+                await self._stream.__aexit__(exc_type, exc, tb)
+        except BaseException as close_error:
+            self._finalize_error(close_error)
+            raise
+        if exc is not None:
+            self._finalize_error(exc)
+        else:
+            self._finalize(interrupted=not self._exhausted)
 
-    def _finalize(self):
+    async def aclose(self):
+        try:
+            if hasattr(self._stream, "aclose"):
+                await self._stream.aclose()
+        except BaseException as close_error:
+            self._finalize_error(close_error)
+            raise
+        self._finalize(interrupted=not self._exhausted)
+
+    def _finalize(self, *, interrupted: bool):
         if self._finalized:
             return
         self._finalized = True
@@ -984,16 +1246,53 @@ class AsyncStreamWrapper:
         ttft_ms = None
         if self._first_chunk_time is not None:
             ttft_ms = (self._first_chunk_time - self._start_time) * 1000
-        self._finalizer(self._span, self._chunks, elapsed_ms, ttft_ms)
+        if self._incremental:
+            self._finalizer.finish(
+                self._span,
+                elapsed_ms,
+                ttft_ms,
+                interrupted=interrupted,
+            )
+        else:
+            if interrupted:
+                self._span.set_attribute("neatlogs.stream.cancelled", True)
+            finalizer_span = (
+                _InterruptedSpanProxy(self._span)
+                if interrupted or self._dropped_chunks
+                else self._span
+            )
+            if _accepts_keyword(self._finalizer, "interrupted"):
+                self._finalizer(
+                    finalizer_span,
+                    self._chunks,
+                    elapsed_ms,
+                    ttft_ms,
+                    interrupted=interrupted,
+                )
+            else:
+                self._finalizer(
+                    finalizer_span,
+                    self._chunks,
+                    elapsed_ms,
+                    ttft_ms,
+                )
 
-    def _finalize_error(self, error: Exception):
+    def _finalize_error(self, error: BaseException):
         if self._finalized:
             return
         self._finalized = True
+        if self._incremental and hasattr(self._finalizer, "fail"):
+            self._finalizer.fail(self._span, error)
+            return
         from opentelemetry.trace import StatusCode
 
-        self._span.set_status(StatusCode.ERROR, str(error))
-        self._span.record_exception(error)
+        if error.__class__.__name__ in {"CancelledError", "GeneratorExit"}:
+            self._span.set_attribute("neatlogs.stream.cancelled", True)
+            self._span.set_status(StatusCode.UNSET)
+        else:
+            self._span.set_status(StatusCode.ERROR, str(error))
+            if isinstance(error, Exception):
+                self._span.record_exception(error)
         self._span.end()
 
     def __getattr__(self, name):

@@ -40,6 +40,7 @@ from typing import Any
 from opentelemetry.trace import StatusCode
 
 from ._wrap_utils import attach_as_current, detach, get_tracer, serialize
+from .core.capture import bound_text
 
 _CLASS_HOOKS_INSTALLED = False
 _LLM_INPUT_CAPTURE_LIMIT = 1 * 1024 * 1024
@@ -53,14 +54,14 @@ def _crewai_span_attributes(kind: str) -> dict[str, Any]:
 
 
 def _serialize_crewai_io(value: Any) -> str:
-    """Serialize CrewAI tool I/O without discarding data before export."""
+    """Serialize CrewAI tool I/O within the explicit capture boundary."""
     if isinstance(value, str):
-        return value
+        return bound_text(value)
     try:
-        return json.dumps(value, default=str, ensure_ascii=False)
+        return serialize(value)
     except Exception:
         try:
-            return str(value)
+            return bound_text(str(value))
         except Exception:
             return f"<unserializable {type(value).__name__}>"
 

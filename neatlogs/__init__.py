@@ -32,10 +32,11 @@ from .core.crewai_task_registry import register_crewai_task
 from .core.identity import identify
 from .core.llm_binder import bind_templates
 from .core.log import log
+from .core.masking_exporter import MaskContext
 from .core.propagation import extract_trace_context, inject_trace_context
 from .decorators import span
 from .errors import NeatlogsConfigurationError, NeatlogsError
-from .init import flush, flush_all, init, shutdown
+from .init import flush, flush_all, get_delivery_diagnostics, init, shutdown
 from .prompt.client import (
     AsyncPromptClient,
     CachedPrompt,

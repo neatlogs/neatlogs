@@ -311,7 +311,12 @@ def _finalize_chat(span: Any, response: Any, duration_ms: float) -> None:
 
 
 def _finalize_chat_stream(
-    span: Any, chunks: List[Any], duration_ms: float, ttft_ms: Optional[float]
+    span: Any,
+    chunks: List[Any],
+    duration_ms: float,
+    ttft_ms: Optional[float],
+    *,
+    interrupted: bool = False,
 ) -> None:
     text_parts: List[str] = []
     tool_calls_acc: dict = {}
@@ -363,7 +368,7 @@ def _finalize_chat_stream(
         span.set_attribute("neatlogs.llm.finish_reason", str(finish_reason))
     _set_chat_usage(span, usage)
 
-    _ok(span, duration_ms, ttft_ms)
+    _ok(span, duration_ms, ttft_ms, interrupted=interrupted)
 
 
 def _set_chat_usage(span: Any, usage: Any) -> None:
@@ -513,7 +518,12 @@ def _finalize_responses(span: Any, response: Any, duration_ms: float) -> None:
 
 
 def _finalize_responses_stream(
-    span: Any, chunks: List[Any], duration_ms: float, ttft_ms: Optional[float]
+    span: Any,
+    chunks: List[Any],
+    duration_ms: float,
+    ttft_ms: Optional[float],
+    *,
+    interrupted: bool = False,
 ) -> None:
     text_parts: List[str] = []
     model = None
@@ -537,7 +547,7 @@ def _finalize_responses_stream(
     if model:
         span.set_attribute("neatlogs.llm.model_name", str(model))
     _set_responses_usage(span, usage)
-    _ok(span, duration_ms, ttft_ms)
+    _ok(span, duration_ms, ttft_ms, interrupted=interrupted)
 
 
 def _set_responses_usage(span: Any, usage: Any) -> None:
@@ -706,7 +716,13 @@ def _finalize_rerank(span: Any, response: Any, duration_ms: float) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _ok(span: Any, duration_ms: float, ttft_ms: Optional[float] = None) -> None:
+def _ok(
+    span: Any,
+    duration_ms: float,
+    ttft_ms: Optional[float] = None,
+    *,
+    interrupted: bool = False,
+) -> None:
     span.set_attribute("neatlogs.llm.metrics.duration_ms", round(duration_ms, 3))
     if ttft_ms is not None:
         span.set_attribute("neatlogs.llm.metrics.ttft_ms", round(ttft_ms, 3))
@@ -715,7 +731,7 @@ def _ok(span: Any, duration_ms: float, ttft_ms: Optional[float] = None) -> None:
                 "neatlogs.llm.metrics.streaming_time_to_generate_ms",
                 round(duration_ms - ttft_ms, 3),
             )
-    span.set_status(StatusCode.OK)
+    span.set_status(StatusCode.UNSET if interrupted else StatusCode.OK)
     span.end()
 
 

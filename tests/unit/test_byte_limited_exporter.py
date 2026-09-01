@@ -6,6 +6,7 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor, SpanExportResult
 
 from neatlogs.core.byte_limited_exporter import ByteLimitedSpanExporter
 from neatlogs.core.delivery import DeliveryDiagnostics
+from neatlogs.core.upload_authority import OverflowExportReceipt
 
 
 class RecordingExporter:
@@ -72,7 +73,12 @@ def test_injectable_upload_authority_receives_complete_masked_envelope():
 
         def export_overflow(self, payload):
             self.payloads.append(payload)
-            return True
+            return OverflowExportReceipt(
+                upload_id="upload-1",
+                project_id="project-1",
+                state="ready",
+                reference_exported=True,
+            )
 
     authority = Authority()
     diagnostics = DeliveryDiagnostics()
@@ -94,6 +100,30 @@ def test_injectable_upload_authority_receives_complete_masked_envelope():
     assert snapshot["span_upload_authority_available"] is True
 
 
+def test_upload_authority_boolean_does_not_falsely_claim_delivery():
+    spans = _finished_spans(count=1, payload_size=16_384)
+
+    class IncompleteAuthority:
+        available = True
+        unavailable_reason = ""
+
+        def export_overflow(self, _payload):
+            return True
+
+    diagnostics = DeliveryDiagnostics()
+    exporter = ByteLimitedSpanExporter(
+        RecordingExporter(),
+        max_export_bytes=128,
+        diagnostics=diagnostics,
+        upload_authority=IncompleteAuthority(),
+    )
+
+    assert exporter.export(spans) is SpanExportResult.FAILURE
+    snapshot = diagnostics.snapshot()
+    assert snapshot["span_overflow_exports"] == 0
+    assert snapshot["span_overflow_failures"] == 1
+
+
 def test_exposes_final_export_failure_count():
     spans = _finished_spans(count=2)
     diagnostics = DeliveryDiagnostics()
@@ -103,6 +133,28 @@ def test_exposes_final_export_failure_count():
 
     assert exporter.export(spans) is SpanExportResult.FAILURE
     assert diagnostics.snapshot()["span_export_failures"] == 2
+
+
+def test_exporter_exception_counts_current_and_unattempted_tail():
+    spans = _finished_spans(count=3, payload_size=256)
+    max_bytes = max(ByteLimitedSpanExporter._encoded_upper_bound(span) for span in spans)
+
+    class RaisingExporter(RecordingExporter):
+        def export(self, spans):
+            self.batches.append(list(spans))
+            raise RuntimeError("transport failed")
+
+    diagnostics = DeliveryDiagnostics()
+    sink = RaisingExporter()
+    exporter = ByteLimitedSpanExporter(
+        sink,
+        max_export_bytes=max_bytes,
+        diagnostics=diagnostics,
+    )
+
+    assert exporter.export(spans) is SpanExportResult.FAILURE
+    assert len(sink.batches) == 1
+    assert diagnostics.snapshot()["span_export_failures"] == 3
 
 
 @pytest.mark.parametrize(

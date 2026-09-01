@@ -34,7 +34,7 @@ from .constants import DEFAULT_INGEST_ENDPOINT, export_queue_capacity
 from .core.byte_limited_exporter import ByteLimitedSpanExporter
 from .core.byte_limited_log_exporter import ByteLimitedLogExporter
 from .core.client_registry import register_client, unregister_client
-from .core.deadline import bounded_call
+from .core.deadline import DeadlineWorker, bounded_call
 from .core.delivery import (
     DeliveryDiagnostics,
     ObservableBatchLogRecordProcessor,
@@ -212,6 +212,10 @@ class Client:
                     )
                 )
 
+        # Start the shutdown worker only after construction succeeds, but before
+        # registering the atexit hook that depends on it. Python 3.12 forbids
+        # starting a new thread once interpreter finalization has begun.
+        self._shutdown_worker = DeadlineWorker(f"neatlogs-client-shutdown-{id(self):x}")
         atexit.register(self._atexit_shutdown)
         register_client(self)
 
@@ -277,7 +281,10 @@ class Client:
             if self._state == "closed":
                 return self._shutdown_result
             if self._state == "closing":
-                if self._shutdown_owner == threading.get_ident():
+                if (
+                    self._shutdown_owner == threading.get_ident()
+                    or self._shutdown_worker.is_current()
+                ):
                     return self._shutdown_result
                 completed = self._state_changed.wait_for(
                     lambda: self._state == "closed",
@@ -308,6 +315,7 @@ class Client:
                 atexit.unregister(self._atexit_shutdown)
             except Exception:
                 pass
+            self._shutdown_worker.close()
             unregister_client(self)
 
     def _atexit_shutdown(self) -> None:
@@ -330,25 +338,35 @@ class Client:
                 self.log_provider.shutdown,
                 deadline,
                 synchronous=synchronous,
+                worker=self._shutdown_worker,
             )
             success = completed and success
-        try:
-            self._span_processor.end_active_spans(termination_reason)
-        except Exception:
+        completed, _ = bounded_call(
+            lambda: self._span_processor.end_active_spans(termination_reason),
+            deadline,
+            synchronous=synchronous,
+            worker=self._shutdown_worker,
+        )
+        if not completed:
             success = False
         remaining_millis = max(0, int((deadline - time.monotonic()) * 1000))
         if not self._span_processor.wait_for_downstream(remaining_millis):
             success = False
         if self._completion_processor is not None:
-            try:
-                self._completion_processor.emit_deferred()
-            except Exception:
+            completed, _ = bounded_call(
+                self._completion_processor.emit_deferred,
+                deadline,
+                synchronous=synchronous,
+                worker=self._shutdown_worker,
+            )
+            if not completed:
                 success = False
         if self._owns_provider:
             completed, _ = bounded_call(
                 self.tracer_provider.shutdown,
                 deadline,
                 synchronous=synchronous,
+                worker=self._shutdown_worker,
             )
             success = completed and success
         else:
@@ -358,6 +376,7 @@ class Client:
                 ),
                 deadline,
                 synchronous=synchronous,
+                worker=self._shutdown_worker,
             )
             success = completed and (result is None or bool(result)) and success
             for processor in reversed(self._transport_processors):
@@ -365,12 +384,14 @@ class Client:
                     processor.shutdown,
                     deadline,
                     synchronous=synchronous,
+                    worker=self._shutdown_worker,
                 )
                 success = completed and success
             completed, _ = bounded_call(
                 self._span_processor.shutdown,
                 deadline,
                 synchronous=synchronous,
+                worker=self._shutdown_worker,
             )
             success = completed and success
 

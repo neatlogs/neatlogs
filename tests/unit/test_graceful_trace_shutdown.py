@@ -3,6 +3,7 @@ import signal
 import subprocess
 import sys
 import threading
+import time
 
 import pytest
 from opentelemetry import trace as otel_trace
@@ -12,6 +13,9 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 from opentelemetry.trace import StatusCode
 
 from neatlogs._wrap_utils import set_neatlogs_provider
+from neatlogs.client import Client
+from neatlogs.core.deadline import DeadlineWorker, bounded_call
+from neatlogs.core.masking_exporter import _MaskRunner
 from neatlogs.core.span_processor import CompletionMarkerSpanProcessor, NeatlogsSpanProcessor
 
 init_module = importlib.import_module("neatlogs.init")
@@ -67,6 +71,141 @@ threading.Thread.start = forbidden
     assert completed.returncode == 0, completed.stderr
     assert marker.read_text() == "closed"
     assert "cannot create new thread" not in completed.stderr
+
+
+def test_prestarted_deadline_worker_returns_at_deadline_without_starting_a_thread(monkeypatch):
+    worker = DeadlineWorker("neatlogs-test-shutdown")
+    monkeypatch.setattr(
+        threading.Thread,
+        "start",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("late thread start")),
+    )
+    started = time.monotonic()
+
+    completed, result = bounded_call(
+        lambda: time.sleep(0.2),
+        time.monotonic() + 0.02,
+        synchronous=True,
+        worker=worker,
+    )
+
+    elapsed = time.monotonic() - started
+    assert completed is False
+    assert isinstance(result, TimeoutError)
+    assert elapsed < 0.1
+    worker.close()
+
+
+def test_mask_runner_uses_workers_started_before_atexit(monkeypatch):
+    runner = _MaskRunner(timeout_seconds=0.1)
+    monkeypatch.setattr(
+        threading.Thread,
+        "start",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("late thread start")),
+    )
+
+    assert runner.apply(lambda snapshot: snapshot, {"signal": "span"}) == {"signal": "span"}
+    runner.shutdown()
+
+
+def test_atexit_flush_with_mask_uses_only_prestarted_workers(tmp_path):
+    marker = tmp_path / "masked.shutdown"
+    script = f"""
+import atexit
+import threading
+import time
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from neatlogs.core.deadline import DeadlineWorker, bounded_call
+from neatlogs.core.masking_exporter import MaskingSpanExporter
+
+inner = InMemorySpanExporter()
+provider = TracerProvider()
+provider.add_span_processor(BatchSpanProcessor(
+    MaskingSpanExporter(inner, lambda snapshot: snapshot),
+    schedule_delay_millis=60_000,
+))
+worker = DeadlineWorker("atexit-test")
+provider.get_tracer("test").start_span("queued").end()
+def cleanup():
+    completed, _ = bounded_call(
+        provider.shutdown,
+        time.monotonic() + 1,
+        synchronous=True,
+        worker=worker,
+    )
+    open({str(marker)!r}, "w").write(f"{{completed}}:{{len(inner.get_finished_spans())}}")
+atexit.register(cleanup)
+def forbidden(*args, **kwargs):
+    raise RuntimeError("cannot create new thread at interpreter shutdown")
+threading.Thread.start = forbidden
+"""
+
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert marker.read_text() == "True:1"
+    assert "cannot create new thread" not in completed.stderr
+
+
+def test_concurrent_client_shutdown_wait_is_deadline_bounded():
+    client = Client(api_key="test-key", workflow_name="bounded", disable_export=True)
+    entered = threading.Event()
+    release = threading.Event()
+
+    class SlowProvider:
+        def shutdown(self):
+            entered.set()
+            release.wait(1)
+
+    client.tracer_provider = SlowProvider()
+    owner = threading.Thread(target=lambda: client.shutdown(timeout_millis=500), daemon=True)
+    owner.start()
+    assert entered.wait(0.2)
+    started = time.monotonic()
+
+    assert client.shutdown(timeout_millis=20) is False
+    assert time.monotonic() - started < 0.1
+
+    release.set()
+    owner.join(1)
+
+
+def test_concurrent_default_shutdown_wait_is_deadline_bounded(monkeypatch):
+    entered = threading.Event()
+    release = threading.Event()
+
+    class SlowProvider:
+        def shutdown(self):
+            entered.set()
+            release.wait(1)
+
+    monkeypatch.setattr(init_module, "_tracer_provider", SlowProvider())
+    monkeypatch.setattr(init_module, "_owns_tracer_provider", True)
+    monkeypatch.setattr(init_module, "_log_provider", None)
+    monkeypatch.setattr(init_module, "_span_processor", None)
+    monkeypatch.setattr(init_module, "_completion_span_processor", None)
+    monkeypatch.setattr(init_module, "_instrumentation_manager", None)
+
+    owner = threading.Thread(
+        target=lambda: init_module.shutdown(timeout_millis=500),
+        daemon=True,
+    )
+    owner.start()
+    assert entered.wait(0.2)
+    started = time.monotonic()
+
+    assert init_module.shutdown(timeout_millis=20) is False
+    assert time.monotonic() - started < 0.1
+
+    release.set()
+    owner.join(1)
 
 
 def test_end_active_spans_closes_children_then_root_and_emits_completion_marker():

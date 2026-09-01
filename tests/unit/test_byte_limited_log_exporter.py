@@ -95,3 +95,25 @@ def test_log_split_failure_counts_failed_and_unattempted_tail(
     assert exporter.export(records) is LogRecordExportResult.FAILURE
     assert len(sink.batches) == expected_attempts
     assert diagnostics.snapshot()["log_export_failures"] == expected_failures
+
+
+def test_log_exporter_exception_counts_current_and_unattempted_tail():
+    records = _finished_logs(count=3, payload_size=256)
+    max_bytes = max(ByteLimitedLogExporter._encoded_upper_bound(item) for item in records)
+
+    class RaisingExporter(RecordingExporter):
+        def export(self, batch):
+            self.batches.append(list(batch))
+            raise RuntimeError("transport failed")
+
+    diagnostics = DeliveryDiagnostics()
+    sink = RaisingExporter()
+    exporter = ByteLimitedLogExporter(
+        sink,
+        max_export_bytes=max_bytes,
+        diagnostics=diagnostics,
+    )
+
+    assert exporter.export(records) is LogRecordExportResult.FAILURE
+    assert len(sink.batches) == 1
+    assert diagnostics.snapshot()["log_export_failures"] == 3

@@ -32,6 +32,7 @@ from .delivery import DeliveryDiagnostics
 from .mask import effective_mask
 
 logger = logging.getLogger(__name__)
+_MASK_POOL_SIZE = 4
 
 
 @dataclass(frozen=True)
@@ -70,11 +71,55 @@ def _mask_call(
     return result
 
 
+class _MaskWorkerPool:
+    """Fixed workers created before atexit; submissions never create threads."""
+
+    def __init__(self, max_workers: int = _MASK_POOL_SIZE) -> None:
+        self._tasks: queue.Queue[Callable[[], None]] = queue.Queue()
+        self._slots = threading.BoundedSemaphore(max_workers)
+        self._workers = [
+            threading.Thread(
+                target=self._run,
+                name=f"neatlogs-mask-{index}",
+                daemon=True,
+            )
+            for index in range(max_workers)
+        ]
+        for worker in self._workers:
+            worker.start()
+
+    def _run(self) -> None:
+        while True:
+            operation = self._tasks.get()
+            try:
+                operation()
+            finally:
+                self._slots.release()
+
+    def submit(self, operation: Callable[[], None]) -> bool:
+        if not self._slots.acquire(blocking=False):
+            return False
+        self._tasks.put_nowait(operation)
+        return True
+
+
+_mask_pool: _MaskWorkerPool | None = None
+_mask_pool_lock = threading.Lock()
+
+
+def _get_mask_pool() -> _MaskWorkerPool:
+    global _mask_pool
+    with _mask_pool_lock:
+        if _mask_pool is None:
+            _mask_pool = _MaskWorkerPool()
+        return _mask_pool
+
+
 class _MaskRunner:
     def __init__(self, timeout_seconds: float = 5.0, max_workers: int = 4) -> None:
         self._timeout_seconds = timeout_seconds
         self._max_workers = max_workers
-        self._slots = threading.BoundedSemaphore(max_workers)
+        self._pool = _get_mask_pool()
         self._closed = threading.Event()
         self._active_lock = threading.Lock()
         self._active_cancellations: set[threading.Event] = set()
@@ -96,7 +141,7 @@ class _MaskRunner:
         active: dict[int, threading.Event] = {}
 
         def launch(index: int) -> bool:
-            if self._closed.is_set() or not self._slots.acquire(blocking=False):
+            if self._closed.is_set():
                 return False
             mask, snapshot = items[index]
             candidate = copy.deepcopy(snapshot)
@@ -121,9 +166,12 @@ class _MaskRunner:
                 finally:
                     with self._active_lock:
                         self._active_cancellations.discard(cancelled)
-                    self._slots.release()
 
-            threading.Thread(target=run, name="neatlogs-mask", daemon=True).start()
+            if not self._pool.submit(run):
+                with self._active_lock:
+                    self._active_cancellations.discard(cancelled)
+                active.pop(index, None)
+                return False
             return True
 
         while pending and len(active) < self._max_workers:

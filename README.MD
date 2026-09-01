@@ -92,11 +92,13 @@ and telemetry items to a 1 MB capture budget. A truncated value contains its ori
 SHA-256 digest, and `backend_upload_contract_unavailable`; spans/logs also carry
 `neatlogs.capture.*` diagnostics, exposed through `get_delivery_diagnostics()`.
 
-Typed-media metadata is detected without fetching remote content. Generic overflow and large
-typed-media upload remain disabled until the backend provides the authenticated, project-scoped
-upload-session contract. The SDK contains an internal injectable authority seam for contract tests,
-but does not guess an endpoint, issue cloud credentials, retain a permanent object URL, or silently
-send an oversized item through ordinary ingest.
+Typed-media metadata is detected without fetching remote content. Credential-bearing remote
+locators are reduced to scheme/host/path, and large inline media is replaced in captured bodies by
+typed unavailable metadata rather than a base64 prefix. Generic overflow and large typed-media
+upload remain disabled until the backend provides the authenticated, project-scoped upload-session
+contract. The internal test seam accepts success only with a project-scoped, validated `ready`
+receipt whose small reference was exported; it does not make the backend contract complete, guess
+an endpoint, issue cloud credentials, or silently send an oversized item through ordinary ingest.
 
 ---
 

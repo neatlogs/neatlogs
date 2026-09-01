@@ -32,7 +32,7 @@ from ._wrap_utils import _normalize_traces_endpoint
 from .constants import DEFAULT_INGEST_ENDPOINT, export_queue_capacity
 from .core.byte_limited_exporter import ByteLimitedSpanExporter
 from .core.byte_limited_log_exporter import ByteLimitedLogExporter
-from .core.deadline import bounded_call
+from .core.deadline import DeadlineWorker, bounded_call
 from .core.delivery import (
     DeliveryDiagnostics,
     ObservableBatchLogRecordProcessor,
@@ -67,6 +67,7 @@ _shutdown_condition = threading.Condition(threading.RLock())
 _shutdown_state = "idle"
 _shutdown_owner = None
 _shutdown_result = True
+_shutdown_worker = None
 _lifecycle_operation_lock = threading.RLock()
 _session_config = {
     "session_id": None,
@@ -305,7 +306,7 @@ def init(
               signal termination. Defaults to True. Set False only when the host
               application owns signal handling and calls ``neatlogs.shutdown()``.
     """
-    global _initialized, _init_signature
+    global _initialized, _init_signature, _shutdown_worker
 
     candidate_signature = _configuration_signature(
         api_key=api_key,
@@ -647,6 +648,7 @@ def init(
         if debug:
             logger.debug(f"Instrumented libraries: {manager.instrumented}")
 
+    _shutdown_worker = DeadlineWorker("neatlogs-default-shutdown")
     atexit.register(_atexit_shutdown)
     _init_signature = candidate_signature
     _initialized = True
@@ -770,36 +772,60 @@ def shutdown(
     _synchronous: bool = False,
 ) -> bool:
     """Run one shutdown at a time and make same-thread re-entry non-blocking."""
-    global _shutdown_state, _shutdown_owner, _shutdown_result
+    global _shutdown_state, _shutdown_owner, _shutdown_result, _shutdown_worker
+    deadline = time.monotonic() + max(0, timeout_millis) / 1000
     current_thread = threading.get_ident()
     with _shutdown_condition:
+        if _shutdown_worker is None:
+            if _synchronous:
+                return False
+            _shutdown_worker = DeadlineWorker("neatlogs-default-shutdown")
         if _shutdown_state == "closing":
             # end_active_spans() invokes processors synchronously. If one of
             # those callbacks re-enters shutdown on this thread, waiting here
             # would deadlock the original shutdown.
-            if _shutdown_owner == current_thread:
+            if _shutdown_owner == current_thread or (
+                _shutdown_worker is not None and _shutdown_worker.is_current()
+            ):
                 return _shutdown_result
-            _shutdown_condition.wait_for(lambda: _shutdown_state == "idle")
-            return _shutdown_result
+            completed = _shutdown_condition.wait_for(
+                lambda: _shutdown_state == "idle",
+                timeout=max(0.0, deadline - time.monotonic()),
+            )
+            return _shutdown_result if completed else False
         _shutdown_state = "closing"
         _shutdown_owner = current_thread
 
+    acquired = _lifecycle_operation_lock.acquire(timeout=max(0.0, deadline - time.monotonic()))
+    if not acquired:
+        with _shutdown_condition:
+            _shutdown_result = False
+            _shutdown_state = "idle"
+            _shutdown_owner = None
+            _shutdown_condition.notify_all()
+        return False
+    shutdown_worker = _shutdown_worker
     try:
-        with _lifecycle_operation_lock:
+        try:
             result = _perform_shutdown(
-                timeout_millis,
+                max(0, int((deadline - time.monotonic()) * 1000)),
                 termination_reason,
                 synchronous=_synchronous,
             )
-    except BaseException:
-        with _shutdown_condition:
-            _shutdown_result = False
-        raise
-    else:
-        with _shutdown_condition:
-            _shutdown_result = result
-        return result
+        except BaseException:
+            with _shutdown_condition:
+                _shutdown_result = False
+            raise
+        else:
+            with _shutdown_condition:
+                _shutdown_result = result
+            return result
     finally:
+        if shutdown_worker is not None:
+            shutdown_worker.close()
+        if _shutdown_worker is shutdown_worker:
+            _shutdown_worker = None
+        _lifecycle_operation_lock.release()
         with _shutdown_condition:
             _shutdown_state = "idle"
             _shutdown_owner = None
@@ -816,7 +842,7 @@ def _perform_shutdown(
     global _tracer_provider, _owns_tracer_provider, _log_provider, _span_processor, _initialized
     global _init_signature
     global _instrumentation_manager, _transport_span_processors, _completion_span_processor
-    global _debug_mode
+    global _debug_mode, _shutdown_worker
 
     try:
         atexit.unregister(_atexit_shutdown)
@@ -834,6 +860,7 @@ def _perform_shutdown(
     completion_span_processor = _completion_span_processor
     transport_span_processors = list(_transport_span_processors)
     instrumentation_manager = _instrumentation_manager
+    shutdown_worker = _shutdown_worker
     if completion_span_processor is not None:
         completion_span_processor.begin_shutdown()
     if span_processor is not None:
@@ -848,6 +875,7 @@ def _perform_shutdown(
             log_provider.shutdown,
             deadline,
             synchronous=synchronous,
+            worker=shutdown_worker,
         )
         if not completed:
             logger.error("Log provider shutdown failed or timed out: %s", result)
@@ -859,19 +887,42 @@ def _perform_shutdown(
     # Root end creates the completion marker, so it must happen only after all
     # buffered LOG records have drained.
     if span_processor:
-        try:
-            ended = span_processor.end_active_spans(termination_reason)
+        completed, result = bounded_call(
+            lambda: span_processor.end_active_spans(termination_reason),
+            deadline,
+            synchronous=synchronous,
+            worker=shutdown_worker,
+        )
+        if completed:
+            ended = result
             if ended:
                 logger.info(f"Ended {ended} active Neatlogs span(s) during {termination_reason}")
-            span_processor._log_performance_stats()
-        except Exception as e:
-            logger.warning(f"Error logging performance stats: {e}")
+        else:
+            logger.warning("Ending active Neatlogs spans failed or timed out: %s", result)
+            success = False
+        completed, result = bounded_call(
+            span_processor._log_performance_stats,
+            deadline,
+            synchronous=synchronous,
+            worker=shutdown_worker,
+        )
+        if not completed:
+            logger.warning("Logging performance stats failed or timed out: %s", result)
+            success = False
         remaining_millis = max(0, int((deadline - time.monotonic()) * 1000))
         if not span_processor.wait_for_downstream(remaining_millis):
             logger.warning("Timed out waiting for ending spans to reach the export queue")
             success = False
     if completion_span_processor is not None:
-        completion_span_processor.emit_deferred()
+        completed, result = bounded_call(
+            completion_span_processor.emit_deferred,
+            deadline,
+            synchronous=synchronous,
+            worker=shutdown_worker,
+        )
+        if not completed:
+            logger.warning("Completion marker emission failed or timed out: %s", result)
+            success = False
 
     if tracer_provider:
         if owns_tracer_provider:
@@ -879,6 +930,7 @@ def _perform_shutdown(
                 tracer_provider.shutdown,
                 deadline,
                 synchronous=synchronous,
+                worker=shutdown_worker,
             )
             if completed:
                 # neatlogs created this provider → safe to fully shut down.
@@ -894,6 +946,7 @@ def _perform_shutdown(
                 ),
                 deadline,
                 synchronous=synchronous,
+                worker=shutdown_worker,
             )
             if completed:
                 # Provider is shared (host app / Langfuse / another SDK set it). Calling
@@ -911,6 +964,7 @@ def _perform_shutdown(
                     processor.shutdown,
                     deadline,
                     synchronous=synchronous,
+                    worker=shutdown_worker,
                 )
                 if not completed:
                     logger.warning("Neatlogs transport shutdown failed or timed out: %s", result)
@@ -920,6 +974,7 @@ def _perform_shutdown(
                     span_processor.shutdown,
                     deadline,
                     synchronous=synchronous,
+                    worker=shutdown_worker,
                 )
                 if not completed:
                     logger.warning(
@@ -927,21 +982,37 @@ def _perform_shutdown(
                     )
                     success = False
 
-    try:
-        from opentelemetry.instrumentation.logging import LoggingInstrumentor
+    def uninstrument_logging() -> None:
+        try:
+            from opentelemetry.instrumentation.logging import LoggingInstrumentor
 
-        LoggingInstrumentor().uninstrument()
-    except Exception:
-        pass
+            LoggingInstrumentor().uninstrument()
+        except Exception:
+            pass
+
+    completed, result = bounded_call(
+        uninstrument_logging,
+        deadline,
+        synchronous=synchronous,
+        worker=shutdown_worker,
+    )
+    if not completed:
+        logger.debug("Logging uninstrument timed out: %s", result)
+        success = False
 
     # Reverse the framework/provider instrumentation so a later init() (or a test
     # re-init with a fresh TracerProvider) rebinds cleanly instead of leaving the
     # old instrumentor pointing at the now-dead provider.
     if instrumentation_manager is not None:
-        try:
-            instrumentation_manager.uninstrument_all()
-        except Exception as e:
-            logger.debug(f"Error uninstrumenting libraries: {e}")
+        completed, result = bounded_call(
+            instrumentation_manager.uninstrument_all,
+            deadline,
+            synchronous=synchronous,
+            worker=shutdown_worker,
+        )
+        if not completed:
+            logger.debug("Instrumentation cleanup failed or timed out: %s", result)
+            success = False
         _instrumentation_manager = None
 
     # Drop the cached wrapper tracer (used by wrap()/trace processors like the

@@ -1,6 +1,7 @@
 import base64
 import hashlib
 
+from neatlogs._wrap_utils import serialize
 from neatlogs.core.media import media_references, set_media_attributes
 
 
@@ -63,3 +64,87 @@ def test_binary_media_requires_explicit_type_and_arbitrary_strings_are_not_media
     )
     assert records[0]["type"] == "audio"
     assert records[0]["byte_length"] == 4
+
+
+def test_remote_media_strips_userinfo_query_and_fragment_from_all_capture_fields():
+    secret_url = (
+        "https://user:password@bucket.example/private.pdf"
+        "?X-Amz-Credential=AKIA_TEST&X-Amz-Signature=secret#fragment"
+    )
+    payload = {
+        "type": "input_file",
+        "mime_type": "application/pdf",
+        "url": secret_url,
+    }
+
+    record = media_references(payload, "input")[0]
+    captured = serialize(payload)
+
+    assert record["reference"] == "https://bucket.example/private.pdf"
+    assert "user" not in record["reference"]
+    assert "password" not in record["reference"]
+    assert "X-Amz" not in captured
+    assert "secret" not in captured
+
+
+def test_large_inline_media_body_is_replaced_by_typed_unavailable_metadata():
+    raw = b"unique-secret-media" * 6000
+    encoded = base64.b64encode(raw).decode()
+    payload = [
+        {
+            "type": "image_url",
+            "image_url": {"url": f"data:image/png;base64,{encoded}"},
+        }
+    ]
+
+    captured = serialize(payload)
+
+    assert encoded[:100] not in captured
+    assert "unique-secret-media" not in captured
+    assert "backend_upload_contract_unavailable" in captured
+    assert hashlib.sha256(raw).hexdigest() in captured
+    assert len(captured.encode()) < 2_000
+
+
+def test_anthropic_source_media_is_sanitized_without_losing_typed_metadata():
+    raw = b"private-anthropic-image" * 5000
+    encoded = base64.b64encode(raw).decode()
+    payload = [
+        {
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": "image/png",
+                "data": encoded,
+            },
+        },
+        {
+            "type": "document",
+            "source": {
+                "type": "url",
+                "url": "https://user:pass@example.test/report.pdf?token=secret#page=1",
+            },
+        },
+    ]
+
+    records = media_references(payload, "input")
+    captured = serialize(payload)
+
+    assert any(record["sha256"] == hashlib.sha256(raw).hexdigest() for record in records)
+    assert any(record.get("reference") == "https://example.test/report.pdf" for record in records)
+    assert encoded[:100] not in captured
+    assert "pass" not in captured
+    assert "token" not in captured
+
+
+def test_bedrock_nested_bytes_are_replaced_when_upload_is_unavailable():
+    raw = b"private-bedrock-image" * 6000
+    payload = {"image": {"format": "png", "source": {"bytes": raw}}}
+
+    records = media_references(payload, "input")
+    captured = serialize(payload)
+
+    assert records[0]["type"] == "image"
+    assert records[0]["state"] == "failed"
+    assert hashlib.sha256(raw).hexdigest() in captured
+    assert "private-bedrock-image" not in captured

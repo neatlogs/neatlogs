@@ -220,21 +220,54 @@ def test_incremental_choice_capture_is_memory_bounded_and_explicit(
     assert "original_bytes=120000" in content
 
 
-def test_legacy_stream_capture_bounds_chunk_references_with_diagnostics(
+def test_legacy_stream_keeps_terminal_usage_beyond_1024_small_events(
     tracer_provider, in_memory_span_exporter
 ):
+    events = [
+        SimpleNamespace(type="response.output_text.delta", delta="x", response=None)
+        for _ in range(1024)
+    ]
+    usage = SimpleNamespace(input_tokens=11, output_tokens=22)
+    events.append(
+        SimpleNamespace(
+            type="response.completed",
+            delta=None,
+            response=SimpleNamespace(model="gpt-test", usage=usage),
+        )
+    )
+
+    span = tracer_provider.get_tracer("neatlogs.test").start_span("responses")
+    wrapper = SyncStreamWrapper(iter(events), span, _finalize_responses_stream)
+    list(wrapper)
+
+    finished = in_memory_span_exporter.get_finished_spans()[0]
+    assert finished.status.status_code is StatusCode.OK
+    assert finished.attributes["neatlogs.llm.token_count.prompt"] == 11
+    assert finished.attributes["neatlogs.llm.token_count.completion"] == 22
+    assert "neatlogs.stream.chunks_dropped" not in finished.attributes
+
+
+def test_legacy_stream_huge_chunk_is_not_retained_or_marked_successful(
+    tracer_provider, in_memory_span_exporter
+):
+    seen = []
+
     def finalizer(span, chunks, _duration, _ttft, *, interrupted=False):
-        span.set_attribute("captured.chunks", len(chunks))
+        seen.extend(chunks)
         span.set_status(StatusCode.UNSET if interrupted else StatusCode.OK)
         span.end()
 
+    huge = SimpleNamespace(payload="secret" * 250_000)
     span = tracer_provider.get_tracer("neatlogs.test").start_span("legacy-stream")
-    wrapper = SyncStreamWrapper(iter(range(1026)), span, finalizer)
+    wrapper = SyncStreamWrapper(iter([huge]), span, finalizer)
     list(wrapper)
 
-    attributes = in_memory_span_exporter.get_finished_spans()[0].attributes
-    assert attributes["captured.chunks"] == 1024
-    assert attributes["neatlogs.stream.chunks_dropped"] == 2
+    finished = in_memory_span_exporter.get_finished_spans()[0]
+    attributes = finished.attributes
+    assert seen == []
+    assert finished.status.status_code is StatusCode.UNSET
+    assert attributes["neatlogs.stream.chunks_dropped"] == 1
+    assert attributes["neatlogs.stream.capture_incomplete"] is True
     assert attributes["neatlogs.capture.truncated"] is True
     assert attributes["neatlogs.capture.overflow.reason"] == "backend_upload_contract_unavailable"
 

@@ -12,7 +12,12 @@ from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
 
 from .capture import limit_span_capture
 from .delivery import DeliveryDiagnostics
-from .upload_authority import DisabledUploadAuthority, OverflowPayload, UploadAuthority
+from .upload_authority import (
+    DisabledUploadAuthority,
+    OverflowExportReceipt,
+    OverflowPayload,
+    UploadAuthority,
+)
 
 DEFAULT_MAX_EXPORT_BYTES = 4 * 1024 * 1024
 logger = logging.getLogger(__name__)
@@ -120,7 +125,7 @@ class ByteLimitedSpanExporter(SpanExporter):
                         type(exc).__name__,
                     )
                     result = SpanExportResult.FAILURE
-                if result is True:
+                if isinstance(result, OverflowExportReceipt) and result.complete:
                     if self._diagnostics is not None:
                         self._diagnostics.record_overflow("span", "exports")
                 else:
@@ -131,7 +136,15 @@ class ByteLimitedSpanExporter(SpanExporter):
                 continue
 
             batch = value
-            if self._inner.export(batch) is not SpanExportResult.SUCCESS:
+            try:
+                result = self._inner.export(batch)
+            except Exception as exc:
+                logger.error(
+                    "[neatlogs] span batch export raised (%s)",
+                    type(exc).__name__,
+                )
+                result = SpanExportResult.FAILURE
+            if result is not SpanExportResult.SUCCESS:
                 if self._diagnostics is not None:
                     self._diagnostics.record_export_failure(
                         "span",

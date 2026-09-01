@@ -1,14 +1,22 @@
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk._logs.export import InMemoryLogRecordExporter, SimpleLogRecordProcessor
+from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor, SpanExportResult
+from opentelemetry.trace import StatusCode
 
 from neatlogs._wrap_utils import serialize
 from neatlogs.core.byte_limited_exporter import ByteLimitedSpanExporter
 from neatlogs.core.byte_limited_log_exporter import ByteLimitedLogExporter
-from neatlogs.core.capture import DEFAULT_MAX_CAPTURE_VALUE_BYTES
+from neatlogs.core.capture import (
+    DEFAULT_MAX_CAPTURE_ITEM_BYTES,
+    DEFAULT_MAX_CAPTURE_VALUE_BYTES,
+    limit_log_capture,
+    limit_span_capture,
+)
 from neatlogs.core.delivery import DeliveryDiagnostics
 from neatlogs.core.masking_exporter import MaskingLogExporter, MaskingSpanExporter
+from neatlogs.core.upload_authority import OverflowExportReceipt
 
 
 class _SpanSink:
@@ -90,7 +98,12 @@ def test_masking_precedes_injected_overflow_authority():
 
         def export_overflow(self, payload):
             self.payload = payload
-            return True
+            return OverflowExportReceipt(
+                upload_id="upload-1",
+                project_id="project-1",
+                state="ready",
+                reference_exported=True,
+            )
 
     def mask(snapshot):
         snapshot["attributes"]["secret"] = "masked"
@@ -122,3 +135,68 @@ def test_masking_precedes_injected_overflow_authority():
     assert b"must-not-cross-authority" not in authority.payload.content
     assert b"masked" in authority.payload.content
     assert sink.spans == []
+
+
+def test_span_capture_budget_covers_name_status_resource_and_mapping_keys():
+    sink = _SpanSink()
+    provider = TracerProvider(
+        resource=Resource(
+            {
+                "resource-key-" + "k" * 200: "resource-value-" + "r" * 200,
+            }
+        )
+    )
+    provider.add_span_processor(SimpleSpanProcessor(sink))
+    span = provider.get_tracer("capture-test").start_span("name-" + "n" * 1_200_000)
+    span.set_status(StatusCode.ERROR, "status-" + "s" * 200)
+    span.add_event("event-" + "e" * 200, {"event-key-" + "k" * 200: "value"})
+    span.end()
+    provider.shutdown()
+
+    bounded, truncations = limit_span_capture(
+        sink.spans[0],
+        max_item_bytes=2_000,
+        max_value_bytes=80,
+    )
+
+    assert truncations >= 5
+    assert len(bounded.name.encode()) <= 80
+    assert len(bounded.status.description.encode()) <= 80
+    assert all(len(key.encode()) <= 80 for key in bounded.resource.attributes)
+    assert all(len(key.encode()) <= 80 for key in bounded.events[0].attributes)
+    assert len(bounded.events[0].name.encode()) <= 80
+    assert len(bounded.name.encode()) < DEFAULT_MAX_CAPTURE_ITEM_BYTES
+
+
+def test_log_capture_bounds_bytes_resource_fields_and_collision_safe_mapping_keys():
+    inner = InMemoryLogRecordExporter()
+    provider = LoggerProvider(
+        resource=Resource({"resource-key-" + "k" * 200: "resource-value-" + "r" * 200})
+    )
+    provider.add_log_record_processor(SimpleLogRecordProcessor(inner))
+    provider.get_logger("capture-test").emit(
+        body={
+            "shared-prefix-" + "a" * 200: b"a" * 200,
+            "shared-prefix-" + "b" * 200: b"b" * 200,
+        },
+        severity_text="severity-" + "s" * 200,
+        event_name="event-" + "e" * 200,
+    )
+    provider.shutdown()
+
+    bounded, truncations = limit_log_capture(
+        inner.get_finished_logs()[0],
+        max_item_bytes=2_000,
+        max_value_bytes=80,
+    )
+    record = bounded.log_record
+    resource = getattr(bounded, "resource", None) or getattr(record, "resource", None)
+
+    assert truncations >= 7
+    assert len(record.body) == 2
+    assert len(set(record.body)) == 2
+    assert all(len(key.encode()) <= 80 for key in record.body)
+    assert all(isinstance(value, bytes) and len(value) <= 80 for value in record.body.values())
+    assert len(record.severity_text.encode()) <= 80
+    assert len(record.event_name.encode()) <= 80
+    assert all(len(key.encode()) <= 80 for key in resource.attributes)

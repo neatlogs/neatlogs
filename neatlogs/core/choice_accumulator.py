@@ -10,7 +10,7 @@ from typing import Any
 from opentelemetry.trace import StatusCode
 
 from .capture import BoundedTextAccumulator
-from .media import set_media_attributes
+from .media import media_references, sanitize_media_payload
 
 MAX_SEMANTIC_STREAM_EVENTS = 128
 
@@ -25,7 +25,12 @@ def _string(value: Any) -> str:
     if isinstance(value, str):
         return value
     try:
-        return json.dumps(value, default=str, ensure_ascii=False, separators=(",", ":"))
+        return json.dumps(
+            sanitize_media_payload(value, "output"),
+            default=str,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
     except (TypeError, ValueError):
         return str(value or "")
 
@@ -45,7 +50,7 @@ class _Choice:
     role: str = "assistant"
     content: BoundedTextAccumulator = field(default_factory=BoundedTextAccumulator)
     reasoning: BoundedTextAccumulator = field(default_factory=BoundedTextAccumulator)
-    media_values: list[Any] = field(default_factory=list)
+    media_records: list[dict[str, Any]] = field(default_factory=list)
     finish_reason: str | None = None
     tool_calls: dict[int, _ToolCall] = field(default_factory=dict)
 
@@ -78,7 +83,7 @@ class ChoiceAccumulator:
             if content is not None:
                 choice.content.append(_string(content))
                 if not isinstance(content, str):
-                    choice.media_values.append(content)
+                    choice.media_records.extend(media_references(content, "output"))
             reasoning = _get(message, "reasoning_content", None)
             if reasoning is not None:
                 choice.reasoning.append(_string(reasoning))
@@ -116,7 +121,7 @@ class ChoiceAccumulator:
                 choice.content.append(content)
             raw_content = _get(delta, "content", None)
             if raw_content is not None and not isinstance(raw_content, str):
-                choice.media_values.append(raw_content)
+                choice.media_records.extend(media_references(raw_content, "output"))
             if reasoning:
                 choice.reasoning.append(reasoning)
             tools = _get(delta, "tool_calls", None) or []
@@ -157,8 +162,13 @@ class ChoiceAccumulator:
             reasoning = choice.reasoning.value()
             if reasoning:
                 span.set_attribute(f"{prefix}.thinking", reasoning)
-            if choice.media_values:
-                set_media_attributes(span, prefix, choice.media_values, "output")
+            unique_media = {
+                (record.get("sha256"), record.get("reference"), record.get("type")): record
+                for record in choice.media_records
+            }
+            for media_index, record in enumerate(unique_media.values()):
+                for key, item in record.items():
+                    span.set_attribute(f"{prefix}.media.{media_index}.{key}", item)
             if choice.finish_reason is not None:
                 span.set_attribute(
                     f"neatlogs.llm.choices.{choice_index}.finish_reason",

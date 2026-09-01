@@ -21,7 +21,12 @@ except ImportError:  # OpenTelemetry 1.35-1.38 compatibility
 from .byte_limited_exporter import DEFAULT_MAX_EXPORT_BYTES
 from .capture import limit_log_capture
 from .delivery import DeliveryDiagnostics
-from .upload_authority import DisabledUploadAuthority, OverflowPayload, UploadAuthority
+from .upload_authority import (
+    DisabledUploadAuthority,
+    OverflowExportReceipt,
+    OverflowPayload,
+    UploadAuthority,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -111,7 +116,8 @@ class ByteLimitedLogExporter(LogRecordExporter):
                     )
                     continue
                 try:
-                    succeeded = self._upload_authority.export_overflow(candidate) is True
+                    result = self._upload_authority.export_overflow(candidate)
+                    succeeded = isinstance(result, OverflowExportReceipt) and result.complete
                 except Exception as exc:
                     logger.error(
                         "[neatlogs] oversized log upload failed (%s)",
@@ -129,7 +135,15 @@ class ByteLimitedLogExporter(LogRecordExporter):
                 continue
 
             records = value
-            if self._inner.export(records) is not LogRecordExportResult.SUCCESS:
+            try:
+                result = self._inner.export(records)
+            except Exception as exc:
+                logger.error(
+                    "[neatlogs] log batch export raised (%s)",
+                    type(exc).__name__,
+                )
+                result = LogRecordExportResult.FAILURE
+            if result is not LogRecordExportResult.SUCCESS:
                 if self._diagnostics is not None:
                     self._diagnostics.record_export_failure(
                         "log",

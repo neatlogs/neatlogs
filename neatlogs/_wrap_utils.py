@@ -11,6 +11,7 @@ Only contains truly shared concerns:
 import inspect
 import json
 import os
+import sys
 import time
 from contextvars import ContextVar
 from typing import Any, Callable, Dict, List, Mapping, Optional
@@ -29,7 +30,7 @@ from .core.capture import (
 from .core.logger import get_logger
 
 logger = get_logger()
-_MAX_LEGACY_STREAM_CHUNKS = 1024
+_MAX_LEGACY_STREAM_BYTES = 1_000_000
 
 _wrapper_tracer: Optional[otel_trace.Tracer] = None
 _wrapper_bootstrapped = False
@@ -877,8 +878,10 @@ def get_provider_tracer() -> "_AutoRootTracer":
 
 def serialize(obj: Any, max_length: Optional[int] = DEFAULT_MAX_CAPTURE_VALUE_BYTES) -> str:
     """Safe JSON serialization with explicit, byte-aware overflow diagnostics."""
+    from .core.media import sanitize_media_payload
+
     try:
-        s = json.dumps(obj, default=str, ensure_ascii=False)
+        s = json.dumps(sanitize_media_payload(obj), default=str, ensure_ascii=False)
     except (TypeError, ValueError):
         s = str(obj)
     return s if max_length is None else bound_text(s, max_length)
@@ -919,6 +922,56 @@ class _InterruptedSpanProxy:
         return getattr(self._span, name)
 
 
+def _bounded_object_size(value: Any, limit: int, seen: Optional[set[int]] = None) -> int:
+    """Estimate retained chunk bytes without materializing an unbounded serialization."""
+
+    if limit < 0:
+        return 0
+    if seen is None:
+        seen = set()
+    if isinstance(value, str):
+        total = 0
+        for offset in range(0, len(value), 4096):
+            total += len(value[offset : offset + 4096].encode("utf-8"))
+            if total > limit:
+                return limit + 1
+        return total
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return min(len(value), limit + 1)
+    if value is None or isinstance(value, (bool, int, float)):
+        return min(sys.getsizeof(value), limit + 1)
+
+    identity = id(value)
+    if identity in seen:
+        return 0
+    seen.add(identity)
+    total = min(sys.getsizeof(value), limit + 1)
+    if total > limit:
+        return total
+
+    if isinstance(value, Mapping):
+        children = value.items()
+    elif isinstance(value, (list, tuple, set, frozenset)):
+        children = ((None, item) for item in value)
+    elif hasattr(value, "__dict__"):
+        children = vars(value).items()
+    else:
+        slots = getattr(type(value), "__slots__", ())
+        if isinstance(slots, str):
+            slots = (slots,)
+        children = ((slot, getattr(value, slot)) for slot in slots if hasattr(value, slot))
+
+    for key, item in children:
+        if key is not None:
+            total += _bounded_object_size(key, limit - total, seen)
+        if total > limit:
+            return limit + 1
+        total += _bounded_object_size(item, limit - total, seen)
+        if total > limit:
+            return limit + 1
+    return total
+
+
 class SyncStreamWrapper:
     """
     Wraps a sync streaming response. Transparently passes through chunks
@@ -933,6 +986,7 @@ class SyncStreamWrapper:
         self._first_chunk_time: Optional[float] = None
         self._incremental = hasattr(finalizer, "on_chunk") and hasattr(finalizer, "finish")
         self._chunks: List[Any] = []
+        self._chunk_bytes = 0
         self._dropped_chunks = 0
         self._finalized = False
         self._exhausted = False
@@ -970,17 +1024,25 @@ class SyncStreamWrapper:
             return chunk
         if self._incremental:
             self._finalizer.on_chunk(self._span, chunk)
-        elif len(self._chunks) < _MAX_LEGACY_STREAM_CHUNKS:
-            self._chunks.append(chunk)
         else:
-            self._dropped_chunks += 1
-            self._mark_chunk_overflow()
+            chunk_bytes = _bounded_object_size(
+                chunk,
+                _MAX_LEGACY_STREAM_BYTES - self._chunk_bytes,
+            )
+            if self._chunk_bytes + chunk_bytes <= _MAX_LEGACY_STREAM_BYTES:
+                self._chunks.append(chunk)
+                self._chunk_bytes += chunk_bytes
+            else:
+                self._dropped_chunks += 1
+                self._mark_chunk_overflow()
         return chunk
 
     def _mark_chunk_overflow(self) -> None:
         self._span.set_attribute("neatlogs.capture.truncated", True)
         self._span.set_attribute("neatlogs.capture.truncated_count", self._dropped_chunks)
         self._span.set_attribute("neatlogs.stream.chunks_dropped", self._dropped_chunks)
+        self._span.set_attribute("neatlogs.stream.capture_incomplete", True)
+        self._span.set_attribute("neatlogs.stream.bytes_retained", self._chunk_bytes)
         self._span.set_attribute("neatlogs.capture.overflow.state", "disabled")
         self._span.set_attribute(
             "neatlogs.capture.overflow.reason",
@@ -1031,9 +1093,14 @@ class SyncStreamWrapper:
         else:
             if interrupted:
                 self._span.set_attribute("neatlogs.stream.cancelled", True)
+            finalizer_span = (
+                _InterruptedSpanProxy(self._span)
+                if interrupted or self._dropped_chunks
+                else self._span
+            )
             if _accepts_keyword(self._finalizer, "interrupted"):
                 self._finalizer(
-                    self._span,
+                    finalizer_span,
                     self._chunks,
                     elapsed_ms,
                     ttft_ms,
@@ -1041,7 +1108,7 @@ class SyncStreamWrapper:
                 )
             else:
                 self._finalizer(
-                    _InterruptedSpanProxy(self._span) if interrupted else self._span,
+                    finalizer_span,
                     self._chunks,
                     elapsed_ms,
                     ttft_ms,
@@ -1082,6 +1149,7 @@ class AsyncStreamWrapper:
         self._first_chunk_time: Optional[float] = None
         self._incremental = hasattr(finalizer, "on_chunk") and hasattr(finalizer, "finish")
         self._chunks: List[Any] = []
+        self._chunk_bytes = 0
         self._dropped_chunks = 0
         self._finalized = False
         self._exhausted = False
@@ -1119,17 +1187,25 @@ class AsyncStreamWrapper:
             return chunk
         if self._incremental:
             self._finalizer.on_chunk(self._span, chunk)
-        elif len(self._chunks) < _MAX_LEGACY_STREAM_CHUNKS:
-            self._chunks.append(chunk)
         else:
-            self._dropped_chunks += 1
-            self._mark_chunk_overflow()
+            chunk_bytes = _bounded_object_size(
+                chunk,
+                _MAX_LEGACY_STREAM_BYTES - self._chunk_bytes,
+            )
+            if self._chunk_bytes + chunk_bytes <= _MAX_LEGACY_STREAM_BYTES:
+                self._chunks.append(chunk)
+                self._chunk_bytes += chunk_bytes
+            else:
+                self._dropped_chunks += 1
+                self._mark_chunk_overflow()
         return chunk
 
     def _mark_chunk_overflow(self) -> None:
         self._span.set_attribute("neatlogs.capture.truncated", True)
         self._span.set_attribute("neatlogs.capture.truncated_count", self._dropped_chunks)
         self._span.set_attribute("neatlogs.stream.chunks_dropped", self._dropped_chunks)
+        self._span.set_attribute("neatlogs.stream.capture_incomplete", True)
+        self._span.set_attribute("neatlogs.stream.bytes_retained", self._chunk_bytes)
         self._span.set_attribute("neatlogs.capture.overflow.state", "disabled")
         self._span.set_attribute(
             "neatlogs.capture.overflow.reason",
@@ -1180,9 +1256,14 @@ class AsyncStreamWrapper:
         else:
             if interrupted:
                 self._span.set_attribute("neatlogs.stream.cancelled", True)
+            finalizer_span = (
+                _InterruptedSpanProxy(self._span)
+                if interrupted or self._dropped_chunks
+                else self._span
+            )
             if _accepts_keyword(self._finalizer, "interrupted"):
                 self._finalizer(
-                    self._span,
+                    finalizer_span,
                     self._chunks,
                     elapsed_ms,
                     ttft_ms,
@@ -1190,7 +1271,7 @@ class AsyncStreamWrapper:
                 )
             else:
                 self._finalizer(
-                    _InterruptedSpanProxy(self._span) if interrupted else self._span,
+                    finalizer_span,
                     self._chunks,
                     elapsed_ms,
                     ttft_ms,

@@ -21,14 +21,30 @@ class OverflowPayload:
     encoding: str = "identity"
 
 
+@dataclass(frozen=True)
+class OverflowExportReceipt:
+    """Proof that backend validation completed and its small reference exported."""
+
+    upload_id: str
+    project_id: str
+    state: str
+    reference_exported: bool
+
+    @property
+    def complete(self) -> bool:
+        return bool(
+            self.upload_id and self.project_id and self.state == "ready" and self.reference_exported
+        )
+
+
 class UploadAuthority(Protocol):
     """Internal seam; no backend URL or authentication contract is assumed."""
 
     available: bool
     unavailable_reason: str
 
-    def export_overflow(self, payload: OverflowPayload) -> bool:
-        """Upload bytes and export the resulting small canonical reference."""
+    def export_overflow(self, payload: OverflowPayload) -> OverflowExportReceipt | None:
+        """Upload, validate, and export a small reference, returning its receipt."""
 
 
 class DisabledUploadAuthority:
@@ -37,6 +53,6 @@ class DisabledUploadAuthority:
     available = False
     unavailable_reason = UPLOAD_UNAVAILABLE_REASON
 
-    def export_overflow(self, payload: OverflowPayload) -> bool:
+    def export_overflow(self, payload: OverflowPayload) -> None:
         del payload
-        return False
+        return None

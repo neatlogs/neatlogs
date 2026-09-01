@@ -504,7 +504,12 @@ def _patch_async_responses(responses: Any) -> None:
 
 
 def _finalize_responses_stream(
-    span: Any, chunks: List[Any], duration_ms: float, ttft_ms: Optional[float]
+    span: Any,
+    chunks: List[Any],
+    duration_ms: float,
+    ttft_ms: Optional[float],
+    *,
+    interrupted: bool = False,
 ) -> None:
     """Finalize a streaming Responses API span (events carry .type / .delta / .response)."""
     text_parts: List[str] = []
@@ -537,7 +542,7 @@ def _finalize_responses_stream(
     span.set_attribute("neatlogs.llm.metrics.duration_ms", round(duration_ms, 3))
     if ttft_ms is not None:
         span.set_attribute("neatlogs.llm.metrics.ttft_ms", round(ttft_ms, 3))
-    span.set_status(StatusCode.OK)
+    span.set_status(StatusCode.UNSET if interrupted else StatusCode.OK)
     span.end()
 
 

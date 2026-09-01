@@ -31,6 +31,7 @@ from opentelemetry.sdk.trace.sampling import ParentBased, TraceIdRatioBased
 from ._wrap_utils import _normalize_traces_endpoint
 from .constants import DEFAULT_INGEST_ENDPOINT, export_queue_capacity
 from .core.byte_limited_exporter import ByteLimitedSpanExporter
+from .core.byte_limited_log_exporter import ByteLimitedLogExporter
 from .core.deadline import bounded_call
 from .core.delivery import (
     DeliveryDiagnostics,
@@ -591,7 +592,14 @@ def init(
         _log_provider.add_log_record_processor(
             NeatlogsLogFilter(
                 ObservableBatchLogRecordProcessor(
-                    MaskingLogExporter(_otlp_log_exporter, mask, diagnostics=_delivery_diagnostics),
+                    MaskingLogExporter(
+                        ByteLimitedLogExporter(
+                            _otlp_log_exporter,
+                            diagnostics=_delivery_diagnostics,
+                        ),
+                        mask,
+                        diagnostics=_delivery_diagnostics,
+                    ),
                     max_export_batch_size=batch_size,
                     max_queue_size=export_queue_capacity(batch_size),
                     schedule_delay_millis=int(flush_interval * 1000),
@@ -639,7 +647,7 @@ def init(
         if debug:
             logger.debug(f"Instrumented libraries: {manager.instrumented}")
 
-    atexit.register(shutdown)
+    atexit.register(_atexit_shutdown)
     _init_signature = candidate_signature
     _initialized = True
     if register_shutdown_handlers:
@@ -690,7 +698,7 @@ def get_log_provider() -> Optional[LoggerProvider]:
     return _log_provider
 
 
-def get_delivery_diagnostics() -> Dict[str, int]:
+def get_delivery_diagnostics() -> Dict[str, Any]:
     """Return loss counters for the current or most recently closed pipeline."""
 
     return _delivery_diagnostics.snapshot()
@@ -749,7 +757,18 @@ def get_session_config():
     return _session_config.copy()
 
 
-def shutdown(timeout_millis: int = 30000, termination_reason: str = "shutdown") -> bool:
+def _atexit_shutdown() -> None:
+    """Synchronous interpreter-exit cleanup (Python 3.12 forbids new threads)."""
+
+    shutdown(_synchronous=True)
+
+
+def shutdown(
+    timeout_millis: int = 30000,
+    termination_reason: str = "shutdown",
+    *,
+    _synchronous: bool = False,
+) -> bool:
     """Run one shutdown at a time and make same-thread re-entry non-blocking."""
     global _shutdown_state, _shutdown_owner, _shutdown_result
     current_thread = threading.get_ident()
@@ -767,7 +786,11 @@ def shutdown(timeout_millis: int = 30000, termination_reason: str = "shutdown") 
 
     try:
         with _lifecycle_operation_lock:
-            result = _perform_shutdown(timeout_millis, termination_reason)
+            result = _perform_shutdown(
+                timeout_millis,
+                termination_reason,
+                synchronous=_synchronous,
+            )
     except BaseException:
         with _shutdown_condition:
             _shutdown_result = False
@@ -783,7 +806,12 @@ def shutdown(timeout_millis: int = 30000, termination_reason: str = "shutdown") 
             _shutdown_condition.notify_all()
 
 
-def _perform_shutdown(timeout_millis: int, termination_reason: str) -> bool:
+def _perform_shutdown(
+    timeout_millis: int,
+    termination_reason: str,
+    *,
+    synchronous: bool = False,
+) -> bool:
     """End active Neatlogs spans, then flush and shut down SDK providers."""
     global _tracer_provider, _owns_tracer_provider, _log_provider, _span_processor, _initialized
     global _init_signature
@@ -791,7 +819,7 @@ def _perform_shutdown(timeout_millis: int, termination_reason: str) -> bool:
     global _debug_mode
 
     try:
-        atexit.unregister(shutdown)
+        atexit.unregister(_atexit_shutdown)
     except Exception:
         pass
 
@@ -816,7 +844,11 @@ def _perform_shutdown(timeout_millis: int, termination_reason: str) -> bool:
     # it is ingested.
     if log_provider:
         logger.debug("Shutting down log provider...")
-        completed, result = bounded_call(log_provider.shutdown, deadline)
+        completed, result = bounded_call(
+            log_provider.shutdown,
+            deadline,
+            synchronous=synchronous,
+        )
         if not completed:
             logger.error("Log provider shutdown failed or timed out: %s", result)
             success = False
@@ -843,7 +875,11 @@ def _perform_shutdown(timeout_millis: int, termination_reason: str) -> bool:
 
     if tracer_provider:
         if owns_tracer_provider:
-            completed, result = bounded_call(tracer_provider.shutdown, deadline)
+            completed, result = bounded_call(
+                tracer_provider.shutdown,
+                deadline,
+                synchronous=synchronous,
+            )
             if completed:
                 # neatlogs created this provider → safe to fully shut down.
                 success = (result is None or bool(result)) and success
@@ -857,6 +893,7 @@ def _perform_shutdown(timeout_millis: int, termination_reason: str) -> bool:
                     timeout_millis=max(0, int((deadline - time.monotonic()) * 1000))
                 ),
                 deadline,
+                synchronous=synchronous,
             )
             if completed:
                 # Provider is shared (host app / Langfuse / another SDK set it). Calling
@@ -870,12 +907,20 @@ def _perform_shutdown(timeout_millis: int, termination_reason: str) -> bool:
                 logger.error("Tracer provider flush failed or timed out: %s", result)
                 success = False
             for processor in reversed(transport_span_processors):
-                completed, result = bounded_call(processor.shutdown, deadline)
+                completed, result = bounded_call(
+                    processor.shutdown,
+                    deadline,
+                    synchronous=synchronous,
+                )
                 if not completed:
                     logger.warning("Neatlogs transport shutdown failed or timed out: %s", result)
                     success = False
             if span_processor is not None:
-                completed, result = bounded_call(span_processor.shutdown, deadline)
+                completed, result = bounded_call(
+                    span_processor.shutdown,
+                    deadline,
+                    synchronous=synchronous,
+                )
                 if not completed:
                     logger.warning(
                         "Neatlogs span processor shutdown failed or timed out: %s", result

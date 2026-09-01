@@ -37,6 +37,38 @@ def _counting_mask(counter, tag):
     return mask
 
 
+def test_optional_second_positional_parameter_keeps_legacy_value():
+    seen = []
+
+    def mask(snapshot, keys=("secret",)):
+        seen.append(keys)
+        return snapshot
+
+    runner = _MaskRunner()
+    try:
+        assert runner.apply(mask, {"signal": "span", "attributes": {}}) is not None
+    finally:
+        runner.shutdown()
+
+    assert seen == [("secret",)]
+
+
+def test_keyword_only_context_is_an_explicit_opt_in():
+    seen = []
+
+    def mask(snapshot, *, context):
+        seen.append(context)
+        return snapshot
+
+    runner = _MaskRunner()
+    try:
+        assert runner.apply(mask, {"signal": "span", "attributes": {}}) is not None
+    finally:
+        runner.shutdown()
+
+    assert seen[0].signal_type == "span"
+
+
 def test_global_mask_applied_once_to_exported_clone():
     counter = {"n": 0}
     provider, inner = _pipeline(_counting_mask(counter, "G"))
@@ -121,7 +153,7 @@ def test_context_aware_mask_timeout_is_fail_closed_and_cancellable():
     blocker = threading.Event()
     observed = {}
 
-    def stuck_mask(snapshot, context):
+    def stuck_mask(snapshot, *, context):
         observed["context"] = context
         blocker.wait()
         return snapshot

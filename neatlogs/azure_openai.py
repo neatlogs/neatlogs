@@ -415,7 +415,12 @@ def _finalize_response(span: Any, response: Any, duration_ms: float) -> None:
 
 
 def _finalize_stream(
-    span: Any, chunks: List[Any], duration_ms: float, ttft_ms: Optional[float]
+    span: Any,
+    chunks: List[Any],
+    duration_ms: float,
+    ttft_ms: Optional[float],
+    *,
+    interrupted: bool = False,
 ) -> None:
     text_parts: List[str] = []
     tool_calls_acc: dict = {}
@@ -484,7 +489,7 @@ def _finalize_stream(
                 round(duration_ms - ttft_ms, 3),
             )
 
-    span.set_status(StatusCode.OK)
+    span.set_status(StatusCode.UNSET if interrupted else StatusCode.OK)
     span.end()
 
 
@@ -510,7 +515,12 @@ def _finalize_responses_response(span: Any, response: Any, duration_ms: float) -
 
 
 def _finalize_responses_stream(
-    span: Any, chunks: List[Any], duration_ms: float, ttft_ms: Optional[float]
+    span: Any,
+    chunks: List[Any],
+    duration_ms: float,
+    ttft_ms: Optional[float],
+    *,
+    interrupted: bool = False,
 ) -> None:
     text_parts: List[str] = []
     model = None
@@ -542,7 +552,7 @@ def _finalize_responses_stream(
     span.set_attribute("neatlogs.llm.metrics.duration_ms", round(duration_ms, 3))
     if ttft_ms is not None:
         span.set_attribute("neatlogs.llm.metrics.ttft_ms", round(ttft_ms, 3))
-    span.set_status(StatusCode.OK)
+    span.set_status(StatusCode.UNSET if interrupted else StatusCode.OK)
     span.end()
 
 

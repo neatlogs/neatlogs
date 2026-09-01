@@ -1,5 +1,7 @@
 import importlib
 import signal
+import subprocess
+import sys
 import threading
 
 import pytest
@@ -13,6 +15,58 @@ from neatlogs._wrap_utils import set_neatlogs_provider
 from neatlogs.core.span_processor import CompletionMarkerSpanProcessor, NeatlogsSpanProcessor
 
 init_module = importlib.import_module("neatlogs.init")
+
+
+@pytest.mark.parametrize("pipeline", ["default", "client"])
+def test_python_312_atexit_shutdown_never_starts_a_thread(tmp_path, pipeline):
+    marker = tmp_path / f"{pipeline}.shutdown"
+    if pipeline == "default":
+        setup = f"""
+import importlib
+import neatlogs
+neatlogs.init(
+    api_key="test-key",
+    disable_export=True,
+    instrumentations=[],
+    register_shutdown_handlers=False,
+)
+module = importlib.import_module("neatlogs.init")
+class Provider:
+    def shutdown(self):
+        open({str(marker)!r}, "w").write("closed")
+module._tracer_provider = Provider()
+module._owns_tracer_provider = True
+module._log_provider = None
+module._span_processor = None
+module._completion_span_processor = None
+module._instrumentation_manager = None
+"""
+    else:
+        setup = f"""
+from neatlogs.client import Client
+client = Client(api_key="test-key", workflow_name="test", disable_export=True)
+class Provider:
+    def shutdown(self):
+        open({str(marker)!r}, "w").write("closed")
+client.tracer_provider = Provider()
+"""
+
+    script = setup + """
+import threading
+def forbidden(*args, **kwargs):
+    raise RuntimeError("cannot create new thread at interpreter shutdown")
+threading.Thread.start = forbidden
+"""
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert marker.read_text() == "closed"
+    assert "cannot create new thread" not in completed.stderr
 
 
 def test_end_active_spans_closes_children_then_root_and_emits_completion_marker():

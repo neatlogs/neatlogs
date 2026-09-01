@@ -9,6 +9,7 @@ from typing import Any
 
 from opentelemetry.trace import StatusCode
 
+from .capture import BoundedTextAccumulator
 from .media import set_media_attributes
 
 MAX_SEMANTIC_STREAM_EVENTS = 128
@@ -33,7 +34,7 @@ def _string(value: Any) -> str:
 class _ToolCall:
     id: str = ""
     name: str = ""
-    arguments: str = ""
+    arguments: BoundedTextAccumulator = field(default_factory=BoundedTextAccumulator)
     type: str = ""
     details: str = ""
     synthetic: bool = False
@@ -42,8 +43,8 @@ class _ToolCall:
 @dataclass
 class _Choice:
     role: str = "assistant"
-    content: list[str] = field(default_factory=list)
-    reasoning: list[str] = field(default_factory=list)
+    content: BoundedTextAccumulator = field(default_factory=BoundedTextAccumulator)
+    reasoning: BoundedTextAccumulator = field(default_factory=BoundedTextAccumulator)
     media_values: list[Any] = field(default_factory=list)
     finish_reason: str | None = None
     tool_calls: dict[int, _ToolCall] = field(default_factory=dict)
@@ -150,12 +151,12 @@ class ChoiceAccumulator:
             choice = self.choices[choice_index]
             prefix = f"neatlogs.llm.output_messages.{choice_index}"
             span.set_attribute(f"{prefix}.role", choice.role)
-            content = "".join(choice.content)
+            content = choice.content.value()
             if content:
                 span.set_attribute(f"{prefix}.content", content)
-            reasoning = "".join(choice.reasoning)
+            reasoning = choice.reasoning.value()
             if reasoning:
-                span.set_attribute(f"{prefix}.reasoning", reasoning)
+                span.set_attribute(f"{prefix}.thinking", reasoning)
             if choice.media_values:
                 set_media_attributes(span, prefix, choice.media_values, "output")
             if choice.finish_reason is not None:
@@ -171,7 +172,8 @@ class ChoiceAccumulator:
                     context = span.get_span_context()
                     raw = (
                         f"{context.trace_id:032x}:{context.span_id:016x}:{choice_index}:"
-                        f"{tool_index}:{tool.name}:{hashlib.sha256(tool.arguments.encode()).hexdigest()}"
+                        f"{tool_index}:{tool.name}:"
+                        f"{hashlib.sha256(tool.arguments.value().encode()).hexdigest()}"
                     )
                     tool.id = f"nl_{hashlib.sha256(raw.encode()).hexdigest()[:24]}"
                     tool.synthetic = True
@@ -180,7 +182,7 @@ class ChoiceAccumulator:
                 if tool.type:
                     span.set_attribute(f"{tool_prefix}.type", tool.type)
                 span.set_attribute(f"{tool_prefix}.name", tool.name)
-                span.set_attribute(f"{tool_prefix}.arguments", tool.arguments)
+                span.set_attribute(f"{tool_prefix}.arguments", tool.arguments.value())
                 if tool.details:
                     span.set_attribute(f"{tool_prefix}.details", tool.details)
                 span.set_attribute(f"{tool_prefix}.choice_index", choice_index)
@@ -222,7 +224,7 @@ class ChoiceAccumulator:
                 tool.name = str(name)
             arguments = _get(function, "arguments", None)
             if arguments is not None:
-                tool.arguments += _string(arguments)
+                tool.arguments.append(_string(arguments))
             if function is None:
                 tool.details = _string(fragment)
 

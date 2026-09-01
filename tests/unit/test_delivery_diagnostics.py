@@ -43,3 +43,12 @@ def test_exposes_queue_saturation_before_otel_drops():
 
     assert diagnostics.snapshot()["span_queue_drops"] == 1
     processor.shutdown()
+
+
+def test_default_diagnostics_report_backend_upload_contract_dependency():
+    diagnostics = DeliveryDiagnostics()
+
+    snapshot = diagnostics.snapshot()
+    assert snapshot["span_upload_authority_available"] is False
+    assert snapshot["log_upload_authority_available"] is False
+    assert snapshot["span_upload_authority_reason"] == "backend_upload_contract_unavailable"

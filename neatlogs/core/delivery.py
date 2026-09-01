@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import threading
 from dataclasses import asdict, dataclass
+from typing import Any
 
 from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
@@ -17,6 +18,18 @@ class DeliveryDiagnosticsSnapshot:
     log_export_failures: int = 0
     masked_span_drops: int = 0
     masked_log_drops: int = 0
+    span_capture_truncations: int = 0
+    log_capture_truncations: int = 0
+    span_overflow_exports: int = 0
+    span_overflow_failures: int = 0
+    span_overflow_unavailable: int = 0
+    log_overflow_exports: int = 0
+    log_overflow_failures: int = 0
+    log_overflow_unavailable: int = 0
+    span_upload_authority_available: bool = False
+    log_upload_authority_available: bool = False
+    span_upload_authority_reason: str = "backend_upload_contract_unavailable"
+    log_upload_authority_reason: str = "backend_upload_contract_unavailable"
 
 
 class DeliveryDiagnostics:
@@ -41,7 +54,24 @@ class DeliveryDiagnostics:
             field = "masked_span_drops" if signal == "span" else "masked_log_drops"
             setattr(self._values, field, getattr(self._values, field) + count)
 
-    def snapshot(self) -> dict[str, int]:
+    def record_capture_truncation(self, signal: str, count: int = 1) -> None:
+        with self._lock:
+            field = "span_capture_truncations" if signal == "span" else "log_capture_truncations"
+            setattr(self._values, field, getattr(self._values, field) + count)
+
+    def record_overflow(self, signal: str, outcome: str, count: int = 1) -> None:
+        if outcome not in {"exports", "failures", "unavailable"}:
+            raise ValueError(f"unknown overflow outcome: {outcome}")
+        with self._lock:
+            field = f"{signal}_overflow_{outcome}"
+            setattr(self._values, field, getattr(self._values, field) + count)
+
+    def configure_upload_authority(self, signal: str, available: bool, reason: str) -> None:
+        with self._lock:
+            setattr(self._values, f"{signal}_upload_authority_available", available)
+            setattr(self._values, f"{signal}_upload_authority_reason", reason)
+
+    def snapshot(self) -> dict[str, Any]:
         with self._lock:
             return asdict(self._values)
 

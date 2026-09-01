@@ -44,12 +44,18 @@ class MaskContext:
     cancelled: threading.Event
 
 
-def _accepts_context(mask: Callable, snapshot: dict[str, Any], context: MaskContext) -> bool:
+def _accepts_context(mask: Callable) -> bool:
+    """Require an explicit keyword-only context opt-in.
+
+    The original public callback contract accepted one positional snapshot.
+    Binding a second positional argument breaks callbacks that happen to have
+    an unrelated optional positional parameter.
+    """
     try:
-        inspect.signature(mask).bind(snapshot, context)
+        parameter = inspect.signature(mask).parameters.get("context")
     except (TypeError, ValueError):
         return False
-    return True
+    return parameter is not None and parameter.kind is inspect.Parameter.KEYWORD_ONLY
 
 
 def _mask_call(
@@ -58,9 +64,7 @@ def _mask_call(
     timeout_seconds: float,
     context: MaskContext,
 ):
-    result = (
-        mask(snapshot, context) if _accepts_context(mask, snapshot, context) else mask(snapshot)
-    )
+    result = mask(snapshot, context=context) if _accepts_context(mask) else mask(snapshot)
     if inspect.isawaitable(result):
         return asyncio.run(asyncio.wait_for(result, timeout=timeout_seconds))
     return result
@@ -330,10 +334,7 @@ class MaskingLogExporter(LogRecordExporter):
 
     def export(self, batch: Sequence[ReadableLogRecord]) -> LogRecordExportResult:
         if self._mask is None:
-            result = self._inner.export(batch)
-            if result is not LogRecordExportResult.SUCCESS and self._diagnostics is not None:
-                self._diagnostics.record_export_failure("log", len(batch))
-            return result
+            return self._inner.export(batch)
         kept = []
         snapshots = [(self._mask, _log_snapshot(item)) for item in batch]
         for item, masked in zip(batch, self._runner.apply_many(snapshots)):
@@ -368,10 +369,7 @@ class MaskingLogExporter(LogRecordExporter):
             kept.append(clone)
         if not kept:
             return LogRecordExportResult.SUCCESS
-        result = self._inner.export(kept)
-        if result is not LogRecordExportResult.SUCCESS and self._diagnostics is not None:
-            self._diagnostics.record_export_failure("log", len(kept))
-        return result
+        return self._inner.export(kept)
 
     def force_flush(self, timeout_millis: int = 10000) -> bool:
         # LogRecordExporter.force_flush became abstract in OpenTelemetry 1.44.

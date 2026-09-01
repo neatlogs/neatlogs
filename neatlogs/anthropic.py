@@ -344,7 +344,12 @@ def _set_usage_attributes(span: Any, usage: Any) -> None:
 
 
 def _finalize_stream(
-    span: Any, chunks: List[Any], duration_ms: float, ttft_ms: Optional[float]
+    span: Any,
+    chunks: List[Any],
+    duration_ms: float,
+    ttft_ms: Optional[float],
+    *,
+    interrupted: bool = False,
 ) -> None:
     """Finalize a streaming response span from accumulated Anthropic stream events."""
     text_parts: List[str] = []
@@ -445,7 +450,7 @@ def _finalize_stream(
                 round(duration_ms - ttft_ms, 3),
             )
 
-    span.set_status(StatusCode.OK)
+    span.set_status(StatusCode.UNSET if interrupted else StatusCode.OK)
     span.end()
 
 

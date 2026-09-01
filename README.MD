@@ -84,6 +84,20 @@ For long-running servers (FastAPI, Celery workers), call `init()` once at startu
 
 Full walkthrough: [Your First Trace](https://docs.neatlogs.com/quickstart/your-first-trace).
 
+### Payload delivery status
+
+Normal OTLP batches are byte-limited and gzip-compressed. Deploy and verify gzip-aware trace
+intake before releasing this SDK version. Captured text values are bounded to 100,000 UTF-8 bytes
+and telemetry items to a 1 MB capture budget. A truncated value contains its original byte length,
+SHA-256 digest, and `backend_upload_contract_unavailable`; spans/logs also carry
+`neatlogs.capture.*` diagnostics, exposed through `get_delivery_diagnostics()`.
+
+Typed-media metadata is detected without fetching remote content. Generic overflow and large
+typed-media upload remain disabled until the backend provides the authenticated, project-scoped
+upload-session contract. The SDK contains an internal injectable authority seam for contract tests,
+but does not guess an endpoint, issue cloud credentials, retain a permanent object URL, or silently
+send an oversized item through ordinary ingest.
+
 ---
 
 ## Integrate into your codebase (recommended)

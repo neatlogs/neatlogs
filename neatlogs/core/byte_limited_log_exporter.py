@@ -1,4 +1,4 @@
-"""Encoded-byte-aware batching for OTLP/protobuf span export."""
+"""Encoded-byte-aware batching for OTLP/protobuf log export."""
 
 from __future__ import annotations
 
@@ -6,32 +6,32 @@ import hashlib
 import logging
 from collections.abc import Sequence
 
-from opentelemetry.exporter.otlp.proto.common.trace_encoder import encode_spans
-from opentelemetry.sdk.trace import ReadableSpan
-from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
+from opentelemetry.exporter.otlp.proto.common._log_encoder import encode_logs
 
-from .capture import limit_span_capture
+try:
+    from opentelemetry.sdk._logs import ReadableLogRecord
+    from opentelemetry.sdk._logs.export import LogRecordExporter, LogRecordExportResult
+except ImportError:  # OpenTelemetry 1.35-1.38 compatibility
+    from opentelemetry.sdk._logs import LogData as ReadableLogRecord
+    from opentelemetry.sdk._logs.export import (
+        LogExporter as LogRecordExporter,
+        LogExportResult as LogRecordExportResult,
+    )
+
+from .byte_limited_exporter import DEFAULT_MAX_EXPORT_BYTES
+from .capture import limit_log_capture
 from .delivery import DeliveryDiagnostics
 from .upload_authority import DisabledUploadAuthority, OverflowPayload, UploadAuthority
 
-DEFAULT_MAX_EXPORT_BYTES = 4 * 1024 * 1024
 logger = logging.getLogger(__name__)
 
 
-class ByteLimitedSpanExporter(SpanExporter):
-    """Split a row batch by a conservative encoded protobuf byte bound.
-
-    Encoding each span as a one-span OTLP request repeats resource and scope
-    framing that a combined request deduplicates. Summing those sizes is
-    therefore a safe upper bound without repeatedly encoding every growing
-    candidate batch. A single oversized span crosses an injectable upload
-    authority boundary; the production default rejects it explicitly until the
-    authenticated backend Phase 8 contract is deployed.
-    """
+class ByteLimitedLogExporter(LogRecordExporter):
+    """Split log batches and explicitly reject unsafe single-record overflow."""
 
     def __init__(
         self,
-        inner: SpanExporter,
+        inner: LogRecordExporter,
         max_export_bytes: int = DEFAULT_MAX_EXPORT_BYTES,
         diagnostics: DeliveryDiagnostics | None = None,
         upload_authority: UploadAuthority | None = None,
@@ -44,36 +44,35 @@ class ByteLimitedSpanExporter(SpanExporter):
         self._upload_authority = upload_authority or DisabledUploadAuthority()
         if diagnostics is not None:
             diagnostics.configure_upload_authority(
-                "span",
+                "log",
                 self._upload_authority.available,
                 self._upload_authority.unavailable_reason,
             )
 
     @staticmethod
-    def _encoded_upper_bound(span: ReadableSpan) -> int:
-        return encode_spans((span,)).ByteSize()
+    def _encoded_upper_bound(item: ReadableLogRecord) -> int:
+        return encode_logs((item,)).ByteSize()
 
-    def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
-        bounded_spans: list[ReadableSpan] = []
-        for span in spans:
-            bounded, truncations = limit_span_capture(span)
-            bounded_spans.append(bounded)
+    def export(self, batch: Sequence[ReadableLogRecord]) -> LogRecordExportResult:
+        bounded = []
+        for item in batch:
+            clone, truncations = limit_log_capture(item)
+            bounded.append(clone)
             if truncations and self._diagnostics is not None:
-                self._diagnostics.record_capture_truncation("span", truncations)
+                self._diagnostics.record_capture_truncation("log", truncations)
 
         actions: list[tuple[str, object]] = []
-        current: list[ReadableSpan] = []
+        current = []
         current_bytes = 0
         overflow_failed = False
-
-        for span in bounded_spans:
-            span_bytes = self._encoded_upper_bound(span)
-            if span_bytes > self._max_export_bytes:
+        for item in bounded:
+            item_bytes = self._encoded_upper_bound(item)
+            if item_bytes > self._max_export_bytes:
                 if current:
                     actions.append(("batch", current))
                     current = []
                     current_bytes = 0
-                payload = encode_spans((span,)).SerializeToString()
+                payload = encode_logs((item,)).SerializeToString()
                 actions.append(
                     (
                         "overflow",
@@ -81,18 +80,17 @@ class ByteLimitedSpanExporter(SpanExporter):
                             content=payload,
                             sha256=hashlib.sha256(payload).hexdigest(),
                             byte_length=len(payload),
-                            signal="span",
+                            signal="log",
                         ),
                     )
                 )
                 continue
-            if current and current_bytes + span_bytes > self._max_export_bytes:
+            if current and current_bytes + item_bytes > self._max_export_bytes:
                 actions.append(("batch", current))
                 current = []
                 current_bytes = 0
-            current.append(span)
-            current_bytes += span_bytes
-
+            current.append(item)
+            current_bytes += item_bytes
         if current:
             actions.append(("batch", current))
 
@@ -102,49 +100,52 @@ class ByteLimitedSpanExporter(SpanExporter):
                 if not self._upload_authority.available:
                     overflow_failed = True
                     if self._diagnostics is not None:
-                        self._diagnostics.record_overflow("span", "unavailable")
-                        self._diagnostics.record_overflow("span", "failures")
-                        self._diagnostics.record_export_failure("span", 1)
+                        self._diagnostics.record_overflow("log", "unavailable")
+                        self._diagnostics.record_overflow("log", "failures")
+                        self._diagnostics.record_export_failure("log", 1)
                     logger.error(
-                        "[neatlogs] oversized span rejected: bytes=%d limit=%d reason=%s",
+                        "[neatlogs] oversized log rejected: bytes=%d limit=%d reason=%s",
                         candidate.byte_length,
                         self._max_export_bytes,
                         self._upload_authority.unavailable_reason,
                     )
                     continue
                 try:
-                    result = self._upload_authority.export_overflow(candidate)
+                    succeeded = self._upload_authority.export_overflow(candidate) is True
                 except Exception as exc:
                     logger.error(
-                        "[neatlogs] oversized span upload failed (%s)",
+                        "[neatlogs] oversized log upload failed (%s)",
                         type(exc).__name__,
                     )
-                    result = SpanExportResult.FAILURE
-                if result is True:
+                    succeeded = False
+                if succeeded:
                     if self._diagnostics is not None:
-                        self._diagnostics.record_overflow("span", "exports")
+                        self._diagnostics.record_overflow("log", "exports")
                 else:
                     overflow_failed = True
                     if self._diagnostics is not None:
-                        self._diagnostics.record_overflow("span", "failures")
-                        self._diagnostics.record_export_failure("span", 1)
+                        self._diagnostics.record_overflow("log", "failures")
+                        self._diagnostics.record_export_failure("log", 1)
                 continue
 
-            batch = value
-            if self._inner.export(batch) is not SpanExportResult.SUCCESS:
+            records = value
+            if self._inner.export(records) is not LogRecordExportResult.SUCCESS:
                 if self._diagnostics is not None:
                     self._diagnostics.record_export_failure(
-                        "span",
+                        "log",
                         sum(
                             len(unattempted) if kind == "batch" else 1
                             for kind, unattempted in actions[index:]
                         ),
                     )
-                return SpanExportResult.FAILURE
-        return SpanExportResult.FAILURE if overflow_failed else SpanExportResult.SUCCESS
+                return LogRecordExportResult.FAILURE
+        return LogRecordExportResult.FAILURE if overflow_failed else LogRecordExportResult.SUCCESS
 
     def force_flush(self, timeout_millis: int = 30000) -> bool:
-        result = self._inner.force_flush(timeout_millis)
+        force_flush = getattr(self._inner, "force_flush", None)
+        if force_flush is None:
+            return True
+        result = force_flush(timeout_millis)
         return True if result is None else bool(result)
 
     def shutdown(self) -> None:

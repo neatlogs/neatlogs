@@ -22,6 +22,7 @@ def test_python_transport_retries_429_post_without_overlapping_otel_5xx_policy()
             requests_seen += 1
             self.rfile.read(int(self.headers.get("Content-Length", "0")))
             self.send_response(429 if requests_seen < 3 else 200)
+            self.send_header("Retry-After", "0")
             self.send_header("Content-Length", "0")
             self.end_headers()
 
@@ -115,7 +116,49 @@ def test_transport_bounds_read_timeout_retries():
     finally:
         server.shutdown()
         server.server_close()
-    assert requests_seen == 3
+    # The response is ambiguous after the body has been accepted, so neither
+    # requests nor urllib3 may replay this POST.
+    assert requests_seen == 1
+
+
+def test_rate_limit_retry_after_cannot_escape_export_deadline():
+    requests_seen = 0
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            nonlocal requests_seen
+            requests_seen += 1
+            self.rfile.read(int(self.headers.get("Content-Length", "0")))
+            self.send_response(429)
+            self.send_header("Retry-After", "30")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def log_message(self, *_args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    started = time.monotonic()
+    try:
+        response = build_otlp_session().post(
+            f"http://127.0.0.1:{server.server_port}/v1/traces",
+            data=b"protobuf",
+            timeout=0.05,
+        )
+        elapsed = time.monotonic() - started
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert response.status_code == 429
+    assert requests_seen == 1
+    assert elapsed < 0.5
+
+
+def test_transport_uses_no_version_sensitive_urllib3_retry_configuration():
+    session = build_otlp_session()
+    assert session.get_adapter("https://").max_retries.total == 0
 
 
 def test_upstream_exporter_rejects_work_after_shutdown():

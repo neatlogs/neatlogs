@@ -9,7 +9,12 @@ from collections.abc import Callable
 from typing import Any
 
 
-def bounded_call(operation: Callable[[], Any], deadline: float) -> tuple[bool, Any]:
+def bounded_call(
+    operation: Callable[[], Any],
+    deadline: float,
+    *,
+    synchronous: bool = False,
+) -> tuple[bool, Any]:
     """Run one close operation by a monotonic deadline.
 
     Python cannot forcibly cancel arbitrary exporter or user callback code, so
@@ -19,6 +24,17 @@ def bounded_call(operation: Callable[[], Any], deadline: float) -> tuple[bool, A
     remaining = deadline - time.monotonic()
     if remaining <= 0:
         return False, TimeoutError("Neatlogs shutdown deadline exceeded")
+    if synchronous:
+        # Python 3.12+ prohibits starting threads from an atexit callback. The
+        # exporters already own their worker threads, so interpreter shutdown
+        # must join/flush those workers directly instead of creating another.
+        try:
+            result = operation()
+        except BaseException as exc:
+            return False, exc
+        if time.monotonic() > deadline:
+            return False, TimeoutError("Neatlogs shutdown deadline exceeded")
+        return True, result
     completed: queue.Queue[tuple[bool, Any]] = queue.Queue(maxsize=1)
 
     def run() -> None:

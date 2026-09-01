@@ -32,6 +32,7 @@ from ._wrap_utils import (
 )
 from .constants import DEFAULT_INGEST_ENDPOINT, export_queue_capacity
 from .core.byte_limited_exporter import ByteLimitedSpanExporter
+from .core.byte_limited_log_exporter import ByteLimitedLogExporter
 from .core.client_registry import register_client, unregister_client
 from .core.deadline import bounded_call
 from .core.delivery import (
@@ -196,7 +197,10 @@ class Client:
                     NeatlogsLogFilter(
                         ObservableBatchLogRecordProcessor(
                             MaskingLogExporter(
-                                log_exporter,
+                                ByteLimitedLogExporter(
+                                    log_exporter,
+                                    diagnostics=self._delivery_diagnostics,
+                                ),
                                 mask,
                                 diagnostics=self._delivery_diagnostics,
                             ),
@@ -208,7 +212,7 @@ class Client:
                     )
                 )
 
-        atexit.register(self.shutdown)
+        atexit.register(self._atexit_shutdown)
         register_client(self)
 
     def get_tracer(self, scope: str):
@@ -226,7 +230,7 @@ class Client:
         with self._state_changed:
             return self._state == "running"
 
-    def get_delivery_diagnostics(self) -> dict[str, int]:
+    def get_delivery_diagnostics(self) -> dict[str, Any]:
         return self._delivery_diagnostics.snapshot()
 
     @contextlib.contextmanager
@@ -266,6 +270,8 @@ class Client:
         self,
         timeout_millis: int = 30000,
         termination_reason: str = "shutdown",
+        *,
+        _synchronous: bool = False,
     ) -> bool:
         with self._state_changed:
             if self._state == "closed":
@@ -286,7 +292,11 @@ class Client:
         self._span_processor.begin_shutdown(termination_reason)
         success = False
         try:
-            success = self._perform_shutdown(timeout_millis, termination_reason)
+            success = self._perform_shutdown(
+                timeout_millis,
+                termination_reason,
+                synchronous=_synchronous,
+            )
             return success
         finally:
             with self._state_changed:
@@ -295,17 +305,32 @@ class Client:
                 self._shutdown_owner = None
                 self._state_changed.notify_all()
             try:
-                atexit.unregister(self.shutdown)
+                atexit.unregister(self._atexit_shutdown)
             except Exception:
                 pass
             unregister_client(self)
 
-    def _perform_shutdown(self, timeout_millis: int, termination_reason: str) -> bool:
+    def _atexit_shutdown(self) -> None:
+        """Synchronous interpreter-exit cleanup (Python 3.12 forbids new threads)."""
+
+        self.shutdown(_synchronous=True)
+
+    def _perform_shutdown(
+        self,
+        timeout_millis: int,
+        termination_reason: str,
+        *,
+        synchronous: bool = False,
+    ) -> bool:
         success = True
         deadline = time.monotonic() + max(0, timeout_millis) / 1000
         # Drain logs before ending roots: root end creates the completion marker.
         if self.log_provider is not None:
-            completed, _ = bounded_call(self.log_provider.shutdown, deadline)
+            completed, _ = bounded_call(
+                self.log_provider.shutdown,
+                deadline,
+                synchronous=synchronous,
+            )
             success = completed and success
         try:
             self._span_processor.end_active_spans(termination_reason)
@@ -320,7 +345,11 @@ class Client:
             except Exception:
                 success = False
         if self._owns_provider:
-            completed, _ = bounded_call(self.tracer_provider.shutdown, deadline)
+            completed, _ = bounded_call(
+                self.tracer_provider.shutdown,
+                deadline,
+                synchronous=synchronous,
+            )
             success = completed and success
         else:
             completed, result = bounded_call(
@@ -328,12 +357,21 @@ class Client:
                     timeout_millis=max(0, int((deadline - time.monotonic()) * 1000))
                 ),
                 deadline,
+                synchronous=synchronous,
             )
             success = completed and (result is None or bool(result)) and success
             for processor in reversed(self._transport_processors):
-                completed, _ = bounded_call(processor.shutdown, deadline)
+                completed, _ = bounded_call(
+                    processor.shutdown,
+                    deadline,
+                    synchronous=synchronous,
+                )
                 success = completed and success
-            completed, _ = bounded_call(self._span_processor.shutdown, deadline)
+            completed, _ = bounded_call(
+                self._span_processor.shutdown,
+                deadline,
+                synchronous=synchronous,
+            )
             success = completed and success
 
         return success

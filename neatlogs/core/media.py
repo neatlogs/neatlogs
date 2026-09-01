@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import hashlib
 import mimetypes
 from collections.abc import Mapping, Sequence
 from typing import Any
 from urllib.parse import urlparse
+
+from .capture import DEFAULT_MAX_CAPTURE_VALUE_BYTES, UPLOAD_UNAVAILABLE_REASON
 
 
 def _kind(mime_type: str, declared: str = "") -> str:
@@ -25,6 +28,22 @@ def _kind(mime_type: str, declared: str = "") -> str:
     return "media"
 
 
+def _base64_metadata(encoded: str) -> tuple[int, str] | None:
+    """Validate/digest base64 incrementally without duplicating the full media."""
+
+    digest = hashlib.sha256()
+    byte_length = 0
+    chunk_size = 64 * 1024  # divisible by four, so quartets never cross chunks
+    try:
+        for offset in range(0, len(encoded), chunk_size):
+            decoded = base64.b64decode(encoded[offset : offset + chunk_size], validate=True)
+            digest.update(decoded)
+            byte_length += len(decoded)
+    except (binascii.Error, ValueError, TypeError):
+        return None
+    return byte_length, digest.hexdigest()
+
+
 def _inline(data: str, mime_type: str, declared: str, purpose: str) -> dict[str, Any] | None:
     encoded = data
     if data.startswith("data:"):
@@ -32,21 +51,29 @@ def _inline(data: str, mime_type: str, declared: str, purpose: str) -> dict[str,
         if not separator:
             return None
         mime_type = header[5:].split(";", 1)[0] or mime_type
-    try:
-        raw = base64.b64decode(encoded, validate=True)
-    except (ValueError, TypeError):
+    metadata = _base64_metadata(encoded)
+    if metadata is None:
         return None
-    digest = hashlib.sha256(raw).hexdigest()
-    return {
+    byte_length, digest = metadata
+    record = {
         "id": f"nl_media_{digest[:24]}",
         "type": _kind(mime_type, declared),
         "source": "inline",
         "mime_type": mime_type or "application/octet-stream",
-        "byte_length": len(raw),
+        "byte_length": byte_length,
         "sha256": digest,
         "purpose": purpose,
-        "state": "inline",
     }
+    if len(data.encode("utf-8")) > DEFAULT_MAX_CAPTURE_VALUE_BYTES:
+        record.update(
+            {
+                "state": "failed",
+                "safe_preview": f"upload unavailable: {UPLOAD_UNAVAILABLE_REASON}",
+            }
+        )
+    else:
+        record["state"] = "inline"
+    return record
 
 
 def _reference(reference: str, mime_type: str, declared: str, purpose: str) -> dict[str, Any]:
@@ -94,11 +121,47 @@ def media_references(value: Any, purpose: str) -> list[dict[str, Any]]:
                 )
                 if record:
                     found.append(record)
+            inline_data = node.get("inline_data") or node.get("inlineData")
+            if isinstance(inline_data, Mapping) and isinstance(inline_data.get("data"), str):
+                record = _inline(
+                    inline_data["data"],
+                    str(inline_data.get("mime_type") or inline_data.get("mimeType") or mime_type),
+                    declared,
+                    purpose,
+                )
+                if record:
+                    found.append(record)
             file_data = node.get("file_data") or node.get("fileData")
             if isinstance(file_data, str):
                 record = _inline(file_data, mime_type, declared or "document", purpose)
                 if record:
                     found.append(record)
+            raw_data = node.get("data")
+            if isinstance(raw_data, (bytes, bytearray)) and (declared or mime_type):
+                digest = hashlib.sha256(raw_data).hexdigest()
+                found.append(
+                    {
+                        "id": f"nl_media_{digest[:24]}",
+                        "type": _kind(mime_type, declared),
+                        "source": "inline",
+                        "mime_type": mime_type or "application/octet-stream",
+                        "byte_length": len(raw_data),
+                        "sha256": digest,
+                        "purpose": purpose,
+                        "state": (
+                            "inline"
+                            if len(raw_data) <= DEFAULT_MAX_CAPTURE_VALUE_BYTES
+                            else "failed"
+                        ),
+                        **(
+                            {}
+                            if len(raw_data) <= DEFAULT_MAX_CAPTURE_VALUE_BYTES
+                            else {
+                                "safe_preview": (f"upload unavailable: {UPLOAD_UNAVAILABLE_REASON}")
+                            }
+                        ),
+                    }
+                )
             reference = (
                 node.get("file_id")
                 or node.get("file_uri")

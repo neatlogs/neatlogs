@@ -1117,6 +1117,13 @@ def _perform_shutdown(
     _media_store = None
     _upload_authority = None
 
+    try:
+        from .prompt.client import _close_shared_prompt_clients
+
+        _close_shared_prompt_clients()
+    except Exception:
+        success = False
+
     _initialized = False
     _init_signature = None
     _tracer_provider = None

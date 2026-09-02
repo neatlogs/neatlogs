@@ -3,8 +3,22 @@ from __future__ import annotations
 import re
 import threading
 import time as _time
+from collections import OrderedDict
+from copy import deepcopy
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Mapping, MutableMapping, Optional, Sequence, Union
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    List,
+    Mapping,
+    MutableMapping,
+    Optional,
+    Sequence,
+    Set,
+    Tuple,
+    Union,
+)
 from urllib.parse import quote
 
 import requests
@@ -14,10 +28,13 @@ from ..core.logger import get_logger
 logger = get_logger()
 
 DEFAULT_CACHE_TTL_SECONDS = 60
+DEFAULT_MAX_CACHE_ENTRIES = 100
+DEFAULT_MAX_REFRESH_WORKERS = 4
 DEFAULT_CONNECT_TIMEOUT = 2.0
 DEFAULT_READ_TIMEOUT = 5.0
 
 _PLACEHOLDER_PATTERN = re.compile(r"\{\{\s*([A-Za-z0-9_.-]+)\s*\}\}")
+CacheKey = Tuple[str, Optional[str], Optional[int]]
 
 
 class PromptClientError(Exception):
@@ -30,6 +47,10 @@ class PromptApiError(PromptClientError):
 
 class PromptNotFoundError(PromptClientError):
     """Raised when a prompt/label/version is not found and no fallback is provided."""
+
+
+class PromptClientClosedError(PromptClientError):
+    """Raised when work is attempted after the prompt client has closed."""
 
 
 # ---------------------------------------------------------------------------
@@ -51,32 +72,43 @@ class _CacheEntry:
 class PromptCache:
     """Thread-safe in-memory cache with stale-while-revalidate semantics."""
 
-    def __init__(self, default_ttl: float = DEFAULT_CACHE_TTL_SECONDS):
-        self._store: Dict[str, _CacheEntry] = {}
+    def __init__(
+        self,
+        default_ttl: float = DEFAULT_CACHE_TTL_SECONDS,
+        max_entries: int = DEFAULT_MAX_CACHE_ENTRIES,
+    ):
+        if max_entries <= 0:
+            raise ValueError("max_entries must be greater than zero")
+        self._store: "OrderedDict[CacheKey, _CacheEntry]" = OrderedDict()
         self._lock = threading.Lock()
         self._default_ttl = default_ttl
+        self._max_entries = max_entries
 
     @staticmethod
-    def cache_key(name: str, label: Optional[str] = None, version: Optional[int] = None) -> str:
-        if label is not None:
-            return f"{name}@label:{label}"
-        if version is not None:
-            return f"{name}@v:{version}"
-        return f"{name}@latest"
+    def cache_key(
+        name: str, label: Optional[str] = None, version: Optional[int] = None
+    ) -> CacheKey:
+        return (name, label, version)
 
-    def get(self, key: str) -> Optional[_CacheEntry]:
+    def get(self, key: CacheKey) -> Optional[_CacheEntry]:
         with self._lock:
-            return self._store.get(key)
+            entry = self._store.get(key)
+            if entry is not None:
+                self._store.move_to_end(key)
+            return entry
 
-    def set(self, key: str, value: Any, ttl: Optional[float] = None) -> None:
+    def set(self, key: CacheKey, value: Any, ttl: Optional[float] = None) -> None:
         with self._lock:
+            self._store.pop(key, None)
             self._store[key] = _CacheEntry(
                 value=value,
                 fetched_at=_time.monotonic(),
                 ttl_seconds=ttl if ttl is not None else self._default_ttl,
             )
+            while len(self._store) > self._max_entries:
+                self._store.popitem(last=False)
 
-    def mark_refreshing(self, key: str) -> bool:
+    def mark_refreshing(self, key: CacheKey) -> bool:
         """Mark entry as being refreshed. Returns False if already refreshing."""
         with self._lock:
             entry = self._store.get(key)
@@ -85,11 +117,26 @@ class PromptCache:
             entry.refreshing = True
             return True
 
-    def clear_refreshing(self, key: str) -> None:
+    def clear_refreshing(self, key: CacheKey) -> None:
         with self._lock:
             entry = self._store.get(key)
             if entry:
                 entry.refreshing = False
+
+    def invalidate_prompt(self, name: str, *, include_versions: bool = False) -> None:
+        with self._lock:
+            for key in list(self._store):
+                key_name, label, version = key
+                if key_name != name:
+                    continue
+                if label is not None or version is None:
+                    self._store.pop(key, None)
+                elif include_versions:
+                    self._store.pop(key, None)
+
+    def clear(self) -> None:
+        with self._lock:
+            self._store.clear()
 
 
 @dataclass(frozen=True)
@@ -103,6 +150,13 @@ class CachedPrompt:
     labels: List[str]
     updated_at: str
     type: str = "text"
+
+
+@dataclass
+class _SyncPromptFlight:
+    completed: threading.Event = field(default_factory=threading.Event)
+    result: Optional["PromptHandle"] = None
+    error: Optional[BaseException] = None
 
 
 class PromptHandle:
@@ -125,7 +179,7 @@ class PromptHandle:
 
     @property
     def config(self) -> Dict[str, Any]:
-        return dict(self._prompt.config)
+        return deepcopy(self._prompt.config)
 
     @property
     def labels(self) -> List[str]:
@@ -145,7 +199,7 @@ class PromptHandle:
 
     @property
     def messages(self) -> Optional[List[Dict[str, str]]]:
-        return list(self._prompt.messages) if self._prompt.messages else None
+        return deepcopy(self._prompt.messages) if self._prompt.messages else None
 
     def compile(self, variables: Mapping[str, str]) -> str:
         """Compile string content with {{variable}} replacement."""
@@ -201,11 +255,31 @@ class PromptClient:
         api_key: str,
         session: Optional[requests.Session] = None,
         cache_ttl_seconds: float = DEFAULT_CACHE_TTL_SECONDS,
+        max_cache_entries: int = DEFAULT_MAX_CACHE_ENTRIES,
+        max_refresh_workers: int = DEFAULT_MAX_REFRESH_WORKERS,
     ):
+        if max_refresh_workers <= 0:
+            raise ValueError("max_refresh_workers must be greater than zero")
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self._session = session or requests.Session()
-        self._cache = PromptCache(default_ttl=cache_ttl_seconds)
+        self._cache = PromptCache(
+            default_ttl=cache_ttl_seconds,
+            max_entries=max_cache_entries,
+        )
+        self._refresh_slots = threading.BoundedSemaphore(max_refresh_workers)
+        self._refresh_threads: Set[threading.Thread] = set()
+        self._refresh_threads_lock = threading.Lock()
+        self._inflight: Dict[CacheKey, _SyncPromptFlight] = {}
+        self._inflight_lock = threading.Lock()
+        self._cache_epoch = 0
+        self._cache_epoch_lock = threading.Lock()
+        self._closed = False
+
+    def _assert_open(self) -> None:
+        with self._cache_epoch_lock:
+            if self._closed:
+                raise PromptClientClosedError("PromptClient is closed.")
 
     def get_prompt(
         self,
@@ -231,6 +305,7 @@ class PromptClient:
             type: Prompt type ("text" or "chat").
             cache_ttl_seconds: Override the default cache TTL for this prompt.
         """
+        self._assert_open()
         if label is not None and version is not None:
             raise ValueError("Cannot specify both label and version.")
 
@@ -238,18 +313,58 @@ class PromptClient:
         entry = self._cache.get(cache_key)
 
         if entry is not None:
-            if not entry.is_expired():
+            # Prompt versions are immutable. Once this client has fetched an
+            # explicitly pinned version, refreshing it cannot produce a newer
+            # version and only adds avoidable prompt-API traffic.
+            if version is not None or not entry.is_expired():
                 return entry.value
             # Stale — return immediately, refresh in background
             self._background_refresh(
-                cache_key, name, label=label, version=version, ttl=cache_ttl_seconds
+                cache_key,
+                name,
+                label=label,
+                version=version,
+                ttl=entry.ttl_seconds if cache_ttl_seconds is None else cache_ttl_seconds,
             )
             return entry.value
 
-        # Cold miss — must fetch synchronously
-        handle = self._fetch_prompt(name, label=label, version=version)
-        self._cache.set(cache_key, handle, cache_ttl_seconds)
-        return handle
+        # Coalesce a cold miss so concurrent callers for one selector share a
+        # single bounded backend request.
+        with self._inflight_lock:
+            flight = self._inflight.get(cache_key)
+            owns_flight = flight is None
+            if flight is None:
+                flight = _SyncPromptFlight()
+                self._inflight[cache_key] = flight
+
+        if not owns_flight:
+            if not flight.completed.wait(DEFAULT_CONNECT_TIMEOUT + DEFAULT_READ_TIMEOUT + 1.0):
+                raise PromptApiError("Prompt request did not complete before its deadline")
+            if flight.error is not None:
+                raise flight.error
+            if flight.result is None:
+                raise PromptApiError("Prompt request completed without a result")
+            return flight.result
+
+        try:
+            with self._cache_epoch_lock:
+                cache_epoch = self._cache_epoch
+            handle = self._fetch_prompt(name, label=label, version=version)
+            with self._cache_epoch_lock:
+                if self._closed:
+                    raise PromptClientClosedError("PromptClient is closed.")
+                if self._cache_epoch == cache_epoch:
+                    self._cache.set(cache_key, handle, cache_ttl_seconds)
+            flight.result = handle
+            return handle
+        except BaseException as exc:
+            flight.error = exc
+            raise
+        finally:
+            flight.completed.set()
+            with self._inflight_lock:
+                if self._inflight.get(cache_key) is flight:
+                    self._inflight.pop(cache_key, None)
 
     def _fetch_prompt(
         self,
@@ -262,16 +377,24 @@ class PromptClient:
         if label is not None:
             return PromptHandle(self.fetch_prompt(name, label=label))
 
-        listing = self.list_prompts(name=name)
+        listing = self.list_prompts(name=name, limit=500)
         items = listing.get("items", [])
 
         if not items:
             raise PromptNotFoundError(f"No versions found for prompt '{name}'")
 
         if version is not None:
-            for item in items:
-                if item.get("version") == version:
-                    return PromptHandle(_normalize_prompt_object(item))
+            offset = 0
+            while True:
+                for item in items:
+                    if item.get("version") == version:
+                        return PromptHandle(_normalize_prompt_object(item))
+                offset += len(items)
+                total = int(listing.get("total") or offset)
+                if not items or offset >= total:
+                    break
+                listing = self.list_prompts(name=name, limit=500, offset=offset)
+                items = listing.get("items", [])
             raise PromptNotFoundError(f"Prompt '{name}' version {version} not found")
 
         latest = max(items, key=lambda x: x.get("createdAt") or x.get("created_at") or "")
@@ -279,7 +402,7 @@ class PromptClient:
 
     def _background_refresh(
         self,
-        cache_key: str,
+        cache_key: CacheKey,
         name: str,
         *,
         label: Optional[str] = None,
@@ -289,18 +412,66 @@ class PromptClient:
         """Refresh a stale cache entry in a background thread (deduped)."""
         if not self._cache.mark_refreshing(cache_key):
             return
+        if not self._refresh_slots.acquire(blocking=False):
+            self._cache.clear_refreshing(cache_key)
+            return
+        with self._cache_epoch_lock:
+            if self._closed:
+                self._refresh_slots.release()
+                self._cache.clear_refreshing(cache_key)
+                return
+            cache_epoch = self._cache_epoch
 
         def _refresh():
             try:
                 handle = self._fetch_prompt(name, label=label, version=version)
-                self._cache.set(cache_key, handle, ttl)
+                with self._cache_epoch_lock:
+                    if not self._closed and self._cache_epoch == cache_epoch:
+                        self._cache.set(cache_key, handle, ttl)
             except Exception as e:
-                logger.debug(f"Background prompt refresh failed for '{cache_key}': {e}")
+                logger.debug(
+                    "Background prompt refresh failed for '%s' (%s)",
+                    cache_key,
+                    type(e).__name__,
+                )
             finally:
                 self._cache.clear_refreshing(cache_key)
+                self._refresh_slots.release()
+                with self._refresh_threads_lock:
+                    self._refresh_threads.discard(threading.current_thread())
 
         thread = threading.Thread(target=_refresh, daemon=True)
-        thread.start()
+        with self._refresh_threads_lock:
+            with self._cache_epoch_lock:
+                if self._closed:
+                    self._refresh_slots.release()
+                    self._cache.clear_refreshing(cache_key)
+                    return
+            self._refresh_threads.add(thread)
+            thread.start()
+
+    def close(self, timeout_seconds: float = 0.5) -> None:
+        """Stop accepting work, release cached prompts, and bound refresh cleanup."""
+        with self._cache_epoch_lock:
+            if self._closed:
+                return
+            self._closed = True
+            self._cache_epoch += 1
+        self._cache.clear()
+        deadline = _time.monotonic() + max(0.0, timeout_seconds)
+        with self._refresh_threads_lock:
+            threads = list(self._refresh_threads)
+        for thread in threads:
+            remaining = deadline - _time.monotonic()
+            if remaining <= 0:
+                break
+            thread.join(remaining)
+        self._session.close()
+
+    def _invalidate_prompt_cache(self, name: str, *, include_versions: bool = False) -> None:
+        with self._cache_epoch_lock:
+            self._cache_epoch += 1
+            self._cache.invalidate_prompt(name, include_versions=include_versions)
 
     # ----------------------------
     # API helpers
@@ -311,6 +482,7 @@ class PromptClient:
         Fetch one prompt by name+label from /api/v1/prompts/:name/fetch.
         Backend checks Redis first, then Postgres.
         """
+        self._assert_open()
         path = f"/api/v1/prompts/{quote(name, safe='')}/fetch"
         payload = self._request_json(method="GET", path=path, params={"label": label})
         return _normalize_prompt_object(payload)
@@ -325,6 +497,7 @@ class PromptClient:
         offset: int = 0,
     ) -> Dict[str, Any]:
         """List prompt versions from /api/managed-prompts."""
+        self._assert_open()
         params: Dict[str, Any] = {
             "limit": max(1, min(limit, 500)),
             "offset": max(0, offset),
@@ -354,18 +527,17 @@ class PromptClient:
 
         For type="text", prompt must be a str.
         For type="chat", prompt must be a list of {"role", "content"} dicts.
-        labels is required — specify at least one label (e.g. "production", "staging").
+        labels must contain exactly one active label (for example, "production").
         """
-        if not labels:
-            raise ValueError(
-                "labels is required. Specify at least one label, e.g. labels=['production']."
-            )
+        self._assert_open()
+        if len(labels) != 1:
+            raise ValueError("labels must contain exactly one label, e.g. labels=['production'].")
         if type == "text" and not isinstance(prompt, str):
             raise ValueError("For type='text', prompt must be a string.")
         if type == "chat" and not isinstance(prompt, list):
             raise ValueError("For type='chat', prompt must be a list of message dicts.")
 
-        body: Dict[str, Any] = {"name": name, "type": type}
+        body: Dict[str, Any] = {"name": name}
         if type == "chat":
             body["messages"] = list(prompt)  # type: ignore[arg-type]
         else:
@@ -380,6 +552,7 @@ class PromptClient:
             body["commit_message"] = commit_message
 
         payload = self._request_json(method="POST", path="/api/managed-prompts", json_body=body)
+        self._invalidate_prompt_cache(name)
         return PromptHandle(_normalize_prompt_object(payload.get("prompt", payload)))
 
     def update_prompt(
@@ -392,28 +565,21 @@ class PromptClient:
         """
         Move labels onto a specific prompt version via /api/managed-prompts/:promptId/labels.
 
-        new_labels is required — specify at least one label (e.g. new_labels=["production"]).
+        new_labels must contain the one active label to assign.
         """
-        if not new_labels:
+        self._assert_open()
+        if len(new_labels) != 1:
             raise ValueError(
-                "new_labels is required. Specify at least one label, e.g. new_labels=['production']."
+                "new_labels must contain exactly one label, e.g. new_labels=['production']."
             )
 
-        listing = self.list_prompts(name=name)
-        prompt_id: Optional[str] = None
-        for item in listing.get("items", []):
-            if item.get("version") == version:
-                prompt_id = item.get("id")
-                break
-
-        if not prompt_id:
-            raise PromptNotFoundError(f"Prompt '{name}' version {version} not found")
+        prompt_id = self._find_prompt_id(name, version)
 
         path = f"/api/managed-prompts/{quote(prompt_id, safe='')}/labels"
-        last_response: Dict[str, Any] = {}
-        for label in new_labels:
-            last_response = self._request_json(method="POST", path=path, json_body={"label": label})
+        label = new_labels[0]
+        last_response = self._request_json(method="POST", path=path, json_body={"label": label})
 
+        self._invalidate_prompt_cache(name)
         return {"name": name, "version": version, "labels": list(new_labels), **last_response}
 
     def delete_prompt(
@@ -424,18 +590,13 @@ class PromptClient:
         """
         Soft-delete a specific prompt version via DELETE /api/managed-prompts/:promptId.
         """
-        listing = self.list_prompts(name=name)
-        prompt_id: Optional[str] = None
-        for item in listing.get("items", []):
-            if item.get("version") == version:
-                prompt_id = item.get("id")
-                break
-
-        if not prompt_id:
-            raise PromptNotFoundError(f"Prompt '{name}' version {version} not found")
+        self._assert_open()
+        prompt_id = self._find_prompt_id(name, version)
 
         path = f"/api/managed-prompts/{quote(prompt_id, safe='')}"
-        return self._request_json(method="DELETE", path=path)
+        response = self._request_json(method="DELETE", path=path)
+        self._invalidate_prompt_cache(name, include_versions=True)
+        return response
 
     def remove_tag(
         self,
@@ -446,18 +607,13 @@ class PromptClient:
         """
         Remove a tag from a prompt version via DELETE /api/managed-prompts/:promptId/tags.
         """
-        listing = self.list_prompts(name=name)
-        prompt_id: Optional[str] = None
-        for item in listing.get("items", []):
-            if item.get("version") == version:
-                prompt_id = item.get("id")
-                break
-
-        if not prompt_id:
-            raise PromptNotFoundError(f"Prompt '{name}' version {version} not found")
+        self._assert_open()
+        prompt_id = self._find_prompt_id(name, version)
 
         path = f"/api/managed-prompts/{quote(prompt_id, safe='')}/tags"
-        return self._request_json(method="DELETE", path=path, json_body={"tag": tag})
+        response = self._request_json(method="DELETE", path=path, json_body={"tag": tag})
+        self._invalidate_prompt_cache(name)
+        return response
 
     def save_as_version(
         self,
@@ -471,6 +627,13 @@ class PromptClient:
         tags: Optional[Sequence[str]] = None,
     ) -> Dict[str, Any]:
         """Save prompt content/messages as a new version via the playground endpoint."""
+        self._assert_open()
+        has_content = isinstance(content, str) and bool(content.strip())
+        has_messages = messages is not None and len(messages) > 0
+        if not has_content and not has_messages:
+            raise ValueError("save_as_version requires non-empty content or messages.")
+        if labels is not None and len(labels) > 1:
+            raise ValueError("labels may contain at most one label.")
         body: Dict[str, Any] = {"promptName": prompt_name}
         if content is not None:
             body["content"] = content
@@ -485,9 +648,25 @@ class PromptClient:
         if tags is not None:
             body["tags"] = list(tags)
 
-        return self._request_json(
+        response = self._request_json(
             method="POST", path="/api/prompt-playground/save-as-version", json_body=body
         )
+        self._invalidate_prompt_cache(prompt_name)
+        return response
+
+    def _find_prompt_id(self, name: str, version: int) -> str:
+        """Resolve a prompt version to its backend UUID across paginated history."""
+        offset = 0
+        while True:
+            listing = self.list_prompts(name=name, limit=500, offset=offset)
+            items = listing.get("items", [])
+            for item in items:
+                if item.get("version") == version and isinstance(item.get("id"), str):
+                    return item["id"]
+            offset += len(items)
+            total = int(listing.get("total") or offset)
+            if not items or offset >= total:
+                raise PromptNotFoundError(f"Prompt '{name}' version {version} not found")
 
     # ----------------
     # Internal helpers
@@ -509,6 +688,7 @@ class PromptClient:
         json_body: Optional[Mapping[str, Any]] = None,
         timeout_seconds: float = DEFAULT_READ_TIMEOUT,
     ) -> Dict[str, Any]:
+        self._assert_open()
         url = f"{self.base_url}{path}"
 
         try:
@@ -538,8 +718,7 @@ class PromptClient:
                     pass
 
         if response.status_code >= 400:
-            body = _safe_response_text(response)
-            raise PromptApiError(f"{method} {path} failed ({response.status_code}): {body}")
+            raise PromptApiError(f"{method} {path} failed ({response.status_code})")
 
         try:
             payload = response.json()
@@ -557,14 +736,6 @@ def _render_template(template: str, variables: Mapping[str, str]) -> str:
         lambda match: str(variables.get(match.group(1), match.group(0))),
         template,
     )
-
-
-def _safe_response_text(response: requests.Response, limit: int = 400) -> str:
-    try:
-        text = response.text.strip()
-    except Exception:
-        return "<unavailable>"
-    return text[:limit] if text else "<empty>"
 
 
 def _normalize_prompt_object(raw: Mapping[str, Any]) -> CachedPrompt:
@@ -624,10 +795,10 @@ def _normalize_prompt_object(raw: Mapping[str, Any]) -> CachedPrompt:
         version=version,
         content=content,
         messages=messages,
-        config=dict(config),
+        config=deepcopy(dict(config)),
         labels=labels,
         updated_at=updated_at,
-        type=prompt_type,
+        type="chat" if messages else prompt_type,
     )
 
 
@@ -640,9 +811,6 @@ _shared_client: Optional[PromptClient] = None
 
 def _get_shared_client() -> PromptClient:
     global _shared_client
-    if _shared_client is not None:
-        return _shared_client
-
     from ..init import _session_config
 
     api_key = _session_config.get("_api_key") or ""
@@ -652,6 +820,15 @@ def _get_shared_client() -> PromptClient:
         raise PromptClientError(
             "No API key available. Call neatlogs.init(api_key=...) before using prompt methods."
         )
+
+    if _shared_client is not None:
+        if (
+            not _shared_client._closed
+            and _shared_client.api_key == api_key
+            and _shared_client.base_url == base_url.rstrip("/")
+        ):
+            return _shared_client
+        _shared_client.close()
 
     _shared_client = PromptClient(base_url=base_url, api_key=api_key)
     return _shared_client
@@ -764,9 +941,13 @@ class AsyncPromptClient:
         connect_timeout: float = DEFAULT_CONNECT_TIMEOUT,
         read_timeout: float = DEFAULT_READ_TIMEOUT,
         cache_ttl_seconds: float = DEFAULT_CACHE_TTL_SECONDS,
+        max_cache_entries: int = DEFAULT_MAX_CACHE_ENTRIES,
+        max_refresh_workers: int = DEFAULT_MAX_REFRESH_WORKERS,
     ):
         import httpx
 
+        if max_refresh_workers <= 0:
+            raise ValueError("max_refresh_workers must be greater than zero")
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self._client = httpx.AsyncClient(
@@ -778,7 +959,16 @@ class AsyncPromptClient:
                 "x-api-key": api_key,
             },
         )
-        self._cache = PromptCache(default_ttl=cache_ttl_seconds)
+        self._cache = PromptCache(
+            default_ttl=cache_ttl_seconds,
+            max_entries=max_cache_entries,
+        )
+        self._refresh_tasks: Set[Any] = set()
+        self._inflight_tasks: Dict[CacheKey, Any] = {}
+        self._max_refresh_workers = max_refresh_workers
+        self._cache_epoch = 0
+        self._closed = False
+        self._transport_closed = False
 
     async def get_prompt(
         self,
@@ -789,6 +979,8 @@ class AsyncPromptClient:
         type: str = "text",
         cache_ttl_seconds: Optional[float] = None,
     ) -> PromptHandle:
+        if self._closed:
+            raise PromptClientClosedError("AsyncPromptClient is closed.")
         if label is not None and version is not None:
             raise ValueError("Cannot specify both label and version.")
 
@@ -796,18 +988,44 @@ class AsyncPromptClient:
         entry = self._cache.get(cache_key)
 
         if entry is not None:
-            if not entry.is_expired():
+            if version is not None or not entry.is_expired():
                 return entry.value
             # Stale — return immediately, refresh in background task
             self._background_refresh(
-                cache_key, name, label=label, version=version, ttl=cache_ttl_seconds
+                cache_key,
+                name,
+                label=label,
+                version=version,
+                ttl=entry.ttl_seconds if cache_ttl_seconds is None else cache_ttl_seconds,
             )
             return entry.value
 
-        # Cold miss — must fetch
-        handle = await self._fetch_prompt(name, label=label, version=version)
-        self._cache.set(cache_key, handle, cache_ttl_seconds)
-        return handle
+        # Concurrent cold misses share one task. Shielding prevents one caller's
+        # cancellation from cancelling the request for every other waiter.
+        import asyncio
+
+        request = self._inflight_tasks.get(cache_key)
+        if request is None:
+            cache_epoch = self._cache_epoch
+
+            async def _fetch_and_cache() -> PromptHandle:
+                handle = await self._fetch_prompt(name, label=label, version=version)
+                if self._closed:
+                    raise PromptClientClosedError("AsyncPromptClient is closed.")
+                if self._cache_epoch == cache_epoch:
+                    self._cache.set(cache_key, handle, cache_ttl_seconds)
+                return handle
+
+            request = asyncio.create_task(_fetch_and_cache())
+            self._inflight_tasks[cache_key] = request
+
+            def _remove_inflight(done: Any) -> None:
+                if self._inflight_tasks.get(cache_key) is done:
+                    self._inflight_tasks.pop(cache_key, None)
+
+            request.add_done_callback(_remove_inflight)
+
+        return await asyncio.shield(request)
 
     async def _fetch_prompt(
         self,
@@ -821,7 +1039,7 @@ class AsyncPromptClient:
             payload = await self._request_json(method="GET", path=path, params={"label": label})
             return PromptHandle(_normalize_prompt_object(payload))
 
-        params: Dict[str, Any] = {"limit": 100, "offset": 0, "name": name}
+        params: Dict[str, Any] = {"limit": 500, "offset": 0, "name": name}
         listing = await self._request_json(method="GET", path="/api/managed-prompts", params=params)
         items = listing.get("items", [])
 
@@ -829,9 +1047,20 @@ class AsyncPromptClient:
             raise PromptNotFoundError(f"No versions found for prompt '{name}'")
 
         if version is not None:
-            for item in items:
-                if item.get("version") == version:
-                    return PromptHandle(_normalize_prompt_object(item))
+            offset = 0
+            while True:
+                for item in items:
+                    if item.get("version") == version:
+                        return PromptHandle(_normalize_prompt_object(item))
+                offset += len(items)
+                total = int(listing.get("total") or offset)
+                if not items or offset >= total:
+                    break
+                params["offset"] = offset
+                listing = await self._request_json(
+                    method="GET", path="/api/managed-prompts", params=params
+                )
+                items = listing.get("items", [])
             raise PromptNotFoundError(f"Prompt '{name}' version {version} not found")
 
         latest = max(items, key=lambda x: x.get("createdAt") or x.get("created_at") or "")
@@ -839,7 +1068,7 @@ class AsyncPromptClient:
 
     def _background_refresh(
         self,
-        cache_key: str,
+        cache_key: CacheKey,
         name: str,
         *,
         label: Optional[str] = None,
@@ -848,21 +1077,33 @@ class AsyncPromptClient:
     ) -> None:
         if not self._cache.mark_refreshing(cache_key):
             return
+        if self._closed or len(self._refresh_tasks) >= self._max_refresh_workers:
+            self._cache.clear_refreshing(cache_key)
+            return
+
+        cache_epoch = self._cache_epoch
 
         import asyncio
 
         async def _refresh():
             try:
                 handle = await self._fetch_prompt(name, label=label, version=version)
-                self._cache.set(cache_key, handle, ttl)
+                if not self._closed and self._cache_epoch == cache_epoch:
+                    self._cache.set(cache_key, handle, ttl)
             except Exception as e:
-                logger.debug(f"Background async prompt refresh failed for '{cache_key}': {e}")
+                logger.debug(
+                    "Background async prompt refresh failed for '%s' (%s)",
+                    cache_key,
+                    type(e).__name__,
+                )
             finally:
                 self._cache.clear_refreshing(cache_key)
 
         try:
             loop = asyncio.get_running_loop()
-            loop.create_task(_refresh())
+            task = loop.create_task(_refresh())
+            self._refresh_tasks.add(task)
+            task.add_done_callback(self._refresh_tasks.discard)
         except RuntimeError:
             self._cache.clear_refreshing(cache_key)
 
@@ -874,6 +1115,8 @@ class AsyncPromptClient:
         params: Optional[Mapping[str, Any]] = None,
         json_body: Optional[Mapping[str, Any]] = None,
     ) -> Dict[str, Any]:
+        if self._closed:
+            raise PromptClientClosedError("AsyncPromptClient is closed.")
         url = f"{self.base_url}{path}"
 
         try:
@@ -901,8 +1144,7 @@ class AsyncPromptClient:
                     pass
 
         if response.status_code >= 400:
-            body = response.text[:400] if response.text else "<empty>"
-            raise PromptApiError(f"{method} {path} failed ({response.status_code}): {body}")
+            raise PromptApiError(f"{method} {path} failed ({response.status_code})")
 
         try:
             payload = response.json()
@@ -915,7 +1157,23 @@ class AsyncPromptClient:
         return dict(payload)
 
     async def close(self):
+        if self._transport_closed:
+            return
+        if not self._closed:
+            self._closed = True
+            self._cache_epoch += 1
+        tasks = list(self._refresh_tasks | set(self._inflight_tasks.values()))
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            import asyncio
+
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._refresh_tasks.clear()
+        self._inflight_tasks.clear()
+        self._cache.clear()
         await self._client.aclose()
+        self._transport_closed = True
 
 
 # ---------------------------------------------------------------------------
@@ -925,11 +1183,8 @@ class AsyncPromptClient:
 _shared_async_client: Optional[AsyncPromptClient] = None
 
 
-def _get_shared_async_client() -> AsyncPromptClient:
+async def _get_shared_async_client() -> AsyncPromptClient:
     global _shared_async_client
-    if _shared_async_client is not None:
-        return _shared_async_client
-
     from ..init import _session_config
 
     api_key = _session_config.get("_api_key") or ""
@@ -939,6 +1194,15 @@ def _get_shared_async_client() -> AsyncPromptClient:
         raise PromptClientError(
             "No API key available. Call neatlogs.init(api_key=...) before using prompt methods."
         )
+
+    if _shared_async_client is not None:
+        if (
+            not _shared_async_client._closed
+            and _shared_async_client.api_key == api_key
+            and _shared_async_client.base_url == base_url.rstrip("/")
+        ):
+            return _shared_async_client
+        await _shared_async_client.close()
 
     _shared_async_client = AsyncPromptClient(base_url=base_url, api_key=api_key)
     return _shared_async_client
@@ -953,6 +1217,29 @@ async def aget_prompt(
     cache_ttl_seconds: Optional[float] = None,
 ) -> PromptHandle:
     """Async version of get_prompt — no thread pool needed."""
-    return await _get_shared_async_client().get_prompt(
+    client = await _get_shared_async_client()
+    return await client.get_prompt(
         name, label=label, version=version, type=type, cache_ttl_seconds=cache_ttl_seconds
     )
+
+
+def _close_shared_prompt_clients() -> None:
+    """Detach prompt clients from a completed default SDK generation."""
+    global _shared_client, _shared_async_client
+    if _shared_client is not None:
+        _shared_client.close()
+        _shared_client = None
+    if _shared_async_client is not None:
+        import asyncio
+
+        async_client = _shared_async_client
+        async_client._closed = True
+        async_client._cache_epoch += 1
+        async_client._cache.clear()
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            asyncio.run(async_client.close())
+        else:
+            loop.create_task(async_client.close())
+        _shared_async_client = None

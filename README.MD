@@ -102,6 +102,23 @@ canonical `ready` reference. Signed URLs and headers never enter telemetry. In-p
 expired, or otherwise incomplete uploads fail explicitly and are exposed through
 `get_delivery_diagnostics()`; an oversized item is never also sent through ordinary ingest.
 
+### Prompt client boundary
+
+Prompt-management requests are product-data API calls, not trace telemetry. The telemetry
+`mask=` callback does not transform prompt content passed to `PromptClient`; apply any desired
+prompt transformation before calling the prompt API. The prompt client authenticates with the
+configured project API key and endpoint independently of the telemetry exporter.
+
+Unpinned and label-based reads use a configurable 60-second cache by default. An expired entry is
+returned immediately while one background refresh runs for that key; a refresh failure leaves the
+stale entry available for the next retry. Explicitly versioned reads stay pinned to that immutable
+version for the lifetime of the client. Each client retains at most 100 prompt selectors and runs
+at most four background refreshes concurrently. Call `PromptClient.close()` when an explicitly
+constructed client is no longer needed. `neatlogs.shutdown()` closes the module-level prompt
+clients created from `init()` so a later SDK generation cannot reuse an earlier project's key or
+cache. Prompt API failures do not flush, stop, or reconfigure the telemetry provider, and API
+response bodies are not copied into SDK error messages.
+
 ---
 
 ## Integrate into your codebase (recommended)

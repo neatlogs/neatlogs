@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import re
 import threading
 import time as _time
@@ -46,6 +47,12 @@ class _CacheEntry:
 
     def is_expired(self) -> bool:
         return (_time.monotonic() - self.fetched_at) >= self.ttl_seconds
+
+
+@dataclass
+class _SyncFetchFlight:
+    event: threading.Event = field(default_factory=threading.Event)
+    error: Optional[BaseException] = None
 
 
 class PromptCache:
@@ -206,6 +213,8 @@ class PromptClient:
         self.api_key = api_key
         self._session = session or requests.Session()
         self._cache = PromptCache(default_ttl=cache_ttl_seconds)
+        self._cold_fetch_lock = threading.Lock()
+        self._cold_fetches: Dict[str, _SyncFetchFlight] = {}
 
     def get_prompt(
         self,
@@ -246,10 +255,55 @@ class PromptClient:
             )
             return entry.value
 
-        # Cold miss — must fetch synchronously
-        handle = self._fetch_prompt(name, label=label, version=version)
-        self._cache.set(cache_key, handle, cache_ttl_seconds)
-        return handle
+        return self._coalesced_cold_fetch(
+            cache_key,
+            name,
+            label=label,
+            version=version,
+            ttl=cache_ttl_seconds,
+        )
+
+    def _coalesced_cold_fetch(
+        self,
+        cache_key: str,
+        name: str,
+        *,
+        label: Optional[str],
+        version: Optional[int],
+        ttl: Optional[float],
+    ) -> PromptHandle:
+        """Let one thread perform a cold network fetch for each cache key."""
+        with self._cold_fetch_lock:
+            cached = self._cache.get(cache_key)
+            if cached is not None:
+                return cached.value
+            flight = self._cold_fetches.get(cache_key)
+            leader = flight is None
+            if flight is None:
+                flight = _SyncFetchFlight()
+                self._cold_fetches[cache_key] = flight
+
+        if not leader:
+            flight.event.wait()
+            if flight.error is not None:
+                raise flight.error
+            cached = self._cache.get(cache_key)
+            if cached is None:
+                raise PromptClientError("Coalesced prompt fetch completed without a result")
+            return cached.value
+
+        try:
+            handle = self._fetch_prompt(name, label=label, version=version)
+            self._cache.set(cache_key, handle, ttl)
+            return handle
+        except BaseException as error:
+            flight.error = error
+            raise
+        finally:
+            flight.event.set()
+            with self._cold_fetch_lock:
+                if self._cold_fetches.get(cache_key) is flight:
+                    self._cold_fetches.pop(cache_key, None)
 
     def _fetch_prompt(
         self,
@@ -259,23 +313,16 @@ class PromptClient:
         version: Optional[int] = None,
     ) -> PromptHandle:
         """Fetch prompt from backend (no cache involved)."""
+        path = f"/api/v1/prompts/{quote(name, safe='')}/fetch"
+        params: Dict[str, Any]
         if label is not None:
-            return PromptHandle(self.fetch_prompt(name, label=label))
-
-        listing = self.list_prompts(name=name)
-        items = listing.get("items", [])
-
-        if not items:
-            raise PromptNotFoundError(f"No versions found for prompt '{name}'")
-
-        if version is not None:
-            for item in items:
-                if item.get("version") == version:
-                    return PromptHandle(_normalize_prompt_object(item))
-            raise PromptNotFoundError(f"Prompt '{name}' version {version} not found")
-
-        latest = max(items, key=lambda x: x.get("createdAt") or x.get("created_at") or "")
-        return PromptHandle(_normalize_prompt_object(latest))
+            params = {"label": label}
+        elif version is not None:
+            params = {"version": version}
+        else:
+            params = {"latest": "true"}
+        payload = self._request_json(method="GET", path=path, params=params)
+        return PromptHandle(_normalize_prompt_object(payload))
 
     def _background_refresh(
         self,
@@ -399,15 +446,7 @@ class PromptClient:
                 "new_labels is required. Specify at least one label, e.g. new_labels=['production']."
             )
 
-        listing = self.list_prompts(name=name)
-        prompt_id: Optional[str] = None
-        for item in listing.get("items", []):
-            if item.get("version") == version:
-                prompt_id = item.get("id")
-                break
-
-        if not prompt_id:
-            raise PromptNotFoundError(f"Prompt '{name}' version {version} not found")
+        prompt_id = self._fetch_prompt(name, version=version).id
 
         path = f"/api/managed-prompts/{quote(prompt_id, safe='')}/labels"
         last_response: Dict[str, Any] = {}
@@ -424,15 +463,7 @@ class PromptClient:
         """
         Soft-delete a specific prompt version via DELETE /api/managed-prompts/:promptId.
         """
-        listing = self.list_prompts(name=name)
-        prompt_id: Optional[str] = None
-        for item in listing.get("items", []):
-            if item.get("version") == version:
-                prompt_id = item.get("id")
-                break
-
-        if not prompt_id:
-            raise PromptNotFoundError(f"Prompt '{name}' version {version} not found")
+        prompt_id = self._fetch_prompt(name, version=version).id
 
         path = f"/api/managed-prompts/{quote(prompt_id, safe='')}"
         return self._request_json(method="DELETE", path=path)
@@ -446,15 +477,7 @@ class PromptClient:
         """
         Remove a tag from a prompt version via DELETE /api/managed-prompts/:promptId/tags.
         """
-        listing = self.list_prompts(name=name)
-        prompt_id: Optional[str] = None
-        for item in listing.get("items", []):
-            if item.get("version") == version:
-                prompt_id = item.get("id")
-                break
-
-        if not prompt_id:
-            raise PromptNotFoundError(f"Prompt '{name}' version {version} not found")
+        prompt_id = self._fetch_prompt(name, version=version).id
 
         path = f"/api/managed-prompts/{quote(prompt_id, safe='')}/tags"
         return self._request_json(method="DELETE", path=path, json_body={"tag": tag})
@@ -779,6 +802,7 @@ class AsyncPromptClient:
             },
         )
         self._cache = PromptCache(default_ttl=cache_ttl_seconds)
+        self._cold_fetches: Dict[str, asyncio.Task[PromptHandle]] = {}
 
     async def get_prompt(
         self,
@@ -804,9 +828,37 @@ class AsyncPromptClient:
             )
             return entry.value
 
-        # Cold miss — must fetch
+        task = self._cold_fetches.get(cache_key)
+        if task is None:
+            task = asyncio.create_task(
+                self._fetch_and_cache(
+                    cache_key,
+                    name,
+                    label=label,
+                    version=version,
+                    ttl=cache_ttl_seconds,
+                )
+            )
+            self._cold_fetches[cache_key] = task
+
+            def clear_flight(completed: asyncio.Task[PromptHandle]) -> None:
+                if self._cold_fetches.get(cache_key) is completed:
+                    self._cold_fetches.pop(cache_key, None)
+
+            task.add_done_callback(clear_flight)
+        return await asyncio.shield(task)
+
+    async def _fetch_and_cache(
+        self,
+        cache_key: str,
+        name: str,
+        *,
+        label: Optional[str],
+        version: Optional[int],
+        ttl: Optional[float],
+    ) -> PromptHandle:
         handle = await self._fetch_prompt(name, label=label, version=version)
-        self._cache.set(cache_key, handle, cache_ttl_seconds)
+        self._cache.set(cache_key, handle, ttl)
         return handle
 
     async def _fetch_prompt(
@@ -816,26 +868,16 @@ class AsyncPromptClient:
         label: Optional[str] = None,
         version: Optional[int] = None,
     ) -> PromptHandle:
+        path = f"/api/v1/prompts/{quote(name, safe='')}/fetch"
+        params: Dict[str, Any]
         if label is not None:
-            path = f"/api/v1/prompts/{quote(name, safe='')}/fetch"
-            payload = await self._request_json(method="GET", path=path, params={"label": label})
-            return PromptHandle(_normalize_prompt_object(payload))
-
-        params: Dict[str, Any] = {"limit": 100, "offset": 0, "name": name}
-        listing = await self._request_json(method="GET", path="/api/managed-prompts", params=params)
-        items = listing.get("items", [])
-
-        if not items:
-            raise PromptNotFoundError(f"No versions found for prompt '{name}'")
-
-        if version is not None:
-            for item in items:
-                if item.get("version") == version:
-                    return PromptHandle(_normalize_prompt_object(item))
-            raise PromptNotFoundError(f"Prompt '{name}' version {version} not found")
-
-        latest = max(items, key=lambda x: x.get("createdAt") or x.get("created_at") or "")
-        return PromptHandle(_normalize_prompt_object(latest))
+            params = {"label": label}
+        elif version is not None:
+            params = {"version": version}
+        else:
+            params = {"latest": "true"}
+        payload = await self._request_json(method="GET", path=path, params=params)
+        return PromptHandle(_normalize_prompt_object(payload))
 
     def _background_refresh(
         self,
@@ -848,8 +890,6 @@ class AsyncPromptClient:
     ) -> None:
         if not self._cache.mark_refreshing(cache_key):
             return
-
-        import asyncio
 
         async def _refresh():
             try:

@@ -27,6 +27,8 @@ from ._wrap_utils import (
     is_suppressed,
     serialize,
 )
+from .core.choice_accumulator import ChoiceAccumulator, GoogleStreamFinalizer
+from .core.media import set_media_attributes
 
 _PATCHED = False
 _ORIG_INIT = None
@@ -127,7 +129,7 @@ def _patch_models(models: Any) -> None:
             _set_input_attributes(span, contents, kwargs)
 
             stream = orig_stream(*args, **kwargs)
-            return SyncStreamWrapper(stream, span, _finalize_stream)
+            return SyncStreamWrapper(stream, span, GoogleStreamFinalizer())
 
         models.generate_content_stream = patched_generate_content_stream
 
@@ -215,7 +217,7 @@ def _patch_async_models(models: Any) -> None:
                 span.end()
                 raise
 
-            return AsyncStreamWrapper(stream, span, _finalize_stream)
+            return AsyncStreamWrapper(stream, span, GoogleStreamFinalizer())
 
         models.generate_content_stream = patched_generate_content_stream
 
@@ -303,6 +305,9 @@ def _set_input_attributes(span: Any, contents: Any, kwargs: dict) -> None:
                 span.set_attribute(
                     f"neatlogs.llm.input_messages.{idx}.content", serialize(system_instruction)
                 )
+                set_media_attributes(
+                    span, f"neatlogs.llm.input_messages.{idx}", system_instruction, "input"
+                )
             idx += 1
 
     # Contents — a single string, or a list of turns (str / dict / typed Content).
@@ -314,12 +319,14 @@ def _set_input_attributes(span: Any, contents: Any, kwargs: dict) -> None:
             role, text = _normalize_content_item(item)
             span.set_attribute(f"neatlogs.llm.input_messages.{idx}.role", role)
             span.set_attribute(f"neatlogs.llm.input_messages.{idx}.content", text)
+            set_media_attributes(span, f"neatlogs.llm.input_messages.{idx}", item, "input")
             idx += 1
     else:
         # A single typed Content (or anything else) — normalize it too.
         role, text = _normalize_content_item(contents)
         span.set_attribute(f"neatlogs.llm.input_messages.{idx}.role", role)
         span.set_attribute(f"neatlogs.llm.input_messages.{idx}.content", text)
+        set_media_attributes(span, f"neatlogs.llm.input_messages.{idx}", contents, "input")
 
     # Tools
     tools = None
@@ -359,43 +366,9 @@ def _set_input_attributes(span: Any, contents: Any, kwargs: dict) -> None:
 
 def _finalize_response(span: Any, response: Any, duration_ms: float) -> None:
     """Extract attributes from a non-streaming GenerateContentResponse."""
-    candidates = getattr(response, "candidates", None) or []
-    text_parts: List[str] = []
-    tool_call_idx = 0
-
-    for candidate in candidates:
-        content = getattr(candidate, "content", None)
-        if not content:
-            continue
-        parts = getattr(content, "parts", None) or []
-        for part in parts:
-            if getattr(part, "text", None) and not getattr(part, "thought", False):
-                text_parts.append(part.text)
-            elif getattr(part, "thought", False) and getattr(part, "text", None):
-                span.set_attribute("neatlogs.llm.output_messages.0.thinking", part.text)
-            elif getattr(part, "function_call", None):
-                fc = part.function_call
-                span.set_attribute(
-                    f"neatlogs.llm.tool_calls.{tool_call_idx}.name", getattr(fc, "name", "")
-                )
-                args = getattr(fc, "args", None)
-                span.set_attribute(
-                    f"neatlogs.llm.tool_calls.{tool_call_idx}.arguments",
-                    serialize(args) if args else "{}",
-                )
-                tool_call_idx += 1
-
-        finish_reason = getattr(candidate, "finish_reason", None)
-        if finish_reason:
-            span.set_attribute("neatlogs.llm.finish_reason", str(finish_reason))
-
-    if text_parts:
-        span.set_attribute("neatlogs.llm.output_messages.0.role", "assistant")
-        span.set_attribute("neatlogs.llm.output_messages.0.content", "".join(text_parts))
-
-    usage = getattr(response, "usage_metadata", None)
-    if usage:
-        _set_usage_attributes(span, usage)
+    accumulator = ChoiceAccumulator()
+    accumulator.add_google_response(response)
+    accumulator.apply(span)
 
     span.set_attribute("neatlogs.llm.metrics.duration_ms", round(duration_ms, 3))
     span.set_status(StatusCode.OK)
@@ -669,7 +642,7 @@ def _patch_chat_classes() -> None:
                     return orig_send_stream(self, message, *args, **kwargs)
                 span = _start_chat_span(self, message, stream=True)
                 stream = orig_send_stream(self, message, *args, **kwargs)
-                return SyncStreamWrapper(stream, span, _finalize_stream)
+                return SyncStreamWrapper(stream, span, GoogleStreamFinalizer())
 
             Chat.send_message_stream = patched_send_stream
 
@@ -714,7 +687,7 @@ def _patch_chat_classes() -> None:
                 except Exception as e:
                     _err(span, e)
                     raise
-                return AsyncStreamWrapper(stream, span, _finalize_stream)
+                return AsyncStreamWrapper(stream, span, GoogleStreamFinalizer())
 
             AsyncChat.send_message_stream = patched_asend_stream
 
@@ -785,6 +758,9 @@ def _unpatch_google_genai_module() -> None:
     _ORIG_INIT = None
 
 
-_patch_google_genai_module()
-
-from google import genai  # noqa: E402
+try:  # noqa: E402 - optional import-replacement surface
+    from google import genai  # type: ignore  # noqa: E402
+except ImportError:  # pragma: no cover - exercised by clean-collection CI
+    genai = None
+else:
+    _patch_google_genai_module()

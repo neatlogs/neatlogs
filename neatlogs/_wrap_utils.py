@@ -39,6 +39,9 @@ _bootstrap_warned = False
 # Single source of truth for the private provider Neatlogs emits into. Every
 # Neatlogs tracer resolves from it; the process-global provider is never adopted.
 _neatlogs_provider: Optional[TracerProvider] = None
+_bootstrap_provider: Optional[TracerProvider] = None
+_bootstrap_upload_authority: Any = None
+_bootstrap_media_store: Any = None
 
 # Optional secondary Client selected only for the current async/thread context.
 # The process-wide provider configured by neatlogs.init() remains the default.
@@ -66,6 +69,17 @@ def get_neatlogs_provider() -> Optional[TracerProvider]:
     if client is not None:
         return client.tracer_provider
     return _neatlogs_provider
+
+
+def take_bootstrap_resources() -> tuple[Optional[TracerProvider], Any, Any]:
+    """Detach resources owned by wrapper-only auto bootstrap for bounded shutdown."""
+
+    global _bootstrap_provider, _bootstrap_upload_authority, _bootstrap_media_store
+    resources = (_bootstrap_provider, _bootstrap_upload_authority, _bootstrap_media_store)
+    _bootstrap_provider = None
+    _bootstrap_upload_authority = None
+    _bootstrap_media_store = None
+    return resources
 
 
 def get_active_client() -> Optional[Any]:
@@ -436,6 +450,7 @@ def neatlogs_span(scope: str, name: str, **start_kwargs: Any) -> "_NeatlogsSpanC
 
 
 def _bootstrap_from_env(api_key: str) -> None:
+    global _bootstrap_provider, _bootstrap_upload_authority, _bootstrap_media_store
     from opentelemetry.exporter.otlp.proto.http import Compression
     from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
     from opentelemetry.sdk.resources import SERVICE_NAME, Resource
@@ -443,7 +458,15 @@ def _bootstrap_from_env(api_key: str) -> None:
 
     from .core.byte_limited_exporter import ByteLimitedSpanExporter
     from .core.delivery import DeliveryDiagnostics, ObservableBatchSpanProcessor
+    from .core.masking_exporter import MaskingSpanExporter
+    from .core.media import PendingMediaStore, set_default_media_store
+    from .core.media_exporter import TypedMediaSpanExporter
     from .core.transport import build_otlp_session
+    from .core.upload_authority import (
+        AuthenticatedUploadAuthority,
+        DisabledUploadAuthority,
+        uploads_enabled,
+    )
 
     endpoint = _wrapper_config.get("endpoint") or os.environ.get(
         "NEATLOGS_ENDPOINT", DEFAULT_INGEST_ENDPOINT
@@ -472,12 +495,39 @@ def _bootstrap_from_env(api_key: str) -> None:
         session=build_otlp_session(),
     )
     diagnostics = DeliveryDiagnostics()
+    parsed = urlparse(endpoint)
+    base_url = f"{parsed.scheme}://{parsed.netloc}"
+    authority = DisabledUploadAuthority()
+    media_store = None
+    if uploads_enabled(None, os.environ.get("NEATLOGS_UPLOADS_ENABLED")):
+        authority = AuthenticatedUploadAuthority(base_url=base_url, api_key=api_key)
+        media_store = PendingMediaStore(max_bytes=authority.max_upload_bytes)
+    set_default_media_store(media_store)
+    limited_exporter = ByteLimitedSpanExporter(
+        exporter,
+        diagnostics=diagnostics,
+        upload_authority=authority,
+    )
+    limited_exporter = TypedMediaSpanExporter(
+        limited_exporter,
+        authority,
+        media_store,
+        diagnostics=diagnostics,
+    )
     provider.add_span_processor(
         ObservableBatchSpanProcessor(
-            ByteLimitedSpanExporter(exporter, diagnostics=diagnostics),
+            MaskingSpanExporter(
+                limited_exporter,
+                mask=None,
+                diagnostics=diagnostics,
+                media_store=media_store,
+            ),
             diagnostics=diagnostics,
         )
     )
+    _bootstrap_provider = provider
+    _bootstrap_upload_authority = authority
+    _bootstrap_media_store = media_store
     set_neatlogs_provider(provider)
     logger.debug(f"neatlogs wrapper: auto-bootstrapped private TracerProvider → {endpoint}")
 
@@ -882,8 +932,11 @@ def serialize(obj: Any, max_length: Optional[int] = DEFAULT_MAX_CAPTURE_VALUE_BY
 
     try:
         s = json.dumps(sanitize_media_payload(obj), default=str, ensure_ascii=False)
-    except (TypeError, ValueError):
-        s = str(obj)
+    except Exception:
+        # Provider objects are untrusted instrumentation inputs: mapping hooks,
+        # serializers, and ``__str__`` may all raise or expose unsanitized media.
+        # A fixed marker preserves provider behavior and fails closed.
+        s = '{"neatlogs_capture_unavailable":"serialization_error"}'
     return s if max_length is None else bound_text(s, max_length)
 
 

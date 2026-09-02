@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gzip
 import hashlib
 import logging
 from collections.abc import Sequence
@@ -13,10 +14,13 @@ from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
 from .capture import limit_span_capture
 from .delivery import DeliveryDiagnostics
 from .upload_authority import (
+    DEFAULT_MAX_OVERFLOW_EXPANDED_BYTES,
+    DEFAULT_MAX_OVERFLOW_UPLOAD_BYTES,
     DisabledUploadAuthority,
     OverflowExportReceipt,
     OverflowPayload,
     UploadAuthority,
+    UploadError,
 )
 
 DEFAULT_MAX_EXPORT_BYTES = 4 * 1024 * 1024
@@ -29,9 +33,8 @@ class ByteLimitedSpanExporter(SpanExporter):
     Encoding each span as a one-span OTLP request repeats resource and scope
     framing that a combined request deduplicates. Summing those sizes is
     therefore a safe upper bound without repeatedly encoding every growing
-    candidate batch. A single oversized span crosses an injectable upload
-    authority boundary; the production default rejects it explicitly until the
-    authenticated backend Phase 8 contract is deployed.
+    candidate batch. A single oversized span crosses the upload-authority
+    boundary when explicitly enabled; the default-off path rejects it.
     """
 
     def __init__(
@@ -61,7 +64,16 @@ class ByteLimitedSpanExporter(SpanExporter):
     def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
         bounded_spans: list[ReadableSpan] = []
         for span in spans:
-            bounded, truncations = limit_span_capture(span)
+            # Only a span that must cross the overflow boundary retains its full,
+            # already-masked payload. Ordinary spans keep the Phase 3 per-value
+            # and collection limits even when uploads are enabled.
+            if (
+                self._upload_authority.available
+                and self._encoded_upper_bound(span) > self._max_export_bytes
+            ):
+                bounded, truncations = span, 0
+            else:
+                bounded, truncations = limit_span_capture(span)
             bounded_spans.append(bounded)
             if truncations and self._diagnostics is not None:
                 self._diagnostics.record_capture_truncation("span", truncations)
@@ -78,18 +90,28 @@ class ByteLimitedSpanExporter(SpanExporter):
                     actions.append(("batch", current))
                     current = []
                     current_bytes = 0
-                payload = encode_spans((span,)).SerializeToString()
-                actions.append(
-                    (
-                        "overflow",
-                        OverflowPayload(
-                            content=payload,
-                            sha256=hashlib.sha256(payload).hexdigest(),
-                            byte_length=len(payload),
-                            signal="span",
-                        ),
+                if self._upload_authority.available and span_bytes > getattr(
+                    self._upload_authority,
+                    "max_overflow_expanded_bytes",
+                    DEFAULT_MAX_OVERFLOW_EXPANDED_BYTES,
+                ):
+                    actions.append(
+                        (
+                            "overflow_too_large",
+                            (
+                                span_bytes,
+                                getattr(
+                                    self._upload_authority,
+                                    "max_overflow_expanded_bytes",
+                                    DEFAULT_MAX_OVERFLOW_EXPANDED_BYTES,
+                                ),
+                            ),
+                        )
                     )
-                )
+                    continue
+                # Defer serialization/compression until execution so a full
+                # batch cannot retain hundreds of 20 MiB compressed payloads.
+                actions.append(("overflow_span", (span, span_bytes)))
                 continue
             if current and current_bytes + span_bytes > self._max_export_bytes:
                 actions.append(("batch", current))
@@ -102,8 +124,21 @@ class ByteLimitedSpanExporter(SpanExporter):
             actions.append(("batch", current))
 
         for index, (action_type, value) in enumerate(actions):
-            if action_type == "overflow":
-                candidate = value
+            if action_type == "overflow_too_large":
+                rejected_bytes, rejected_limit = value
+                overflow_failed = True
+                if self._diagnostics is not None:
+                    self._diagnostics.record_upload_failure("prepare:invalid_byte_length")
+                    self._diagnostics.record_overflow("span", "failures")
+                    self._diagnostics.record_export_failure("span", 1)
+                logger.error(
+                    "[neatlogs] oversized span rejected: bytes=%d upload_limit=%d",
+                    rejected_bytes,
+                    rejected_limit,
+                )
+                continue
+            if action_type == "overflow_span":
+                overflow_span, expanded_bytes = value
                 if not self._upload_authority.available:
                     overflow_failed = True
                     if self._diagnostics is not None:
@@ -112,14 +147,50 @@ class ByteLimitedSpanExporter(SpanExporter):
                         self._diagnostics.record_export_failure("span", 1)
                     logger.error(
                         "[neatlogs] oversized span rejected: bytes=%d limit=%d reason=%s",
-                        candidate.byte_length,
+                        expanded_bytes,
                         self._max_export_bytes,
                         self._upload_authority.unavailable_reason,
                     )
                     continue
+                expanded_payload = encode_spans((overflow_span,)).SerializeToString()
+                compressed = gzip.compress(expanded_payload, mtime=0)
+                max_compressed = getattr(
+                    self._upload_authority,
+                    "max_overflow_bytes",
+                    DEFAULT_MAX_OVERFLOW_UPLOAD_BYTES,
+                )
+                if len(compressed) > max_compressed:
+                    overflow_failed = True
+                    if self._diagnostics is not None:
+                        self._diagnostics.record_upload_failure("prepare:invalid_byte_length")
+                        self._diagnostics.record_overflow("span", "failures")
+                        self._diagnostics.record_export_failure("span", 1)
+                    logger.error(
+                        "[neatlogs] oversized span rejected: bytes=%d upload_limit=%d",
+                        len(compressed),
+                        max_compressed,
+                    )
+                    continue
+                candidate = OverflowPayload(
+                    content=compressed,
+                    sha256=hashlib.sha256(compressed).hexdigest(),
+                    byte_length=len(compressed),
+                    signal="span",
+                    content_encoding="gzip",
+                )
                 try:
                     result = self._upload_authority.export_overflow(candidate)
+                except UploadError as exc:
+                    if self._diagnostics is not None:
+                        self._diagnostics.record_upload_failure(f"{exc.stage}:{exc.reason_code}")
+                    logger.error(
+                        "[neatlogs] oversized span upload failed (%s)",
+                        type(exc).__name__,
+                    )
+                    result = SpanExportResult.FAILURE
                 except Exception as exc:
+                    if self._diagnostics is not None:
+                        self._diagnostics.record_upload_failure("unexpected_error")
                     logger.error(
                         "[neatlogs] oversized span upload failed (%s)",
                         type(exc).__name__,

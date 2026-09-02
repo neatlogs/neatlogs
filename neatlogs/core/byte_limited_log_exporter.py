@@ -26,6 +26,7 @@ from .upload_authority import (
     OverflowExportReceipt,
     OverflowPayload,
     UploadAuthority,
+    UploadError,
 )
 
 logger = logging.getLogger(__name__)
@@ -61,6 +62,8 @@ class ByteLimitedLogExporter(LogRecordExporter):
     def export(self, batch: Sequence[ReadableLogRecord]) -> LogRecordExportResult:
         bounded = []
         for item in batch:
+            # The v1 upload contract only accepts OTLP trace envelopes. Preserve
+            # the Phase 3 bounded log path even when trace/media uploads are on.
             clone, truncations = limit_log_capture(item)
             bounded.append(clone)
             if truncations and self._diagnostics is not None:
@@ -118,7 +121,17 @@ class ByteLimitedLogExporter(LogRecordExporter):
                 try:
                     result = self._upload_authority.export_overflow(candidate)
                     succeeded = isinstance(result, OverflowExportReceipt) and result.complete
+                except UploadError as exc:
+                    if self._diagnostics is not None:
+                        self._diagnostics.record_upload_failure(f"{exc.stage}:{exc.reason_code}")
+                    logger.error(
+                        "[neatlogs] oversized log upload failed (%s)",
+                        type(exc).__name__,
+                    )
+                    succeeded = False
                 except Exception as exc:
+                    if self._diagnostics is not None:
+                        self._diagnostics.record_upload_failure("unexpected_error")
                     logger.error(
                         "[neatlogs] oversized log upload failed (%s)",
                         type(exc).__name__,

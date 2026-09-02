@@ -10,9 +10,10 @@ from typing import Any
 from opentelemetry.trace import StatusCode
 
 from .capture import BoundedTextAccumulator
-from .media import media_references, sanitize_media_payload
+from .media import current_media_store, media_references, sanitize_media_payload
 
 MAX_SEMANTIC_STREAM_EVENTS = 128
+MAX_MEDIA_RECORDS_PER_CHOICE = 32
 
 
 def _get(value: Any, name: str, default=None):
@@ -51,6 +52,7 @@ class _Choice:
     content: BoundedTextAccumulator = field(default_factory=BoundedTextAccumulator)
     reasoning: BoundedTextAccumulator = field(default_factory=BoundedTextAccumulator)
     media_records: list[dict[str, Any]] = field(default_factory=list)
+    media_records_dropped: int = 0
     finish_reason: str | None = None
     tool_calls: dict[int, _ToolCall] = field(default_factory=dict)
 
@@ -83,7 +85,7 @@ class ChoiceAccumulator:
             if content is not None:
                 choice.content.append(_string(content))
                 if not isinstance(content, str):
-                    choice.media_records.extend(media_references(content, "output"))
+                    self._add_media(choice, media_references(content, "output"))
             reasoning = _get(message, "reasoning_content", None)
             if reasoning is not None:
                 choice.reasoning.append(_string(reasoning))
@@ -91,6 +93,112 @@ class ChoiceAccumulator:
             finish_reason = _get(value, "finish_reason", None)
             if finish_reason is not None:
                 choice.finish_reason = str(finish_reason)
+
+    def add_single_response(
+        self,
+        content: Any,
+        *,
+        role: str = "assistant",
+        finish_reason: str | None = None,
+        tool_calls: Any = None,
+        usage: Any = None,
+        model: str | None = None,
+        response_id: str | None = None,
+    ) -> None:
+        """Normalize providers/callbacks that expose one flattened completion."""
+
+        self.add_response(
+            {
+                "id": response_id,
+                "model": model,
+                "usage": usage,
+                "choices": [
+                    {
+                        "index": 0,
+                        "finish_reason": finish_reason,
+                        "message": {
+                            "role": role,
+                            "content": content,
+                            "tool_calls": tool_calls or [],
+                        },
+                    }
+                ],
+            }
+        )
+
+    def add_google_response(self, response: Any) -> None:
+        """Normalize every Gemini candidate without flattening candidate zero."""
+
+        self._capture_google_envelope(response)
+        for position, candidate in enumerate(_get(response, "candidates", None) or []):
+            index = _get(candidate, "index", position)
+            index = index if isinstance(index, int) else position
+            choice = self._choice(index)
+            content = _get(candidate, "content", None)
+            if content is not None:
+                role = _get(content, "role", None)
+                if role:
+                    choice.role = "assistant" if str(role) == "model" else str(role)
+                tool_index = 0
+                for part in _get(content, "parts", None) or []:
+                    text = _get(part, "text", None)
+                    if text is not None and _get(part, "thought", False):
+                        choice.reasoning.append(str(text))
+                    elif text is not None:
+                        choice.content.append(str(text))
+                    function_call = _get(part, "function_call", None)
+                    if function_call is not None:
+                        tool = choice.tool_calls.setdefault(tool_index, _ToolCall(type="function"))
+                        call_id = _get(function_call, "id", None)
+                        name = _get(function_call, "name", None)
+                        arguments = _get(function_call, "args", None)
+                        if call_id:
+                            tool.id = str(call_id)
+                        if name:
+                            tool.name = str(name)
+                        if arguments is not None:
+                            tool.arguments.append(_string(arguments))
+                        tool_index += 1
+                    inline_data = _get(part, "inline_data", None) or _get(part, "file_data", None)
+                    if inline_data is not None:
+                        self._add_media(choice, media_references(inline_data, "output"))
+            finish_reason = _get(candidate, "finish_reason", None)
+            if finish_reason is not None:
+                choice.finish_reason = str(finish_reason)
+
+    def add_google_chunk(self, span: Any, chunk: Any) -> None:
+        chunk_index = self.chunk_count
+        self.chunk_count += 1
+        before = {
+            index: (
+                choice.content.original_bytes,
+                choice.reasoning.original_bytes,
+                len(choice.tool_calls),
+            )
+            for index, choice in self.choices.items()
+        }
+        self.add_google_response(chunk)
+        summary = []
+        for index in sorted(self.choices):
+            choice = self.choices[index]
+            previous = before.get(index, (0, 0, 0))
+            summary.append(
+                {
+                    "choice_index": index,
+                    "content_bytes": choice.content.original_bytes - previous[0],
+                    "reasoning_bytes": choice.reasoning.original_bytes - previous[1],
+                    "tool_calls": len(choice.tool_calls) - previous[2],
+                    "finish_reason": choice.finish_reason,
+                }
+            )
+        if chunk_index < MAX_SEMANTIC_STREAM_EVENTS and summary:
+            span.add_event(
+                "neatlogs.stream.chunk",
+                {
+                    "neatlogs.stream.chunk.index": chunk_index,
+                    "neatlogs.stream.chunk.summary": _string({"choices": summary}),
+                },
+            )
 
     def add_chunk(self, span: Any, chunk: Any) -> None:
         chunk_index = self.chunk_count
@@ -121,7 +229,7 @@ class ChoiceAccumulator:
                 choice.content.append(content)
             raw_content = _get(delta, "content", None)
             if raw_content is not None and not isinstance(raw_content, str):
-                choice.media_records.extend(media_references(raw_content, "output"))
+                self._add_media(choice, media_references(raw_content, "output"))
             if reasoning:
                 choice.reasoning.append(reasoning)
             tools = _get(delta, "tool_calls", None) or []
@@ -169,6 +277,8 @@ class ChoiceAccumulator:
             for media_index, record in enumerate(unique_media.values()):
                 for key, item in record.items():
                     span.set_attribute(f"{prefix}.media.{media_index}.{key}", item)
+            if choice.media_records_dropped:
+                span.set_attribute(f"{prefix}.media_dropped_count", choice.media_records_dropped)
             if choice.finish_reason is not None:
                 span.set_attribute(
                     f"neatlogs.llm.choices.{choice_index}.finish_reason",
@@ -214,6 +324,30 @@ class ChoiceAccumulator:
                     self.chunk_count - MAX_SEMANTIC_STREAM_EVENTS,
                 )
 
+    @staticmethod
+    def _add_media(choice: _Choice, records: list[dict[str, Any]]) -> None:
+        identities = {
+            (record.get("sha256"), record.get("reference"), record.get("type"))
+            for record in choice.media_records
+        }
+        for record in records:
+            identity = (record.get("sha256"), record.get("reference"), record.get("type"))
+            if identity in identities:
+                token = record.get("upload_token")
+                store = current_media_store()
+                if isinstance(token, str) and store is not None:
+                    store.release(token)
+                continue
+            if len(choice.media_records) >= MAX_MEDIA_RECORDS_PER_CHOICE:
+                choice.media_records_dropped += 1
+                token = record.get("upload_token")
+                store = current_media_store()
+                if isinstance(token, str) and store is not None:
+                    store.release(token)
+                continue
+            choice.media_records.append(record)
+            identities.add(identity)
+
     def _choice(self, index: int) -> _Choice:
         return self.choices.setdefault(index, _Choice())
 
@@ -246,6 +380,27 @@ class ChoiceAccumulator:
         if model:
             self.model = str(model)
         response_id = _get(value, "id", None)
+        if response_id:
+            self.response_id = str(response_id)
+
+    def _capture_google_envelope(self, value: Any) -> None:
+        usage = _get(value, "usage_metadata", None)
+        if usage is not None:
+            self.usage = {
+                "prompt_tokens": _get(usage, "prompt_token_count", None),
+                "completion_tokens": _get(usage, "candidates_token_count", None),
+                "total_tokens": _get(usage, "total_token_count", None),
+                "prompt_tokens_details": {
+                    "cached_tokens": _get(usage, "cached_content_token_count", None)
+                },
+                "completion_tokens_details": {
+                    "reasoning_tokens": _get(usage, "thoughts_token_count", None)
+                },
+            }
+        model = _get(value, "model_version", None) or _get(value, "model", None)
+        if model:
+            self.model = str(model)
+        response_id = _get(value, "response_id", None)
         if response_id:
             self.response_id = str(response_id)
 
@@ -321,3 +476,10 @@ class OpenAIStreamFinalizer:
             if isinstance(error, Exception):
                 span.record_exception(error)
         span.end()
+
+
+class GoogleStreamFinalizer(OpenAIStreamFinalizer):
+    """Incremental Gemini finalizer using the same canonical choice state."""
+
+    def on_chunk(self, span: Any, chunk: Any) -> None:
+        self.accumulator.add_google_chunk(span, chunk)

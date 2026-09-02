@@ -34,6 +34,8 @@ from ._wrap_utils import (
     is_suppressed,
     serialize,
 )
+from .core.choice_accumulator import ChoiceAccumulator, OpenAIStreamFinalizer
+from .core.media import set_media_attributes
 
 _PROVIDER = "openrouter"
 
@@ -153,6 +155,7 @@ def _set_chat_input(span: Any, kwargs: dict) -> None:
             f"neatlogs.llm.input_messages.{i}.content",
             content if isinstance(content, str) else serialize(content),
         )
+        set_media_attributes(span, f"neatlogs.llm.input_messages.{i}", content, "input")
         tool_call_id = _get(msg, "tool_call_id", None)
         if tool_call_id:
             span.set_attribute(f"neatlogs.llm.input_messages.{i}.tool_call_id", tool_call_id)
@@ -240,7 +243,7 @@ def _patch_chat(chat: Any) -> None:
                 _err(span, e)
                 raise
             if is_stream:
-                return SyncStreamWrapper(response, span, _finalize_chat_stream)
+                return SyncStreamWrapper(response, span, OpenAIStreamFinalizer())
             _finalize_chat(span, response, (time.perf_counter() - start) * 1000)
             return response
 
@@ -260,7 +263,7 @@ def _patch_chat(chat: Any) -> None:
                 _err(span, e)
                 raise
             if is_stream:
-                return AsyncStreamWrapper(response, span, _finalize_chat_stream)
+                return AsyncStreamWrapper(response, span, OpenAIStreamFinalizer())
             _finalize_chat(span, response, (time.perf_counter() - start) * 1000)
             return response
 
@@ -271,41 +274,19 @@ def _patch_chat(chat: Any) -> None:
 
 def _finalize_chat(span: Any, response: Any, duration_ms: float) -> None:
     """Extract attributes from a non-streaming ChatResult."""
+    accumulator = ChoiceAccumulator()
+    accumulator.add_response(response)
+    accumulator.apply(span)
     choices = _get(response, "choices", []) or []
-    for i, choice in enumerate(choices):
-        message = _get(choice, "message", None)
-        if message is None:
-            continue
-        span.set_attribute(f"neatlogs.llm.output_messages.{i}.role", "assistant")
-        content = _get(message, "content", None)
-        if content:
-            text = content if isinstance(content, str) else serialize(_plain(content))
-            span.set_attribute(f"neatlogs.llm.output_messages.{i}.content", text)
-            if i == 0:
-                span.set_attribute("output.value", text)
-        tool_calls = _get(message, "tool_calls", None)
-        if tool_calls:
-            for j, tc in enumerate(tool_calls):
-                fn = _get(tc, "function", None)
-                span.set_attribute(f"neatlogs.llm.tool_calls.{j}.id", _get(tc, "id", "") or "")
-                span.set_attribute(f"neatlogs.llm.tool_calls.{j}.name", _get(fn, "name", "") or "")
-                args = _get(fn, "arguments", "")
+    if choices:
+        message = _get(choices[0], "message", None)
+        if message is not None:
+            content = _get(message, "content", None)
+            if content:
                 span.set_attribute(
-                    f"neatlogs.llm.tool_calls.{j}.arguments",
-                    args if isinstance(args, str) else serialize(_plain(args)),
+                    "output.value",
+                    content if isinstance(content, str) else serialize(_plain(content)),
                 )
-        finish_reason = _get(choice, "finish_reason", None)
-        if finish_reason:
-            span.set_attribute("neatlogs.llm.finish_reason", str(finish_reason))
-
-    _set_chat_usage(span, _get(response, "usage", None))
-
-    model = _get(response, "model", None)
-    if model:
-        span.set_attribute("neatlogs.llm.model_name", str(model))
-    response_id = _get(response, "id", None)
-    if response_id:
-        span.set_attribute("neatlogs.llm.response_id", str(response_id))
 
     _ok(span, duration_ms)
 
@@ -499,6 +480,12 @@ def _extract_responses_text(response: Any) -> Optional[str]:
 
 
 def _finalize_responses(span: Any, response: Any, duration_ms: float) -> None:
+    set_media_attributes(
+        span,
+        "neatlogs.llm.output_messages.0",
+        _get(response, "output", None) or [],
+        "output",
+    )
     text = _extract_responses_text(response)
     if text:
         span.set_attribute("neatlogs.llm.output_messages.0.role", "assistant")
@@ -526,6 +513,7 @@ def _finalize_responses_stream(
     interrupted: bool = False,
 ) -> None:
     text_parts: List[str] = []
+    set_media_attributes(span, "neatlogs.llm.output_messages.0", chunks, "output")
     model = None
     usage = None
     for ev in chunks:

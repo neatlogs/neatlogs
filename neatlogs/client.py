@@ -10,6 +10,7 @@ from __future__ import annotations
 import atexit
 import contextlib
 import math
+import os
 import threading
 import time
 from collections.abc import Iterator
@@ -42,8 +43,15 @@ from .core.delivery import (
 )
 from .core.log_exporter import NeatlogsLogFilter
 from .core.masking_exporter import MaskingLogExporter, MaskingSpanExporter
+from .core.media import PendingMediaStore
+from .core.media_exporter import TypedMediaLogExporter, TypedMediaSpanExporter
 from .core.span_processor import CompletionMarkerSpanProcessor, NeatlogsSpanProcessor
 from .core.transport import build_otlp_session
+from .core.upload_authority import (
+    AuthenticatedUploadAuthority,
+    DisabledUploadAuthority,
+)
+from .core.upload_authority import uploads_enabled as resolve_uploads_enabled
 from .errors import NeatlogsConfigurationError
 from .version import __version__
 
@@ -86,6 +94,7 @@ class Client:
         mask: Callable[[dict[str, Any]], Any] | None = None,
         disable_export: bool = False,
         tracer_provider: TracerProvider | None = None,
+        uploads_enabled: bool | None = None,
     ) -> None:
         key = str(api_key or "").strip()
         name = str(workflow_name or "").strip()
@@ -109,6 +118,12 @@ class Client:
             raise NeatlogsConfigurationError(
                 "tracer_provider must be private and must not be the process-global provider"
             )
+        traces_endpoint = _normalize_traces_endpoint(endpoint)
+        parsed = urlparse(traces_endpoint)
+        base_url = f"{parsed.scheme}://{parsed.netloc}"
+        enable_uploads = resolve_uploads_enabled(
+            uploads_enabled, os.getenv("NEATLOGS_UPLOADS_ENABLED")
+        )
 
         self.workflow_name = name
         self._state = "running"
@@ -151,9 +166,11 @@ class Client:
         self._transport_processors: list[Any] = []
         self._completion_processor: CompletionMarkerSpanProcessor | None = None
 
-        traces_endpoint = _normalize_traces_endpoint(endpoint)
-        parsed = urlparse(traces_endpoint)
-        base_url = f"{parsed.scheme}://{parsed.netloc}"
+        self._upload_authority = DisabledUploadAuthority()
+        self._media_store = None
+        if enable_uploads and not disable_export:
+            self._upload_authority = AuthenticatedUploadAuthority(base_url=base_url, api_key=key)
+            self._media_store = PendingMediaStore(max_bytes=self._upload_authority.max_upload_bytes)
         if not disable_export:
             exporter = OTLPSpanExporter(
                 endpoint=traces_endpoint,
@@ -161,11 +178,23 @@ class Client:
                 compression=Compression.Gzip,
                 session=build_otlp_session(),
             )
+            limited_span_exporter = ByteLimitedSpanExporter(
+                exporter,
+                diagnostics=self._delivery_diagnostics,
+                upload_authority=self._upload_authority,
+            )
+            limited_span_exporter = TypedMediaSpanExporter(
+                limited_span_exporter,
+                self._upload_authority,
+                self._media_store,
+                diagnostics=self._delivery_diagnostics,
+            )
             batch_processor = ObservableBatchSpanProcessor(
                 MaskingSpanExporter(
-                    ByteLimitedSpanExporter(exporter, diagnostics=self._delivery_diagnostics),
+                    limited_span_exporter,
                     mask,
                     diagnostics=self._delivery_diagnostics,
+                    media_store=self._media_store,
                 ),
                 max_export_batch_size=batch_size,
                 max_queue_size=export_queue_capacity(batch_size),
@@ -193,16 +222,25 @@ class Client:
                     compression=Compression.Gzip,
                     session=build_otlp_session(),
                 )
+                limited_log_exporter = ByteLimitedLogExporter(
+                    log_exporter,
+                    diagnostics=self._delivery_diagnostics,
+                    upload_authority=self._upload_authority,
+                )
+                limited_log_exporter = TypedMediaLogExporter(
+                    limited_log_exporter,
+                    self._upload_authority,
+                    self._media_store,
+                    diagnostics=self._delivery_diagnostics,
+                )
                 self.log_provider.add_log_record_processor(
                     NeatlogsLogFilter(
                         ObservableBatchLogRecordProcessor(
                             MaskingLogExporter(
-                                ByteLimitedLogExporter(
-                                    log_exporter,
-                                    diagnostics=self._delivery_diagnostics,
-                                ),
+                                limited_log_exporter,
                                 mask,
                                 diagnostics=self._delivery_diagnostics,
+                                media_store=self._media_store,
                             ),
                             max_export_batch_size=batch_size,
                             max_queue_size=export_queue_capacity(batch_size),
@@ -395,6 +433,11 @@ class Client:
             )
             success = completed and success
 
+        if self._media_store is not None:
+            self._media_store.clear()
+        close_uploads = getattr(self._upload_authority, "close", None)
+        if callable(close_uploads):
+            close_uploads()
         return success
 
     close = shutdown

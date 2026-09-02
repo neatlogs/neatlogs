@@ -35,6 +35,8 @@ from ._wrap_utils import (
     is_suppressed,
     serialize,
 )
+from .core.choice_accumulator import ChoiceAccumulator, OpenAIStreamFinalizer
+from .core.media import set_media_attributes
 
 _PROVIDER = "azure"
 _SYSTEM = "azure"
@@ -134,6 +136,7 @@ def _set_chat_input(span: Any, kwargs: dict) -> None:
             span.set_attribute(f"neatlogs.llm.input_messages.{i}.content", content)
         else:
             span.set_attribute(f"neatlogs.llm.input_messages.{i}.content", serialize(content))
+        set_media_attributes(span, f"neatlogs.llm.input_messages.{i}", content, "input")
         if msg.get("tool_call_id"):
             span.set_attribute(f"neatlogs.llm.input_messages.{i}.tool_call_id", msg["tool_call_id"])
 
@@ -184,7 +187,7 @@ def _patch_completions(completions: Any) -> None:
             raise
 
         if is_stream:
-            return SyncStreamWrapper(response, span, _finalize_stream)
+            return SyncStreamWrapper(response, span, OpenAIStreamFinalizer())
 
         _finalize_response(span, response, (time.perf_counter() - start) * 1000)
         return response
@@ -223,7 +226,7 @@ def _patch_async_completions(completions: Any) -> None:
             raise
 
         if is_stream:
-            return AsyncStreamWrapper(response, span, _finalize_stream)
+            return AsyncStreamWrapper(response, span, OpenAIStreamFinalizer())
 
         _finalize_response(span, response, (time.perf_counter() - start) * 1000)
         return response
@@ -370,44 +373,9 @@ def _patch_embeddings(embeddings: Any, sync: bool = True) -> None:
 
 def _finalize_response(span: Any, response: Any, duration_ms: float) -> None:
     """Extract attributes from a non-streaming ChatCompletion response."""
-    choices = getattr(response, "choices", []) or []
-    for i, choice in enumerate(choices):
-        message = getattr(choice, "message", None)
-        if not message:
-            continue
-        span.set_attribute(f"neatlogs.llm.output_messages.{i}.role", "assistant")
-        if getattr(message, "content", None):
-            span.set_attribute(f"neatlogs.llm.output_messages.{i}.content", message.content)
-        if getattr(message, "tool_calls", None):
-            for j, tc in enumerate(message.tool_calls):
-                span.set_attribute(f"neatlogs.llm.tool_calls.{j}.id", tc.id)
-                span.set_attribute(f"neatlogs.llm.tool_calls.{j}.name", tc.function.name)
-                span.set_attribute(f"neatlogs.llm.tool_calls.{j}.arguments", tc.function.arguments)
-        finish_reason = getattr(choice, "finish_reason", None)
-        if finish_reason:
-            span.set_attribute("neatlogs.llm.finish_reason", finish_reason)
-
-    usage = getattr(response, "usage", None)
-    if usage:
-        if getattr(usage, "prompt_tokens", None) is not None:
-            span.set_attribute("neatlogs.llm.token_count.prompt", usage.prompt_tokens)
-        if getattr(usage, "completion_tokens", None) is not None:
-            span.set_attribute("neatlogs.llm.token_count.completion", usage.completion_tokens)
-        total = getattr(usage, "total_tokens", None)
-        if total is not None:
-            span.set_attribute("neatlogs.llm.token_count.total", total)
-        if getattr(usage, "prompt_tokens_details", None):
-            cached = getattr(usage.prompt_tokens_details, "cached_tokens", None)
-            if cached is not None:
-                span.set_attribute("neatlogs.llm.token_count.cache_read", cached)
-        if getattr(usage, "completion_tokens_details", None):
-            reasoning = getattr(usage.completion_tokens_details, "reasoning_tokens", None)
-            if reasoning is not None:
-                span.set_attribute("neatlogs.llm.token_count.reasoning", reasoning)
-
-    model = getattr(response, "model", None)
-    if model:
-        span.set_attribute("neatlogs.llm.model_name", model)
+    accumulator = ChoiceAccumulator()
+    accumulator.add_response(response)
+    accumulator.apply(span)
 
     span.set_attribute("neatlogs.llm.metrics.duration_ms", round(duration_ms, 3))
     span.set_status(StatusCode.OK)
@@ -494,6 +462,12 @@ def _finalize_stream(
 
 
 def _finalize_responses_response(span: Any, response: Any, duration_ms: float) -> None:
+    set_media_attributes(
+        span,
+        "neatlogs.llm.output_messages.0",
+        getattr(response, "output", None) or [],
+        "output",
+    )
     output_text = getattr(response, "output_text", None)
     if output_text:
         span.set_attribute("neatlogs.llm.output_messages.0.role", "assistant")
@@ -523,6 +497,7 @@ def _finalize_responses_stream(
     interrupted: bool = False,
 ) -> None:
     text_parts: List[str] = []
+    set_media_attributes(span, "neatlogs.llm.output_messages.0", chunks, "output")
     model = None
     usage = None
     for ev in chunks:
@@ -744,6 +719,12 @@ def _patch_legacy_completions(completions: Any, sync: bool = True) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _set_generated_image_media(span: Any, data: Any) -> None:
+    # Image API items do not carry a ``type`` discriminator. Supply the known
+    # resource context so URL-only and base64 responses share canonical media.
+    set_media_attributes(span, "neatlogs.llm.output_messages.0", {"image": data}, "output")
+
+
 def _patch_images(images: Any, sync: bool = True) -> None:
     for method, span_name in (
         ("generate", "azure_openai.images.generate"),
@@ -771,6 +752,7 @@ def _patch_images(images: Any, sync: bool = True) -> None:
             def finalize(span, response, duration_ms):
                 data = getattr(response, "data", None)
                 if data is not None:
+                    _set_generated_image_media(span, data)
                     try:
                         span.set_attribute("neatlogs.image.count", len(data))
                     except TypeError:
@@ -788,6 +770,29 @@ def _patch_images(images: Any, sync: bool = True) -> None:
 # ---------------------------------------------------------------------------
 # Audio (speech / transcriptions / translations)
 # ---------------------------------------------------------------------------
+
+
+def _set_speech_response_media(span: Any, response: Any) -> None:
+    """Capture the buffered speech body without exposing raw bytes as attributes."""
+
+    try:
+        content = response if isinstance(response, (bytes, bytearray)) else response.content
+        if not isinstance(content, (bytes, bytearray)) or not content:
+            return
+        headers = getattr(response, "headers", {}) if not isinstance(response, bytes) else {}
+        content_type = headers.get("content-type", "audio/mpeg") if hasattr(headers, "get") else ""
+        set_media_attributes(
+            span,
+            "neatlogs.llm.output_messages.0",
+            {
+                "type": "audio",
+                "mime_type": content_type or "audio/mpeg",
+                "data": content,
+            },
+            "output",
+        )
+    except Exception:
+        return
 
 
 def _patch_audio(audio: Any, sync: bool = True) -> None:
@@ -809,12 +814,17 @@ def _patch_audio(audio: Any, sync: bool = True) -> None:
             return attrs
 
         start_attrs.__name__ = "azure_openai.audio.speech.create"
+
+        def finalize_speech(span, response, duration_ms):
+            _set_speech_response_media(span, response)
+            _ok(span, duration_ms)
+
         _patch_method(
             speech,
             "create",
             "_neatlogs_azure_patched",
             start_attrs,
-            lambda s, r, d: _ok(s, d),
+            finalize_speech,
             is_async=not sync,
         )
 

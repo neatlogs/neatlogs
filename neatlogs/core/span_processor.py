@@ -7,13 +7,13 @@ import json
 import os
 import threading
 import time
+from collections import deque
 from typing import Any, Callable, Dict, List, Optional
 from urllib.parse import unquote
 
 from opentelemetry import context as context_api
 from opentelemetry.context import Context
 from opentelemetry.sdk.trace import ReadableSpan, Span, SpanProcessor
-from opentelemetry.trace import Status, StatusCode
 
 from .attribute_processor import UnifiedAttributeProcessor
 from .logger import get_logger
@@ -162,6 +162,12 @@ class NeatlogsSpanProcessor(SpanProcessor):
         # Per-trace child I/O accumulator for root backfill (see on_end §1b):
         #   trace_id(int) -> {parent_hex: {"in_ts","in_val","out_ts","out_val"}}
         self._trace_child_io: dict = {}
+        # Child spans can end concurrently with their root. Keep capacity,
+        # read/modify, and root-drain operations in one critical section, and
+        # remember recently closed traces so a late child cannot reopen one.
+        self._trace_child_io_lock = threading.RLock()
+        self._closed_trace_io: set[int] = set()
+        self._closed_trace_io_order: deque[int] = deque()
         # Spans are normally closed by their context manager/decorator. Keep a
         # lifecycle registry as a last line of defence for process
         # shutdown: OpenTelemetry cannot export an open span, and a root that
@@ -517,55 +523,41 @@ class NeatlogsSpanProcessor(SpanProcessor):
                     )
                 parent_span_id = None
 
-            # 6. Build span_data dict (used for file logging)
-            span_data = {
-                "trace_id": trace_id,
-                "span_id": span_id,
-                "parent_span_id": parent_span_id,
+            # 6. Run normalization with only fields the transforms consume.
+            # Event/resource/status dictionaries are materialized only for the
+            # opt-in processed debug log, keeping the production hot path lean.
+            normalized_span = {
                 "name": span.name,
                 "kind": (unified_attrs.get("neatlogs.span.kind", "UNKNOWN") or "UNKNOWN"),
-                "start_time": span.start_time,
-                "end_time": span.end_time,
-                "duration_ns": span.end_time - span.start_time if span.end_time else None,
                 "attributes": unified_attrs,
-                "resource": {"attributes": resource_attrs},
-                "status": {
-                    "code": span.status.status_code.name,
-                    "description": span.status.description,
-                },
-                "events": (
-                    [
-                        {
-                            "name": event.name,
-                            "timestamp": event.timestamp,
-                            "attributes": dict(event.attributes) if event.attributes else {},
-                        }
-                        for event in span.events
-                    ]
-                    if span.events
-                    else []
-                ),
             }
 
             # 7. Per-span post-processing (framework span name normalization, CrewAI tasks)
-            results = self._normalize_framework_span_names([span_data])
-            span_data = results[0] if results else span_data
-            results = self._inject_crewai_task_templates([span_data])
-            span_data = results[0] if results else span_data
+            results = self._normalize_framework_span_names([normalized_span])
+            normalized_span = results[0] if results else normalized_span
+            results = self._inject_crewai_task_templates([normalized_span])
+            normalized_span = results[0] if results else normalized_span
 
             # Write normalized neatlogs.* keys onto the still-mutable OTel span.
             # Masking happens later, once, on a clone in the batched exporter worker.
-            final_attrs = span_data.get("attributes") or {}
+            final_attrs = normalized_span.get("attributes") or {}
             try:
                 span_attrs = span._attributes
                 if span_attrs is not None:
-                    for _k, _v in final_attrs.items():
-                        if isinstance(_v, (str, int, float, bool)):
-                            span_attrs[_k] = _v
-                        elif isinstance(_v, (list, tuple)) and all(
-                            isinstance(_i, (str, int, float, bool)) for _i in _v
-                        ):
-                            span_attrs[_k] = list(_v)
+                    was_immutable = getattr(span_attrs, "_immutable", False)
+                    if was_immutable:
+                        span_attrs._immutable = False
+                    try:
+                        for _k, _v in final_attrs.items():
+                            if isinstance(_v, (str, int, float, bool)):
+                                span_attrs[_k] = _v
+                            elif isinstance(_v, (list, tuple)) and all(
+                                isinstance(_i, (str, int, float, bool)) for _i in _v
+                            ):
+                                span_attrs[_k] = list(_v)
+                    finally:
+                        if was_immutable:
+                            span_attrs._immutable = True
 
             except Exception as _wb_exc:
                 if self.debug:
@@ -578,6 +570,23 @@ class NeatlogsSpanProcessor(SpanProcessor):
                 and not self._processed_log_file_handle.closed
             ):
                 try:
+                    span_data = {
+                        "trace_id": trace_id,
+                        "span_id": span_id,
+                        "parent_span_id": parent_span_id,
+                        "name": normalized_span.get("name") or span.name,
+                        "kind": normalized_span.get("kind") or "UNKNOWN",
+                        "start_time": span.start_time,
+                        "end_time": span.end_time,
+                        "duration_ns": span.end_time - span.start_time if span.end_time else None,
+                        "attributes": final_attrs,
+                        "resource": {"attributes": resource_attrs},
+                        "status": {
+                            "code": span.status.status_code.name,
+                            "description": span.status.description,
+                        },
+                        "events": self._serialize_span_events(span),
+                    }
                     self._processed_log_file_handle.write(json.dumps(span_data) + "\n")
                     self._processed_log_file_handle.flush()
                 except Exception as e:
@@ -700,10 +709,9 @@ class NeatlogsSpanProcessor(SpanProcessor):
     def _mark_interrupted(span: Span, clean_reason: str) -> None:
         span.set_attribute("neatlogs.trace.interrupted", True)
         span.set_attribute("neatlogs.trace.termination.reason", clean_reason)
-        # Preserve application/framework terminal success. A span that was
-        # still UNSET when interrupted did not complete and is an OTel ERROR.
-        if span.status.status_code is StatusCode.UNSET:
-            span.set_status(Status(StatusCode.ERROR, f"Interrupted during {clean_reason}"))
+        # Interruption is neither application success nor application failure.
+        # Preserve the status the application/framework already supplied; an
+        # unfinished UNSET span remains UNSET and metadata records why it ended.
         span.add_event(
             "neatlogs.trace.interrupted",
             {"neatlogs.trace.termination.reason": clean_reason},
@@ -758,19 +766,29 @@ class NeatlogsSpanProcessor(SpanProcessor):
                 # Bound memory: buckets are freed when their root ends, but a rootless
                 # trace would leak. Stop tracking NEW traces past a cap (existing
                 # buckets still fill and drain normally).
-                if trace_id not in self._trace_child_io and len(self._trace_child_io) >= 10000:
-                    return
-                per_trace = self._trace_child_io.setdefault(trace_id, {})
-                agg = per_trace.setdefault(parent_hex, {})
-                if in_val is not None and ("in_ts" not in agg or ts < agg["in_ts"]):
-                    agg["in_ts"], agg["in_val"] = ts, in_val
-                if out_val is not None and ("out_ts" not in agg or ts >= agg["out_ts"]):
-                    agg["out_ts"], agg["out_val"] = ts, out_val
+                with self._trace_child_io_lock:
+                    if trace_id in self._closed_trace_io:
+                        return
+                    if trace_id not in self._trace_child_io and len(self._trace_child_io) >= 10000:
+                        return
+                    per_trace = self._trace_child_io.setdefault(trace_id, {})
+                    agg = per_trace.setdefault(parent_hex, {})
+                    if in_val is not None and ("in_ts" not in agg or ts < agg["in_ts"]):
+                        agg["in_ts"], agg["in_val"] = ts, in_val
+                    if out_val is not None and ("out_ts" not in agg or ts >= agg["out_ts"]):
+                        agg["out_ts"], agg["out_val"] = ts, out_val
                 return
 
             # Root span: backfill from accumulated direct children, then drop the
             # per-trace bucket (the trace is complete once its root ends).
-            per_trace = self._trace_child_io.pop(trace_id, None)
+            with self._trace_child_io_lock:
+                per_trace = self._trace_child_io.pop(trace_id, None)
+                if trace_id not in self._closed_trace_io:
+                    if len(self._closed_trace_io_order) >= 10000:
+                        expired = self._closed_trace_io_order.popleft()
+                        self._closed_trace_io.discard(expired)
+                    self._closed_trace_io.add(trace_id)
+                    self._closed_trace_io_order.append(trace_id)
             if not per_trace:
                 return
             root_hex = f"{span.context.span_id:016x}"
@@ -793,15 +811,30 @@ class NeatlogsSpanProcessor(SpanProcessor):
                 span_attrs._immutable = False
             try:
                 if want_in:
-                    span_attrs["input.value"] = agg["in_val"][:10000]
+                    span_attrs["input.value"] = agg["in_val"]
                 if want_out:
-                    span_attrs["output.value"] = agg["out_val"][:10000]
+                    span_attrs["output.value"] = agg["out_val"]
             finally:
                 if was_immutable:
                     span_attrs._immutable = True
         except Exception as exc:
             if self.debug:
                 logger.debug(f"[SpanProcessor] Root I/O backfill skipped: {exc}")
+
+    @staticmethod
+    def _serialize_span_events(span: ReadableSpan) -> List[Dict[str, Any]]:
+        """Materialize events only for the opt-in processed debug file."""
+
+        if not span.events:
+            return []
+        return [
+            {
+                "name": event.name,
+                "timestamp": event.timestamp,
+                "attributes": dict(event.attributes) if event.attributes else {},
+            }
+            for event in span.events
+        ]
 
     def _emit_completion_marker(
         self,

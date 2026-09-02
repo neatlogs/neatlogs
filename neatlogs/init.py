@@ -39,8 +39,15 @@ from .core.delivery import (
     ObservableBatchSpanProcessor,
 )
 from .core.logger import get_logger
+from .core.media import PendingMediaStore, set_default_media_store
+from .core.media_exporter import TypedMediaLogExporter, TypedMediaSpanExporter
 from .core.span_processor import CompletionMarkerSpanProcessor, NeatlogsSpanProcessor
 from .core.transport import build_otlp_session
+from .core.upload_authority import (
+    AuthenticatedUploadAuthority,
+    DisabledUploadAuthority,
+)
+from .core.upload_authority import uploads_enabled as resolve_uploads_enabled
 from .errors import NeatlogsConfigurationError
 from .instrumentation.manager import InstrumentationManager
 from .version import __version__
@@ -61,6 +68,8 @@ _completion_span_processor = None
 _instrumentation_manager = None
 _debug_mode = False
 _delivery_diagnostics = DeliveryDiagnostics()
+_upload_authority = None
+_media_store = None
 _signal_handlers = {}
 _signal_shutdown_in_progress = False
 _shutdown_condition = threading.Condition(threading.RLock())
@@ -234,6 +243,7 @@ def init(
     tracer_provider: Optional[Any] = None,
     isolate: Optional[bool] = None,
     register_shutdown_handlers: bool = True,
+    uploads_enabled: Optional[bool] = None,
 ) -> None:
     """
     Initialize Neatlogs SDK.
@@ -305,9 +315,15 @@ def init(
               active Neatlogs spans child-first and flush before preserving normal
               signal termination. Defaults to True. Set False only when the host
               application owns signal handling and calls ``neatlogs.shutdown()``.
+        uploads_enabled: Enable the authenticated typed-media and oversized OTLP
+              upload contract. Defaults to ``NEATLOGS_UPLOADS_ENABLED``, which
+              is false when unset.
     """
     global _initialized, _init_signature, _shutdown_worker
 
+    uploads_enabled_resolved = resolve_uploads_enabled(
+        uploads_enabled, os.getenv("NEATLOGS_UPLOADS_ENABLED")
+    )
     candidate_signature = _configuration_signature(
         api_key=api_key,
         endpoint=endpoint,
@@ -329,6 +345,7 @@ def init(
         tracer_provider=tracer_provider,
         isolate=isolate,
         register_shutdown_handlers=register_shutdown_handlers,
+        uploads_enabled=uploads_enabled_resolved,
     )
 
     if _initialized:
@@ -407,12 +424,6 @@ def init(
     _parsed = _urlparse(traces_endpoint)
     _base_url = f"{_parsed.scheme}://{_parsed.netloc}"
 
-    global _session_config
-    _session_config["user_id"] = user_id
-    _session_config["workflow_name"] = resolved_workflow_name
-    _session_config["_api_key"] = resolved_key
-    _session_config["_base_url"] = _base_url
-
     # Session and end-user identity are deliberately NOT resource attributes:
     # they are per-request, set at the trace root (trace()/@span) or via
     # neatlogs.identify(). Only the operator user.id is process-global here.
@@ -445,6 +456,25 @@ def init(
     if pii_span_types is not None:
         resource_attrs["neatlogs.pii.span_types"] = ",".join(pii_span_types)
     resource = Resource.create(resource_attrs)
+
+    global _session_config
+    _session_config["user_id"] = user_id
+    _session_config["workflow_name"] = resolved_workflow_name
+    _session_config["_api_key"] = resolved_key
+    _session_config["_base_url"] = _base_url
+
+    # Create and publish upload resources only after all user input validation
+    # succeeds. A failed init must not leave raw-media storage or an HTTP session.
+    global _upload_authority, _media_store
+    _upload_authority = DisabledUploadAuthority()
+    _media_store = None
+    if uploads_enabled_resolved and not disable_export_resolved:
+        _upload_authority = AuthenticatedUploadAuthority(
+            base_url=_base_url,
+            api_key=resolved_key,
+        )
+        _media_store = PendingMediaStore(max_bytes=_upload_authority.max_upload_bytes)
+    set_default_media_store(_media_store)
 
     global _tracer_provider, _owns_tracer_provider
     if tracer_provider is not None:
@@ -537,12 +567,24 @@ def init(
             def force_flush(self, timeout_millis: int = 30000):
                 return self._inner.force_flush(timeout_millis)
 
+        limited_span_exporter = ByteLimitedSpanExporter(
+            otlp_exporter,
+            diagnostics=_delivery_diagnostics,
+            upload_authority=_upload_authority,
+        )
+        limited_span_exporter = TypedMediaSpanExporter(
+            limited_span_exporter,
+            _upload_authority,
+            _media_store,
+            diagnostics=_delivery_diagnostics,
+        )
         batch_processor = ObservableBatchSpanProcessor(
             _FilteredOTLPExporter(
                 MaskingSpanExporter(
-                    ByteLimitedSpanExporter(otlp_exporter, diagnostics=_delivery_diagnostics),
+                    limited_span_exporter,
                     mask,
                     diagnostics=_delivery_diagnostics,
+                    media_store=_media_store,
                 )
             ),
             max_export_batch_size=batch_size,
@@ -590,16 +632,25 @@ def init(
         _log_provider = LoggerProvider(resource=resource)
         # NeatlogsLogFilter drops external-module and no-trace records before
         # BatchLogRecordProcessor batches and sends them via OTLPLogExporter.
+        limited_log_exporter = ByteLimitedLogExporter(
+            _otlp_log_exporter,
+            diagnostics=_delivery_diagnostics,
+            upload_authority=_upload_authority,
+        )
+        limited_log_exporter = TypedMediaLogExporter(
+            limited_log_exporter,
+            _upload_authority,
+            _media_store,
+            diagnostics=_delivery_diagnostics,
+        )
         _log_provider.add_log_record_processor(
             NeatlogsLogFilter(
                 ObservableBatchLogRecordProcessor(
                     MaskingLogExporter(
-                        ByteLimitedLogExporter(
-                            _otlp_log_exporter,
-                            diagnostics=_delivery_diagnostics,
-                        ),
+                        limited_log_exporter,
                         mask,
                         diagnostics=_delivery_diagnostics,
+                        media_store=_media_store,
                     ),
                     max_export_batch_size=batch_size,
                     max_queue_size=export_queue_capacity(batch_size),
@@ -843,6 +894,7 @@ def _perform_shutdown(
     global _init_signature
     global _instrumentation_manager, _transport_span_processors, _completion_span_processor
     global _debug_mode, _shutdown_worker
+    global _upload_authority, _media_store
 
     try:
         atexit.unregister(_atexit_shutdown)
@@ -861,6 +913,12 @@ def _perform_shutdown(
     transport_span_processors = list(_transport_span_processors)
     instrumentation_manager = _instrumentation_manager
     shutdown_worker = _shutdown_worker
+    from ._wrap_utils import take_bootstrap_resources
+
+    bootstrap_provider, bootstrap_authority, bootstrap_media_store = take_bootstrap_resources()
+    if tracer_provider is None and bootstrap_provider is not None:
+        tracer_provider = bootstrap_provider
+        owns_tracer_provider = True
     if completion_span_processor is not None:
         completion_span_processor.begin_shutdown()
     if span_processor is not None:
@@ -982,13 +1040,32 @@ def _perform_shutdown(
                     )
                     success = False
 
-    def uninstrument_logging() -> None:
-        try:
-            from opentelemetry.instrumentation.logging import LoggingInstrumentor
+    # Wrapper-only auto-bootstrap owns a distinct provider. If regular init()
+    # subsequently installed another provider, both pipelines still need a
+    # bounded shutdown; never strand the earlier wrapper exporter/session.
+    if bootstrap_provider is not None and bootstrap_provider is not tracer_provider:
+        completed, result = bounded_call(
+            bootstrap_provider.shutdown,
+            deadline,
+            synchronous=synchronous,
+            worker=shutdown_worker,
+        )
+        if completed:
+            success = (result is None or bool(result)) and success
+        else:
+            logger.error("Wrapper bootstrap shutdown failed or timed out: %s", result)
+            success = False
 
-            LoggingInstrumentor().uninstrument()
-        except Exception:
-            pass
+    def uninstrument_logging() -> None:
+        # Only undo the logging patch NeatLogs installed. Touching an
+        # unconfigured or foreign instrumentor violates provider ownership.
+        if log_provider is not None:
+            try:
+                from opentelemetry.instrumentation.logging import LoggingInstrumentor
+
+                LoggingInstrumentor().uninstrument()
+            except Exception:
+                pass
 
     completed, result = bounded_call(
         uninstrument_logging,
@@ -1025,6 +1102,20 @@ def _perform_shutdown(
         set_neatlogs_provider(None)
     except Exception:
         pass
+
+    set_default_media_store(None)
+    if _media_store is not None:
+        _media_store.clear()
+    if bootstrap_media_store is not None:
+        bootstrap_media_store.clear()
+    close_uploads = getattr(_upload_authority, "close", None)
+    if callable(close_uploads):
+        close_uploads()
+    close_bootstrap_uploads = getattr(bootstrap_authority, "close", None)
+    if callable(close_bootstrap_uploads):
+        close_bootstrap_uploads()
+    _media_store = None
+    _upload_authority = None
 
     _initialized = False
     _init_signature = None

@@ -34,6 +34,15 @@ from .core.llm_binder import bind_templates
 from .core.log import log
 from .core.masking_exporter import MaskContext
 from .core.propagation import extract_trace_context, inject_trace_context
+from .core.telemetry_v2 import (
+    InMemoryDiagnosticSpanExporter,
+    OwnershipV2,
+    StatusV2,
+    TelemetrySpanV2,
+    TypedValueV2,
+    WrapperV2,
+    normalize_span_v2,
+)
 from .decorators import span
 from .errors import NeatlogsConfigurationError, NeatlogsError
 from .init import flush, flush_all, get_delivery_diagnostics, init, shutdown
@@ -322,5 +331,12 @@ __all__ = [
     "langchain_handler",
     "openai_agents_processor",
     "strands_hooks",
+    "OwnershipV2",
+    "WrapperV2",
+    "TypedValueV2",
+    "StatusV2",
+    "TelemetrySpanV2",
+    "normalize_span_v2",
+    "InMemoryDiagnosticSpanExporter",
     "__version__",
 ]

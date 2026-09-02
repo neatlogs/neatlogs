@@ -365,6 +365,12 @@ def _finalize_response(span: Any, response: Any, duration_ms: float) -> None:
 def _finalize_responses_response(span: Any, response: Any, duration_ms: float) -> None:
     """Extract attributes from a Responses API response."""
     output_text = getattr(response, "output_text", None)
+    set_media_attributes(
+        span,
+        "neatlogs.llm.output_messages.0",
+        getattr(response, "output", None) or [],
+        "output",
+    )
     if output_text:
         span.set_attribute("neatlogs.llm.output_messages.0.role", "assistant")
         span.set_attribute("neatlogs.llm.output_messages.0.content", output_text)
@@ -513,6 +519,7 @@ def _finalize_responses_stream(
 ) -> None:
     """Finalize a streaming Responses API span (events carry .type / .delta / .response)."""
     text_parts: List[str] = []
+    set_media_attributes(span, "neatlogs.llm.output_messages.0", chunks, "output")
     model = None
     usage = None
     for ev in chunks:
@@ -693,6 +700,12 @@ def _patch_legacy_completions(completions: Any, sync: bool = True) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _set_generated_image_media(span: Any, data: Any) -> None:
+    # Image API items do not carry a ``type`` discriminator. Supply the known
+    # resource context so URL-only and base64 responses share canonical media.
+    set_media_attributes(span, "neatlogs.llm.output_messages.0", {"image": data}, "output")
+
+
 def _patch_images(images: Any, sync: bool = True) -> None:
     for method, span_name in (
         ("generate", "openai.images.generate"),
@@ -720,6 +733,7 @@ def _patch_images(images: Any, sync: bool = True) -> None:
             def finalize(span, response, duration_ms):
                 data = getattr(response, "data", None)
                 if data is not None:
+                    _set_generated_image_media(span, data)
                     try:
                         span.set_attribute("neatlogs.image.count", len(data))
                     except TypeError:
@@ -735,6 +749,29 @@ def _patch_images(images: Any, sync: bool = True) -> None:
 # ---------------------------------------------------------------------------
 # Audio (speech / transcriptions / translations)
 # ---------------------------------------------------------------------------
+
+
+def _set_speech_response_media(span: Any, response: Any) -> None:
+    """Capture the buffered speech body without exposing raw bytes as attributes."""
+
+    try:
+        content = response if isinstance(response, (bytes, bytearray)) else response.content
+        if not isinstance(content, (bytes, bytearray)) or not content:
+            return
+        headers = getattr(response, "headers", {}) if not isinstance(response, bytes) else {}
+        content_type = headers.get("content-type", "audio/mpeg") if hasattr(headers, "get") else ""
+        set_media_attributes(
+            span,
+            "neatlogs.llm.output_messages.0",
+            {
+                "type": "audio",
+                "mime_type": content_type or "audio/mpeg",
+                "data": content,
+            },
+            "output",
+        )
+    except Exception:
+        return
 
 
 def _patch_audio(audio: Any, sync: bool = True) -> None:
@@ -756,12 +793,17 @@ def _patch_audio(audio: Any, sync: bool = True) -> None:
             return attrs
 
         start_attrs.__name__ = "openai.audio.speech.create"
+
+        def finalize_speech(span, response, duration_ms):
+            _set_speech_response_media(span, response)
+            _ok(span, duration_ms)
+
         _patch_method(
             speech,
             "create",
             "_neatlogs_patched",
             start_attrs,
-            lambda s, r, d: _ok(s, d),
+            finalize_speech,
             is_async=not sync,
         )
 

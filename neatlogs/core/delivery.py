@@ -30,6 +30,11 @@ class DeliveryDiagnosticsSnapshot:
     log_upload_authority_available: bool = False
     span_upload_authority_reason: str = "backend_upload_contract_unavailable"
     log_upload_authority_reason: str = "backend_upload_contract_unavailable"
+    span_media_uploads: int = 0
+    span_media_upload_failures: int = 0
+    log_media_uploads: int = 0
+    log_media_upload_failures: int = 0
+    upload_last_failure_reason: str = ""
 
 
 class DeliveryDiagnostics:
@@ -70,6 +75,18 @@ class DeliveryDiagnostics:
         with self._lock:
             setattr(self._values, f"{signal}_upload_authority_available", available)
             setattr(self._values, f"{signal}_upload_authority_reason", reason)
+
+    def record_media_upload(self, signal: str, *, succeeded: bool, reason: str = "") -> None:
+        with self._lock:
+            suffix = "uploads" if succeeded else "upload_failures"
+            field = f"{signal}_media_{suffix}"
+            setattr(self._values, field, getattr(self._values, field) + 1)
+            if not succeeded:
+                self._values.upload_last_failure_reason = reason
+
+    def record_upload_failure(self, reason: str) -> None:
+        with self._lock:
+            self._values.upload_last_failure_reason = reason
 
     def snapshot(self) -> dict[str, Any]:
         with self._lock:

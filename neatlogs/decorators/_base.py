@@ -292,8 +292,12 @@ def _decorate_span(
                         stdout_ctx.__enter__()
                     try:
                         async for chunk in func(*args, **kwargs):
-                            _record_stream_chunk(span, len(chunks), chunk)
                             chunks.append(chunk)
+                            _record_stream_chunk(span, len(chunks) - 1, chunk)
+                            _set_stream_counts(span, len(chunks))
+                            if cap_out:
+                                span.set_attribute("output.value", _safe_json_dumps(chunks))
+                                span.set_attribute("output.mime_type", "application/json")
                             yield chunk
                         _finish_stream(span, chunks, bound_inputs)
                     except (GeneratorExit, asyncio.CancelledError):
@@ -332,8 +336,12 @@ def _decorate_span(
                         stdout_ctx.__enter__()
                     try:
                         for chunk in func(*args, **kwargs):
-                            _record_stream_chunk(span, len(chunks), chunk)
                             chunks.append(chunk)
+                            _record_stream_chunk(span, len(chunks) - 1, chunk)
+                            _set_stream_counts(span, len(chunks))
+                            if cap_out:
+                                span.set_attribute("output.value", _safe_json_dumps(chunks))
+                                span.set_attribute("output.mime_type", "application/json")
                             yield chunk
                         _finish_stream(span, chunks, bound_inputs)
                     except GeneratorExit:

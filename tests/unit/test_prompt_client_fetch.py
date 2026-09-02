@@ -6,7 +6,13 @@ from unittest.mock import AsyncMock, Mock, call
 
 import pytest
 
-from neatlogs.prompt.client import AsyncPromptClient, PromptClient, PromptHandle
+from neatlogs.prompt.client import (
+    AsyncPromptClient,
+    PromptApiError,
+    PromptClient,
+    PromptHandle,
+    PromptNotFoundError,
+)
 
 PROMPT = {
     "id": "00000000-0000-4000-8000-000000000001",
@@ -57,6 +63,29 @@ async def test_async_fetch_uses_one_exact_endpoint(version, expected_params):
         path="/api/v1/prompts/support%20prompt/fetch",
         params=expected_params,
     )
+
+
+@pytest.mark.parametrize("version", [123, None])
+def test_sync_exact_fetch_preserves_not_found_error(version):
+    client = PromptClient(base_url="https://example.test", api_key="test-key")
+    client._request_json = Mock(side_effect=PromptApiError("GET failed (404)", status_code=404))
+
+    with pytest.raises(PromptNotFoundError, match="not found"):
+        client._fetch_prompt("support prompt", version=version)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("version", [123, None])
+async def test_async_exact_fetch_preserves_not_found_error(version):
+    client = AsyncPromptClient(base_url="https://example.test", api_key="test-key")
+    client._request_json = AsyncMock(
+        side_effect=PromptApiError("GET failed (404)", status_code=404)
+    )
+    try:
+        with pytest.raises(PromptNotFoundError, match="not found"):
+            await client._fetch_prompt("support prompt", version=version)
+    finally:
+        await client.close()
 
 
 def test_sync_cold_cache_miss_is_coalesced():

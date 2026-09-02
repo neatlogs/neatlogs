@@ -11,6 +11,7 @@ from urllib.parse import quote
 import requests
 
 from ..core.logger import get_logger
+from ._singleflight import AsyncSingleFlight, SyncSingleFlight
 
 logger = get_logger()
 
@@ -28,9 +29,21 @@ class PromptClientError(Exception):
 class PromptApiError(PromptClientError):
     """Raised when the backend returns an API error."""
 
+    def __init__(self, message: str, *, status_code: Optional[int] = None):
+        super().__init__(message)
+        self.status_code = status_code
+
 
 class PromptNotFoundError(PromptClientError):
     """Raised when a prompt/label/version is not found and no fallback is provided."""
+
+
+def _prompt_selector_description(label: Optional[str], version: Optional[int]) -> str:
+    if label is not None:
+        return f"label '{label}'"
+    if version is not None:
+        return f"version {version}"
+    return "latest version"
 
 
 # ---------------------------------------------------------------------------
@@ -47,12 +60,6 @@ class _CacheEntry:
 
     def is_expired(self) -> bool:
         return (_time.monotonic() - self.fetched_at) >= self.ttl_seconds
-
-
-@dataclass
-class _SyncFetchFlight:
-    event: threading.Event = field(default_factory=threading.Event)
-    error: Optional[BaseException] = None
 
 
 class PromptCache:
@@ -213,8 +220,7 @@ class PromptClient:
         self.api_key = api_key
         self._session = session or requests.Session()
         self._cache = PromptCache(default_ttl=cache_ttl_seconds)
-        self._cold_fetch_lock = threading.Lock()
-        self._cold_fetches: Dict[str, _SyncFetchFlight] = {}
+        self._cold_fetches: SyncSingleFlight[PromptHandle] = SyncSingleFlight()
 
     def get_prompt(
         self,
@@ -255,15 +261,18 @@ class PromptClient:
             )
             return entry.value
 
-        return self._coalesced_cold_fetch(
+        return self._cold_fetches.run(
             cache_key,
-            name,
-            label=label,
-            version=version,
-            ttl=cache_ttl_seconds,
+            lambda: self._fetch_and_cache(
+                cache_key,
+                name,
+                label=label,
+                version=version,
+                ttl=cache_ttl_seconds,
+            ),
         )
 
-    def _coalesced_cold_fetch(
+    def _fetch_and_cache(
         self,
         cache_key: str,
         name: str,
@@ -272,38 +281,9 @@ class PromptClient:
         version: Optional[int],
         ttl: Optional[float],
     ) -> PromptHandle:
-        """Let one thread perform a cold network fetch for each cache key."""
-        with self._cold_fetch_lock:
-            cached = self._cache.get(cache_key)
-            if cached is not None:
-                return cached.value
-            flight = self._cold_fetches.get(cache_key)
-            leader = flight is None
-            if flight is None:
-                flight = _SyncFetchFlight()
-                self._cold_fetches[cache_key] = flight
-
-        if not leader:
-            flight.event.wait()
-            if flight.error is not None:
-                raise flight.error
-            cached = self._cache.get(cache_key)
-            if cached is None:
-                raise PromptClientError("Coalesced prompt fetch completed without a result")
-            return cached.value
-
-        try:
-            handle = self._fetch_prompt(name, label=label, version=version)
-            self._cache.set(cache_key, handle, ttl)
-            return handle
-        except BaseException as error:
-            flight.error = error
-            raise
-        finally:
-            flight.event.set()
-            with self._cold_fetch_lock:
-                if self._cold_fetches.get(cache_key) is flight:
-                    self._cold_fetches.pop(cache_key, None)
+        handle = self._fetch_prompt(name, label=label, version=version)
+        self._cache.set(cache_key, handle, ttl)
+        return handle
 
     def _fetch_prompt(
         self,
@@ -321,7 +301,13 @@ class PromptClient:
             params = {"version": version}
         else:
             params = {"latest": "true"}
-        payload = self._request_json(method="GET", path=path, params=params)
+        try:
+            payload = self._request_json(method="GET", path=path, params=params)
+        except PromptApiError as error:
+            if error.status_code == 404:
+                selector = _prompt_selector_description(label, version)
+                raise PromptNotFoundError(f"Prompt '{name}' {selector} not found") from error
+            raise
         return PromptHandle(_normalize_prompt_object(payload))
 
     def _background_refresh(
@@ -562,7 +548,10 @@ class PromptClient:
 
         if response.status_code >= 400:
             body = _safe_response_text(response)
-            raise PromptApiError(f"{method} {path} failed ({response.status_code}): {body}")
+            raise PromptApiError(
+                f"{method} {path} failed ({response.status_code}): {body}",
+                status_code=response.status_code,
+            )
 
         try:
             payload = response.json()
@@ -802,7 +791,7 @@ class AsyncPromptClient:
             },
         )
         self._cache = PromptCache(default_ttl=cache_ttl_seconds)
-        self._cold_fetches: Dict[str, asyncio.Task[PromptHandle]] = {}
+        self._cold_fetches: AsyncSingleFlight[PromptHandle] = AsyncSingleFlight()
 
     async def get_prompt(
         self,
@@ -828,25 +817,16 @@ class AsyncPromptClient:
             )
             return entry.value
 
-        task = self._cold_fetches.get(cache_key)
-        if task is None:
-            task = asyncio.create_task(
-                self._fetch_and_cache(
-                    cache_key,
-                    name,
-                    label=label,
-                    version=version,
-                    ttl=cache_ttl_seconds,
-                )
-            )
-            self._cold_fetches[cache_key] = task
-
-            def clear_flight(completed: asyncio.Task[PromptHandle]) -> None:
-                if self._cold_fetches.get(cache_key) is completed:
-                    self._cold_fetches.pop(cache_key, None)
-
-            task.add_done_callback(clear_flight)
-        return await asyncio.shield(task)
+        return await self._cold_fetches.run(
+            cache_key,
+            lambda: self._fetch_and_cache(
+                cache_key,
+                name,
+                label=label,
+                version=version,
+                ttl=cache_ttl_seconds,
+            ),
+        )
 
     async def _fetch_and_cache(
         self,
@@ -876,7 +856,13 @@ class AsyncPromptClient:
             params = {"version": version}
         else:
             params = {"latest": "true"}
-        payload = await self._request_json(method="GET", path=path, params=params)
+        try:
+            payload = await self._request_json(method="GET", path=path, params=params)
+        except PromptApiError as error:
+            if error.status_code == 404:
+                selector = _prompt_selector_description(label, version)
+                raise PromptNotFoundError(f"Prompt '{name}' {selector} not found") from error
+            raise
         return PromptHandle(_normalize_prompt_object(payload))
 
     def _background_refresh(
@@ -942,7 +928,10 @@ class AsyncPromptClient:
 
         if response.status_code >= 400:
             body = response.text[:400] if response.text else "<empty>"
-            raise PromptApiError(f"{method} {path} failed ({response.status_code}): {body}")
+            raise PromptApiError(
+                f"{method} {path} failed ({response.status_code}): {body}",
+                status_code=response.status_code,
+            )
 
         try:
             payload = response.json()

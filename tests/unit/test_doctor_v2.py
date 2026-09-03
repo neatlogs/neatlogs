@@ -10,8 +10,8 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor, SpanExportResult
 from opentelemetry.trace import SpanContext, SpanKind, Status, StatusCode, TraceFlags, TraceState
 
 from neatlogs.__main__ import main
-from neatlogs.core.masking_exporter import MaskingSpanExporter
 from neatlogs.core.choice_accumulator import ChoiceAccumulator
+from neatlogs.core.masking_exporter import MaskingSpanExporter
 from neatlogs.core.media import set_media_attributes
 from neatlogs.doctor_v2 import (
     clear_doctor_capture,

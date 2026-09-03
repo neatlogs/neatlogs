@@ -146,8 +146,8 @@ Example prompts once installed:
 - *"Wrap my FastAPI handler so each request is a top-level trace"*
 
 Full install options: [skills README](https://github.com/neatlogs/skills/blob/main/README.md).
-Automated Skill support is governed by the [versioned skills support manifest](https://github.com/neatlogs/skills/releases/download/skills-v1.3.0/skills-support-v1.json);
-unsupported SDK, runtime, or integration combinations stop with an upgrade instruction instead of guessing.
+The Wizard detects the project, downloads the needed Skill from the latest Skills
+release, applies the documented instrumentation, and runs the applicable checks.
 
 API reference: [docs.neatlogs.com](https://docs.neatlogs.com)
 

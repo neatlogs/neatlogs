@@ -1901,6 +1901,7 @@
         "dialect": "neatlogs-direct",
         "patterns": [
           "neatlogs.span.kind",
+          "neatlogs.doctor",
           "neatlogs.doctor.*",
           "neatlogs.workflow.*",
           "neatlogs.agent.*",

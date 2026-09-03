@@ -1,14 +1,18 @@
+import base64
+import hashlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
 
 from opentelemetry.sdk.resources import Resource
-from opentelemetry.sdk.trace import ReadableSpan
-from opentelemetry.sdk.trace.export import SpanExportResult
+from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor, SpanExportResult
 from opentelemetry.trace import SpanContext, SpanKind, Status, StatusCode, TraceFlags, TraceState
 
 from neatlogs.__main__ import main
 from neatlogs.core.masking_exporter import MaskingSpanExporter
+from neatlogs.core.choice_accumulator import ChoiceAccumulator
+from neatlogs.core.media import set_media_attributes
 from neatlogs.doctor_v2 import (
     clear_doctor_capture,
     doctor_captured_local_v2,
@@ -35,7 +39,7 @@ def test_valid_envelope_conforms_to_doctor_v2_shape():
     result = doctor_local_v2(envelope(), flush_duration_ms=12)
     assert result["format_version"] == "neatlogs.doctor/v2"
     assert result["mode"] == "local"
-    assert result["status"] == "pass"
+    assert result["status"] == "pass", result
     assert result["first_failure"] is None
     assert result["runtime"]["language"] == "python"
     assert result["checks"][0]["reason_code"] == "LOCAL_ENVELOPE_VALID"
@@ -120,6 +124,7 @@ def persisted_trace(exporter):
     }
     return {
         "_id": f"{spans[0].get_span_context().trace_id:032x}",
+        "status": "success",
         "workflowName": "neatlogs.doctor.v2",
         "spanCount": len(spans),
         "promptTokens": 11,
@@ -160,6 +165,25 @@ def persisted_trace(exporter):
     }
 
 
+def materialize_for_v3(trace_data):
+    """Mirror the backend's UI-facing simplified trace representation."""
+    for item in trace_data["spans"]:
+        data = item["data"]
+        if item["node_name"] == "doctor.probe.root":
+            data["input_value"] = "generated diagnostic input"
+            data["output_value"] = "Value: 2"
+        elif item["node_name"] == "doctor.probe.llm":
+            data["input_value"] = {"prompt": "generated diagnostic input"}
+            data["output_value"] = "Text: generated diagnostic output"
+        elif item["node_name"] == "doctor.probe.agent":
+            data["input_value"] = "Prompt: generated diagnostic input"
+            data["output_value"] = "Text: generated diagnostic output"
+        elif item["node_name"] == "doctor.probe.tool":
+            data["input_value"] = "Value: 1"
+            data["output_value"] = "Value: 2"
+    return trace_data
+
+
 def test_ordinary_exporter_path_never_enters_doctor_retention():
     clear_doctor_capture()
     inner = Exporter()
@@ -197,6 +221,171 @@ def test_explicit_doctor_exporter_captures_only_post_mask_data():
     assert doctor_captured_local_v2("00000000000000000000000000000001")["status"] == "pass"
     exporter.shutdown()
     assert get_captured_envelope("00000000000000000000000000000001") is None
+
+
+def test_production_choice_and_media_paths_flow_into_doctor_capture():
+    """Exercise the same helpers used by supported OpenAI-compatible wrappers."""
+
+    clear_doctor_capture()
+    provider = TracerProvider()
+    provider.add_span_processor(
+        SimpleSpanProcessor(MaskingSpanExporter(Exporter(), None, doctor_capture=True))
+    )
+    tracer = provider.get_tracer("doctor-supported-wrapper-path")
+    with tracer.start_as_current_span("wrapped.llm") as llm:
+        trace_id = f"{llm.get_span_context().trace_id:032x}"
+        llm.set_attribute("neatlogs.span.kind", "LLM")
+        llm.set_attribute("neatlogs.llm.input", '{"prompt":"hello"}')
+        llm.set_attribute("neatlogs.llm.output", '{"text":"AB"}')
+        accumulator = ChoiceAccumulator()
+        accumulator.add_chunk(
+            llm,
+            {
+                "choices": [
+                    {"index": 0, "delta": {"content": "A"}},
+                    {
+                        "index": 1,
+                        "delta": {
+                            "content": "X",
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "id": "doctor_call_1",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "diagnostic_tool",
+                                        "arguments": '{"value":',
+                                    },
+                                }
+                            ],
+                        },
+                    },
+                ]
+            },
+        )
+        accumulator.add_chunk(
+            llm,
+            {
+                "choices": [
+                    {"index": 0, "delta": {"content": "B"}, "finish_reason": "stop"},
+                    {
+                        "index": 1,
+                        "delta": {
+                            "content": "Y",
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "function": {"arguments": "1}"},
+                                }
+                            ],
+                        },
+                        "finish_reason": "tool_calls",
+                    },
+                ]
+            },
+        )
+        accumulator.apply(llm)
+        llm.set_attribute("neatlogs.llm.is_streaming", True)
+        raw = b"doctor-image"
+        set_media_attributes(
+            llm,
+            "neatlogs.llm.output_messages.0",
+            {
+                "type": "image_url",
+                "image_url": {"url": "data:image/png;base64," + base64.b64encode(raw).decode()},
+            },
+            "output",
+        )
+        with tracer.start_as_current_span("wrapped.tool") as tool:
+            tool.set_attribute("neatlogs.span.kind", "TOOL")
+            tool.set_attribute("neatlogs.tool_call.id", "doctor_call_1")
+            tool.set_attribute("neatlogs.tool.name", "diagnostic_tool")
+            tool.set_attribute("neatlogs.tool.input", '{"value":1}')
+            tool.set_attribute("neatlogs.tool.output", '{"value":2}')
+    assert provider.force_flush(timeout_millis=5_000)
+    captured = get_captured_envelope(trace_id)
+    by_name = {item["name"]: item for item in captured["spans"]}
+    projected = by_name["wrapped.llm"]
+    assert projected["expected_choice_count"] == 2
+    assert [choice["message"]["content"] for choice in projected["choices"]] == ["AB", "XY"]
+    assert projected["choices"][1]["message"]["tool_calls"][0]["arguments"] == {"value": 1}
+    assert len(projected["stream_fragments"]) == 2
+    assert projected["streaming"] is True
+    assert projected["payload_references"] == [
+        {
+            "digest": "sha256:" + hashlib.sha256(raw).hexdigest(),
+            "size": len(raw),
+            "mime_type": "image/png",
+        }
+    ]
+    assert by_name["wrapped.tool"]["tool_call"]["id"] == "doctor_call_1"
+    assert doctor_local_v2(captured)["status"] == "pass"
+    provider.shutdown()
+    clear_doctor_capture()
+
+
+def test_emitted_span_capture_derives_choices_stream_tool_and_payload_fields():
+    clear_doctor_capture()
+    provider = TracerProvider()
+    provider.add_span_processor(
+        SimpleSpanProcessor(MaskingSpanExporter(Exporter(), None, doctor_capture=True))
+    )
+    tracer = provider.get_tracer("doctor-capture-regression")
+    digest = "a" * 64
+    with tracer.start_as_current_span("doctor.llm") as llm:
+        trace_id = f"{llm.get_span_context().trace_id:032x}"
+        llm.set_attribute("neatlogs.span.kind", "LLM")
+        llm.set_attribute("neatlogs.llm.input", '{"prompt":"hello"}')
+        llm.set_attribute("neatlogs.llm.output", '{"text":"done"}')
+        llm.set_attribute("neatlogs.llm.output_messages.0.content", "first")
+        llm.set_attribute("neatlogs.llm.output_messages.1.content", "second")
+        llm.set_attribute("neatlogs.llm.choices.0.finish_reason", "tool_calls")
+        llm.set_attribute("neatlogs.llm.choices.1.finish_reason", "stop")
+        llm.set_attribute("neatlogs.llm.tool_calls.0.id", "doctor_call_1")
+        llm.set_attribute("neatlogs.llm.tool_calls.0.name", "diagnostic_tool")
+        llm.set_attribute("neatlogs.llm.tool_calls.0.arguments", '{"value":1}')
+        llm.set_attribute("neatlogs.llm.tool_calls.0.choice_index", 0)
+        llm.set_attribute("neatlogs.llm.is_streaming", True)
+        llm.add_event(
+            "neatlogs.stream.chunk",
+            {"neatlogs.stream.chunk.summary": '{"text":"done"}'},
+        )
+        llm.set_attribute("neatlogs.capture.truncated", True)
+        llm.set_attribute("neatlogs.llm.output.media.0.sha256", digest)
+        llm.set_attribute("neatlogs.llm.output.media.0.byte_length", 1024)
+        llm.set_attribute("neatlogs.llm.output.media.0.mime_type", "application/json")
+        with tracer.start_as_current_span("doctor.tool") as tool:
+            tool.set_attribute("neatlogs.span.kind", "TOOL")
+            tool.set_attribute("neatlogs.tool_call.id", "doctor_call_1")
+            tool.set_attribute("neatlogs.tool.name", "diagnostic_tool")
+            tool.set_attribute("neatlogs.tool.input", '{"value":1}')
+            tool.set_attribute("neatlogs.tool.output", '{"value":2}')
+    assert provider.force_flush(timeout_millis=5_000)
+    captured = get_captured_envelope(trace_id)
+    by_name = {item["name"]: item for item in captured["spans"]}
+    projected = by_name["doctor.llm"]
+    assert projected["expected_choice_count"] == 2
+    assert [choice["index"] for choice in projected["choices"]] == [0, 1]
+    assert projected["choices"][0]["message"]["tool_calls"][0]["id"] == "doctor_call_1"
+    assert projected["stream_fragments"] == [{"text": "done"}]
+    assert projected["streaming"] is True
+    assert projected["oversized"] is True
+    assert projected["payload_references"] == [
+        {
+            "digest": f"sha256:{digest}",
+            "size": 1024,
+            "mime_type": "application/json",
+        }
+    ]
+    assert by_name["doctor.tool"]["tool_call"] == {
+        "id": "doctor_call_1",
+        "name": "diagnostic_tool",
+        "arguments": {"value": 1},
+        "result": {"value": 2},
+    }
+    assert doctor_local_v2(captured)["status"] == "pass"
+    provider.shutdown()
+    clear_doctor_capture()
 
 
 def test_capture_store_is_bounded_to_sixteen_traces():
@@ -250,10 +439,11 @@ def test_probe_exports_and_reads_back_the_exact_trace(monkeypatch):
 
     def get(url, **kwargs):
         calls.append((url, kwargs))
+        payload = materialize_for_v3(persisted_trace(exporter))
         return SimpleNamespace(
             ok=True,
             status_code=200,
-            json=lambda: persisted_trace(exporter),
+            json=lambda: payload,
             raise_for_status=lambda: None,
         )
 
@@ -264,13 +454,17 @@ def test_probe_exports_and_reads_back_the_exact_trace(monkeypatch):
         timeout_seconds=1,
         _exporter=exporter,
     )
-    assert result["status"] == "pass"
+    assert result["status"] == "pass", result
     assert result["capture"]["span_count"] == 4
     assert result["probe"] == {
         "ingest_route": "/v1/traces",
         "marker_header": "x-neatlogs-doctor",
         "marker_version": "v1",
         "visible": True,
+        "readback_trace_id": result["capture"]["trace_id"],
+        "finalized": True,
+        "meaningful_root_count": 1,
+        "duplicate_span_count": 0,
         "readback_span_count": 4,
         "hierarchy_valid": True,
         "attributes_valid": True,
@@ -281,6 +475,85 @@ def test_probe_exports_and_reads_back_the_exact_trace(monkeypatch):
     assert calls[0][0].startswith("http://localhost:4100/api/traces/v3/")
     assert calls[0][1]["headers"] == {"x-api-key": "local-key"}
     assert "local-key" not in json.dumps(result)
+
+
+def test_probe_rejects_wrong_materialized_input_output(monkeypatch):
+    exporter = Exporter()
+
+    def get(*args, **kwargs):
+        trace_data = materialize_for_v3(persisted_trace(exporter))
+        trace_data["spans"][2]["data"]["output_value"] = "Text: wrong output"
+        return SimpleNamespace(
+            ok=True,
+            status_code=200,
+            json=lambda: trace_data,
+            raise_for_status=lambda: None,
+        )
+
+    monkeypatch.setattr("neatlogs.doctor_v2.requests.get", get)
+    result = doctor_probe_v2(
+        api_key="local-key",
+        endpoint="http://localhost:4100",
+        timeout_seconds=1,
+        _exporter=exporter,
+    )
+    assert result["status"] == "fail"
+    assert result["first_failure"] == "INPUT_OUTPUT_VALID_FAILED"
+    assert result["probe"]["input_output_valid"] is False
+
+
+def test_probe_reports_terminal_correlation_roots_and_duplicates(monkeypatch):
+    exporter = Exporter()
+
+    def get(*args, **kwargs):
+        trace_data = materialize_for_v3(persisted_trace(exporter))
+        trace_data["spans"][3]["span_id"] = trace_data["spans"][1]["span_id"]
+        return SimpleNamespace(
+            ok=True,
+            status_code=200,
+            json=lambda: trace_data,
+            raise_for_status=lambda: None,
+        )
+
+    monkeypatch.setattr("neatlogs.doctor_v2.requests.get", get)
+    result = doctor_probe_v2(
+        api_key="local-key",
+        endpoint="http://localhost:4100",
+        timeout_seconds=1,
+        _exporter=exporter,
+    )
+    assert result["status"] == "fail"
+    assert result["probe"]["readback_trace_id"] == result["capture"]["trace_id"]
+    assert result["probe"]["finalized"] is True
+    assert result["probe"]["meaningful_root_count"] == 1
+    assert result["probe"]["duplicate_span_count"] == 1
+    assert result["probe"]["hierarchy_valid"] is False
+
+
+def test_probe_rejects_failed_or_error_terminal_readback(monkeypatch):
+    for terminal_status in ("failed", "error", "completed"):
+        exporter = Exporter()
+
+        def get(*args, **kwargs):
+            trace_data = materialize_for_v3(persisted_trace(exporter))
+            trace_data["status"] = terminal_status
+            return SimpleNamespace(
+                ok=True,
+                status_code=200,
+                json=lambda: trace_data,
+                raise_for_status=lambda: None,
+            )
+
+        monkeypatch.setattr("neatlogs.doctor_v2.requests.get", get)
+        result = doctor_probe_v2(
+            api_key="local-key",
+            endpoint="http://localhost:4100",
+            timeout_seconds=1,
+            _exporter=exporter,
+        )
+        assert result["status"] == "fail"
+        assert result["first_failure"] == "TRACE_FINALIZED_FAILED"
+        assert result["probe"]["finalized"] is False
 
 
 def test_probe_exporter_uses_normal_trace_route_and_versioned_header(monkeypatch):

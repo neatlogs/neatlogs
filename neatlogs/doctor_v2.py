@@ -32,6 +32,7 @@ _MAX_CAPTURED_BYTES_TOTAL = 1024 * 1024
 _capture_lock = threading.RLock()
 _captures: OrderedDict[str, dict[str, dict[str, Any]]] = OrderedDict()
 _capture_sizes: dict[str, int] = {}
+_capture_span_sizes: dict[str, dict[str, int]] = {}
 _latest_trace_id: str | None = None
 
 
@@ -105,15 +106,92 @@ def _first(attributes: Mapping[str, Any], keys: Sequence[str]) -> Any:
     return None
 
 
-def _tool_calls(attributes: Mapping[str, Any]) -> list[dict[str, str]] | None:
+def _tool_calls(attributes: Mapping[str, Any]) -> list[dict[str, Any]] | None:
     """Read only canonical indexed keys from attribute-mapping.json."""
-    exploded: dict[int, dict[str, str]] = {}
+    exploded: dict[int, dict[str, Any]] = {}
     for key, item in attributes.items():
-        match = re.fullmatch(r"neatlogs\.llm\.tool_calls\.(\d+)\.(id|name)$", key)
-        if match and isinstance(item, str):
-            exploded.setdefault(int(match.group(1)), {})[match.group(2)] = item
+        match = re.fullmatch(
+            r"neatlogs\.llm\.tool_calls\.(\d+)\."
+            r"(id|name|arguments|choice_index|tool_call_index)$",
+            key,
+        )
+        if match:
+            exploded.setdefault(int(match.group(1)), {})[match.group(2)] = _json_value(item)
     calls = [exploded[index] for index in sorted(exploded) if "id" in exploded[index]]
     return calls or None
+
+
+def _choices(
+    attributes: Mapping[str, Any], calls: Sequence[Mapping[str, Any]]
+) -> list[dict[str, Any]]:
+    indexes: set[int] = set()
+    messages: dict[int, dict[str, Any]] = {}
+    finishes: dict[int, Any] = {}
+    for key, value in attributes.items():
+        match = re.fullmatch(r"neatlogs\.llm\.output_messages\.(\d+)\.(.+)", key)
+        if match:
+            index = int(match.group(1))
+            indexes.add(index)
+            messages.setdefault(index, {})[match.group(2)] = _json_value(value)
+            continue
+        match = re.fullmatch(r"neatlogs\.llm\.choices\.(\d+)\.finish_reason", key)
+        if match:
+            index = int(match.group(1))
+            indexes.add(index)
+            finishes[index] = _json_value(value)
+    for call in calls:
+        choice_index = call.get("choice_index", 0)
+        if isinstance(choice_index, int) and not isinstance(choice_index, bool):
+            indexes.add(choice_index)
+    choices = []
+    for index in sorted(indexes):
+        message = dict(messages.get(index, {}))
+        selected_calls = [call for call in calls if call.get("choice_index", 0) == index]
+        if selected_calls:
+            message["tool_calls"] = selected_calls
+        choice: dict[str, Any] = {"index": index, "message": message}
+        if index in finishes:
+            choice["finish_reason"] = finishes[index]
+        choices.append(choice)
+    return choices
+
+
+def _stream_fragments(span: ReadableSpan) -> list[Any]:
+    fragments = []
+    for event in span.events or ():
+        if event.name == "neatlogs.stream.chunk" and event.attributes:
+            summary = event.attributes.get("neatlogs.stream.chunk.summary")
+            if summary is not None:
+                fragments.append(_json_value(summary))
+    return fragments
+
+
+def _payload_references(attributes: Mapping[str, Any]) -> list[dict[str, Any]]:
+    records: dict[tuple[str, int], dict[str, Any]] = {}
+    pattern = re.compile(
+        r"^(neatlogs\..+\.media)\.(\d+)\." r"(id|reference|sha256|mime_type|byte_length|state)$"
+    )
+    for key, value in attributes.items():
+        match = pattern.fullmatch(key)
+        if match:
+            records.setdefault((match.group(1), int(match.group(2))), {})[match.group(3)] = (
+                _json_value(value)
+            )
+    references = []
+    for identity in sorted(records):
+        record = records[identity]
+        digest = record.get("sha256")
+        size = record.get("byte_length")
+        if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+            continue
+        references.append(
+            {
+                "digest": f"sha256:{digest}",
+                "size": size if isinstance(size, int) and not isinstance(size, bool) else 0,
+                "mime_type": str(record.get("mime_type") or "application/octet-stream"),
+            }
+        )
+    return references
 
 
 def _diagnostic_span(span: ReadableSpan) -> dict[str, Any]:
@@ -137,7 +215,6 @@ def _diagnostic_span(span: ReadableSpan) -> dict[str, Any]:
     fields = {
         "input": _first(attributes, (f"neatlogs.{kind.lower()}.input",)),
         "output": _first(attributes, (f"neatlogs.{kind.lower()}.output",)),
-        "choices": _first(attributes, ("neatlogs.llm.generation_choices",)),
     }
     for key, value in fields.items():
         if value is not None:
@@ -145,16 +222,38 @@ def _diagnostic_span(span: ReadableSpan) -> dict[str, Any]:
     calls = _tool_calls(attributes)
     if calls:
         output["tool_calls"] = calls
+    choices = _choices(attributes, calls or ())
+    if choices:
+        output["choices"] = choices
+    expected_choices = attributes.get("neatlogs.llm.generation_choices")
+    if isinstance(expected_choices, int) and not isinstance(expected_choices, bool):
+        output["expected_choice_count"] = expected_choices
+    elif isinstance(expected_choices, (list, tuple)):
+        output["expected_choice_count"] = len(expected_choices)
+    elif choices:
+        output["expected_choice_count"] = len(choices)
     call_id = _first(attributes, ("neatlogs.tool_call.id",))
     if kind == "TOOL" and isinstance(call_id, str):
         output["tool_call"] = {"id": call_id}
         if isinstance(attributes.get("neatlogs.tool.name"), str):
             output["tool_call"]["name"] = attributes["neatlogs.tool.name"]
+        if "neatlogs.tool.input" in attributes:
+            output["tool_call"]["arguments"] = _json_value(attributes["neatlogs.tool.input"])
+        if "neatlogs.tool.output" in attributes:
+            output["tool_call"]["result"] = _json_value(attributes["neatlogs.tool.output"])
+    fragments = _stream_fragments(span)
+    if fragments:
+        output["stream_fragments"] = fragments
     streaming = bool(
         attributes.get("neatlogs.llm.is_streaming") or attributes.get("neatlogs.tool.is_streaming")
     )
     if streaming:
         output["streaming"] = True
+    references = _payload_references(attributes)
+    if references:
+        output["payload_references"] = references
+    if attributes.get("neatlogs.capture.truncated") is True:
+        output["oversized"] = True
     return output
 
 
@@ -162,45 +261,45 @@ def capture_prepared_spans(spans: Sequence[ReadableSpan]) -> None:
     """Capture the final masked spans immediately before the network exporter."""
 
     global _latest_trace_id
+    prepared: list[tuple[str, dict[str, Any], int]] = []
+    for span in spans:
+        # Completion is a finalizer control record and is folded out of the
+        # product trace. Compare Doctor read-back against semantic spans.
+        if span.name == "neatlogs.trace.complete":
+            continue
+        trace_id = f"{span.get_span_context().trace_id:032x}"
+        item = _diagnostic_span(span)
+        item_size = len(
+            json.dumps(_canonical(item), separators=(",", ":"), sort_keys=True).encode("utf-8")
+        )
+        if item_size <= _MAX_CAPTURED_BYTES_PER_TRACE:
+            prepared.append((trace_id, item, item_size))
+
     with _capture_lock:
-        for span in spans:
-            # Completion is a finalizer control record and is folded out of the
-            # product trace. Compare Doctor read-back against semantic spans.
-            if span.name == "neatlogs.trace.complete":
-                continue
-            trace_id = f"{span.get_span_context().trace_id:032x}"
+        for trace_id, item, item_size in prepared:
             current = _captures.pop(trace_id, {})
-            item = _diagnostic_span(span)
+            span_sizes = _capture_span_sizes.setdefault(trace_id, {})
             if item["span_id"] not in current and len(current) >= _MAX_CAPTURED_SPANS_PER_TRACE:
                 _captures[trace_id] = current
                 continue
-            item_size = len(
-                json.dumps(_canonical(item), separators=(",", ":"), sort_keys=True).encode("utf-8")
-            )
-            previous = current.get(item["span_id"])
-            previous_size = (
-                len(
-                    json.dumps(_canonical(previous), separators=(",", ":"), sort_keys=True).encode(
-                        "utf-8"
-                    )
-                )
-                if previous is not None
-                else 0
-            )
+            previous_size = span_sizes.get(item["span_id"], 0)
             next_size = _capture_sizes.get(trace_id, 0) - previous_size + item_size
             if next_size > _MAX_CAPTURED_BYTES_PER_TRACE:
                 _captures[trace_id] = current
                 continue
             current[item["span_id"]] = item
+            span_sizes[item["span_id"]] = item_size
             _captures[trace_id] = current
             _capture_sizes[trace_id] = next_size
             _latest_trace_id = trace_id
         while len(_captures) > _MAX_CAPTURED_TRACES:
             evicted, _ = _captures.popitem(last=False)
             _capture_sizes.pop(evicted, None)
+            _capture_span_sizes.pop(evicted, None)
         while sum(_capture_sizes.values()) > _MAX_CAPTURED_BYTES_TOTAL and _captures:
             evicted, _ = _captures.popitem(last=False)
             _capture_sizes.pop(evicted, None)
+            _capture_span_sizes.pop(evicted, None)
 
 
 def clear_doctor_capture() -> None:
@@ -208,6 +307,7 @@ def clear_doctor_capture() -> None:
     with _capture_lock:
         _captures.clear()
         _capture_sizes.clear()
+        _capture_span_sizes.clear()
         _latest_trace_id = None
 
 
@@ -447,6 +547,16 @@ def doctor_local_v2(
                     "fail",
                     "CHOICE_LOSS",
                     "The normalized response lost model choices",
+                    {"span_id": span_id},
+                )
+            )
+        if span.get("streaming") and not span.get("stream_fragments"):
+            checks.append(
+                _check(
+                    "stream",
+                    "fail",
+                    "STREAM_FRAGMENT_MISSING",
+                    "A streaming span has no captured canonical chunk events",
                     {"span_id": span_id},
                 )
             )
@@ -722,10 +832,20 @@ def _record(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, Mapping) else {}
 
 
+def _matches_materialized_value(value: Any, candidates: Sequence[Any]) -> bool:
+    """Match one of the exact, versioned v3 materialization representations."""
+    actual = json.dumps(_canonical(_json_value(value)), separators=(",", ":"), sort_keys=True)
+    return any(
+        actual == json.dumps(_canonical(candidate), separators=(",", ":"), sort_keys=True)
+        for candidate in candidates
+    )
+
+
 def _persisted_probe_result(local: dict[str, Any], trace_data: Mapping[str, Any]) -> dict[str, Any]:
     spans = [dict(item) for item in trace_data.get("spans", []) if isinstance(item, Mapping)]
     ids = [item.get("span_id") if isinstance(item.get("span_id"), str) else "" for item in spans]
     id_set = set(ids)
+    duplicate_span_count = len(ids) - len(id_set)
     expected_types = {
         "doctor.probe.root": "workflow",
         "doctor.probe.agent": "agent_action",
@@ -744,10 +864,16 @@ def _persisted_probe_result(local: dict[str, Any], trace_data: Mapping[str, Any]
         for item in spans
     ]
     by_name = {item["name"]: item for item in normalized}
+    meaningful_root_count = sum(
+        item["parent_id"] in (None, "") and item["name"] != "neatlogs.trace.complete"
+        for item in normalized
+    )
     exact_set = len(normalized) == 4 and set(by_name) == set(expected_types)
     hierarchy_valid = bool(
         exact_set
         and len(id_set) == 4
+        and duplicate_span_count == 0
+        and meaningful_root_count == 1
         and all(_SPAN_ID.fullmatch(item) for item in ids)
         and by_name["doctor.probe.root"]["parent_id"] in (None, "")
         and by_name["doctor.probe.agent"]["parent_id"] == by_name["doctor.probe.root"]["id"]
@@ -757,27 +883,38 @@ def _persisted_probe_result(local: dict[str, Any], trace_data: Mapping[str, Any]
     attributes_valid = bool(
         exact_set and all(by_name[name]["type"] == kind for name, kind in expected_types.items())
     )
+    # The v3 read path intentionally returns the UI-facing simplified view.
+    # It may preserve the normalized JSON value or render the same deterministic
+    # semantic value for display. Keep this allowlist identical across SDKs.
     expected_io = {
         "doctor.probe.root": (
-            {"prompt": "generated diagnostic input"},
-            {"result": {"value": 2}},
+            ({"prompt": "generated diagnostic input"}, "generated diagnostic input"),
+            ({"result": {"value": 2}}, "Value: 2"),
         ),
         "doctor.probe.agent": (
-            {"prompt": "generated diagnostic input"},
-            {"text": "generated diagnostic output"},
+            ({"prompt": "generated diagnostic input"}, "Prompt: generated diagnostic input"),
+            ({"text": "generated diagnostic output"}, "Text: generated diagnostic output"),
         ),
         "doctor.probe.llm": (
-            {"messages": [{"role": "user", "content": "generated diagnostic input"}]},
-            {"text": "generated diagnostic output"},
+            (
+                {"messages": [{"role": "user", "content": "generated diagnostic input"}]},
+                {"prompt": "generated diagnostic input"},
+            ),
+            ({"text": "generated diagnostic output"}, "Text: generated diagnostic output"),
         ),
-        "doctor.probe.tool": ({"value": 1}, {"value": 2}),
+        "doctor.probe.tool": (
+            ({"value": 1}, "Value: 1"),
+            ({"value": 2}, "Value: 2"),
+        ),
     }
     input_output_valid = bool(
         exact_set
         and all(
-            _json_value(by_name[name]["data"].get("input_value")) == expected_input
-            and _json_value(by_name[name]["data"].get("output_value")) == expected_output
-            for name, (expected_input, expected_output) in expected_io.items()
+            _matches_materialized_value(by_name[name]["data"].get("input_value"), expected_inputs)
+            and _matches_materialized_value(
+                by_name[name]["data"].get("output_value"), expected_outputs
+            )
+            for name, (expected_inputs, expected_outputs) in expected_io.items()
         )
     )
     metadata_valid = bool(
@@ -811,7 +948,11 @@ def _persisted_probe_result(local: dict[str, Any], trace_data: Mapping[str, Any]
     readback_span_count = (
         trace_data.get("spanCount") if isinstance(trace_data.get("spanCount"), int) else len(spans)
     )
-    visible = trace_data.get("_id") == local.get("capture", {}).get("trace_id")
+    readback_trace_id = trace_data.get("_id") if isinstance(trace_data.get("_id"), str) else ""
+    visible = readback_trace_id == local.get("capture", {}).get("trace_id")
+    # A terminal failure is materialized, but it is not a successful Doctor
+    # probe. Only the product API's documented successful terminal value passes.
+    finalized = str(trace_data.get("status") or "").lower() == "success"
     validations = (
         (
             "probe_visibility",
@@ -819,6 +960,13 @@ def _persisted_probe_result(local: dict[str, Any], trace_data: Mapping[str, Any]
             "TRACE_VISIBLE",
             "WAIT_FOR_TRACE",
             "The exact Doctor trace is visible through the authenticated trace API",
+        ),
+        (
+            "probe_finalization",
+            finalized,
+            "TRACE_FINALIZED",
+            "WAIT_FOR_TRACE",
+            "The exact Doctor trace reached a terminal materialized state",
         ),
         (
             "probe_hierarchy",
@@ -877,6 +1025,10 @@ def _persisted_probe_result(local: dict[str, Any], trace_data: Mapping[str, Any]
             "marker_header": "x-neatlogs-doctor",
             "marker_version": "v1",
             "visible": visible,
+            "readback_trace_id": readback_trace_id,
+            "finalized": finalized,
+            "meaningful_root_count": meaningful_root_count,
+            "duplicate_span_count": duplicate_span_count,
             "readback_span_count": readback_span_count,
             "hierarchy_valid": hierarchy_valid,
             "attributes_valid": attributes_valid,

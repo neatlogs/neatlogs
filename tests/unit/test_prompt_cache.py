@@ -18,6 +18,7 @@ from neatlogs.prompt.client import (
     PromptClient,
     PromptClientClosedError,
     PromptHandle,
+    PromptNotFoundError,
 )
 
 init_module = importlib.import_module("neatlogs.init")
@@ -283,6 +284,17 @@ def test_prompt_transport_error_does_not_copy_prompt_selectors():
     assert str(captured.value) == "GET /api/v1/prompts/:name/fetch request failed"
     assert "customer" not in str(captured.value)
     assert "production" not in str(captured.value)
+
+
+def test_prompt_not_found_error_does_not_copy_prompt_name():
+    client = PromptClient(base_url="https://example.test", api_key="test")
+    client.list_prompts = Mock(return_value={"items": [], "total": 0})
+
+    with pytest.raises(PromptNotFoundError) as captured:
+        client.get_prompt("private-customer-name")
+
+    assert str(captured.value) == "Managed prompt not found"
+    assert "customer" not in str(captured.value)
 
 
 @pytest.mark.asyncio

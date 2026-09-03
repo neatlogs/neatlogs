@@ -414,7 +414,7 @@ class PromptClient:
         items = listing.get("items", [])
 
         if not items:
-            raise PromptNotFoundError(f"No versions found for prompt '{name}'")
+            raise PromptNotFoundError("Managed prompt not found")
 
         if version is not None:
             offset = 0
@@ -428,7 +428,7 @@ class PromptClient:
                     break
                 listing = self.list_prompts(name=name, limit=500, offset=offset)
                 items = listing.get("items", [])
-            raise PromptNotFoundError(f"Prompt '{name}' version {version} not found")
+            raise PromptNotFoundError(f"Managed prompt version {version} not found")
 
         latest = max(items, key=lambda x: x.get("createdAt") or x.get("created_at") or "")
         return PromptHandle(_normalize_prompt_object(latest))
@@ -708,7 +708,7 @@ class PromptClient:
             offset += len(items)
             total = int(listing.get("total") or offset)
             if not items or offset >= total:
-                raise PromptNotFoundError(f"Prompt '{name}' version {version} not found")
+                raise PromptNotFoundError(f"Managed prompt version {version} not found")
 
     # ----------------
     # Internal helpers
@@ -1090,7 +1090,7 @@ class AsyncPromptClient:
         items = listing.get("items", [])
 
         if not items:
-            raise PromptNotFoundError(f"No versions found for prompt '{name}'")
+            raise PromptNotFoundError("Managed prompt not found")
 
         if version is not None:
             offset = 0
@@ -1107,7 +1107,7 @@ class AsyncPromptClient:
                     method="GET", path="/api/managed-prompts", params=params
                 )
                 items = listing.get("items", [])
-            raise PromptNotFoundError(f"Prompt '{name}' version {version} not found")
+            raise PromptNotFoundError(f"Managed prompt version {version} not found")
 
         latest = max(items, key=lambda x: x.get("createdAt") or x.get("created_at") or "")
         return PromptHandle(_normalize_prompt_object(latest))

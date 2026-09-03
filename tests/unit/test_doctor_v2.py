@@ -112,6 +112,7 @@ def _span(attributes, *, trace_id=1, span_id=2, parent_id=0):
 class Exporter:
     def __init__(self):
         self.spans = []
+        self.shutdown_calls = 0
 
     def export(self, spans):
         self.spans.extend(spans)
@@ -121,7 +122,7 @@ class Exporter:
         return True
 
     def shutdown(self):
-        pass
+        self.shutdown_calls += 1
 
 
 def persisted_trace(exporter):
@@ -584,6 +585,107 @@ def test_probe_exports_and_reads_back_the_exact_trace(monkeypatch):
     assert calls[0][0].startswith("http://localhost:4100/api/traces/v3/")
     assert calls[0][1]["headers"] == {"x-api-key": "local-key"}
     assert "local-key" not in json.dumps(result)
+
+
+def test_ordinary_runtime_then_probe_fails_closed_without_disturbing_runtime(monkeypatch):
+    import importlib
+
+    from neatlogs.core.context import trace
+
+    init_module = importlib.import_module("neatlogs.init")
+    ordinary_exporter = Exporter()
+    probe_exporter = Exporter()
+    monkeypatch.setenv("NEATLOGS_DISABLE_EXPORT", "false")
+    monkeypatch.setattr(
+        init_module,
+        "OTLPSpanExporter",
+        lambda **_kwargs: ordinary_exporter,
+    )
+
+    init_module.init(
+        api_key="local-key",
+        endpoint="http://localhost:4100",
+        workflow_name="neatlogs.doctor.v2",
+        batch_size=32,
+        flush_interval=60,
+        register_shutdown_handlers=False,
+    )
+    ordinary_provider = init_module._tracer_provider
+
+    result = doctor_probe_v2(
+        api_key="local-key",
+        endpoint="http://localhost:4100",
+        timeout_seconds=1,
+        _exporter=probe_exporter,
+    )
+
+    assert result["status"] == "fail"
+    assert result["first_failure"] == "BACKEND_PROBE_UNAVAILABLE"
+    assert "capture" not in result
+    assert init_module._initialized is True
+    assert init_module._tracer_provider is ordinary_provider
+    assert ordinary_exporter.shutdown_calls == 0
+    assert probe_exporter.spans == []
+
+    with trace(name="ordinary.after-probe", kind="WORKFLOW"):
+        pass
+    assert init_module.flush(timeout_millis=5_000)
+    assert any(item.name == "ordinary.after-probe" for item in ordinary_exporter.spans)
+    assert init_module.shutdown(termination_reason="ordinary-test-complete")
+
+
+def test_probe_then_ordinary_runtime_starts_without_doctor_transport(monkeypatch):
+    import importlib
+
+    from neatlogs.core.context import trace
+
+    init_module = importlib.import_module("neatlogs.init")
+    probe_exporter = Exporter()
+
+    def get(*_args, **_kwargs):
+        payload = materialize_for_v3(persisted_trace(probe_exporter))
+        return SimpleNamespace(
+            ok=True,
+            status_code=200,
+            json=lambda: payload,
+            raise_for_status=lambda: None,
+        )
+
+    monkeypatch.setattr("neatlogs.doctor_v2.requests.get", get)
+    result = doctor_probe_v2(
+        api_key="local-key",
+        endpoint="http://localhost:4100",
+        timeout_seconds=1,
+        _exporter=probe_exporter,
+    )
+    assert result["status"] == "pass", result
+    assert init_module._initialized is False
+
+    ordinary_exporter = Exporter()
+    constructor_options = {}
+
+    def build_exporter(**kwargs):
+        constructor_options.update(kwargs)
+        return ordinary_exporter
+
+    monkeypatch.setenv("NEATLOGS_DISABLE_EXPORT", "false")
+    monkeypatch.setattr(init_module, "OTLPSpanExporter", build_exporter)
+    init_module.init(
+        api_key="local-key",
+        endpoint="http://localhost:4100",
+        workflow_name="neatlogs.doctor.v2",
+        batch_size=32,
+        flush_interval=60,
+        register_shutdown_handlers=False,
+    )
+
+    assert constructor_options["headers"] == {"x-api-key": "local-key"}
+    assert "neatlogs.doctor" not in init_module._tracer_provider.resource.attributes
+    with trace(name="ordinary.after-doctor", kind="WORKFLOW"):
+        pass
+    assert init_module.flush(timeout_millis=5_000)
+    assert any(item.name == "ordinary.after-doctor" for item in ordinary_exporter.spans)
+    assert init_module.shutdown(termination_reason="ordinary-test-complete")
 
 
 def test_probe_rejects_wrong_materialized_input_output(monkeypatch):

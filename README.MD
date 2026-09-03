@@ -255,7 +255,9 @@ neatlogs doctor --local
 neatlogs-doctor --local --json
 ```
 
-To verify the complete ingestion path through the hosted diagnostic receipt endpoint:
+To verify the complete ingestion path, export a controlled trace through the existing
+`POST /v1/traces` route and read that exact trace back through
+`GET /api/traces/v3/:traceId`:
 
 ```bash
 NEATLOGS_API_KEY=your-api-key neatlogs doctor --probe --json

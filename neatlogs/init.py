@@ -216,8 +216,17 @@ def _configuration_signature(**values):
     ).lower() in ("true", "1", "yes")
     mask = values.pop("mask")
     provider = values.pop("tracer_provider")
+    doctor_probe = values.pop("_doctor_probe")
+    doctor_probe_exporter = values.pop("_doctor_probe_exporter")
     values["mask_identity"] = id(mask) if mask is not None else None
     values["provider_identity"] = id(provider) if provider is not None else None
+    # Doctor changes both the resource contract and the transport headers. It
+    # must never be treated as an idempotent reuse of an ordinary initialized
+    # runtime, because the probe owns and shuts down the pipeline it creates.
+    values["doctor_probe"] = bool(doctor_probe)
+    values["doctor_probe_exporter_identity"] = (
+        id(doctor_probe_exporter) if doctor_probe_exporter is not None else None
+    )
     return json.dumps(values, sort_keys=True, separators=(",", ":"), default=str)
 
 
@@ -348,6 +357,8 @@ def init(
         isolate=isolate,
         register_shutdown_handlers=register_shutdown_handlers,
         uploads_enabled=uploads_enabled_resolved,
+        _doctor_probe=_doctor_probe,
+        _doctor_probe_exporter=_doctor_probe_exporter,
     )
 
     if _initialized:

@@ -121,9 +121,7 @@ def _tool_calls(attributes: Mapping[str, Any]) -> list[dict[str, Any]] | None:
     return calls or None
 
 
-def _choices(
-    attributes: Mapping[str, Any], calls: Sequence[Mapping[str, Any]]
-) -> list[dict[str, Any]]:
+def _choices(attributes: Mapping[str, Any]) -> list[dict[str, Any]]:
     indexes: set[int] = set()
     messages: dict[int, dict[str, Any]] = {}
     finishes: dict[int, Any] = {}
@@ -139,16 +137,9 @@ def _choices(
             index = int(match.group(1))
             indexes.add(index)
             finishes[index] = _json_value(value)
-    for call in calls:
-        choice_index = call.get("choice_index", 0)
-        if isinstance(choice_index, int) and not isinstance(choice_index, bool):
-            indexes.add(choice_index)
     choices = []
     for index in sorted(indexes):
         message = dict(messages.get(index, {}))
-        selected_calls = [call for call in calls if call.get("choice_index", 0) == index]
-        if selected_calls:
-            message["tool_calls"] = selected_calls
         choice: dict[str, Any] = {"index": index, "message": message}
         if index in finishes:
             choice["finish_reason"] = finishes[index]
@@ -222,7 +213,7 @@ def _diagnostic_span(span: ReadableSpan) -> dict[str, Any]:
     calls = _tool_calls(attributes)
     if calls:
         output["tool_calls"] = calls
-    choices = _choices(attributes, calls or ())
+    choices = _choices(attributes)
     if choices:
         output["choices"] = choices
     expected_choices = attributes.get("neatlogs.llm.generation_choices")
@@ -1048,63 +1039,6 @@ def doctor_probe_v2(
     _exporter: Any = None,
 ) -> dict[str, Any]:
     """Export a controlled trace and read the exact persisted trace back."""
-
-    import secrets
-
-    root_id = secrets.token_hex(8)
-    agent_id = secrets.token_hex(8)
-    synthetic = {
-        "trace_id": secrets.token_hex(16),
-        "root_span_id": root_id,
-        "spans": [
-            {
-                "span_id": root_id,
-                "parent_span_id": None,
-                "name": "doctor.probe.root",
-                "kind": "WORKFLOW",
-                "status": "OK",
-                "input": {"prompt": "generated diagnostic input"},
-                "output": {"result": {"value": 2}},
-                "sampled": True,
-                "ended": True,
-            },
-            {
-                "span_id": agent_id,
-                "parent_span_id": root_id,
-                "name": "doctor.probe.agent",
-                "kind": "AGENT",
-                "status": "OK",
-                "input": {"prompt": "generated diagnostic input"},
-                "output": {"text": "generated diagnostic output"},
-                "sampled": True,
-                "ended": True,
-            },
-            {
-                "span_id": secrets.token_hex(8),
-                "parent_span_id": agent_id,
-                "name": "doctor.probe.llm",
-                "kind": "LLM",
-                "status": "OK",
-                "input": {"prompt": "generated diagnostic input"},
-                "output": {"text": "generated diagnostic output"},
-                "sampled": True,
-                "ended": True,
-            },
-            {
-                "span_id": secrets.token_hex(8),
-                "parent_span_id": root_id,
-                "name": "doctor.probe.tool",
-                "kind": "TOOL",
-                "status": "OK",
-                "input": {"value": 1},
-                "output": {"value": 2},
-                "sampled": True,
-                "ended": True,
-            },
-        ],
-    }
-    local = doctor_local_v2(synthetic)
-    capture = local["capture"]
     key = (api_key if api_key is not None else os.getenv("NEATLOGS_API_KEY", "")).strip()
     if not key:
         return {
@@ -1118,7 +1052,6 @@ def doctor_probe_v2(
                 "schema_version": str(TELEMETRY_SCHEMA_VERSION),
                 "transport": "otlp_http_protobuf",
             },
-            "capture": capture,
             "checks": [
                 _check(
                     "credentials",
@@ -1134,12 +1067,17 @@ def doctor_probe_v2(
         )
     except ValueError:
         return {
-            **local,
+            "format_version": DOCTOR_V2_FORMAT_VERSION,
             "mode": "probe",
             "status": "fail",
             "first_failure": "ENDPOINT_INVALID",
+            "runtime": {
+                "language": "python",
+                "sdk_version": __version__,
+                "schema_version": str(TELEMETRY_SCHEMA_VERSION),
+                "transport": "otlp_http_protobuf",
+            },
             "checks": [
-                *local["checks"],
                 _check(
                     "endpoint",
                     "fail",
@@ -1148,6 +1086,7 @@ def doctor_probe_v2(
                 ),
             ],
         }
+    capture: dict[str, Any] | None = None
     try:
         local = _controlled_probe_capture(
             api_key=key,
@@ -1190,7 +1129,7 @@ def doctor_probe_v2(
         reason_code = (
             "AUTH_FAILED" if response_status in {401, 403} else "BACKEND_PROBE_UNAVAILABLE"
         )
-        return {
+        failure = {
             "format_version": DOCTOR_V2_FORMAT_VERSION,
             "mode": "probe",
             "status": "fail",
@@ -1201,7 +1140,6 @@ def doctor_probe_v2(
                 "schema_version": str(TELEMETRY_SCHEMA_VERSION),
                 "transport": "otlp_http_protobuf",
             },
-            "capture": capture,
             "checks": [
                 _check(
                     "probe",
@@ -1215,3 +1153,6 @@ def doctor_probe_v2(
                 )
             ],
         }
+        if capture is not None:
+            failure["capture"] = capture
+        return failure

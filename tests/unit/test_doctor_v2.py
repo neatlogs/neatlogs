@@ -29,10 +29,20 @@ def envelope():
     return json.loads((FIXTURES / "valid-envelope.json").read_text())
 
 
+def rich_envelope():
+    return json.loads((FIXTURES / "rich-envelope.json").read_text())
+
+
 def test_canonical_digest_matches_cross_language_golden_value():
     assert doctor_semantic_digest(envelope()) == (
         "sha256:824650f5fbc6d9f8d923813564116092" "63417219eaf7fdafbd2ba94795b6c4f7"
     )
+
+
+def test_rich_digest_matches_cross_language_golden_with_top_level_tool_requests():
+    fixture = rich_envelope()
+    expected = "sha256:45b1ebe029b272ceb45edb210978f6600d29ac50ca4d9cd0f4ef5abb3eff063e"
+    assert doctor_semantic_digest(fixture) == expected
 
 
 def test_valid_envelope_conforms_to_doctor_v2_shape():
@@ -308,7 +318,8 @@ def test_production_choice_and_media_paths_flow_into_doctor_capture():
     projected = by_name["wrapped.llm"]
     assert projected["expected_choice_count"] == 2
     assert [choice["message"]["content"] for choice in projected["choices"]] == ["AB", "XY"]
-    assert projected["choices"][1]["message"]["tool_calls"][0]["arguments"] == {"value": 1}
+    assert projected["tool_calls"][0]["arguments"] == {"value": 1}
+    assert all("tool_calls" not in choice["message"] for choice in projected["choices"])
     assert len(projected["stream_fragments"]) == 2
     assert projected["streaming"] is True
     assert projected["payload_references"] == [
@@ -322,6 +333,103 @@ def test_production_choice_and_media_paths_flow_into_doctor_capture():
     assert doctor_local_v2(captured)["status"] == "pass"
     provider.shutdown()
     clear_doctor_capture()
+
+
+def test_public_google_genai_wrapper_flows_through_normalizer_and_doctor_capture():
+    from neatlogs import wrap
+    from neatlogs.core.context import trace
+    from neatlogs.init import flush, init, shutdown
+
+    class Models:
+        def generate_content(self, *args, **kwargs):
+            raise AssertionError("non-streaming provider method was not expected")
+
+        def generate_content_stream(self, *args, **kwargs):
+            return iter(
+                [
+                    {
+                        "candidates": [
+                            {
+                                "index": 0,
+                                "content": {"role": "model", "parts": [{"text": "A"}]},
+                            },
+                            {
+                                "index": 1,
+                                "content": {
+                                    "role": "model",
+                                    "parts": [
+                                        {"text": "X"},
+                                        {
+                                            "function_call": {
+                                                "id": "doctor_call_1",
+                                                "name": "diagnostic_tool",
+                                                "args": {"value": 1},
+                                            }
+                                        },
+                                    ],
+                                },
+                            },
+                        ]
+                    },
+                    {
+                        "candidates": [
+                            {
+                                "index": 0,
+                                "finish_reason": "stop",
+                                "content": {"role": "model", "parts": [{"text": "B"}]},
+                            },
+                            {
+                                "index": 1,
+                                "finish_reason": "tool_calls",
+                                "content": {"role": "model", "parts": [{"text": "Y"}]},
+                            },
+                        ]
+                    },
+                ]
+            )
+
+    Client = type("Client", (), {"__module__": "google.genai.client"})
+    client = Client()
+    client.vertexai = False
+    client.models = Models()
+    exporter = Exporter()
+    init(
+        api_key="project-key",
+        endpoint="http://localhost:4100",
+        workflow_name="wrapper-doctor-test",
+        register_shutdown_handlers=False,
+        _doctor_probe=True,
+        _doctor_probe_exporter=exporter,
+    )
+    try:
+        wrapped = wrap(client)
+        with trace(name="wrapped.root", kind="WORKFLOW") as root:
+            trace_id = f"{root.get_span_context().trace_id:032x}"
+            list(
+                wrapped.models.generate_content_stream(
+                    model="gemini-test",
+                    contents="generated diagnostic input",
+                )
+            )
+            with trace(name="wrapped.tool", kind="TOOL") as tool:
+                tool.set_attribute("neatlogs.tool_call.id", "doctor_call_1")
+                tool.set_attribute("neatlogs.tool.name", "diagnostic_tool")
+                tool.set_attribute("neatlogs.tool.input", '{"value":1}')
+                tool.set_attribute("neatlogs.tool.output", '{"value":2}')
+        assert flush(timeout_millis=5_000)
+        captured = get_captured_envelope(trace_id)
+        assert captured is not None
+        by_name = {item["name"]: item for item in captured["spans"]}
+        llm = by_name["google_genai.models.generate_content"]
+        assert [choice["message"].get("content") for choice in llm["choices"]] == ["AB", "XY"]
+        assert llm["tool_calls"][0]["id"] == "doctor_call_1"
+        assert all("tool_calls" not in choice["message"] for choice in llm["choices"])
+        assert llm["streaming"] is True
+        assert by_name["wrapped.tool"]["tool_call"]["id"] == "doctor_call_1"
+        assert doctor_local_v2(captured)["status"] == "pass"
+    finally:
+        shutdown(termination_reason="doctor-wrapper-test-complete")
+        clear_doctor_capture()
 
 
 def test_emitted_span_capture_derives_choices_stream_tool_and_payload_fields():
@@ -366,7 +474,8 @@ def test_emitted_span_capture_derives_choices_stream_tool_and_payload_fields():
     projected = by_name["doctor.llm"]
     assert projected["expected_choice_count"] == 2
     assert [choice["index"] for choice in projected["choices"]] == [0, 1]
-    assert projected["choices"][0]["message"]["tool_calls"][0]["id"] == "doctor_call_1"
+    assert projected["tool_calls"][0]["id"] == "doctor_call_1"
+    assert all("tool_calls" not in choice["message"] for choice in projected["choices"])
     assert projected["stream_fragments"] == [{"text": "done"}]
     assert projected["streaming"] is True
     assert projected["oversized"] is True
@@ -589,13 +698,16 @@ def test_probe_missing_credential_never_echoes_environment(monkeypatch):
     monkeypatch.delenv("NEATLOGS_API_KEY", raising=False)
     result = doctor_probe_v2()
     assert result["first_failure"] == "CREDENTIAL_MISSING"
-    assert result["capture"]["span_count"] == 4
+    # Credential validation is a preflight failure: do not create or imply an
+    # exported controlled fixture when the normal authenticated path cannot run.
+    assert "capture" not in result
 
 
 def test_probe_invalid_endpoint_returns_stable_configuration_failure():
     result = doctor_probe_v2(api_key="test-key", endpoint="not-a-url")
     assert result["status"] == "fail"
     assert result["first_failure"] == "ENDPOINT_INVALID"
+    assert "capture" not in result
     assert result["checks"][-1]["remediation_code"] == "SET_ENDPOINT"
     assert "api_key" not in json.dumps(result).lower()
 
@@ -613,7 +725,9 @@ def test_standalone_local_runs_real_isolated_exporter_pipeline(monkeypatch, caps
     assert result["status"] == "pass"
     assert result["first_failure"] is None
     assert result["capture"]["span_count"] == 4
-    assert result["capture"]["semantic_digest"].startswith("sha256:")
+    assert result["capture"]["semantic_digest"] == (
+        "sha256:7163d2de42c4165f3ae552279fdde2ec0839413ce608c6e5d71f3fb532df319b"
+    )
     assert result["checks"] == [
         {
             "name": "local_envelope",

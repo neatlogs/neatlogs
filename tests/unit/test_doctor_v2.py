@@ -2,8 +2,8 @@ import base64
 import hashlib
 import json
 from pathlib import Path
-from types import SimpleNamespace
 
+import requests
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor, SpanExportResult
@@ -123,6 +123,17 @@ class Exporter:
 
     def shutdown(self):
         self.shutdown_calls += 1
+
+
+def _json_response(payload, status_code=200):
+    body = json.dumps(payload).encode()
+    response = requests.Response()
+    response.status_code = status_code
+    response._content = body
+    response._content_consumed = True
+    response.headers["content-length"] = str(len(body))
+    response.url = "http://localhost:4100/api/traces/v3/test"
+    return response
 
 
 def persisted_trace(exporter):
@@ -550,12 +561,15 @@ def test_probe_exports_and_reads_back_the_exact_trace(monkeypatch):
     def get(url, **kwargs):
         calls.append((url, kwargs))
         payload = materialize_for_v3(persisted_trace(exporter))
-        return SimpleNamespace(
-            ok=True,
-            status_code=200,
-            json=lambda: payload,
-            raise_for_status=lambda: None,
-        )
+        payload["ingestionDiagnostics"] = {
+            "protocolVersion": "v1",
+            "state": "succeeded",
+            "currentStage": "finalized",
+            "lastSuccessfulStage": "finalized",
+            "retryable": False,
+            "stages": [{"lastObservedAt": "must-not-survive"}],
+        }
+        return _json_response(payload)
 
     monkeypatch.setattr("neatlogs.doctor_v2.requests.get", get)
     result = doctor_probe_v2(
@@ -583,7 +597,20 @@ def test_probe_exports_and_reads_back_the_exact_trace(monkeypatch):
         "typed_tokens_valid": True,
     }
     assert calls[0][0].startswith("http://localhost:4100/api/traces/v3/")
-    assert calls[0][1]["headers"] == {"x-api-key": "local-key"}
+    assert calls[0][1]["headers"] == {
+        "x-api-key": "local-key",
+        "x-neatlogs-doctor": "v1",
+    }
+    finalization = next(
+        check for check in result["checks"] if check["name"] == "probe_finalization"
+    )
+    assert finalization["details"] == {
+        "ingestion_state": "succeeded",
+        "current_stage": "finalized",
+        "last_successful_stage": "finalized",
+        "retryable": False,
+    }
+    assert "must-not-survive" not in json.dumps(result)
     assert "local-key" not in json.dumps(result)
 
 
@@ -644,12 +671,7 @@ def test_probe_then_ordinary_runtime_starts_without_doctor_transport(monkeypatch
 
     def get(*_args, **_kwargs):
         payload = materialize_for_v3(persisted_trace(probe_exporter))
-        return SimpleNamespace(
-            ok=True,
-            status_code=200,
-            json=lambda: payload,
-            raise_for_status=lambda: None,
-        )
+        return _json_response(payload)
 
     monkeypatch.setattr("neatlogs.doctor_v2.requests.get", get)
     result = doctor_probe_v2(
@@ -694,12 +716,7 @@ def test_probe_rejects_wrong_materialized_input_output(monkeypatch):
     def get(*args, **kwargs):
         trace_data = materialize_for_v3(persisted_trace(exporter))
         trace_data["spans"][2]["data"]["output_value"] = "Text: wrong output"
-        return SimpleNamespace(
-            ok=True,
-            status_code=200,
-            json=lambda: trace_data,
-            raise_for_status=lambda: None,
-        )
+        return _json_response(trace_data)
 
     monkeypatch.setattr("neatlogs.doctor_v2.requests.get", get)
     result = doctor_probe_v2(
@@ -719,12 +736,7 @@ def test_probe_reports_terminal_correlation_roots_and_duplicates(monkeypatch):
     def get(*args, **kwargs):
         trace_data = materialize_for_v3(persisted_trace(exporter))
         trace_data["spans"][3]["span_id"] = trace_data["spans"][1]["span_id"]
-        return SimpleNamespace(
-            ok=True,
-            status_code=200,
-            json=lambda: trace_data,
-            raise_for_status=lambda: None,
-        )
+        return _json_response(trace_data)
 
     monkeypatch.setattr("neatlogs.doctor_v2.requests.get", get)
     result = doctor_probe_v2(
@@ -748,12 +760,7 @@ def test_probe_rejects_failed_or_error_terminal_readback(monkeypatch):
         def get(*args, **kwargs):
             trace_data = materialize_for_v3(persisted_trace(exporter))
             trace_data["status"] = terminal_status
-            return SimpleNamespace(
-                ok=True,
-                status_code=200,
-                json=lambda: trace_data,
-                raise_for_status=lambda: None,
-            )
+            return _json_response(trace_data)
 
         monkeypatch.setattr("neatlogs.doctor_v2.requests.get", get)
         result = doctor_probe_v2(
@@ -848,16 +855,89 @@ def test_standalone_local_runs_real_isolated_exporter_pipeline(monkeypatch, caps
 
 def test_probe_never_treats_processing_readback_as_success(monkeypatch):
     exporter = Exporter()
-    response = SimpleNamespace(
-        ok=True,
-        status_code=202,
-        json=lambda: {"status": "processing"},
-        raise_for_status=lambda: None,
+    response = _json_response(
+        {
+            "status": "processing",
+            "message": "must-not-survive",
+            "ingestionDiagnostics": {
+                "protocolVersion": "v1",
+                "state": "processing",
+                "currentStage": "raw_durable",
+                "lastSuccessfulStage": "raw_durable",
+                "retryable": False,
+                "stages": [{"firstObservedAt": "must-not-survive"}],
+            },
+        },
+        202,
     )
     monkeypatch.setattr("neatlogs.doctor_v2.requests.get", lambda *a, **k: response)
-    monkeypatch.setattr("neatlogs.doctor_v2.time.sleep", lambda *_: None)
-    ticks = iter(float(value) for value in range(1_000))
-    monkeypatch.setattr("neatlogs.doctor_v2.time.monotonic", lambda: next(ticks))
+    result = doctor_probe_v2(
+        api_key="local-key",
+        endpoint="http://localhost:4100",
+        timeout_seconds=0.01,
+        _exporter=exporter,
+    )
+    assert result["status"] == "fail"
+    assert result["first_failure"] == "BACKEND_PROBE_UNAVAILABLE"
+    assert result["checks"][-1]["details"] == {
+        "ingestion_state": "processing",
+        "current_stage": "raw_durable",
+        "last_successful_stage": "raw_durable",
+        "retryable": False,
+    }
+    assert "must-not-survive" not in json.dumps(result)
+
+
+def test_probe_retains_safe_diagnostics_from_not_found_until_timeout(monkeypatch):
+    exporter = Exporter()
+    response = _json_response(
+        {
+            "ingestionDiagnostics": {
+                "protocolVersion": "v1",
+                "state": "processing",
+                "currentStage": "raw_durable",
+                "lastSuccessfulStage": "raw_durable",
+                "retryable": False,
+            }
+        },
+        404,
+    )
+    monkeypatch.setattr("neatlogs.doctor_v2.requests.get", lambda *_a, **_k: response)
+    result = doctor_probe_v2(
+        api_key="local-key",
+        endpoint="http://localhost:4100",
+        timeout_seconds=0.01,
+        _exporter=exporter,
+    )
+    assert result["checks"][-1]["details"] == {
+        "ingestion_state": "processing",
+        "current_stage": "raw_durable",
+        "last_successful_stage": "raw_durable",
+        "retryable": False,
+    }
+
+
+def test_probe_stops_on_terminal_stage_receipt_with_safe_details(monkeypatch):
+    exporter = Exporter()
+    response = _json_response(
+        {
+            "message": "database leaked a secret",
+            "projectId": "must-not-survive",
+            "ingestionDiagnostics": {
+                "protocolVersion": "v1",
+                "state": "failed",
+                "currentStage": "pii_redaction",
+                "lastSuccessfulStage": "pii_dispatch",
+                "failedStage": "pii_redaction",
+                "failureCode": "PII_REDACTION_FAILED",
+                "retryable": True,
+                "stages": [{"lastObservedAt": "secret-timestamp"}],
+            },
+        },
+        409,
+    )
+    get = lambda *_args, **_kwargs: response
+    monkeypatch.setattr("neatlogs.doctor_v2.requests.get", get)
     result = doctor_probe_v2(
         api_key="local-key",
         endpoint="http://localhost:4100",
@@ -866,6 +946,222 @@ def test_probe_never_treats_processing_readback_as_success(monkeypatch):
     )
     assert result["status"] == "fail"
     assert result["first_failure"] == "BACKEND_PROBE_UNAVAILABLE"
+    assert result["checks"][-1]["details"] == {
+        "ingestion_state": "failed",
+        "current_stage": "pii_redaction",
+        "last_successful_stage": "pii_dispatch",
+        "failed_stage": "pii_redaction",
+        "failure_code": "PII_REDACTION_FAILED",
+        "retryable": True,
+    }
+    assert "must-not-survive" not in json.dumps(result)
+    assert "secret" not in json.dumps(result)
+
+
+def test_probe_ignores_unknown_or_malformed_stage_diagnostics(monkeypatch):
+    exporter = Exporter()
+
+    def get(*_args, **_kwargs):
+        payload = materialize_for_v3(persisted_trace(exporter))
+        payload["ingestionDiagnostics"] = {
+            "protocolVersion": "v1",
+            "state": {"nested": "processing"},
+            "currentStage": ["raw_durable"],
+            "retryable": False,
+        }
+        return _json_response(payload)
+
+    monkeypatch.setattr("neatlogs.doctor_v2.requests.get", get)
+    result = doctor_probe_v2(
+        api_key="local-key",
+        endpoint="http://localhost:4100",
+        timeout_seconds=1,
+        _exporter=exporter,
+    )
+    assert result["status"] == "pass"
+    assert all("details" not in check for check in result["checks"])
+
+
+def test_probe_refuses_cross_origin_redirect_without_forwarding_credentials(monkeypatch):
+    exporter = Exporter()
+    calls = []
+
+    def get(*args, **kwargs):
+        calls.append((args, kwargs))
+        response = _json_response({}, 302)
+        response.headers["location"] = "https://attacker.example/collect"
+        return response
+
+    monkeypatch.setattr("neatlogs.doctor_v2.requests.get", get)
+    result = doctor_probe_v2(
+        api_key="local-key",
+        endpoint="http://localhost:4100",
+        timeout_seconds=1,
+        _exporter=exporter,
+    )
+    assert result["first_failure"] == "BACKEND_PROBE_UNAVAILABLE"
+    assert len(calls) == 1
+    assert calls[0][1]["allow_redirects"] is False
+    assert calls[0][1]["stream"] is True
+    assert "local-key" not in json.dumps(result)
+
+
+def test_probe_caps_all_readback_status_bodies(monkeypatch):
+    for status_code in (200, 202, 409):
+        exporter = Exporter()
+        oversized = json.dumps(
+            {
+                "ingestionDiagnostics": {
+                    "protocolVersion": "v1",
+                    "state": "processing",
+                    "currentStage": "raw_durable",
+                    "retryable": False,
+                },
+                "padding": "x" * ((1 << 20) + 1),
+            }
+        ).encode()
+
+        def get(*_args, **_kwargs):
+            response = requests.Response()
+            response.status_code = status_code
+            response._content = oversized
+            response.headers["content-length"] = str(len(oversized))
+            response.url = "http://localhost:4100/api/traces/v3/test"
+            return response
+
+        monkeypatch.setattr("neatlogs.doctor_v2.requests.get", get)
+        result = doctor_probe_v2(
+            api_key="local-key",
+            endpoint="http://localhost:4100",
+            timeout_seconds=0.01,
+            _exporter=exporter,
+        )
+        assert result["first_failure"] == "BACKEND_PROBE_UNAVAILABLE"
+        assert all("details" not in check for check in result["checks"])
+
+
+def test_probe_success_uses_only_final_response_diagnostics(monkeypatch):
+    exporter = Exporter()
+    calls = 0
+
+    def get(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return _json_response(
+                {
+                    "ingestionDiagnostics": {
+                        "protocolVersion": "v1",
+                        "state": "processing",
+                        "currentStage": "raw_durable",
+                        "lastSuccessfulStage": "raw_durable",
+                        "retryable": False,
+                    }
+                },
+                202,
+            )
+        payload = materialize_for_v3(persisted_trace(exporter))
+        return _json_response(payload)
+
+    monkeypatch.setattr("neatlogs.doctor_v2.requests.get", get)
+    monkeypatch.setattr("neatlogs.doctor_v2.time.sleep", lambda *_: None)
+    result = doctor_probe_v2(
+        api_key="local-key",
+        endpoint="http://localhost:4100",
+        timeout_seconds=1,
+        _exporter=exporter,
+    )
+    assert result["status"] == "pass"
+    assert all("details" not in check for check in result["checks"])
+
+
+def test_probe_retains_diagnostics_only_on_network_and_server_failures(monkeypatch):
+    for terminal in ("network", "server", "auth", "redirect", "client"):
+        exporter = Exporter()
+        calls = 0
+
+        def get(*_args, **_kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return _json_response(
+                    {
+                        "ingestionDiagnostics": {
+                            "protocolVersion": "v1",
+                            "state": "processing",
+                            "currentStage": "pii_dispatch",
+                            "lastSuccessfulStage": "kafka_published",
+                            "retryable": False,
+                        }
+                    },
+                    202,
+                )
+            if terminal == "network":
+                raise requests.ConnectionError("network unavailable")
+            response = requests.Response()
+            response.status_code = {
+                "auth": 403,
+                "redirect": 302,
+                "client": 418,
+                "server": 503,
+            }[terminal]
+            response.url = "http://localhost:4100/api/traces/v3/test"
+            response._content = b""
+            return response
+
+        monkeypatch.setattr("neatlogs.doctor_v2.requests.get", get)
+        monkeypatch.setattr("neatlogs.doctor_v2.time.sleep", lambda *_: None)
+        result = doctor_probe_v2(
+            api_key="local-key",
+            endpoint="http://localhost:4100",
+            timeout_seconds=1,
+            _exporter=exporter,
+        )
+        failure = next(check for check in result["checks"] if check["status"] == "fail")
+        expected = (
+            {
+                "ingestion_state": "processing",
+                "current_stage": "pii_dispatch",
+                "last_successful_stage": "kafka_published",
+                "retryable": False,
+            }
+            if terminal in {"network", "server"}
+            else None
+        )
+        assert failure.get("details") == expected
+
+
+def test_probe_does_not_retain_stale_details_for_malformed_terminal_receipt(monkeypatch):
+    exporter = Exporter()
+    calls = 0
+
+    def get(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return _json_response(
+                {
+                    "ingestionDiagnostics": {
+                        "protocolVersion": "v1",
+                        "state": "processing",
+                        "currentStage": "raw_durable",
+                        "retryable": False,
+                    }
+                },
+                202,
+            )
+        return _json_response({"ingestionDiagnostics": {"protocolVersion": "v2"}}, 409)
+
+    monkeypatch.setattr("neatlogs.doctor_v2.requests.get", get)
+    monkeypatch.setattr("neatlogs.doctor_v2.time.sleep", lambda *_: None)
+    result = doctor_probe_v2(
+        api_key="local-key",
+        endpoint="http://localhost:4100",
+        timeout_seconds=1,
+        _exporter=exporter,
+    )
+    failure = next(check for check in reversed(result["checks"]) if check["status"] == "fail")
+    assert failure.get("details") is None
 
 
 def test_probe_rejects_redacted_token_counts(monkeypatch):
@@ -874,12 +1170,7 @@ def test_probe_rejects_redacted_token_counts(monkeypatch):
     def get(*args, **kwargs):
         trace_data = persisted_trace(exporter)
         trace_data["promptTokens"] = "[REDACTED]"
-        return SimpleNamespace(
-            ok=True,
-            status_code=200,
-            json=lambda: trace_data,
-            raise_for_status=lambda: None,
-        )
+        return _json_response(trace_data)
 
     monkeypatch.setattr("neatlogs.doctor_v2.requests.get", get)
     result = doctor_probe_v2(

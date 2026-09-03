@@ -31,6 +31,22 @@ def _print_v2(result: dict, as_json: bool) -> None:
     print(f"Neatlogs Doctor: {result['status'].upper()}")
     for check in result.get("checks", []):
         print(f"[{check['status'].upper()}] {check['reason_code']}: {check['message']}")
+    diagnostics = next(
+        (
+            check.get("details")
+            for check in result.get("checks", [])
+            if isinstance(check.get("details"), dict) and check["details"].get("current_stage")
+        ),
+        None,
+    )
+    if diagnostics:
+        failed = (
+            f"; failed: {diagnostics['failed_stage']}" if diagnostics.get("failed_stage") else ""
+        )
+        print(
+            f"Ingestion: {diagnostics.get('ingestion_state')} at "
+            f"{diagnostics['current_stage']}{failed}"
+        )
     if result.get("first_failure"):
         print(f"First failure: {result['first_failure']}")
 

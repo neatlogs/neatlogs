@@ -827,6 +827,99 @@ def _record(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, Mapping) else {}
 
 
+_INGESTION_STAGES = {
+    "kafka_published",
+    "pii_dispatch",
+    "pii_redaction",
+    "storage_consumer",
+    "raw_durable",
+    "root_resolution",
+    "simplification",
+    "finalized",
+}
+_INGESTION_STATES = {"processing", "failed", "succeeded"}
+_SAFE_FAILURE_CODE = re.compile(r"^[A-Z0-9_]{1,64}$")
+_MAX_READBACK_BYTES = 1 << 20
+
+
+def _ingestion_diagnostic_details(value: Any) -> dict[str, str | bool] | None:
+    diagnostics = _record(_record(value).get("ingestionDiagnostics"))
+    current_stage = diagnostics.get("currentStage")
+    state = diagnostics.get("state")
+    retryable = diagnostics.get("retryable")
+    if (
+        diagnostics.get("protocolVersion") != "v1"
+        or not isinstance(current_stage, str)
+        or current_stage not in _INGESTION_STAGES
+        or not isinstance(state, str)
+        or state not in _INGESTION_STATES
+        or not isinstance(retryable, bool)
+    ):
+        return None
+    for key in ("lastSuccessfulStage", "failedStage"):
+        if key in diagnostics:
+            stage = diagnostics[key]
+            if not isinstance(stage, str) or stage not in _INGESTION_STAGES:
+                return None
+    failure_code = diagnostics.get("failureCode")
+    if failure_code is not None and (
+        not isinstance(failure_code, str) or not _SAFE_FAILURE_CODE.fullmatch(failure_code)
+    ):
+        return None
+    return {
+        "ingestion_state": state,
+        "current_stage": current_stage,
+        **(
+            {"last_successful_stage": diagnostics["lastSuccessfulStage"]}
+            if "lastSuccessfulStage" in diagnostics
+            else {}
+        ),
+        **({"failed_stage": diagnostics["failedStage"]} if "failedStage" in diagnostics else {}),
+        **({"failure_code": failure_code} if failure_code is not None else {}),
+        "retryable": retryable,
+    }
+
+
+def _bounded_response_json(response: Any) -> Any:
+    try:
+        headers = getattr(response, "headers", {})
+        content_length = headers.get("content-length") if isinstance(headers, Mapping) else None
+        if content_length is not None:
+            try:
+                parsed_content_length = int(content_length)
+            except (TypeError, ValueError):
+                parsed_content_length = None
+            if parsed_content_length is not None and parsed_content_length > _MAX_READBACK_BYTES:
+                raise ValueError("trace read-back exceeded the response limit")
+        iterator = getattr(response, "iter_content", None)
+        if callable(iterator):
+            body = bytearray()
+            for chunk in iterator(chunk_size=64 * 1024):
+                if not chunk:
+                    continue
+                body.extend(chunk)
+                if len(body) > _MAX_READBACK_BYTES:
+                    raise ValueError("trace read-back exceeded the response limit")
+            return json.loads(bytes(body))
+        content = getattr(response, "content", None)
+        if isinstance(content, (bytes, bytearray)):
+            if len(content) > _MAX_READBACK_BYTES:
+                raise ValueError("trace read-back exceeded the response limit")
+            return json.loads(bytes(content))
+        raise TypeError("response does not expose a bounded byte stream")
+    finally:
+        _close_response(response)
+
+
+def _close_response(response: Any) -> None:
+    close = getattr(response, "close", None)
+    if callable(close):
+        try:
+            close()
+        except Exception:
+            pass
+
+
 def _matches_materialized_value(value: Any, candidates: Sequence[Any]) -> bool:
     """Match one of the exact, versioned v3 materialization representations."""
     actual = json.dumps(_canonical(_json_value(value)), separators=(",", ":"), sort_keys=True)
@@ -836,7 +929,11 @@ def _matches_materialized_value(value: Any, candidates: Sequence[Any]) -> bool:
     )
 
 
-def _persisted_probe_result(local: dict[str, Any], trace_data: Mapping[str, Any]) -> dict[str, Any]:
+def _persisted_probe_result(
+    local: dict[str, Any],
+    trace_data: Mapping[str, Any],
+    diagnostic_details: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     spans = [dict(item) for item in trace_data.get("spans", []) if isinstance(item, Mapping)]
     ids = [item.get("span_id") if isinstance(item.get("span_id"), str) else "" for item in spans]
     id_set = set(ids)
@@ -1009,6 +1106,10 @@ def _persisted_probe_result(local: dict[str, Any], trace_data: Mapping[str, Any]
         }
         for name, passed, pass_code, remediation, message in validations
     ]
+    if diagnostic_details:
+        next(item for item in probe_checks if item["name"] == "probe_finalization")["details"] = (
+            dict(diagnostic_details)
+        )
     first = next((item for item in probe_checks if item["status"] == "fail"), None)
     return {
         **local,
@@ -1091,6 +1192,7 @@ def doctor_probe_v2(
             ],
         }
     capture: dict[str, Any] | None = None
+    last_diagnostics: dict[str, str | bool] | None = None
     try:
         local = _controlled_probe_capture(
             api_key=key,
@@ -1104,23 +1206,43 @@ def doctor_probe_v2(
         while time.monotonic() < deadline:
             response = requests.get(
                 readback_url,
-                headers={"x-api-key": key},
+                headers={"x-api-key": key, "x-neatlogs-doctor": "v1"},
                 timeout=min(5.0, max(0.1, deadline - time.monotonic())),
+                allow_redirects=False,
+                stream=True,
             )
             if response.status_code in {401, 403}:
+                _close_response(response)
                 response.raise_for_status()
-            if response.ok and response.status_code != 202:
-                value = response.json()
+            if 200 <= response.status_code < 300 and response.status_code != 202:
+                value = _bounded_response_json(response)
                 if not isinstance(value, dict):
                     raise ValueError("invalid trace read-back")
                 trace_data = value
+                last_diagnostics = _ingestion_diagnostic_details(value)
                 break
-            if response.status_code not in {202, 404}:
+            if response.status_code in {202, 404, 409}:
+                try:
+                    value = _bounded_response_json(response)
+                except (ValueError, TypeError, json.JSONDecodeError):
+                    value = None
+                current_diagnostics = _ingestion_diagnostic_details(value)
+                if response.status_code == 409:
+                    last_diagnostics = current_diagnostics
+                    response.raise_for_status()
+                if current_diagnostics:
+                    last_diagnostics = current_diagnostics
+            else:
+                _close_response(response)
+                if 300 <= response.status_code < 400:
+                    raise requests.HTTPError(
+                        "trace read-back redirects are disabled", response=response
+                    )
                 response.raise_for_status()
             time.sleep(min(1.0, max(0, deadline - time.monotonic())))
         if trace_data is None:
             raise requests.Timeout("timed out waiting for exact Doctor trace")
-        return _persisted_probe_result(local, trace_data)
+        return _persisted_probe_result(local, trace_data, last_diagnostics)
     except (
         requests.RequestException,
         RuntimeError,
@@ -1128,10 +1250,15 @@ def doctor_probe_v2(
         TypeError,
         json.JSONDecodeError,
     ) as exc:
-        response = getattr(exc, "response", None)
-        response_status = getattr(response, "status_code", None)
+        error_response = getattr(exc, "response", None)
+        response_status = getattr(error_response, "status_code", None)
         reason_code = (
             "AUTH_FAILED" if response_status in {401, 403} else "BACKEND_PROBE_UNAVAILABLE"
+        )
+        retain_diagnostics = bool(
+            response_status == 409
+            or (isinstance(response_status, int) and response_status >= 500)
+            or (isinstance(exc, requests.RequestException) and response_status is None)
         )
         failure = {
             "format_version": DOCTOR_V2_FORMAT_VERSION,
@@ -1154,6 +1281,7 @@ def doctor_probe_v2(
                         if reason_code == "AUTH_FAILED"
                         else "The existing trace ingestion or read path is unavailable"
                     ),
+                    last_diagnostics if retain_diagnostics else None,
                 )
             ],
         }

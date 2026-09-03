@@ -61,19 +61,30 @@ def _standalone_local() -> dict:
     )
     tracer = provider.get_tracer("neatlogs.doctor", __version__)
     started = time.monotonic()
-    with tracer.start_as_current_span("doctor.workflow") as root:
+    with tracer.start_as_current_span("doctor.probe.root") as root:
         trace_id = f"{root.get_span_context().trace_id:032x}"
         root.set_attribute("neatlogs.span.kind", "WORKFLOW")
         root.set_attribute("input.value", '{"prompt":"generated diagnostic input"}')
-        root.set_attribute("output.value", '{"result":"generated diagnostic output"}')
-        root.set_attribute("neatlogs.llm.tool_calls.0.id", "doctor_call_1")
-        root.set_attribute("neatlogs.llm.tool_calls.0.name", "diagnostic_tool")
-        with tracer.start_as_current_span("doctor.tool") as tool:
+        with tracer.start_as_current_span("doctor.probe.agent") as agent:
+            agent.set_attribute("neatlogs.span.kind", "AGENT")
+            agent.set_attribute("input.value", '{"prompt":"generated diagnostic input"}')
+            with tracer.start_as_current_span("doctor.probe.llm") as llm:
+                llm.set_attribute("neatlogs.span.kind", "LLM")
+                llm.set_attribute(
+                    "input.value",
+                    '{"messages":[{"role":"user","content":"generated diagnostic input"}]}',
+                )
+                llm.set_attribute("output.value", '{"text":"generated diagnostic output"}')
+                llm.set_attribute("neatlogs.llm.token_count.prompt", 11)
+                llm.set_attribute("neatlogs.llm.token_count.completion", 7)
+                llm.set_attribute("neatlogs.llm.token_count.total", 18)
+            agent.set_attribute("output.value", '{"text":"generated diagnostic output"}')
+        with tracer.start_as_current_span("doctor.probe.tool") as tool:
             tool.set_attribute("neatlogs.span.kind", "TOOL")
-            tool.set_attribute("neatlogs.tool.call_id", "doctor_call_1")
             tool.set_attribute("neatlogs.tool.name", "diagnostic_tool")
             tool.set_attribute("input.value", '{"value":1}')
             tool.set_attribute("output.value", '{"value":2}')
+        root.set_attribute("output.value", '{"result":{"value":2}}')
     flushed = provider.force_flush(timeout_millis=5_000)
     duration_ms = max(0, round((time.monotonic() - started) * 1_000))
     result = doctor_captured_local_v2(

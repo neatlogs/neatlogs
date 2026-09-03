@@ -1,4 +1,4 @@
-"""Doctor v2 envelope capture, validation, and backend receipt probing."""
+"""Doctor v2 envelope capture, validation, export, and exact trace read-back."""
 
 from __future__ import annotations
 
@@ -12,11 +12,11 @@ import time
 from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
-from urllib.parse import urljoin, urlparse
+from urllib.parse import quote, urlparse
 
 import requests
 from opentelemetry.sdk.trace import ReadableSpan
-from opentelemetry.trace import StatusCode, TraceFlags
+from opentelemetry.trace import StatusCode, TraceFlags, get_current_span
 
 from .schema_v2 import TELEMETRY_SCHEMA_VERSION
 from .version import __version__
@@ -30,10 +30,28 @@ _capture_lock = threading.RLock()
 _captures: OrderedDict[str, dict[str, dict[str, Any]]] = OrderedDict()
 _latest_trace_id: str | None = None
 
+
+def _mark_doctor_span(span_type: str) -> None:
+    from ._wrap_utils import active_neatlogs_context
+
+    context = active_neatlogs_context()
+    span = get_current_span(context) if context is not None else get_current_span()
+    span.set_attributes(
+        {
+            "neatlogs.doctor": True,
+            "neatlogs.doctor.version": "v1",
+            "service.name": "neatlogs.doctor.v2",
+            "telemetry.sdk.language": "python",
+            "telemetry.sdk.version": __version__,
+            "neatlogs.span.type": span_type,
+        }
+    )
+
+
 _REMEDIATION = {
     "CREDENTIAL_MISSING": "SET_CREDENTIAL",
     "AUTH_FAILED": "CHECK_INGEST_CREDENTIAL",
-    "BACKEND_PROBE_UNAVAILABLE": "CHECK_DIAGNOSTIC_ENDPOINT",
+    "BACKEND_PROBE_UNAVAILABLE": "CHECK_TRACE_ENDPOINT",
     "ENDPOINT_INVALID": "SET_ENDPOINT",
     "PROVIDER_OWNERSHIP_AMBIGUOUS": "USE_PRIVATE_PROVIDER",
     "TRACE_ID_INVALID": "RECREATE_TRACE",
@@ -57,10 +75,6 @@ _REMEDIATION = {
     "FLUSH_TIMEOUT": "INCREASE_FLUSH_BUDGET",
     "MASKING_FAILED_CLOSED": "FIX_MASK_CALLBACK",
     "LOCAL_ENVELOPE_VALID": "NONE",
-    "STAGE_PENDING": "WAIT_FOR_RECEIPT",
-    "DIAGNOSTIC_EXPIRED": "CREATE_NEW_SESSION",
-    "DIAGNOSTIC_NOT_VISIBLE": "CONTACT_SUPPORT",
-    "DIGEST_MISMATCH": "CONTACT_SUPPORT",
 }
 
 
@@ -164,6 +178,10 @@ def capture_prepared_spans(spans: Sequence[ReadableSpan]) -> None:
     global _latest_trace_id
     with _capture_lock:
         for span in spans:
+            # Completion is a finalizer control record and is folded out of the
+            # product trace. Compare Doctor read-back against semantic spans.
+            if span.name == "neatlogs.trace.complete":
+                continue
             trace_id = f"{span.get_span_context().trace_id:032x}"
             current = _captures.pop(trace_id, {})
             item = _diagnostic_span(span)
@@ -530,34 +548,300 @@ def _safe_endpoint(value: str) -> str:
         or parsed.password
     ):
         raise ValueError("invalid endpoint")
-    return f"{parsed.scheme}://{parsed.netloc}/api/diagnostics/v2/sessions"
+    return f"{parsed.scheme}://{parsed.netloc}"
+
+
+def _controlled_probe_capture(
+    *, api_key: str, endpoint: str, exporter: Any = None
+) -> dict[str, Any]:
+    """Export one deterministic trace through the normal SDK pipeline."""
+
+    from .core.context import trace
+    from .core.logger import get_logger
+    from .decorators import span
+    from .init import flush, init, shutdown
+
+    clear_doctor_capture()
+    sdk_logger = get_logger()
+    logging_was_disabled = sdk_logger.disabled
+    sdk_logger.disabled = True
+    try:
+        init(
+            api_key=api_key,
+            endpoint=endpoint,
+            workflow_name="neatlogs.doctor.v2",
+            batch_size=32,
+            flush_interval=60,
+            register_shutdown_handlers=False,
+            _doctor_probe=True,
+            _doctor_probe_exporter=exporter,
+        )
+    except Exception:
+        sdk_logger.disabled = logging_was_disabled
+        raise
+
+    @span(kind="AGENT", name="doctor.probe.agent", role="diagnostic-agent")
+    def diagnostic_agent(prompt: str) -> dict[str, str]:
+        _mark_doctor_span("AGENT")
+        with trace(name="doctor.probe.llm", kind="LLM") as llm:
+            # trace() marks manual helper spans internal by default. This is an
+            # intentional user-facing Doctor semantic span, so keep it in the
+            # normal materialized trace.
+            llm.set_attribute("neatlogs.internal", False)
+            _mark_doctor_span("LLM")
+            llm.set_attribute(
+                "input.value",
+                json.dumps({"messages": [{"role": "user", "content": prompt}]}),
+            )
+            llm.set_attribute("neatlogs.llm.token_count.prompt", 11)
+            llm.set_attribute("neatlogs.llm.token_count.completion", 7)
+            llm.set_attribute("neatlogs.llm.token_count.total", 18)
+            output = {"text": "generated diagnostic output"}
+            llm.set_attribute("output.value", json.dumps(output))
+            return output
+
+    @span(kind="TOOL", name="doctor.probe.tool")
+    def diagnostic_tool(value: int) -> dict[str, int]:
+        _mark_doctor_span("TOOL")
+        return {"value": value + 1}
+
+    started = time.monotonic()
+    trace_id = ""
+    try:
+        with trace(
+            name="doctor.probe.root",
+            kind="WORKFLOW",
+            session_id="neatlogs-doctor-probe",
+        ) as root:
+            _mark_doctor_span("WORKFLOW")
+            trace_id = f"{root.get_span_context().trace_id:032x}"
+            root.set_attribute("input.value", json.dumps({"prompt": "generated diagnostic input"}))
+            diagnostic_agent("generated diagnostic input")
+            tool_output = diagnostic_tool(1)
+            root.set_attribute("output.value", json.dumps({"result": tool_output}))
+        flushed = flush(timeout_millis=5_000)
+        local = doctor_captured_local_v2(
+            trace_id,
+            flush_outcome="success" if flushed else "timeout",
+            flush_duration_ms=max(0, round((time.monotonic() - started) * 1_000)),
+        )
+        if local is None:
+            raise RuntimeError("Doctor export capture was unavailable")
+        return local
+    finally:
+        try:
+            shutdown(timeout_millis=5_000, termination_reason="doctor-probe-complete")
+        finally:
+            sdk_logger.disabled = logging_was_disabled
+
+
+def _record(value: Any) -> dict[str, Any]:
+    return dict(value) if isinstance(value, Mapping) else {}
+
+
+def _persisted_probe_result(local: dict[str, Any], trace_data: Mapping[str, Any]) -> dict[str, Any]:
+    spans = [dict(item) for item in trace_data.get("spans", []) if isinstance(item, Mapping)]
+    ids = [item.get("span_id") if isinstance(item.get("span_id"), str) else "" for item in spans]
+    id_set = set(ids)
+    roots = [item for item in spans if not item.get("parent_span_id")]
+    hierarchy_valid = (
+        len(roots) == 1
+        and len(id_set) == len(spans)
+        and all(_SPAN_ID.fullmatch(item) for item in ids)
+        and all(
+            not item.get("parent_span_id") or item.get("parent_span_id") in id_set for item in spans
+        )
+    )
+    expected_types = {
+        "doctor.probe.root": "workflow",
+        "doctor.probe.agent": "agent_action",
+        "doctor.probe.llm": "llm",
+        "doctor.probe.tool": "tool_call",
+    }
+    normalized = [
+        {
+            "name": str(item.get("node_name") or item.get("span_name") or ""),
+            "type": str(item.get("node_type") or item.get("span_type") or "").lower(),
+            "data": _record(item.get("data")),
+            "metadata": _record(item.get("span_metadata")),
+        }
+        for item in spans
+    ]
+    attributes_valid = all(
+        any(item["name"] == name and item["type"] == kind for item in normalized)
+        for name, kind in expected_types.items()
+    )
+    input_output_valid = all(
+        any(
+            item["name"] == name
+            and "input_value" in item["data"]
+            and "output_value" in item["data"]
+            for item in normalized
+        )
+        for name in expected_types
+    )
+    expected_spans = [item for item in normalized if item["name"] in expected_types]
+    metadata_valid = len(expected_spans) == len(expected_types) and all(
+        item["metadata"].get("neatlogs.doctor") is True
+        and item["metadata"].get("neatlogs.doctor.version") == "v1"
+        and item["metadata"].get("telemetry.sdk.language") == "python"
+        for item in expected_spans
+    )
+    token_values = [
+        trace_data.get("promptTokens"),
+        trace_data.get("completionTokens"),
+        trace_data.get("totalTokensUsed"),
+    ]
+    typed_tokens_valid = all(
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+        and value == expected
+        for value, expected in zip(token_values, (11, 7, 18), strict=True)
+    )
+    readback_span_count = (
+        trace_data.get("spanCount") if isinstance(trace_data.get("spanCount"), int) else len(spans)
+    )
+    visible = trace_data.get("_id") == local.get("capture", {}).get("trace_id")
+    validations = (
+        (
+            "probe_visibility",
+            visible and readback_span_count >= local["capture"]["span_count"],
+            "TRACE_VISIBLE",
+            "WAIT_FOR_TRACE",
+            "The exact Doctor trace is visible through the authenticated trace API",
+        ),
+        (
+            "probe_hierarchy",
+            hierarchy_valid,
+            "HIERARCHY_VALID",
+            "CHECK_TRACE_FINALIZER",
+            "The persisted Doctor hierarchy has one root and valid parents",
+        ),
+        (
+            "probe_attributes",
+            attributes_valid,
+            "ATTRIBUTES_VALID",
+            "CHECK_ATTRIBUTE_MAPPING",
+            "The persisted Doctor span names and types are complete",
+        ),
+        (
+            "probe_input_output",
+            input_output_valid,
+            "INPUT_OUTPUT_VALID",
+            "CHECK_PAYLOAD_MAPPING",
+            "The persisted Doctor spans retain input and output",
+        ),
+        (
+            "probe_metadata",
+            metadata_valid,
+            "METADATA_VALID",
+            "CHECK_METADATA_FINALIZATION",
+            "The versioned Doctor SDK metadata survived finalization",
+        ),
+        (
+            "probe_typed_tokens",
+            typed_tokens_valid,
+            "TYPED_TOKENS_VALID",
+            "CHECK_TOKEN_MAPPING",
+            "Persisted token totals remain numeric",
+        ),
+    )
+    probe_checks = [
+        {
+            "name": name,
+            "status": "pass" if passed else "fail",
+            "reason_code": pass_code if passed else f"{pass_code}_FAILED",
+            "remediation_code": "NONE" if passed else remediation,
+            "message": message,
+        }
+        for name, passed, pass_code, remediation, message in validations
+    ]
+    first = next((item for item in probe_checks if item["status"] == "fail"), None)
+    return {
+        **local,
+        "mode": "probe",
+        "status": "fail" if first or local["status"] != "pass" else "pass",
+        "first_failure": first["reason_code"] if first else local.get("first_failure"),
+        "probe": {
+            "ingest_route": "/v1/traces",
+            "marker_header": "x-neatlogs-doctor",
+            "marker_version": "v1",
+            "visible": visible,
+            "readback_span_count": readback_span_count,
+            "hierarchy_valid": hierarchy_valid,
+            "attributes_valid": attributes_valid,
+            "input_output_valid": input_output_valid,
+            "metadata_valid": metadata_valid,
+            "typed_tokens_valid": typed_tokens_valid,
+        },
+        "checks": [*local.get("checks", []), *probe_checks],
+    }
 
 
 def doctor_probe_v2(
-    *, api_key: str | None = None, endpoint: str | None = None, timeout_seconds: float = 10.0
+    *,
+    api_key: str | None = None,
+    endpoint: str | None = None,
+    timeout_seconds: float = 45.0,
+    _exporter: Any = None,
 ) -> dict[str, Any]:
-    """Create and poll a scoped backend diagnostic session without exposing its token."""
+    """Export a controlled trace and read the exact persisted trace back."""
 
     import secrets
 
+    root_id = secrets.token_hex(8)
+    agent_id = secrets.token_hex(8)
     synthetic = {
         "trace_id": secrets.token_hex(16),
-        "root_span_id": secrets.token_hex(8),
-        "spans": [],
+        "root_span_id": root_id,
+        "spans": [
+            {
+                "span_id": root_id,
+                "parent_span_id": None,
+                "name": "doctor.probe.root",
+                "kind": "WORKFLOW",
+                "status": "OK",
+                "input": {"prompt": "generated diagnostic input"},
+                "output": {"result": {"value": 2}},
+                "sampled": True,
+                "ended": True,
+            },
+            {
+                "span_id": agent_id,
+                "parent_span_id": root_id,
+                "name": "doctor.probe.agent",
+                "kind": "AGENT",
+                "status": "OK",
+                "input": {"prompt": "generated diagnostic input"},
+                "output": {"text": "generated diagnostic output"},
+                "sampled": True,
+                "ended": True,
+            },
+            {
+                "span_id": secrets.token_hex(8),
+                "parent_span_id": agent_id,
+                "name": "doctor.probe.llm",
+                "kind": "LLM",
+                "status": "OK",
+                "input": {"prompt": "generated diagnostic input"},
+                "output": {"text": "generated diagnostic output"},
+                "sampled": True,
+                "ended": True,
+            },
+            {
+                "span_id": secrets.token_hex(8),
+                "parent_span_id": root_id,
+                "name": "doctor.probe.tool",
+                "kind": "TOOL",
+                "status": "OK",
+                "input": {"value": 1},
+                "output": {"value": 2},
+                "sampled": True,
+                "ended": True,
+            },
+        ],
     }
-    synthetic["spans"].append(
-        {
-            "span_id": synthetic["root_span_id"],
-            "parent_span_id": None,
-            "name": "doctor.workflow",
-            "kind": "WORKFLOW",
-            "status": "OK",
-            "input": {"prompt": "generated diagnostic input"},
-            "output": {"result": "generated diagnostic output"},
-            "sampled": True,
-            "ended": True,
-        }
-    )
     local = doctor_local_v2(synthetic)
     capture = local["capture"]
     key = (api_key if api_key is not None else os.getenv("NEATLOGS_API_KEY", "")).strip()
@@ -603,114 +887,43 @@ def doctor_probe_v2(
                 ),
             ],
         }
-    headers = {"x-api-key": key, "content-type": "application/json"}
-    session_id = None
     try:
-        created_response = requests.post(
-            url,
-            headers=headers,
-            json={
-                "envelope_digest": capture["semantic_digest"],
-                "fixture_version": "doctor-v2",
-                "trace_id": capture["trace_id"],
-            },
-            timeout=min(5.0, timeout_seconds),
+        local = _controlled_probe_capture(
+            api_key=key,
+            endpoint=url,
+            exporter=_exporter,
         )
-        created_response.raise_for_status()
-        created = created_response.json()
-        session_id, token = created.get("diagnostic_id"), created.get("probe_token")
-        if not isinstance(session_id, str) or not isinstance(token, str):
-            raise ValueError("invalid diagnostic session")
-        receipt_url = urljoin(url.rstrip("/") + "/", session_id)
+        capture = local["capture"]
+        readback_url = f"{url}/api/traces/v3/{quote(capture['trace_id'], safe='')}"
         deadline = time.monotonic() + timeout_seconds
-        receipt: dict[str, Any] = {
-            "status": "pending",
-            "stages": [],
-            "expires_at": created.get("expires_at"),
-        }
+        trace_data: dict[str, Any] | None = None
         while time.monotonic() < deadline:
             response = requests.get(
-                receipt_url,
-                headers={"x-api-key": key, "x-neatlogs-diagnostic-token": token},
+                readback_url,
+                headers={"x-api-key": key},
                 timeout=min(5.0, max(0.1, deadline - time.monotonic())),
             )
-            if response.ok:
-                receipt = response.json()
-            if receipt.get("status") in {"pass", "fail", "expired"}:
+            if response.status_code in {401, 403}:
+                response.raise_for_status()
+            if response.ok and response.status_code != 202:
+                value = response.json()
+                if not isinstance(value, dict):
+                    raise ValueError("invalid trace read-back")
+                trace_data = value
                 break
-            time.sleep(min(0.25, max(0, deadline - time.monotonic())))
-        stages = [item for item in receipt.get("stages", []) if isinstance(item, dict)]
-        required = (
-            "auth",
-            "schema_decode",
-            "pii",
-            "kafka",
-            "raw_durable",
-            "root_resolution",
-            "simplified_durable",
-            "visibility",
-        )
-        complete = receipt.get("status") == "pass" and all(
-            any(item.get("stage") == stage and item.get("status") == "accepted" for item in stages)
-            for stage in required
-        )
-        failed = next((item for item in stages if item.get("status") == "failed"), None)
-        local_digest = receipt.get("local_semantic_digest")
-        backend_digest = receipt.get("backend_semantic_digest")
-        digest_mismatch = any(
-            isinstance(value, str) and value != capture["semantic_digest"]
-            for value in (local_digest, backend_digest)
-        ) or (
-            isinstance(local_digest, str)
-            and isinstance(backend_digest, str)
-            and local_digest != backend_digest
-        )
-        reason = receipt.get("first_failure") or (failed or {}).get("reason_code")
-        if reason is None and digest_mismatch:
-            reason = "DIGEST_MISMATCH"
-        if reason is None and not complete:
-            reason = (
-                "DIAGNOSTIC_EXPIRED"
-                if receipt.get("status") == "expired"
-                else (
-                    "STAGE_PENDING"
-                    if receipt.get("status") == "pending"
-                    else "DIAGNOSTIC_NOT_VISIBLE"
-                )
-            )
-        if digest_mismatch:
-            complete = False
-        check = _check(
-            "probe_visibility",
-            "pass" if complete else "fail",
-            "DIAGNOSTIC_VISIBLE" if complete else reason,
-            (
-                "The diagnostic trace reached the authenticated read path"
-                if complete
-                else "The backend diagnostic did not reach every required stage"
-            ),
-        )
-        return {
-            "format_version": DOCTOR_V2_FORMAT_VERSION,
-            "mode": "probe",
-            "status": "pass" if complete else "fail",
-            "first_failure": reason,
-            "runtime": {
-                "language": "python",
-                "sdk_version": __version__,
-                "schema_version": str(TELEMETRY_SCHEMA_VERSION),
-                "transport": "otlp_http_protobuf",
-            },
-            "capture": capture,
-            "probe": {
-                "diagnostic_id": session_id,
-                "receipt_status": receipt.get("status", "pending"),
-                "expires_at": receipt.get("expires_at") or created.get("expires_at"),
-                "stages": stages,
-            },
-            "checks": [check],
-        }
-    except (requests.RequestException, ValueError, TypeError, json.JSONDecodeError) as exc:
+            if response.status_code not in {202, 404}:
+                response.raise_for_status()
+            time.sleep(min(1.0, max(0, deadline - time.monotonic())))
+        if trace_data is None:
+            raise requests.Timeout("timed out waiting for exact Doctor trace")
+        return _persisted_probe_result(local, trace_data)
+    except (
+        requests.RequestException,
+        RuntimeError,
+        ValueError,
+        TypeError,
+        json.JSONDecodeError,
+    ) as exc:
         response = getattr(exc, "response", None)
         response_status = getattr(response, "status_code", None)
         reason_code = (
@@ -734,20 +947,10 @@ def doctor_probe_v2(
                     "fail",
                     reason_code,
                     (
-                        "The authenticated diagnostic session was rejected"
+                        "The project key was rejected by the existing trace API"
                         if reason_code == "AUTH_FAILED"
-                        else "The backend diagnostic session is unavailable"
+                        else "The existing trace ingestion or read path is unavailable"
                     ),
                 )
             ],
         }
-    finally:
-        if session_id:
-            try:
-                requests.delete(
-                    urljoin(url.rstrip("/") + "/", session_id),
-                    headers={"x-api-key": key},
-                    timeout=2.0,
-                )
-            except requests.RequestException:
-                pass

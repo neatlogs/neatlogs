@@ -27,7 +27,7 @@ def envelope():
 
 def test_canonical_digest_matches_cross_language_golden_value():
     assert doctor_semantic_digest(envelope()) == (
-        "sha256:76d8726734664dacaa4e6da4ffc547cc" "5b7c8edde4721a485b5875378c233381"
+        "sha256:824650f5fbc6d9f8d923813564116092" "63417219eaf7fdafbd2ba94795b6c4f7"
     )
 
 
@@ -39,6 +39,15 @@ def test_valid_envelope_conforms_to_doctor_v2_shape():
     assert result["first_failure"] is None
     assert result["runtime"]["language"] == "python"
     assert result["checks"][0]["reason_code"] == "LOCAL_ENVELOPE_VALID"
+
+
+def test_unknown_future_reason_uses_safe_support_remediation():
+    from neatlogs.doctor_v2 import _check
+
+    assert (
+        _check("future", "fail", "SERVER_REASON_V99", "future failure")["remediation_code"]
+        == "CONTACT_SUPPORT"
+    )
 
 
 def test_validation_reports_first_contract_order_failure():
@@ -140,7 +149,10 @@ def persisted_trace(exporter):
                 "span_metadata": {
                     "neatlogs.doctor": item.attributes.get("neatlogs.doctor"),
                     "neatlogs.doctor.version": item.attributes.get("neatlogs.doctor.version"),
+                    "service.name": item.attributes.get("service.name"),
                     "telemetry.sdk.language": item.attributes.get("telemetry.sdk.language"),
+                    "telemetry.sdk.version": item.attributes.get("telemetry.sdk.version"),
+                    "neatlogs.span.type": item.attributes.get("neatlogs.span.type"),
                 },
             }
             for item in spans
@@ -148,22 +160,30 @@ def persisted_trace(exporter):
     }
 
 
-def test_real_exporter_path_captures_only_post_mask_data():
+def test_ordinary_exporter_path_never_enters_doctor_retention():
+    clear_doctor_capture()
+    inner = Exporter()
+    exporter = MaskingSpanExporter(inner, None)
+    exporter.export([_span({"neatlogs.span.kind": "WORKFLOW"})])
+    assert get_captured_envelope("00000000000000000000000000000001") is None
+
+
+def test_explicit_doctor_exporter_captures_only_post_mask_data():
     clear_doctor_capture()
     inner = Exporter()
 
     def mask(snapshot):
-        snapshot["attributes"]["input.value"] = '{"email":"[masked]"}'
+        snapshot["attributes"]["neatlogs.workflow.input"] = '{"email":"[masked]"}'
         return snapshot
 
-    exporter = MaskingSpanExporter(inner, mask)
+    exporter = MaskingSpanExporter(inner, mask, doctor_capture=True)
     assert (
         exporter.export(
             [
                 _span(
                     {
                         "neatlogs.span.kind": "WORKFLOW",
-                        "input.value": '{"email":"secret@example.com"}',
+                        "neatlogs.workflow.input": '{"email":"secret@example.com"}',
                     }
                 )
             ]
@@ -175,6 +195,8 @@ def test_real_exporter_path_captures_only_post_mask_data():
     serialized = json.dumps(captured)
     assert "secret@example.com" not in serialized
     assert doctor_captured_local_v2("00000000000000000000000000000001")["status"] == "pass"
+    exporter.shutdown()
+    assert get_captured_envelope("00000000000000000000000000000001") is None
 
 
 def test_capture_store_is_bounded_to_sixteen_traces():
@@ -185,6 +207,41 @@ def test_capture_store_is_bounded_to_sixteen_traces():
         capture_prepared_spans([_span({"neatlogs.span.kind": "WORKFLOW"}, trace_id=trace_id)])
     assert get_captured_envelope("00000000000000000000000000000001") is None
     assert get_captured_envelope("00000000000000000000000000000011") is not None
+
+
+def test_capture_store_has_hard_span_and_byte_bounds():
+    clear_doctor_capture()
+    from neatlogs.doctor_v2 import capture_prepared_spans
+
+    capture_prepared_spans(
+        [
+            _span(
+                {"neatlogs.span.kind": "TOOL"},
+                trace_id=2,
+                span_id=index + 1,
+                parent_id=1 if index else 0,
+            )
+            for index in range(80)
+        ]
+    )
+    captured = get_captured_envelope("00000000000000000000000000000002")
+    assert captured is not None
+    assert len(captured["spans"]) == 64
+
+    clear_doctor_capture()
+    capture_prepared_spans(
+        [
+            _span(
+                {
+                    "neatlogs.span.kind": "WORKFLOW",
+                    "neatlogs.input.value": "x" * (300 * 1024),
+                },
+                trace_id=3,
+                span_id=1,
+            )
+        ]
+    )
+    assert get_captured_envelope("00000000000000000000000000000003") is None
 
 
 def test_probe_exports_and_reads_back_the_exact_trace(monkeypatch):

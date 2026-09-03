@@ -26,8 +26,12 @@ _TRACE_ID = re.compile(r"^[0-9a-f]{32}$")
 _SPAN_ID = re.compile(r"^[0-9a-f]{16}$")
 _DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 _MAX_CAPTURED_TRACES = 16
+_MAX_CAPTURED_SPANS_PER_TRACE = 64
+_MAX_CAPTURED_BYTES_PER_TRACE = 256 * 1024
+_MAX_CAPTURED_BYTES_TOTAL = 1024 * 1024
 _capture_lock = threading.RLock()
 _captures: OrderedDict[str, dict[str, dict[str, Any]]] = OrderedDict()
+_capture_sizes: dict[str, int] = {}
 _latest_trace_id: str | None = None
 
 
@@ -48,6 +52,9 @@ def _mark_doctor_span(span_type: str) -> None:
     )
 
 
+# This maps every reason emitted by this SDK version. It is intentionally not an
+# exhaustive registry for future/backend reason codes: unknown codes fail safely
+# to CONTACT_SUPPORT so a newer server can never trigger an unsafe client action.
 _REMEDIATION = {
     "CREDENTIAL_MISSING": "SET_CREDENTIAL",
     "AUTH_FAILED": "CHECK_INGEST_CREDENTIAL",
@@ -75,6 +82,7 @@ _REMEDIATION = {
     "FLUSH_TIMEOUT": "INCREASE_FLUSH_BUDGET",
     "MASKING_FAILED_CLOSED": "FIX_MASK_CALLBACK",
     "LOCAL_ENVELOPE_VALID": "NONE",
+    "PROBE_FIXTURE_INVALID": "FIX_DOCTOR_INSTRUMENTATION",
 }
 
 
@@ -98,17 +106,10 @@ def _first(attributes: Mapping[str, Any], keys: Sequence[str]) -> Any:
 
 
 def _tool_calls(attributes: Mapping[str, Any]) -> list[dict[str, str]] | None:
-    value = _first(attributes, ("gen_ai.assistant.tool_calls", "neatlogs.llm.tool_calls"))
-    if isinstance(value, list):
-        calls = [
-            {key: item[key] for key in ("id", "name") if isinstance(item.get(key), str)}
-            for item in value
-            if isinstance(item, dict) and isinstance(item.get("id"), str)
-        ]
-        return calls or None
+    """Read only canonical indexed keys from attribute-mapping.json."""
     exploded: dict[int, dict[str, str]] = {}
     for key, item in attributes.items():
-        match = re.match(r"^(?:neatlogs\.)?llm\.tool_calls\.(\d+)\.(id|name)$", key)
+        match = re.fullmatch(r"neatlogs\.llm\.tool_calls\.(\d+)\.(id|name)$", key)
         if match and isinstance(item, str):
             exploded.setdefault(int(match.group(1)), {})[match.group(2)] = item
     calls = [exploded[index] for index in sorted(exploded) if "id" in exploded[index]]
@@ -126,11 +127,7 @@ def _diagnostic_span(span: ReadableSpan) -> dict[str, Any]:
         "parent_span_id": f"{parent.span_id:016x}" if parent and parent.is_valid else None,
         "name": span.name,
         "kind": kind,
-        "status": (
-            "ERROR"
-            if span.status.status_code is StatusCode.ERROR
-            else "OK" if span.status.status_code is StatusCode.OK else "UNSET"
-        ),
+        "status": ("ERROR" if span.status.status_code is StatusCode.ERROR else "OK"),
         "sampled": bool(context.trace_flags & TraceFlags.SAMPLED),
         "ended": span.end_time is not None,
         "start_time_ns": span.start_time,
@@ -138,18 +135,9 @@ def _diagnostic_span(span: ReadableSpan) -> dict[str, Any]:
         "attributes": attributes,
     }
     fields = {
-        "input": _first(
-            attributes,
-            ("gen_ai.input.messages", "input.value", "neatlogs.input", "neatlogs.llm.input"),
-        ),
-        "output": _first(
-            attributes,
-            ("gen_ai.output.messages", "output.value", "neatlogs.output", "neatlogs.llm.output"),
-        ),
-        "choices": _first(attributes, ("gen_ai.response.choices", "neatlogs.llm.choices")),
-        "stream_fragments": _first(
-            attributes, ("gen_ai.stream.fragments", "neatlogs.stream.fragments")
-        ),
+        "input": _first(attributes, (f"neatlogs.{kind.lower()}.input",)),
+        "output": _first(attributes, (f"neatlogs.{kind.lower()}.output",)),
+        "choices": _first(attributes, ("neatlogs.llm.generation_choices",)),
     }
     for key, value in fields.items():
         if value is not None:
@@ -157,15 +145,13 @@ def _diagnostic_span(span: ReadableSpan) -> dict[str, Any]:
     calls = _tool_calls(attributes)
     if calls:
         output["tool_calls"] = calls
-    call_id = _first(attributes, ("neatlogs.tool.call_id", "neatlogs.tool_call.id", "tool_call_id"))
+    call_id = _first(attributes, ("neatlogs.tool_call.id",))
     if kind == "TOOL" and isinstance(call_id, str):
         output["tool_call"] = {"id": call_id}
         if isinstance(attributes.get("neatlogs.tool.name"), str):
             output["tool_call"]["name"] = attributes["neatlogs.tool.name"]
     streaming = bool(
-        attributes.get("neatlogs.llm.is_streaming")
-        or attributes.get("neatlogs.tool.is_streaming")
-        or "stream_fragments" in output
+        attributes.get("neatlogs.llm.is_streaming") or attributes.get("neatlogs.tool.is_streaming")
     )
     if streaming:
         output["streaming"] = True
@@ -185,17 +171,43 @@ def capture_prepared_spans(spans: Sequence[ReadableSpan]) -> None:
             trace_id = f"{span.get_span_context().trace_id:032x}"
             current = _captures.pop(trace_id, {})
             item = _diagnostic_span(span)
+            if item["span_id"] not in current and len(current) >= _MAX_CAPTURED_SPANS_PER_TRACE:
+                _captures[trace_id] = current
+                continue
+            item_size = len(
+                json.dumps(_canonical(item), separators=(",", ":"), sort_keys=True).encode("utf-8")
+            )
+            previous = current.get(item["span_id"])
+            previous_size = (
+                len(
+                    json.dumps(_canonical(previous), separators=(",", ":"), sort_keys=True).encode(
+                        "utf-8"
+                    )
+                )
+                if previous is not None
+                else 0
+            )
+            next_size = _capture_sizes.get(trace_id, 0) - previous_size + item_size
+            if next_size > _MAX_CAPTURED_BYTES_PER_TRACE:
+                _captures[trace_id] = current
+                continue
             current[item["span_id"]] = item
             _captures[trace_id] = current
+            _capture_sizes[trace_id] = next_size
             _latest_trace_id = trace_id
         while len(_captures) > _MAX_CAPTURED_TRACES:
-            _captures.popitem(last=False)
+            evicted, _ = _captures.popitem(last=False)
+            _capture_sizes.pop(evicted, None)
+        while sum(_capture_sizes.values()) > _MAX_CAPTURED_BYTES_TOTAL and _captures:
+            evicted, _ = _captures.popitem(last=False)
+            _capture_sizes.pop(evicted, None)
 
 
 def clear_doctor_capture() -> None:
     global _latest_trace_id
     with _capture_lock:
         _captures.clear()
+        _capture_sizes.clear()
         _latest_trace_id = None
 
 
@@ -226,10 +238,36 @@ def _canonical(value: Any) -> Any:
 
 
 def doctor_semantic_digest(envelope: Mapping[str, Any]) -> str:
+    spans = [dict(item) for item in envelope["spans"]]
+    names_by_id = {str(item.get("span_id")): str(item.get("name")) for item in spans}
+    stable_fields = (
+        "name",
+        "kind",
+        "status",
+        "input",
+        "output",
+        "choices",
+        "expected_choice_count",
+        "tool_calls",
+        "tool_call",
+        "streaming",
+        "oversized",
+        "payload_references",
+        "sampled",
+        "ended",
+    )
     projection = {
-        "trace_id": envelope["trace_id"],
-        "root_span_id": envelope["root_span_id"],
-        "spans": sorted(envelope["spans"], key=lambda span: span["span_id"].lower()),
+        "spans": sorted(
+            [
+                {
+                    **{key: item[key] for key in stable_fields if key in item},
+                    "parent": names_by_id.get(str(item.get("parent_span_id"))),
+                }
+                for item in spans
+                if item.get("name") != "neatlogs.trace.complete"
+            ],
+            key=lambda item: (str(item.get("name")), str(item.get("kind"))),
+        )
     }
     encoded = json.dumps(
         _canonical(projection),
@@ -252,6 +290,54 @@ def _check(name: str, status: str, reason: str, message: str, details=None) -> d
     }
 
 
+def _probe_fixture_check(spans: Sequence[Mapping[str, Any]]) -> dict[str, Any] | None:
+    expected = {
+        "doctor.probe.root": ("WORKFLOW", None),
+        "doctor.probe.agent": ("AGENT", "doctor.probe.root"),
+        "doctor.probe.llm": ("LLM", "doctor.probe.agent"),
+        "doctor.probe.tool": ("TOOL", "doctor.probe.root"),
+    }
+    by_name = {str(span.get("name")): span for span in spans}
+    if len(spans) != 4 or set(by_name) != set(expected):
+        return _check(
+            "probe_fixture",
+            "fail",
+            "PROBE_FIXTURE_INVALID",
+            "Doctor must capture exactly the four versioned semantic fixture spans",
+        )
+    names_by_id = {str(span.get("span_id")): name for name, span in by_name.items()}
+    for name, (kind, parent_name) in expected.items():
+        span = by_name[name]
+        actual_parent = names_by_id.get(str(span.get("parent_span_id")))
+        if span.get("kind") != kind or actual_parent != parent_name:
+            return _check(
+                "probe_fixture",
+                "fail",
+                "PROBE_FIXTURE_INVALID",
+                "Doctor fixture span types or parent edges are incorrect",
+                {"span": name},
+            )
+        attrs = span.get("attributes") if isinstance(span.get("attributes"), Mapping) else {}
+        if (
+            attrs.get("neatlogs.doctor") is not True
+            or attrs.get("neatlogs.doctor.version") != "v1"
+            or attrs.get("service.name") != "neatlogs.doctor.v2"
+            or attrs.get("telemetry.sdk.language") != "python"
+            or attrs.get("telemetry.sdk.version") != __version__
+            or attrs.get("neatlogs.span.type") != kind
+            or span.get("input") is None
+            or span.get("output") is None
+        ):
+            return _check(
+                "probe_fixture",
+                "fail",
+                "PROBE_FIXTURE_INVALID",
+                "Doctor fixture metadata and deterministic input/output must be complete",
+                {"span": name},
+            )
+    return None
+
+
 def doctor_local_v2(
     envelope: Mapping[str, Any],
     *,
@@ -262,6 +348,7 @@ def doctor_local_v2(
     sample_rate: float = 1.0,
     queue_capacity: int = 2048,
     dropped_spans: int = 0,
+    expected_probe_fixture: bool = False,
 ) -> dict[str, Any]:
     """Validate one final normalized and masked export envelope."""
 
@@ -363,16 +450,6 @@ def doctor_local_v2(
                     {"span_id": span_id},
                 )
             )
-        if span.get("streaming") and not span.get("stream_fragments"):
-            checks.append(
-                _check(
-                    "stream",
-                    "fail",
-                    "STREAM_FRAGMENT_MISSING",
-                    "Streaming span has no captured fragments",
-                    {"span_id": span_id},
-                )
-            )
         references = span.get("payload_references") or []
         if span.get("oversized") and not any(
             isinstance(ref, Mapping)
@@ -444,6 +521,10 @@ def doctor_local_v2(
                 "All spans must share the root sampling decision",
             )
         )
+    if expected_probe_fixture:
+        fixture_failure = _probe_fixture_check(spans)
+        if fixture_failure:
+            checks.append(fixture_failure)
     if not private_provider:
         checks.append(
             _check(
@@ -624,6 +705,7 @@ def _controlled_probe_capture(
             trace_id,
             flush_outcome="success" if flushed else "timeout",
             flush_duration_ms=max(0, round((time.monotonic() - started) * 1_000)),
+            expected_probe_fixture=True,
         )
         if local is None:
             raise RuntimeError("Doctor export capture was unavailable")
@@ -632,6 +714,7 @@ def _controlled_probe_capture(
         try:
             shutdown(timeout_millis=5_000, termination_reason="doctor-probe-complete")
         finally:
+            clear_doctor_capture()
             sdk_logger.disabled = logging_was_disabled
 
 
@@ -643,15 +726,6 @@ def _persisted_probe_result(local: dict[str, Any], trace_data: Mapping[str, Any]
     spans = [dict(item) for item in trace_data.get("spans", []) if isinstance(item, Mapping)]
     ids = [item.get("span_id") if isinstance(item.get("span_id"), str) else "" for item in spans]
     id_set = set(ids)
-    roots = [item for item in spans if not item.get("parent_span_id")]
-    hierarchy_valid = (
-        len(roots) == 1
-        and len(id_set) == len(spans)
-        and all(_SPAN_ID.fullmatch(item) for item in ids)
-        and all(
-            not item.get("parent_span_id") or item.get("parent_span_id") in id_set for item in spans
-        )
-    )
     expected_types = {
         "doctor.probe.root": "workflow",
         "doctor.probe.agent": "agent_action",
@@ -660,6 +734,8 @@ def _persisted_probe_result(local: dict[str, Any], trace_data: Mapping[str, Any]
     }
     normalized = [
         {
+            "id": item.get("span_id"),
+            "parent_id": item.get("parent_span_id"),
             "name": str(item.get("node_name") or item.get("span_name") or ""),
             "type": str(item.get("node_type") or item.get("span_type") or "").lower(),
             "data": _record(item.get("data")),
@@ -667,25 +743,58 @@ def _persisted_probe_result(local: dict[str, Any], trace_data: Mapping[str, Any]
         }
         for item in spans
     ]
-    attributes_valid = all(
-        any(item["name"] == name and item["type"] == kind for item in normalized)
-        for name, kind in expected_types.items()
+    by_name = {item["name"]: item for item in normalized}
+    exact_set = len(normalized) == 4 and set(by_name) == set(expected_types)
+    hierarchy_valid = bool(
+        exact_set
+        and len(id_set) == 4
+        and all(_SPAN_ID.fullmatch(item) for item in ids)
+        and by_name["doctor.probe.root"]["parent_id"] in (None, "")
+        and by_name["doctor.probe.agent"]["parent_id"] == by_name["doctor.probe.root"]["id"]
+        and by_name["doctor.probe.llm"]["parent_id"] == by_name["doctor.probe.agent"]["id"]
+        and by_name["doctor.probe.tool"]["parent_id"] == by_name["doctor.probe.root"]["id"]
     )
-    input_output_valid = all(
-        any(
-            item["name"] == name
-            and "input_value" in item["data"]
-            and "output_value" in item["data"]
-            for item in normalized
+    attributes_valid = bool(
+        exact_set and all(by_name[name]["type"] == kind for name, kind in expected_types.items())
+    )
+    expected_io = {
+        "doctor.probe.root": (
+            {"prompt": "generated diagnostic input"},
+            {"result": {"value": 2}},
+        ),
+        "doctor.probe.agent": (
+            {"prompt": "generated diagnostic input"},
+            {"text": "generated diagnostic output"},
+        ),
+        "doctor.probe.llm": (
+            {"messages": [{"role": "user", "content": "generated diagnostic input"}]},
+            {"text": "generated diagnostic output"},
+        ),
+        "doctor.probe.tool": ({"value": 1}, {"value": 2}),
+    }
+    input_output_valid = bool(
+        exact_set
+        and all(
+            _json_value(by_name[name]["data"].get("input_value")) == expected_input
+            and _json_value(by_name[name]["data"].get("output_value")) == expected_output
+            for name, (expected_input, expected_output) in expected_io.items()
         )
-        for name in expected_types
     )
-    expected_spans = [item for item in normalized if item["name"] in expected_types]
-    metadata_valid = len(expected_spans) == len(expected_types) and all(
-        item["metadata"].get("neatlogs.doctor") is True
-        and item["metadata"].get("neatlogs.doctor.version") == "v1"
-        and item["metadata"].get("telemetry.sdk.language") == "python"
-        for item in expected_spans
+    metadata_valid = bool(
+        exact_set
+        and all(
+            by_name[name]["metadata"].get("neatlogs.doctor") is True
+            and by_name[name]["metadata"].get("neatlogs.doctor.version") == "v1"
+            and by_name[name]["metadata"].get("service.name") == "neatlogs.doctor.v2"
+            and by_name[name]["metadata"].get("telemetry.sdk.language") == "python"
+            and by_name[name]["metadata"].get("telemetry.sdk.version") == __version__
+            and by_name[name]["metadata"].get("neatlogs.span.type")
+            == expected_types[name]
+            .replace("agent_action", "agent")
+            .replace("tool_call", "tool")
+            .upper()
+            for name in expected_types
+        )
     )
     token_values = [
         trace_data.get("promptTokens"),
@@ -706,7 +815,7 @@ def _persisted_probe_result(local: dict[str, Any], trace_data: Mapping[str, Any]
     validations = (
         (
             "probe_visibility",
-            visible and readback_span_count >= local["capture"]["span_count"],
+            visible and readback_span_count == 4 and len(spans) == 4,
             "TRACE_VISIBLE",
             "WAIT_FOR_TRACE",
             "The exact Doctor trace is visible through the authenticated trace API",

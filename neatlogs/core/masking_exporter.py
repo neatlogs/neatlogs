@@ -315,12 +315,14 @@ class MaskingSpanExporter(SpanExporter):
         timeout_seconds: float = 5.0,
         diagnostics: DeliveryDiagnostics | None = None,
         media_store: Any | None = None,
+        doctor_capture: bool = False,
     ) -> None:
         self._inner = inner
         self._global_mask = mask
         self._runner = _MaskRunner(timeout_seconds)
         self._diagnostics = diagnostics
         self._media_store = media_store
+        self._doctor_capture = doctor_capture
 
     def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
         prepared: list[ReadableSpan | None] = [None] * len(spans)
@@ -351,12 +353,13 @@ class MaskingSpanExporter(SpanExporter):
         kept = [span for span in prepared if span is not None]
         if not kept:
             return SpanExportResult.SUCCESS
-        try:
-            from ..doctor_v2 import capture_prepared_spans
+        if self._doctor_capture:
+            try:
+                from ..doctor_v2 import capture_prepared_spans
 
-            capture_prepared_spans(kept)
-        except Exception:
-            logger.error("[neatlogs] doctor capture failed safely")
+                capture_prepared_spans(kept)
+            except Exception:
+                logger.error("[neatlogs] doctor capture failed safely")
         return self._inner.export(kept)
 
     def force_flush(self, timeout_millis: int = 30000) -> bool:
@@ -365,7 +368,13 @@ class MaskingSpanExporter(SpanExporter):
 
     def shutdown(self) -> None:
         self._runner.shutdown()
-        self._inner.shutdown()
+        try:
+            self._inner.shutdown()
+        finally:
+            if self._doctor_capture:
+                from ..doctor_v2 import clear_doctor_capture
+
+                clear_doctor_capture()
 
 
 def _log_snapshot(item: ReadableLogRecord) -> dict[str, Any]:

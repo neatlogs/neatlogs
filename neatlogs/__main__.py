@@ -57,19 +57,37 @@ def _standalone_local() -> dict:
         NeatlogsSpanProcessor(emit_completion_markers=False, own_all_spans=True)
     )
     provider.add_span_processor(
-        SimpleSpanProcessor(MaskingSpanExporter(_MemorySink(), lambda snapshot: snapshot))
+        SimpleSpanProcessor(
+            MaskingSpanExporter(_MemorySink(), lambda snapshot: snapshot, doctor_capture=True)
+        )
     )
     tracer = provider.get_tracer("neatlogs.doctor", __version__)
+
+    def mark(span, span_type: str) -> None:
+        span.set_attributes(
+            {
+                "neatlogs.doctor": True,
+                "neatlogs.doctor.version": "v1",
+                "service.name": "neatlogs.doctor.v2",
+                "telemetry.sdk.language": "python",
+                "telemetry.sdk.version": __version__,
+                "neatlogs.span.type": span_type,
+            }
+        )
+
     started = time.monotonic()
     with tracer.start_as_current_span("doctor.probe.root") as root:
+        mark(root, "WORKFLOW")
         trace_id = f"{root.get_span_context().trace_id:032x}"
-        root.set_attribute("neatlogs.span.kind", "WORKFLOW")
+        root.set_attribute("neatlogs.span.kind", "workflow")
         root.set_attribute("input.value", '{"prompt":"generated diagnostic input"}')
         with tracer.start_as_current_span("doctor.probe.agent") as agent:
-            agent.set_attribute("neatlogs.span.kind", "AGENT")
+            mark(agent, "AGENT")
+            agent.set_attribute("neatlogs.span.kind", "agent")
             agent.set_attribute("input.value", '{"prompt":"generated diagnostic input"}')
             with tracer.start_as_current_span("doctor.probe.llm") as llm:
-                llm.set_attribute("neatlogs.span.kind", "LLM")
+                mark(llm, "LLM")
+                llm.set_attribute("neatlogs.span.kind", "llm")
                 llm.set_attribute(
                     "input.value",
                     '{"messages":[{"role":"user","content":"generated diagnostic input"}]}',
@@ -80,7 +98,8 @@ def _standalone_local() -> dict:
                 llm.set_attribute("neatlogs.llm.token_count.total", 18)
             agent.set_attribute("output.value", '{"text":"generated diagnostic output"}')
         with tracer.start_as_current_span("doctor.probe.tool") as tool:
-            tool.set_attribute("neatlogs.span.kind", "TOOL")
+            mark(tool, "TOOL")
+            tool.set_attribute("neatlogs.span.kind", "tool")
             tool.set_attribute("neatlogs.tool.name", "diagnostic_tool")
             tool.set_attribute("input.value", '{"value":1}')
             tool.set_attribute("output.value", '{"value":2}')
@@ -91,8 +110,10 @@ def _standalone_local() -> dict:
         trace_id,
         flush_outcome="success" if flushed else "timeout",
         flush_duration_ms=duration_ms,
+        expected_probe_fixture=True,
     )
     provider.shutdown()
+    clear_doctor_capture()
     if result is None:
         raise RuntimeError("isolated Doctor capture was unavailable")
     return result

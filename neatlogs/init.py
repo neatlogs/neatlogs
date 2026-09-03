@@ -597,6 +597,7 @@ def init(
                     mask,
                     diagnostics=_delivery_diagnostics,
                     media_store=_media_store,
+                    doctor_capture=_doctor_probe,
                 )
             ),
             max_export_batch_size=batch_size,

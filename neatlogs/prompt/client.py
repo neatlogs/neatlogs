@@ -34,6 +34,7 @@ DEFAULT_CONNECT_TIMEOUT = 2.0
 DEFAULT_READ_TIMEOUT = 5.0
 
 _PLACEHOLDER_PATTERN = re.compile(r"\{\{\s*([A-Za-z0-9_.-]+)\s*\}\}")
+_LABEL_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,50}$")
 CacheKey = Tuple[str, Optional[str], Optional[int]]
 
 
@@ -163,7 +164,7 @@ class PromptHandle:
     """Compiled prompt handle returned by PromptClient.get_prompt()."""
 
     def __init__(self, prompt: CachedPrompt):
-        self._prompt = prompt
+        self._prompt = deepcopy(prompt)
 
     @property
     def id(self) -> str:
@@ -236,6 +237,38 @@ class PromptHandle:
                 "content": _render_template(self._prompt.content, variables),
             }
         ]
+
+
+def _validate_label(label: Any, operation: str) -> None:
+    if not isinstance(label, str) or not _LABEL_PATTERN.fullmatch(label):
+        raise ValueError(
+            f"{operation} labels must contain 1-50 letters, numbers, underscores, or hyphens."
+        )
+
+
+def _validate_tag(tag: Any, operation: str) -> None:
+    if (
+        not isinstance(tag, str)
+        or tag != tag.strip()
+        or not tag
+        or len(tag) > 64
+        or "\n" in tag
+        or "\r" in tag
+    ):
+        raise ValueError(
+            f"{operation} tags must contain 1-64 characters without surrounding whitespace or newlines."
+        )
+
+
+def _safe_error_path(path: str) -> str:
+    route = path.split("?", 1)[0]
+    if re.fullmatch(r"/api/v1/prompts/[^/]+/fetch", route):
+        return "/api/v1/prompts/:name/fetch"
+    return re.sub(
+        r"^/api/managed-prompts/[^/]+(?=/|$)",
+        "/api/managed-prompts/:promptId",
+        route,
+    )
 
 
 class PromptClient:
@@ -430,8 +463,7 @@ class PromptClient:
                         self._cache.set(cache_key, handle, ttl)
             except Exception as e:
                 logger.debug(
-                    "Background prompt refresh failed for '%s' (%s)",
-                    cache_key,
+                    "Background prompt refresh failed (%s)",
                     type(e).__name__,
                 )
             finally:
@@ -517,7 +549,7 @@ class PromptClient:
         name: str,
         prompt: Union[str, Sequence[Dict[str, str]]],
         type: str = "text",
-        labels: Sequence[str],
+        labels: Sequence[str] = (),
         tags: Optional[Sequence[str]] = None,
         config: Optional[Mapping[str, Any]] = None,
         commit_message: Optional[str] = None,
@@ -527,11 +559,15 @@ class PromptClient:
 
         For type="text", prompt must be a str.
         For type="chat", prompt must be a list of {"role", "content"} dicts.
-        labels must contain exactly one active label (for example, "production").
+        labels may contain one active label (for example, "production").
         """
         self._assert_open()
-        if len(labels) != 1:
-            raise ValueError("labels must contain exactly one label, e.g. labels=['production'].")
+        if len(labels) > 1:
+            raise ValueError("labels may contain at most one label.")
+        for label in labels:
+            _validate_label(label, "create_prompt")
+        for tag in tags or ():
+            _validate_tag(tag, "create_prompt")
         if type == "text" and not isinstance(prompt, str):
             raise ValueError("For type='text', prompt must be a string.")
         if type == "chat" and not isinstance(prompt, list):
@@ -572,6 +608,7 @@ class PromptClient:
             raise ValueError(
                 "new_labels must contain exactly one label, e.g. new_labels=['production']."
             )
+        _validate_label(new_labels[0], "update_prompt")
 
         prompt_id = self._find_prompt_id(name, version)
 
@@ -608,6 +645,7 @@ class PromptClient:
         Remove a tag from a prompt version via DELETE /api/managed-prompts/:promptId/tags.
         """
         self._assert_open()
+        _validate_tag(tag, "remove_tag")
         prompt_id = self._find_prompt_id(name, version)
 
         path = f"/api/managed-prompts/{quote(prompt_id, safe='')}/tags"
@@ -634,6 +672,10 @@ class PromptClient:
             raise ValueError("save_as_version requires non-empty content or messages.")
         if labels is not None and len(labels) > 1:
             raise ValueError("labels may contain at most one label.")
+        for label in labels or ():
+            _validate_label(label, "save_as_version")
+        for tag in tags or ():
+            _validate_tag(tag, "save_as_version")
         body: Dict[str, Any] = {"promptName": prompt_name}
         if content is not None:
             body["content"] = content
@@ -690,6 +732,7 @@ class PromptClient:
     ) -> Dict[str, Any]:
         self._assert_open()
         url = f"{self.base_url}{path}"
+        safe_path = _safe_error_path(path)
 
         try:
             from opentelemetry.context import attach, detach, set_value
@@ -700,14 +743,17 @@ class PromptClient:
             _token = None
 
         try:
-            response = self._session.request(
-                method=method,
-                url=url,
-                params=params,
-                json=json_body,
-                headers={**self._auth_headers(), "Content-Type": "application/json"},
-                timeout=(DEFAULT_CONNECT_TIMEOUT, timeout_seconds),
-            )
+            try:
+                response = self._session.request(
+                    method=method,
+                    url=url,
+                    params=params,
+                    json=json_body,
+                    headers={**self._auth_headers(), "Content-Type": "application/json"},
+                    timeout=(DEFAULT_CONNECT_TIMEOUT, timeout_seconds),
+                )
+            except requests.RequestException:
+                raise PromptApiError(f"{method} {safe_path} request failed") from None
         finally:
             if _token is not None:
                 try:
@@ -718,15 +764,15 @@ class PromptClient:
                     pass
 
         if response.status_code >= 400:
-            raise PromptApiError(f"{method} {path} failed ({response.status_code})")
+            raise PromptApiError(f"{method} {safe_path} failed ({response.status_code})")
 
         try:
             payload = response.json()
-        except Exception as exc:
-            raise PromptApiError(f"{method} {path} returned non-JSON response") from exc
+        except Exception:
+            raise PromptApiError(f"{method} {safe_path} returned non-JSON response") from None
 
         if not isinstance(payload, MutableMapping):
-            raise PromptApiError(f"{method} {path} returned unexpected response shape")
+            raise PromptApiError(f"{method} {safe_path} returned unexpected response shape")
 
         return dict(payload)
 
@@ -866,7 +912,7 @@ def create_prompt(
     name: str,
     prompt: Union[str, Sequence[Dict[str, str]]],
     type: str = "text",
-    labels: Sequence[str],
+    labels: Sequence[str] = (),
     tags: Optional[Sequence[str]] = None,
     config: Optional[Mapping[str, Any]] = None,
     commit_message: Optional[str] = None,
@@ -1092,8 +1138,7 @@ class AsyncPromptClient:
                     self._cache.set(cache_key, handle, ttl)
             except Exception as e:
                 logger.debug(
-                    "Background async prompt refresh failed for '%s' (%s)",
-                    cache_key,
+                    "Background async prompt refresh failed (%s)",
                     type(e).__name__,
                 )
             finally:
@@ -1115,9 +1160,12 @@ class AsyncPromptClient:
         params: Optional[Mapping[str, Any]] = None,
         json_body: Optional[Mapping[str, Any]] = None,
     ) -> Dict[str, Any]:
+        import httpx
+
         if self._closed:
             raise PromptClientClosedError("AsyncPromptClient is closed.")
         url = f"{self.base_url}{path}"
+        safe_path = _safe_error_path(path)
 
         try:
             from opentelemetry.context import attach, detach, set_value
@@ -1128,12 +1176,15 @@ class AsyncPromptClient:
             _token = None
 
         try:
-            response = await self._client.request(
-                method=method,
-                url=url,
-                params=params,
-                json=json_body,
-            )
+            try:
+                response = await self._client.request(
+                    method=method,
+                    url=url,
+                    params=params,
+                    json=json_body,
+                )
+            except httpx.HTTPError:
+                raise PromptApiError(f"{method} {safe_path} request failed") from None
         finally:
             if _token is not None:
                 try:
@@ -1144,15 +1195,15 @@ class AsyncPromptClient:
                     pass
 
         if response.status_code >= 400:
-            raise PromptApiError(f"{method} {path} failed ({response.status_code})")
+            raise PromptApiError(f"{method} {safe_path} failed ({response.status_code})")
 
         try:
             payload = response.json()
-        except Exception as exc:
-            raise PromptApiError(f"{method} {path} returned non-JSON response") from exc
+        except Exception:
+            raise PromptApiError(f"{method} {safe_path} returned non-JSON response") from None
 
         if not isinstance(payload, MutableMapping):
-            raise PromptApiError(f"{method} {path} returned unexpected response shape")
+            raise PromptApiError(f"{method} {safe_path} returned unexpected response shape")
 
         return dict(payload)
 

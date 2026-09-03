@@ -1,9 +1,11 @@
 import asyncio
 import importlib
 import threading
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, call
 
+import httpx
 import pytest
+import requests
 
 import neatlogs
 import neatlogs.prompt.client as prompt_client_module
@@ -129,14 +131,16 @@ def test_cache_keys_do_not_collide_for_names_containing_selector_text():
 
 
 def test_cached_prompt_nested_values_are_returned_as_defensive_copies():
+    original_messages = [{"role": "system", "content": "original"}]
+    original_config = {"nested": {"temperature": 0.2}}
     handle = PromptHandle(
         CachedPrompt(
             id="prompt-1",
             name="assistant",
             version=1,
             content="",
-            messages=[{"role": "system", "content": "original"}],
-            config={"nested": {"temperature": 0.2}},
+            messages=original_messages,
+            config=original_config,
             labels=[],
             updated_at="2026-09-03T00:00:00Z",
             type="chat",
@@ -148,6 +152,8 @@ def test_cached_prompt_nested_values_are_returned_as_defensive_copies():
     assert messages is not None
     messages[0]["content"] = "changed"
     config["nested"]["temperature"] = 1.0
+    original_messages[0]["content"] = "changed at source"
+    original_config["nested"]["temperature"] = 2.0
 
     assert handle.messages == [{"role": "system", "content": "original"}]
     assert handle.config == {"nested": {"temperature": 0.2}}
@@ -252,6 +258,52 @@ def test_prompt_api_error_does_not_copy_response_content():
     assert str(captured.value) == "GET /api/managed-prompts failed (400)"
 
 
+def test_prompt_transport_error_does_not_copy_network_details():
+    session = Mock()
+    session.request.side_effect = requests.ConnectionError(
+        "failed https://example.test/api/v1/prompts/private-name/fetch"
+    )
+    client = PromptClient(base_url="https://example.test", api_key="test", session=session)
+
+    with pytest.raises(PromptApiError) as captured:
+        client.list_prompts()
+
+    assert "example.test" not in str(captured.value)
+    assert str(captured.value) == "GET /api/managed-prompts request failed"
+
+
+def test_prompt_transport_error_does_not_copy_prompt_selectors():
+    session = Mock()
+    session.request.side_effect = requests.ConnectionError("private prompt leaked")
+    client = PromptClient(base_url="https://example.test", api_key="test", session=session)
+
+    with pytest.raises(PromptApiError) as captured:
+        client.fetch_prompt("private-customer-name", label="production")
+
+    assert str(captured.value) == "GET /api/v1/prompts/:name/fetch request failed"
+    assert "customer" not in str(captured.value)
+    assert "production" not in str(captured.value)
+
+
+@pytest.mark.asyncio
+async def test_async_prompt_transport_error_does_not_copy_network_details():
+    client = AsyncPromptClient(base_url="https://example.test", api_key="test")
+    client._client.request = AsyncMock(
+        side_effect=httpx.ConnectError(
+            "failed https://example.test/private",
+            request=httpx.Request("GET", "https://example.test/private"),
+        )
+    )
+    try:
+        with pytest.raises(PromptApiError) as captured:
+            await client.get_prompt("private-name")
+
+        assert "example.test" not in str(captured.value)
+        assert str(captured.value) == "GET /api/managed-prompts request failed"
+    finally:
+        await client.close()
+
+
 def test_prompt_crud_invalidates_mutable_selectors_and_deleted_versions():
     client = PromptClient(base_url="https://example.test", api_key="test")
     client._cache.set(_key("assistant"), _prompt(1, "latest"))
@@ -344,6 +396,76 @@ def test_prompt_mutation_resolves_versions_beyond_first_500_results():
     )
 
 
+def test_prompt_writes_match_backend_routes_and_field_names():
+    client = PromptClient(base_url="https://example.test", api_key="test")
+    client._request_json = Mock(
+        side_effect=[
+            {"prompt": _raw_prompt(1, "hello")},
+            {"prompt": _raw_prompt(2, "updated")},
+        ]
+    )
+
+    client.create_prompt(
+        name="assistant",
+        prompt="hello",
+        labels=["production"],
+        commit_message="initial",
+    )
+    client.save_as_version(
+        prompt_name="assistant",
+        content="updated",
+        labels=["production"],
+        commit_message="revision",
+    )
+
+    assert client._request_json.call_args_list == [
+        call(
+            method="POST",
+            path="/api/managed-prompts",
+            json_body={
+                "name": "assistant",
+                "content": "hello",
+                "labels": ["production"],
+                "commit_message": "initial",
+            },
+        ),
+        call(
+            method="POST",
+            path="/api/prompt-playground/save-as-version",
+            json_body={
+                "promptName": "assistant",
+                "content": "updated",
+                "commitMessage": "revision",
+                "labels": ["production"],
+            },
+        ),
+    ]
+
+
+def test_label_and_tag_mutations_use_resolved_uuid_routes():
+    client = PromptClient(base_url="https://example.test", api_key="test")
+    client.list_prompts = Mock(
+        return_value={"items": [{"id": "prompt-1", "name": "assistant", "version": 1}]}
+    )
+    client._request_json = Mock(return_value={})
+
+    client.update_prompt(name="assistant", version=1, new_labels=["production"])
+    client.remove_tag("assistant", 1, "release")
+
+    assert client._request_json.call_args_list == [
+        call(
+            method="POST",
+            path="/api/managed-prompts/prompt-1/labels",
+            json_body={"label": "production"},
+        ),
+        call(
+            method="DELETE",
+            path="/api/managed-prompts/prompt-1/tags",
+            json_body={"tag": "release"},
+        ),
+    ]
+
+
 def test_save_as_version_rejects_empty_content_before_network():
     client = PromptClient(base_url="https://example.test", api_key="test")
     client._request_json = Mock()
@@ -354,11 +476,11 @@ def test_save_as_version_rejects_empty_content_before_network():
     client._request_json.assert_not_called()
 
 
-def test_prompt_writes_reject_multiple_labels_before_network():
+def test_prompt_writes_validate_labels_and_tags_before_network():
     client = PromptClient(base_url="https://example.test", api_key="test")
     client._request_json = Mock()
 
-    with pytest.raises(ValueError, match="exactly one"):
+    with pytest.raises(ValueError, match="at most one"):
         client.create_prompt(
             name="assistant",
             prompt="hello",
@@ -370,8 +492,31 @@ def test_prompt_writes_reject_multiple_labels_before_network():
             content="hello",
             labels=["production", "staging"],
         )
+    with pytest.raises(ValueError, match="1-50"):
+        client.create_prompt(name="assistant", prompt="hello", labels=["  "])
+    with pytest.raises(ValueError, match="1-50"):
+        client.update_prompt(name="assistant", version=1, new_labels=[""])
+    with pytest.raises(ValueError, match="1-50"):
+        client.save_as_version(prompt_name="assistant", content="hello", labels=["\t"])
+    with pytest.raises(ValueError, match="1-64"):
+        client.remove_tag("assistant", 1, " unsafe ")
+    with pytest.raises(ValueError, match="1-64"):
+        client.save_as_version(prompt_name="assistant", content="hello", tags=["line\nbreak"])
 
     client._request_json.assert_not_called()
+
+
+def test_create_prompt_allows_an_unlabeled_version():
+    client = PromptClient(base_url="https://example.test", api_key="test")
+    client._request_json = Mock(return_value={"prompt": _raw_prompt(1, "hello")})
+
+    client.create_prompt(name="assistant", prompt="hello")
+
+    assert client._request_json.call_args == call(
+        method="POST",
+        path="/api/managed-prompts",
+        json_body={"name": "assistant", "content": "hello", "labels": []},
+    )
 
 
 def test_shared_sync_client_rotates_credentials_and_shutdown_detaches_it(monkeypatch):

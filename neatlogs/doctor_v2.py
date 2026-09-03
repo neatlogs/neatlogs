@@ -36,6 +36,10 @@ _capture_span_sizes: dict[str, dict[str, int]] = {}
 _latest_trace_id: str | None = None
 
 
+def _canonical_span_kind(value: Any) -> str:
+    return str(value or "").removeprefix("Neatlogs.").upper()
+
+
 def _mark_doctor_span(span_type: str) -> None:
     from ._wrap_utils import active_neatlogs_context
 
@@ -48,7 +52,7 @@ def _mark_doctor_span(span_type: str) -> None:
             "service.name": "neatlogs.doctor.v2",
             "telemetry.sdk.language": "python",
             "telemetry.sdk.version": __version__,
-            "neatlogs.span.type": span_type,
+            "neatlogs.span.kind": span_type.lower(),
         }
     )
 
@@ -189,7 +193,7 @@ def _diagnostic_span(span: ReadableSpan) -> dict[str, Any]:
     context = span.get_span_context()
     attributes = dict(span.attributes or {})
     kind_value = attributes.get("neatlogs.span.kind", attributes.get("openinference.span.kind"))
-    kind = str(kind_value or "INTERNAL").removeprefix("Neatlogs.").upper()
+    kind = _canonical_span_kind(kind_value or "INTERNAL")
     parent = span.parent
     output: dict[str, Any] = {
         "span_id": f"{context.span_id:016x}",
@@ -415,7 +419,7 @@ def _probe_fixture_check(spans: Sequence[Mapping[str, Any]]) -> dict[str, Any] |
             or attrs.get("service.name") != "neatlogs.doctor.v2"
             or attrs.get("telemetry.sdk.language") != "python"
             or attrs.get("telemetry.sdk.version") != __version__
-            or attrs.get("neatlogs.span.type") != kind
+            or _canonical_span_kind(attrs.get("neatlogs.span.kind")) != kind
             or span.get("input") is None
             or span.get("output") is None
         ):
@@ -916,7 +920,7 @@ def _persisted_probe_result(local: dict[str, Any], trace_data: Mapping[str, Any]
             and by_name[name]["metadata"].get("service.name") == "neatlogs.doctor.v2"
             and by_name[name]["metadata"].get("telemetry.sdk.language") == "python"
             and by_name[name]["metadata"].get("telemetry.sdk.version") == __version__
-            and by_name[name]["metadata"].get("neatlogs.span.type")
+            and _canonical_span_kind(by_name[name]["metadata"].get("neatlogs.span.kind"))
             == expected_types[name]
             .replace("agent_action", "agent")
             .replace("tool_call", "tool")

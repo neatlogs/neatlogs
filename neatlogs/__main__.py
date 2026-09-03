@@ -71,7 +71,7 @@ def _standalone_local() -> dict:
                 "service.name": "neatlogs.doctor.v2",
                 "telemetry.sdk.language": "python",
                 "telemetry.sdk.version": __version__,
-                "neatlogs.span.type": span_type,
+                "neatlogs.span.kind": span_type.lower(),
             }
         )
 

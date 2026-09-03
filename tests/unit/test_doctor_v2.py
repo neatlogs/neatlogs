@@ -168,7 +168,7 @@ def persisted_trace(exporter):
                     "service.name": item.attributes.get("service.name"),
                     "telemetry.sdk.language": item.attributes.get("telemetry.sdk.language"),
                     "telemetry.sdk.version": item.attributes.get("telemetry.sdk.version"),
-                    "neatlogs.span.type": item.attributes.get("neatlogs.span.type"),
+                    "neatlogs.span.kind": item.attributes.get("neatlogs.span.kind"),
                 },
             }
             for item in spans

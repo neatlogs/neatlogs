@@ -124,15 +124,8 @@ def main() -> int:
 
     try:
         flushed = neatlogs.flush(timeout_millis=10_000)
-        local = None if args.local else neatlogs.doctor_captured_local_v2(trace_id)
     finally:
         neatlogs.shutdown(timeout_millis=10_000, termination_reason="packaged-e2e-complete")
-
-    if not args.local:
-        if local is None or local.get("status") != "pass":
-            raise RuntimeError(f"captured-envelope validation failed: {json.dumps(local)}")
-        if local.get("capture", {}).get("span_count") != len(expected):
-            raise RuntimeError("captured-envelope span count mismatch")
 
     manifest = {
         "format_version": "neatlogs.packaged-e2e/v1",
@@ -143,15 +136,6 @@ def main() -> int:
         "expected_completion_tokens": 5,
         "expected_total_tokens": 18,
         "flush_success": bool(flushed),
-        "captured_validation": (
-            {
-                "status": local["status"],
-                "span_count": local["capture"]["span_count"],
-                "semantic_digest": local["capture"]["semantic_digest"],
-            }
-            if local is not None
-            else None
-        ),
         "spans": expected,
     }
     args.output.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")

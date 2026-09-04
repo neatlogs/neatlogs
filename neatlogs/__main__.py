@@ -141,7 +141,7 @@ def main(argv: list[str] | None = None) -> int:
     doctor_parser = commands.add_parser(
         "doctor", help="run read-only, network-free SDK diagnostics"
     )
-    modes = doctor_parser.add_mutually_exclusive_group()
+    modes = doctor_parser.add_mutually_exclusive_group(required=True)
     modes.add_argument("--local", action="store_true")
     modes.add_argument("--probe", action="store_true")
     doctor_parser.add_argument("--endpoint")

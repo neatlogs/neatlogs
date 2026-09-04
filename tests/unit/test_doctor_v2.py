@@ -853,6 +853,14 @@ def test_standalone_local_runs_real_isolated_exporter_pipeline(monkeypatch, caps
     assert result["flush"]["outcome"] == "success"
 
 
+def test_standalone_requires_an_explicit_doctor_mode(capsys):
+    assert main(["doctor", "--json"]) == 4
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "one of the arguments --local --probe is required" in captured.err
+    assert "Usage: neatlogs doctor (--local | --probe) [--json]" in captured.err
+
+
 def test_probe_never_treats_processing_readback_as_success(monkeypatch):
     exporter = Exporter()
     response = _json_response(

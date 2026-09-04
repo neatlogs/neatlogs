@@ -5,6 +5,7 @@ Neatlogs SDK.
 import atexit
 import functools
 import hashlib
+import importlib.util
 import json
 import math
 import os
@@ -90,6 +91,15 @@ _session_config = {
 def is_debug_enabled() -> bool:
     """Return True if neatlogs was initialized with debug=True."""
     return _debug_mode
+
+
+def _instrument_library(library: str) -> bool:
+    """Activate one library through the current default instrumentation manager."""
+    manager = _instrumentation_manager
+    if manager is None:
+        return False
+    manager.instrument(libraries=[library])
+    return library in manager.instrumented
 
 
 def _trace_sampler(sample_rate: float) -> ParentBased:
@@ -540,6 +550,19 @@ def init(
     from ._wrap_utils import set_neatlogs_provider
 
     set_neatlogs_provider(provider)
+
+    # Strands converts its native GenAI spans in an on_end processor. It must run
+    # before Neatlogs' normalizer and exporter see those spans.
+    if importlib.util.find_spec("strands") is not None:
+        try:
+            from .strands import instrument_strands, prepare_strands
+
+            prepare_strands(provider)
+            if instrumentations and "strands" in instrumentations:
+                instrument_strands(provider)
+        except Exception as exc:
+            if debug:
+                logger.debug("Could not prepare Strands instrumentation: %s", exc)
 
     # NeatlogsSpanProcessor: pure pre-processing (attribute normalization + file logging)
     global _span_processor

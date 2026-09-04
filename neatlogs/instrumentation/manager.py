@@ -11,11 +11,12 @@ from typing import List, Optional, Set
 from opentelemetry.instrumentation.threading import ThreadingInstrumentor
 from opentelemetry.sdk.trace import TracerProvider
 
-from .http_context_propagation import patch_http_context_propagation
 from .openinference_isolation import provider_for_openinference
 from .registry import INSTRUMENTATION_REGISTRY, get_libraries_by_tag
 
 logger = logging.getLogger(__name__)
+
+_HTTP_LIBRARIES = frozenset({"requests", "httpx", "urllib3", "aiohttp"})
 
 # Holds the raw, pre-tokenization text passed to LangChain embedding wrappers
 # (OpenAIEmbeddings.embed_documents/embed_query). LangChain tokenizes text into
@@ -47,47 +48,6 @@ class InstrumentationManager:
         except Exception as e:
             if self.debug:
                 logger.warning(f"⚠️  Failed to instrument threading: {e}")
-
-    def instrument_http(self) -> None:
-        """
-        Instrument HTTP libraries for context propagation.
-        Uses standard opentelemetry-instrumentation-* contrib packages (not AI-specific).
-
-        DISABLED: HTTP auto-instrumentation is turned off. It emitted a large volume
-        of infra HTTP spans (POST/GET/HEAD/DELETE to LLM/vector/telemetry endpoints)
-        that add no agentic value and pollute the trace. In-process parent/child
-        linkage for frameworks (CrewAI, LangChain, ...) comes from the OTel context
-        (contextvars), NOT HTTP headers, so disabling this does not fragment traces.
-        To re-enable, delete the early return below.
-        """
-        if self.debug:
-            logger.info("⏭️  HTTP instrumentation disabled (no infra HTTP spans)")
-        return
-
-        http_libs = ["requests", "httpx", "urllib3", "aiohttp"]
-
-        for lib in http_libs:
-            if not self._is_library_installed(lib):
-                if self.debug:
-                    logger.info(f"⏭️  Skipped HTTP: {lib} (not installed)")
-                continue
-
-            try:
-                self._instrument_library(lib, convention="openllmetry")
-                self.instrumented.add(lib)
-                if self.debug:
-                    logger.info(f"✅ Instrumented HTTP: {lib}")
-            except Exception as e:
-                if self.debug:
-                    logger.warning(f"⚠️  Failed to instrument {lib}: {e}")
-
-        try:
-            patch_http_context_propagation()
-            if self.debug:
-                logger.info("✅ Patched HTTP context propagation (best-effort)")
-        except Exception as e:
-            if self.debug:
-                logger.warning(f"⚠️  Failed to patch HTTP context propagation: {e}")
 
     def instrument_mcp(self) -> None:
         """
@@ -155,6 +115,17 @@ class InstrumentationManager:
                 logger.warning(f"⚠️  Unknown library: {library}")
             return
 
+        if library in _HTTP_LIBRARIES:
+            try:
+                self._instrument_library(library, convention="openllmetry")
+                self.instrumented.add(library)
+                if self.debug:
+                    logger.info(f"✅ {library} (OpenTelemetry HTTP client)")
+            except Exception as e:
+                if self.debug:
+                    logger.warning(f"⚠️  {library} (OpenTelemetry HTTP client): {e}")
+            return
+
         # CrewAI: neatlogs' own class-level hooks (crewai.py) build the full
         # crew→task→agent→llm→tool tree as a single neatlogs-owned trace, so bare
         # crews under instrumentations=["crewai"] are covered without any wrap()
@@ -212,7 +183,7 @@ class InstrumentationManager:
             instrumentor_class_name = self._get_instrumentor_class_name(library, convention)
             instrumentor_class = getattr(module, instrumentor_class_name)
 
-            is_http_lib = library in ["requests", "httpx", "urllib3", "aiohttp"]
+            is_http_lib = library in _HTTP_LIBRARIES
             tracer_provider = (
                 provider_for_openinference(self.provider)
                 if convention == "openinference"
@@ -258,7 +229,7 @@ class InstrumentationManager:
             raise Exception(f"Failed to instrument {library} with {convention}: {e}")
 
     def uninstrument_all(self) -> None:
-        """Reverse instrument()/instrument_http()/instrument_threading().
+        """Reverse instrument() and instrument_threading().
 
         OpenInference/OpenLLMetry instrumentors are BaseInstrumentor singletons, so
         re-resolving the class and calling .uninstrument() tears down the same global

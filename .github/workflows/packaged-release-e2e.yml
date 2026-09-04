@@ -54,12 +54,29 @@ jobs:
             --expected "$EVIDENCE_DIR/expected.json" \
             --output "$EVIDENCE_DIR/readback-summary.json"
 
+      - name: Verify published Wizard delegates to the Python package
+        shell: bash
+        run: |
+          set -euo pipefail
+          ln -s "$RUNNER_TEMP/neatlogs-packaged-e2e" .venv
+          npx --yes @neatlogs/wizard@0.1.7 doctor \
+            --install-dir "$GITHUB_WORKSPACE" \
+            --local \
+            --json \
+            > "$EVIDENCE_DIR/wizard-doctor-local.log"
+          npx --yes @neatlogs/wizard@0.1.7 doctor \
+            --install-dir "$GITHUB_WORKSPACE" \
+            --probe \
+            --endpoint "$NEATLOGS_ENDPOINT" \
+            --json \
+            > "$EVIDENCE_DIR/wizard-doctor-probe.log"
+
       - name: Publish sanitized evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: python-packaged-release-e2e-${{ github.sha }}
-          path: ${{ env.EVIDENCE_DIR }}/*.json
+          path: ${{ env.EVIDENCE_DIR }}/*
           include-hidden-files: true
           if-no-files-found: warn
           retention-days: 7

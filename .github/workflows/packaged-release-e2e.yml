@@ -78,6 +78,7 @@ jobs:
           fixture="$RUNNER_TEMP/wizard-python-fixture"
           cp -R tests/e2e/wizard_seed "$fixture"
           python -m venv "$fixture/.venv"
+          cd "$fixture"
           npx --yes @neatlogs/wizard@0.1.7 \
             --install-dir "$fixture" \
             --endpoint "$NEATLOGS_ENDPOINT" \

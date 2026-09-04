@@ -60,5 +60,6 @@ jobs:
         with:
           name: python-packaged-release-e2e-${{ github.sha }}
           path: ${{ env.EVIDENCE_DIR }}/*.json
+          include-hidden-files: true
           if-no-files-found: warn
           retention-days: 7

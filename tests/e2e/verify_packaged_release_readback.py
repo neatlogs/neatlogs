@@ -61,6 +61,9 @@ def main() -> int:
         time.sleep(1)
 
     _require(payload is not None, "timed out waiting for exact trace")
+    args.output.with_name("readback-raw.json").write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n"
+    )
     _require(payload.get("_id") == trace_id, "readback trace ID mismatch")
     _require(str(payload.get("status") or "").lower() == "success", "trace did not finalize")
 
@@ -75,7 +78,10 @@ def main() -> int:
 
     for span_id, wanted in expected_by_id.items():
         got = by_id[span_id]
-        _require(got["name"] == wanted["name"], f"name mismatch for {span_id}")
+        _require(
+            got["name"] == wanted["name"],
+            f"name mismatch for {span_id}: expected {wanted['name']!r}, got {got['name']!r}",
+        )
         _require(got["kind"] == wanted["kind"], f"kind mismatch for {wanted['name']}")
         _require(got["parent"] == wanted["parent"], f"parent mismatch for {wanted['name']}")
         _require("input_value" in got["data"], f"missing input for {wanted['name']}")

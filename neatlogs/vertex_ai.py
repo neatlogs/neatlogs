@@ -69,13 +69,50 @@ def wrap_vertex_ai_client(client: Any) -> Any:
     (generate_content + generate_content_stream) on sync and async, and chat
     sessions (Chat/AsyncChat send_message + send_message_stream).
     """
-    _patch_models(client.models)
-    _patch_models_extra(client.models, is_async=False)
-    if hasattr(client, "aio") and hasattr(client.aio, "models"):
-        _patch_async_models(client.aio.models)
-        _patch_models_extra(client.aio.models, is_async=True)
-    _patch_chat_classes()
+    models = getattr(client, "models", None)
+    _safe(_patch_models, models)
+    if models is not None:
+        _safe(_patch_models_extra, models, is_async=False)
+    aio = getattr(client, "aio", None)
+    aio_models = getattr(aio, "models", None) if aio is not None else None
+    if aio_models is not None:
+        _safe(_patch_async_models, aio_models)
+        _safe(_patch_models_extra, aio_models, is_async=True)
+    try:
+        _patch_chat_classes()
+    except Exception:
+        pass
     return client
+
+
+def _safe(fn, resource, **kw):
+    """Call a patch fn only if the resource exists; never raise."""
+    if resource is None:
+        return
+    try:
+        fn(resource, **kw) if kw else fn(resource)
+    except Exception:
+        pass
+
+
+def _record_error(span: Any, error: Exception) -> None:
+    try:
+        span.set_status(StatusCode.ERROR, str(error))
+        span.record_exception(error)
+        span.end()
+    except Exception:
+        pass
+
+
+def _finish_ok(span: Any, finalize) -> None:
+    try:
+        finalize()
+    except Exception:
+        try:
+            span.set_status(StatusCode.OK)
+            span.end()
+        except Exception:
+            pass
 
 
 def _start_span(model: Any, stream: bool, name: str = "vertex_ai.models.generate_content") -> Any:
@@ -102,20 +139,34 @@ def _patch_models(models: Any) -> None:
         if is_suppressed():
             return orig_generate(*args, **kwargs)
 
-        model = kwargs.get("model", args[0] if args else "")
-        contents = kwargs.get("contents", args[1] if len(args) > 1 else "")
+        span = None
+        try:
+            model = kwargs.get("model", args[0] if args else "")
+            contents = kwargs.get("contents", args[1] if len(args) > 1 else "")
 
-        span = _start_span(model, stream=False)
-        _set_input_attributes(span, contents, kwargs)
+            span = _start_span(model, stream=False)
+            _set_input_attributes(span, contents, kwargs)
 
-        start = time.perf_counter()
+            start = time.perf_counter()
+        except Exception:
+            if span is not None:
+                try:
+                    span.end()
+                except Exception:
+                    pass
+            return orig_generate(*args, **kwargs)
+
         try:
             response = orig_generate(*args, **kwargs)
         except Exception as e:
-            _err(span, e)
+            try:
+                _record_error(span, e)
+            except Exception:
+                pass
             raise
 
-        _finalize_response(span, response, (time.perf_counter() - start) * 1000)
+        duration_ms = (time.perf_counter() - start) * 1000
+        _finish_ok(span, lambda: _finalize_response(span, response, duration_ms))
         return response
 
     models.generate_content = patched_generate_content
@@ -126,13 +177,29 @@ def _patch_models(models: Any) -> None:
             if is_suppressed():
                 return orig_stream(*args, **kwargs)
 
-            model = kwargs.get("model", args[0] if args else "")
-            contents = kwargs.get("contents", args[1] if len(args) > 1 else "")
+            span = None
+            try:
+                model = kwargs.get("model", args[0] if args else "")
+                contents = kwargs.get("contents", args[1] if len(args) > 1 else "")
 
-            span = _start_span(model, stream=True)
-            _set_input_attributes(span, contents, kwargs)
+                span = _start_span(model, stream=True)
+                _set_input_attributes(span, contents, kwargs)
+            except Exception:
+                if span is not None:
+                    try:
+                        span.end()
+                    except Exception:
+                        pass
+                return orig_stream(*args, **kwargs)
 
-            stream = orig_stream(*args, **kwargs)
+            try:
+                stream = orig_stream(*args, **kwargs)
+            except Exception:
+                try:
+                    span.end()
+                except Exception:
+                    pass
+                raise
             return SyncStreamWrapper(stream, span, _finalize_stream)
 
         models.generate_content_stream = patched_generate_content_stream
@@ -151,20 +218,34 @@ def _patch_async_models(models: Any) -> None:
         if is_suppressed():
             return await orig_generate(*args, **kwargs)
 
-        model = kwargs.get("model", args[0] if args else "")
-        contents = kwargs.get("contents", args[1] if len(args) > 1 else "")
+        span = None
+        try:
+            model = kwargs.get("model", args[0] if args else "")
+            contents = kwargs.get("contents", args[1] if len(args) > 1 else "")
 
-        span = _start_span(model, stream=False)
-        _set_input_attributes(span, contents, kwargs)
+            span = _start_span(model, stream=False)
+            _set_input_attributes(span, contents, kwargs)
 
-        start = time.perf_counter()
+            start = time.perf_counter()
+        except Exception:
+            if span is not None:
+                try:
+                    span.end()
+                except Exception:
+                    pass
+            return await orig_generate(*args, **kwargs)
+
         try:
             response = await orig_generate(*args, **kwargs)
         except Exception as e:
-            _err(span, e)
+            try:
+                _record_error(span, e)
+            except Exception:
+                pass
             raise
 
-        _finalize_response(span, response, (time.perf_counter() - start) * 1000)
+        duration_ms = (time.perf_counter() - start) * 1000
+        _finish_ok(span, lambda: _finalize_response(span, response, duration_ms))
         return response
 
     models.generate_content = patched_generate_content
@@ -177,18 +258,29 @@ def _patch_async_models(models: Any) -> None:
             if is_suppressed():
                 return await orig_stream(*args, **kwargs)
 
-            model = kwargs.get("model", args[0] if args else "")
-            contents = kwargs.get("contents", args[1] if len(args) > 1 else "")
+            span = None
+            try:
+                model = kwargs.get("model", args[0] if args else "")
+                contents = kwargs.get("contents", args[1] if len(args) > 1 else "")
 
-            span = _start_span(model, stream=True)
-            _set_input_attributes(span, contents, kwargs)
+                span = _start_span(model, stream=True)
+                _set_input_attributes(span, contents, kwargs)
+            except Exception:
+                if span is not None:
+                    try:
+                        span.end()
+                    except Exception:
+                        pass
+                return await orig_stream(*args, **kwargs)
 
             try:
                 stream = await orig_stream(*args, **kwargs)
-            except Exception as e:
-                _err(span, e)
+            except Exception:
+                try:
+                    span.end()
+                except Exception:
+                    pass
                 raise
-
             return AsyncStreamWrapper(stream, span, _finalize_stream)
 
         models.generate_content_stream = patched_generate_content_stream
@@ -609,7 +701,9 @@ def _patch_chat_classes() -> None:
             except Exception as e:
                 _err(span, e)
                 raise
-            _finalize_response(span, resp, (time.perf_counter() - start) * 1000)
+            _finish_ok(
+                span, lambda: _finalize_response(span, resp, (time.perf_counter() - start) * 1000)
+            )
             return resp
 
         Chat.send_message = patched_send
@@ -645,7 +739,9 @@ def _patch_chat_classes() -> None:
             except Exception as e:
                 _err(span, e)
                 raise
-            _finalize_response(span, resp, (time.perf_counter() - start) * 1000)
+            _finish_ok(
+                span, lambda: _finalize_response(span, resp, (time.perf_counter() - start) * 1000)
+            )
             return resp
 
         AsyncChat.send_message = patched_asend

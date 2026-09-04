@@ -4406,6 +4406,7 @@ portkey = [
     { name = "portkey-ai" },
 ]
 pydantic-ai = [
+    { name = "openinference-instrumentation-pydantic-ai", extra = ["instruments"] },
     { name = "pydantic-ai" },
 ]
 smolagents = [
@@ -4499,6 +4500,7 @@ requires-dist = [
     { name = "openinference-instrumentation-openai-agents", specifier = ">=1.4.0" },
     { name = "openinference-instrumentation-portkey", specifier = ">=0.1.7" },
     { name = "openinference-instrumentation-pydantic-ai", specifier = ">=0.1.9" },
+    { name = "openinference-instrumentation-pydantic-ai", extras = ["instruments"], marker = "extra == 'pydantic-ai'", specifier = ">=0.1.9" },
     { name = "openinference-instrumentation-smolagents", specifier = ">=0.1.21" },
     { name = "openinference-instrumentation-vertexai", specifier = ">=0.1.11" },
     { name = "openinference-semantic-conventions", specifier = ">=0.1.13" },
@@ -4513,7 +4515,7 @@ requires-dist = [
     { name = "opentelemetry-instrumentation-urllib3", specifier = ">=0.56b0" },
     { name = "opentelemetry-sdk", specifier = ">=1.35.0" },
     { name = "portkey-ai", marker = "extra == 'portkey'", specifier = ">=1.0.0" },
-    { name = "pydantic-ai", marker = "extra == 'pydantic-ai'", specifier = ">=0.0.9" },
+    { name = "pydantic-ai", marker = "extra == 'pydantic-ai'", specifier = ">=0.7.5" },
     { name = "pymilvus", marker = "extra == 'milvus'", specifier = ">=2.4.0,<2.5.0" },
     { name = "qdrant-client", marker = "extra == 'langchain'", specifier = "<1.16" },
     { name = "requests", specifier = ">=2.31.0" },
@@ -5428,6 +5430,11 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/56/de/ea6fc50322408fe23bce8279e442a57f2b2a950a95e6e12b230b46591ba1/openinference_instrumentation_pydantic_ai-0.1.20.tar.gz", hash = "sha256:83c1062cc03c8bfa81a6825a7a4dbab733232ed6d617f8f0838d5e0298cc0e02", size = 24737, upload-time = "2026-08-12T19:46:03.99Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/01/42/39e7e59f88bb314c22a3c541b3f449afdca4b8bb3f3f623e26d6e5b95694/openinference_instrumentation_pydantic_ai-0.1.20-py3-none-any.whl", hash = "sha256:618208bca5e736d0d3dcfc46e6cf5a4a492bac0984600cd0d7eb13c606557601", size = 17005, upload-time = "2026-08-12T19:46:02.512Z" },
+]
+
+[package.optional-dependencies]
+instruments = [
+    { name = "pydantic-ai" },
 ]
 
 [[package]]

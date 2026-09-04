@@ -541,6 +541,15 @@ def init(
 
     set_neatlogs_provider(provider)
 
+    global _instrumentation_manager
+    manager = InstrumentationManager(
+        provider=provider,
+        debug=debug,
+        excluded_urls=endpoint,
+    )
+    _instrumentation_manager = manager
+    manager.prepare_span_processors(instrumentations)
+
     # NeatlogsSpanProcessor: pure pre-processing (attribute normalization + file logging)
     global _span_processor
     _span_processor = NeatlogsSpanProcessor(
@@ -706,14 +715,6 @@ def init(
                 )
     elif debug:
         logger.debug("Log capture disabled (pass capture_logs=True to enable)")
-
-    global _instrumentation_manager
-    manager = InstrumentationManager(
-        provider=provider,
-        debug=debug,
-        excluded_urls=endpoint,
-    )
-    _instrumentation_manager = manager
 
     manager.instrument_threading()
     manager.instrument_http()

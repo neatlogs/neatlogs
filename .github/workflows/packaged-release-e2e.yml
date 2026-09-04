@@ -1,6 +1,7 @@
 name: Packaged Python release E2E
 
 on:
+  pull_request:
   workflow_dispatch:
 
 permissions:

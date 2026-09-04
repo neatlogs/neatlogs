@@ -1,0 +1,110 @@
+name: Doctor hosted E2E
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: python-doctor-e2e-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  doctor-e2e:
+    name: packed wheel to finalized trace
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      EVIDENCE_DIR: ${{ github.workspace }}/.doctor-evidence
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Build and install the wheel outside the checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install build
+          python -m build
+          python -m venv "$RUNNER_TEMP/neatlogs-doctor-install"
+          "$RUNNER_TEMP/neatlogs-doctor-install/bin/python" -m pip install dist/*.whl
+
+      - name: Run local Doctor check
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE_DIR"
+          "$RUNNER_TEMP/neatlogs-doctor-install/bin/neatlogs" doctor --local --json \
+            > "$EVIDENCE_DIR/doctor-local.json"
+
+      - name: Run hosted Doctor probe
+        shell: bash
+        env:
+          NEATLOGS_API_KEY: ${{ secrets.NEATLOGS_DEV_API_KEY }}
+          NEATLOGS_ENDPOINT: ${{ vars.NEATLOGS_DEV_ENDPOINT }}
+        run: |
+          set -euo pipefail
+          test -n "${NEATLOGS_API_KEY:-}" || { echo 'NEATLOGS_DEV_API_KEY is not configured' >&2; exit 1; }
+          test -n "${NEATLOGS_ENDPOINT:-}" || { echo 'NEATLOGS_DEV_ENDPOINT is not configured' >&2; exit 1; }
+          "$RUNNER_TEMP/neatlogs-doctor-install/bin/neatlogs" doctor --probe --json \
+            > "$EVIDENCE_DIR/doctor-probe.json"
+
+      - name: Verify exact finalized readback
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          evidence = Path(os.environ["EVIDENCE_DIR"])
+          local = json.loads((evidence / "doctor-local.json").read_text())
+          probe = json.loads((evidence / "doctor-probe.json").read_text())
+          expected_digest = "sha256:7163d2de42c4165f3ae552279fdde2ec0839413ce608c6e5d71f3fb532df319b"
+
+          assert local["format_version"] == "neatlogs.doctor/v2"
+          assert local["mode"] == "local" and local["status"] == "pass"
+          assert local["capture"]["span_count"] == 4
+          assert probe["format_version"] == "neatlogs.doctor/v2"
+          assert probe["mode"] == "probe" and probe["status"] == "pass"
+          assert probe["capture"]["span_count"] == 4
+          assert probe["capture"]["semantic_digest"] == expected_digest
+          receipt = probe["probe"]
+          assert receipt["ingest_route"] == "/v1/traces"
+          assert receipt["marker_header"] == "x-neatlogs-doctor"
+          assert receipt["marker_version"] == "v1"
+          assert receipt["visible"] is True
+          assert receipt["readback_trace_id"] == probe["capture"]["trace_id"]
+          assert receipt["finalized"] is True
+          assert receipt["readback_span_count"] == 4
+          assert receipt["meaningful_root_count"] == 1
+          assert receipt["duplicate_span_count"] == 0
+          for field in (
+              "hierarchy_valid",
+              "attributes_valid",
+              "input_output_valid",
+              "metadata_valid",
+              "typed_tokens_valid",
+          ):
+              assert receipt[field] is True, field
+          probe_checks = [item for item in probe["checks"] if item["name"].startswith("probe_")]
+          assert probe_checks and all(item["status"] == "pass" for item in probe_checks)
+          PY
+
+      - name: Publish sanitized Doctor evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-doctor-e2e-${{ github.sha }}
+          path: ${{ github.workspace }}/.doctor-evidence/*.json
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7

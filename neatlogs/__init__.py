@@ -44,6 +44,13 @@ from .core.telemetry_v2 import (
     normalize_span_v2,
 )
 from .decorators import span
+from .doctor_v2 import (
+    DOCTOR_V2_FORMAT_VERSION,
+    doctor_captured_local_v2,
+    doctor_local_v2,
+    doctor_probe_v2,
+    doctor_semantic_digest,
+)
 from .errors import NeatlogsConfigurationError, NeatlogsError
 from .init import flush, flush_all, get_delivery_diagnostics, init, shutdown
 from .prompt.client import (
@@ -340,5 +347,10 @@ __all__ = [
     "TelemetrySpanV2",
     "normalize_span_v2",
     "InMemoryDiagnosticSpanExporter",
+    "DOCTOR_V2_FORMAT_VERSION",
+    "doctor_captured_local_v2",
+    "doctor_local_v2",
+    "doctor_probe_v2",
+    "doctor_semantic_digest",
     "__version__",
 ]

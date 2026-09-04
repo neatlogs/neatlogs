@@ -1,0 +1,92 @@
+{
+  "trace_id": "11111111111111111111111111111111",
+  "root_span_id": "2222222222222222",
+  "spans": [
+    {
+      "span_id": "2222222222222222",
+      "parent_span_id": null,
+      "name": "doctor.rich.root",
+      "kind": "WORKFLOW",
+      "status": "OK",
+      "input": {"prompt": "generated diagnostic input"},
+      "output": {"result": "generated diagnostic output"},
+      "sampled": true,
+      "ended": true
+    },
+    {
+      "span_id": "3333333333333333",
+      "parent_span_id": "2222222222222222",
+      "name": "doctor.rich.llm",
+      "kind": "LLM",
+      "status": "OK",
+      "input": {"messages": [{"role": "user", "content": "generated diagnostic input"}]},
+      "output": {"text": "generated diagnostic output"},
+      "choices": [
+        {
+          "index": 0,
+          "message": {
+            "role": "assistant",
+            "content": "choice zero"
+          },
+          "finish_reason": "stop"
+        },
+        {
+          "index": 1,
+          "message": {
+            "role": "assistant",
+            "content": "choice one"
+          },
+          "finish_reason": "tool_calls"
+        }
+      ],
+      "tool_calls": [
+        {
+          "id": "doctor_call_1",
+          "name": "diagnostic_tool",
+          "arguments": {"value": 1},
+          "choice_index": 1,
+          "tool_call_index": 0
+        }
+      ],
+      "expected_choice_count": 2,
+      "stream_fragments": [
+        {"choices": [{"choice_index": 0, "content_bytes": 6}]},
+        {"choices": [{"choice_index": 1, "tool_calls": 1}]}
+      ],
+      "streaming": true,
+      "sampled": true,
+      "ended": true
+    },
+    {
+      "span_id": "4444444444444444",
+      "parent_span_id": "3333333333333333",
+      "name": "doctor.rich.tool",
+      "kind": "TOOL",
+      "status": "OK",
+      "tool_call": {
+        "id": "doctor_call_1",
+        "name": "diagnostic_tool",
+        "arguments": {"value": 1},
+        "result": {"value": 2}
+      },
+      "sampled": true,
+      "ended": true
+    },
+    {
+      "span_id": "5555555555555555",
+      "parent_span_id": "2222222222222222",
+      "name": "doctor.rich.payload",
+      "kind": "CHAIN",
+      "status": "OK",
+      "payload_references": [
+        {
+          "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "size": 1024,
+          "mime_type": "application/json"
+        }
+      ],
+      "sampled": true,
+      "ended": true
+    }
+  ]
+}

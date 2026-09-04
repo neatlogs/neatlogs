@@ -216,8 +216,17 @@ def _configuration_signature(**values):
     ).lower() in ("true", "1", "yes")
     mask = values.pop("mask")
     provider = values.pop("tracer_provider")
+    doctor_probe = values.pop("_doctor_probe")
+    doctor_probe_exporter = values.pop("_doctor_probe_exporter")
     values["mask_identity"] = id(mask) if mask is not None else None
     values["provider_identity"] = id(provider) if provider is not None else None
+    # Doctor changes both the resource contract and the transport headers. It
+    # must never be treated as an idempotent reuse of an ordinary initialized
+    # runtime, because the probe owns and shuts down the pipeline it creates.
+    values["doctor_probe"] = bool(doctor_probe)
+    values["doctor_probe_exporter_identity"] = (
+        id(doctor_probe_exporter) if doctor_probe_exporter is not None else None
+    )
     return json.dumps(values, sort_keys=True, separators=(",", ":"), default=str)
 
 
@@ -244,6 +253,8 @@ def init(
     isolate: Optional[bool] = None,
     register_shutdown_handlers: bool = True,
     uploads_enabled: Optional[bool] = None,
+    _doctor_probe: bool = False,
+    _doctor_probe_exporter: Optional[Any] = None,
 ) -> None:
     """
     Initialize Neatlogs SDK.
@@ -346,6 +357,8 @@ def init(
         isolate=isolate,
         register_shutdown_handlers=register_shutdown_handlers,
         uploads_enabled=uploads_enabled_resolved,
+        _doctor_probe=_doctor_probe,
+        _doctor_probe_exporter=_doctor_probe_exporter,
     )
 
     if _initialized:
@@ -375,6 +388,11 @@ def init(
     disable_export_resolved = bool(disable_export) or (
         os.getenv("NEATLOGS_DISABLE_EXPORT", "").lower() in ("true", "1", "yes")
     )
+    # Probe is an explicit CLI action whose purpose is a controlled export. A
+    # process-wide disable flag must not silently turn it into a false local-only
+    # pass; local Doctor never sets this internal flag.
+    if _doctor_probe:
+        disable_export_resolved = False
 
     if api_key is not None and str(api_key).strip():
         resolved_key = str(api_key).strip()
@@ -432,6 +450,9 @@ def init(
         "service.version": __version__,
         "neatlogs.workflow_name": resolved_workflow_name,
     }
+    if _doctor_probe:
+        resource_attrs["neatlogs.doctor"] = True
+        resource_attrs["neatlogs.doctor.version"] = "v1"
     if user_id:
         resource_attrs["user.id"] = user_id
     if tags:
@@ -535,8 +556,10 @@ def init(
     # BatchSpanProcessor + OTLPSpanExporter: standard transport
     if not disable_export_resolved:
         otlp_headers = {"x-api-key": resolved_key}
+        if _doctor_probe:
+            otlp_headers["x-neatlogs-doctor"] = "v1"
         # Always send traces to the OTLP traces endpoint for the configured base URL.
-        otlp_exporter = OTLPSpanExporter(
+        otlp_exporter = _doctor_probe_exporter or OTLPSpanExporter(
             endpoint=traces_endpoint,
             headers=otlp_headers,
             compression=Compression.Gzip,
@@ -585,6 +608,7 @@ def init(
                     mask,
                     diagnostics=_delivery_diagnostics,
                     media_store=_media_store,
+                    doctor_capture=_doctor_probe,
                 )
             ),
             max_export_batch_size=batch_size,

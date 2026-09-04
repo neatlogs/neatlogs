@@ -44,6 +44,24 @@ pip install "neatlogs[google-genai]"
 
 Requires **Python >= 3.10, < 3.14**.
 
+Before initialization, run the local Doctor. It sends generated non-user workflow
+and tool spans through an isolated instance of the installed SDK's normalization,
+masking, capture, and flush pipeline. It performs no backend request and requires
+no API key:
+
+```bash
+python -m neatlogs doctor --local --json
+# or: neatlogs-doctor --local --json
+```
+
+A passing local result proves that this installed SDK pipeline works. It does not
+prove that an application's own instrumentors or backend export are working.
+Doctor capture is enabled only inside the isolated local/probe pipeline, is
+strictly bounded, and is cleared during shutdown; normal application telemetry is
+never retained for diagnostics. Use `doctor --probe` to export a controlled trace
+through `/v1/traces` and read that exact trace back through
+`/api/traces/v3/:traceId`; HTTP acceptance or exporter flush alone is not a pass.
+
 ---
 
 ## Quickstart
@@ -245,6 +263,26 @@ NEATLOGS_ENDPOINT=https://ingest.neatlogs.com   # optional — this is the defau
 ```
 
 Get your API key from the [NeatLogs dashboard](https://app.neatlogs.com). Full `init()` options: [reference](https://docs.neatlogs.com/reference/init-reference).
+
+### Doctor diagnostics
+
+Validate the SDK's final normalized and masked telemetry envelope without sending data:
+
+```bash
+neatlogs doctor --local
+# or
+neatlogs-doctor --local --json
+```
+
+To verify the complete ingestion path, export a controlled trace through the existing
+`POST /v1/traces` route and read that exact trace back through
+`GET /api/traces/v3/:traceId`:
+
+```bash
+NEATLOGS_API_KEY=your-api-key neatlogs doctor --probe --json
+```
+
+Local mode is network-free and uses generated diagnostic data. Probe mode reports the first failing backend stage with a stable reason code and never prints the API key.
 
 ---
 

@@ -1,0 +1,63 @@
+name: Packaged Python release E2E
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  packaged-release-e2e:
+    name: PyPI wheel to exact finalized trace
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      EVIDENCE_DIR: ${{ github.workspace }}/.packaged-e2e-evidence
+      NEATLOGS_API_KEY: ${{ secrets.NEATLOGS_DEV_API_KEY }}
+      NEATLOGS_ENDPOINT: ${{ vars.NEATLOGS_DEV_ENDPOINT }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install the exact public wheel
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${NEATLOGS_API_KEY:-}"
+          test -n "${NEATLOGS_ENDPOINT:-}"
+          python -m venv "$RUNNER_TEMP/neatlogs-packaged-e2e"
+          "$RUNNER_TEMP/neatlogs-packaged-e2e/bin/python" -m pip install --no-cache-dir \
+            "neatlogs==1.4.21"
+          test "$("$RUNNER_TEMP/neatlogs-packaged-e2e/bin/python" -c \
+            'import importlib.metadata as m; print(m.version("neatlogs"))')" = "1.4.21"
+
+      - name: Run the normal user workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE_DIR"
+          "$RUNNER_TEMP/neatlogs-packaged-e2e/bin/python" \
+            tests/e2e/packaged_release_workflow.py \
+            --output "$EVIDENCE_DIR/expected.json" \
+            > "$EVIDENCE_DIR/workflow-summary.json"
+
+      - name: Verify exact finalized readback
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/neatlogs-packaged-e2e/bin/python" \
+            tests/e2e/verify_packaged_release_readback.py \
+            --expected "$EVIDENCE_DIR/expected.json" \
+            --output "$EVIDENCE_DIR/readback-summary.json"
+
+      - name: Publish sanitized evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-packaged-release-e2e-${{ github.sha }}
+          path: ${{ env.EVIDENCE_DIR }}/*.json
+          if-no-files-found: warn
+          retention-days: 7

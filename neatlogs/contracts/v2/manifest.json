@@ -1,8 +1,0 @@
-{
-  "contract_version": "2.0.0",
-  "schema_version": 2,
-  "schema_file": "neatlogs-telemetry.schema.json",
-  "schema_id": "https://schemas.neatlogs.com/telemetry/v2/neatlogs-telemetry.schema.json",
-  "schema_sha256": "50bbd9f1e6eaa6c83f08dcb84da3a98867c962fc8c4e1edd629da561fe5fe5a8",
-  "authority": "https://github.com/neatlogs/skills/tree/main/contracts/v2"
-}

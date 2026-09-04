@@ -227,6 +227,9 @@ class InstrumentationManager:
 
             # Post-instrument patches for OpenInference libraries
             if convention == "openinference":
+                # Some adapters import helper modules only from instrument().
+                # Refresh their direct OTel function references after that import.
+                provider_for_openinference(self.provider)
                 if library == "openai":
                     self._patch_openinference_openai_request_extras()
                     self._patch_openinference_openai_response_extras()
@@ -1577,6 +1580,7 @@ class InstrumentationManager:
             special_imports = {
                 "google_genai": "google.genai",
                 "google_generativeai": "google.generativeai",
+                "google_adk": "google.adk",
                 # Vertex AI (neatlogs custom) runs through the google-genai SDK in
                 # Vertex mode, not the legacy `vertexai` / google-cloud-aiplatform pkg.
                 "vertex_ai": "google.genai",

@@ -25,6 +25,7 @@ from .._wrap_utils import (
 _ISOLATED_MARKER = "_neatlogs_openinference_isolated"
 _ORIGINAL_USE_SPAN = trace_api.use_span
 _ORIGINAL_SET_SPAN_IN_CONTEXT = trace_api.set_span_in_context
+_ORIGINAL_GET_CURRENT_SPAN = trace_api.get_current_span
 _ORIGINAL_SET_VALUE = context_api.set_value
 _PATCHED = False
 
@@ -70,6 +71,13 @@ def _safe_set_span_in_context(
     if not _is_isolated_span(span):
         return _ORIGINAL_SET_SPAN_IN_CONTEXT(span, context)
     return set_neatlogs_span_in_context(span, context, force_owned=True)
+
+
+def _safe_get_current_span(context: Optional[context_api.Context] = None) -> Span:
+    private_span = _current_neatlogs_parent(context)
+    if private_span is not None and _is_isolated_span(private_span):
+        return private_span
+    return _ORIGINAL_GET_CURRENT_SPAN(context)
 
 
 def _safe_set_value(
@@ -148,6 +156,8 @@ def _patch_loaded_openinference_references() -> None:
                 namespace[attr_name] = _safe_use_span
             elif value is _ORIGINAL_SET_SPAN_IN_CONTEXT:
                 namespace[attr_name] = _safe_set_span_in_context
+            elif value is _ORIGINAL_GET_CURRENT_SPAN:
+                namespace[attr_name] = _safe_get_current_span
             elif value is _ORIGINAL_SET_VALUE:
                 namespace[attr_name] = _safe_set_value
 

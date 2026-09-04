@@ -17,8 +17,6 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    environment:
-      name: doctor-e2e-dev
     env:
       EVIDENCE_DIR: ${{ github.workspace }}/.doctor-evidence
     steps:

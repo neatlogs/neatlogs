@@ -71,6 +71,27 @@ jobs:
             --json \
             > "$EVIDENCE_DIR/wizard-doctor-probe.log"
 
+      - name: Instrument and verify a clean Python app with the published Wizard
+        shell: bash
+        run: |
+          set -euo pipefail
+          fixture="$RUNNER_TEMP/wizard-python-fixture"
+          cp -R tests/e2e/wizard_seed "$fixture"
+          python -m venv "$fixture/.venv"
+          npx --yes @neatlogs/wizard@0.1.7 \
+            --install-dir "$fixture" \
+            --endpoint "$NEATLOGS_ENDPOINT" \
+            --ci \
+            --approve-commands \
+            > "$EVIDENCE_DIR/wizard-instrumentation.log"
+          "$fixture/.venv/bin/python" -m neatlogs doctor --local --json \
+            > "$EVIDENCE_DIR/wizard-instrumented-doctor.json"
+          if rg -lF "$NEATLOGS_API_KEY" "$fixture" --glob '!**/.venv/**'; then
+            echo 'Wizard persisted the project credential' >&2
+            exit 1
+          fi
+          cp "$fixture/main.py" "$EVIDENCE_DIR/wizard-instrumented-main.py"
+
       - name: Publish sanitized evidence
         if: always()
         uses: actions/upload-artifact@v4

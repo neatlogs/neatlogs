@@ -80,6 +80,7 @@ def main() -> int:
                 expected.append(
                     {
                         "name": f"{prefix}.llm",
+                        "display_name": "e2e-deterministic-model",
                         "kind": "llm",
                         "span_id": llm_id,
                         "parent": agent_id,

@@ -78,9 +78,10 @@ def main() -> int:
 
     for span_id, wanted in expected_by_id.items():
         got = by_id[span_id]
+        expected_display_name = wanted.get("display_name", wanted["name"])
         _require(
-            got["name"] == wanted["name"],
-            f"name mismatch for {span_id}: expected {wanted['name']!r}, got {got['name']!r}",
+            got["name"] == expected_display_name,
+            f"name mismatch for {span_id}: expected {expected_display_name!r}, got {got['name']!r}",
         )
         _require(got["kind"] == wanted["kind"], f"kind mismatch for {wanted['name']}")
         _require(got["parent"] == wanted["parent"], f"parent mismatch for {wanted['name']}")

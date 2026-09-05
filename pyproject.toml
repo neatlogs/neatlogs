@@ -155,7 +155,8 @@ portkey = [
     "portkey-ai>=1.0.0",
 ]
 pydantic-ai = [
-    "pydantic-ai>=0.0.9",
+    "pydantic-ai>=0.7.5",
+    "openinference-instrumentation-pydantic-ai[instruments]>=0.1.9",
 ]
 smolagents = [
     "smolagents>=1.0.0",

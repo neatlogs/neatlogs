@@ -26,6 +26,7 @@ from opentelemetry.trace import StatusCode
 from ._wrap_utils import attach_as_current, detach, get_tracer, serialize
 
 _CLASS_HOOKS_INSTALLED = False
+_NATIVE_AUTO_INSTRUMENTATION_ACTIVE = False
 
 # Pydantic AI's run_sync() calls run(), which calls iter(). Without a guard we
 # would emit three nested AGENT spans for one logical run. This flag marks that
@@ -34,12 +35,20 @@ _CLASS_HOOKS_INSTALLED = False
 _agent_span_active = contextvars.ContextVar("neatlogs_pai_agent_active", default=False)
 
 
+def set_native_auto_instrumentation(active: bool) -> None:
+    global _NATIVE_AUTO_INSTRUMENTATION_ACTIVE
+    _NATIVE_AUTO_INSTRUMENTATION_ACTIVE = active
+
+
 def wrap_pydantic_ai(agent: Any) -> Any:
     """
     Wrap a Pydantic AI Agent. Patches run(), run_sync(), run_stream(), iter()
     and installs class-level Model (LLM) + toolset (TOOL) hooks.
     Returns the same agent instance.
     """
+    if _NATIVE_AUTO_INSTRUMENTATION_ACTIVE:
+        return agent
+
     _install_class_hooks()
     _patch_agent_model(agent)
     _patch_run(agent)
@@ -165,6 +174,8 @@ def _patch_run(agent: Any) -> None:
     orig_run = agent.run
 
     async def patched_run(*args, **kwargs):
+        if _NATIVE_AUTO_INSTRUMENTATION_ACTIVE:
+            return await orig_run(*args, **kwargs)
         if _agent_span_active.get():
             return await orig_run(*args, **kwargs)
         tracer = get_tracer()
@@ -203,6 +214,8 @@ def _patch_run_sync(agent: Any) -> None:
     orig_run_sync = agent.run_sync
 
     def patched_run_sync(*args, **kwargs):
+        if _NATIVE_AUTO_INSTRUMENTATION_ACTIVE:
+            return orig_run_sync(*args, **kwargs)
         if _agent_span_active.get():
             return orig_run_sync(*args, **kwargs)
         tracer = get_tracer()
@@ -241,6 +254,8 @@ def _patch_run_stream(agent: Any) -> None:
     orig_run_stream = agent.run_stream
 
     def patched_run_stream(*args, **kwargs):
+        if _NATIVE_AUTO_INSTRUMENTATION_ACTIVE:
+            return orig_run_stream(*args, **kwargs)
         # run_stream() returns an async context manager (not a coroutine).
         if _agent_span_active.get():
             return orig_run_stream(*args, **kwargs)
@@ -310,6 +325,8 @@ def _patch_iter(agent: Any) -> None:
     orig_iter = agent.iter
 
     def patched_iter(*args, **kwargs):
+        if _NATIVE_AUTO_INSTRUMENTATION_ACTIVE:
+            return orig_iter(*args, **kwargs)
         if _agent_span_active.get():
             return orig_iter(*args, **kwargs)
         attrs = _get_agent_attributes(agent)
@@ -532,6 +549,8 @@ def _patch_model_class(model_cls=None) -> None:
         orig_request = target.request
 
         async def patched_request(self, messages, *a, **k):
+            if _NATIVE_AUTO_INSTRUMENTATION_ACTIVE:
+                return await orig_request(self, messages, *a, **k)
             tracer = get_tracer()
             attrs = {"neatlogs.span.kind": "llm", "neatlogs.llm.model_name": str(_model_name(self))}
             span = tracer.start_span(name="pydantic_ai.model.request", attributes=attrs)
@@ -555,6 +574,8 @@ def _patch_model_class(model_cls=None) -> None:
         orig_request_stream = target.request_stream
 
         def patched_request_stream(self, messages, *a, **k):
+            if _NATIVE_AUTO_INSTRUMENTATION_ACTIVE:
+                return orig_request_stream(self, messages, *a, **k)
             # request_stream returns an async context manager yielding a streamed response.
             tracer = get_tracer()
             attrs = {
@@ -646,6 +667,8 @@ def _patch_toolset_class() -> None:
     orig_call_tool = FunctionToolset.call_tool
 
     async def patched_call_tool(self, name, tool_args, ctx, tool, *a, **k):
+        if _NATIVE_AUTO_INSTRUMENTATION_ACTIVE:
+            return await orig_call_tool(self, name, tool_args, ctx, tool, *a, **k)
         tracer = get_tracer()
         attrs = {"neatlogs.span.kind": "tool", "neatlogs.tool.name": str(name)}
         if tool_args is not None:

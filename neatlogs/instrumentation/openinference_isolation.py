@@ -9,7 +9,7 @@ to Neatlogs' private parent key.
 
 import sys
 from contextlib import contextmanager
-from typing import Any, Iterator, Optional
+from typing import Any, Iterable, Iterator, Optional
 
 from opentelemetry import context as context_api
 from opentelemetry import trace as trace_api
@@ -137,10 +137,55 @@ class _IsolatedOpenInferenceTracerProvider:
         return getattr(self._provider, name)
 
 
-def _patch_loaded_openinference_references() -> None:
-    """Replace direct imports held by already-imported OI adapter modules."""
+class _IsolatedNativeTracer:
+    """Keep spans from native OTel integrations on Neatlogs' private context."""
+
+    __slots__ = ("_tracer",)
+
+    def __init__(self, tracer: Any) -> None:
+        self._tracer = tracer
+
+    def start_span(self, *args: Any, **kwargs: Any) -> Any:
+        positional = list(args)
+        if len(positional) >= 2:
+            positional[1] = _sdk_parent_context(positional[1])
+        else:
+            kwargs["context"] = _sdk_parent_context(kwargs.get("context"))
+        return _mark_isolated(self._tracer.start_span(*positional, **kwargs))
+
+    def start_as_current_span(self, *args: Any, **kwargs: Any) -> Any:
+        end_on_exit = kwargs.pop("end_on_exit", True)
+        record_exception = kwargs.pop("record_exception", True)
+        set_status_on_exception = kwargs.pop("set_status_on_exception", True)
+        span = self.start_span(*args, **kwargs)
+        return _safe_use_span(
+            span,
+            end_on_exit=end_on_exit,
+            record_exception=record_exception,
+            set_status_on_exception=set_status_on_exception,
+        )
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._tracer, name)
+
+
+class _IsolatedNativeTracerProvider:
+    __slots__ = ("_provider",)
+
+    def __init__(self, provider: Any) -> None:
+        self._provider = provider
+
+    def get_tracer(self, *args: Any, **kwargs: Any) -> Any:
+        return _IsolatedNativeTracer(self._provider.get_tracer(*args, **kwargs))
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._provider, name)
+
+
+def _patch_loaded_references(prefixes: Iterable[str]) -> None:
+    """Replace direct OTel imports held by supported integration modules."""
     for name, module in tuple(sys.modules.items()):
-        if not name.startswith("openinference.instrumentation") or module is None:
+        if not any(name.startswith(prefix) for prefix in prefixes) or module is None:
             continue
         namespace = getattr(module, "__dict__", {})
         for attr_name, value in tuple(namespace.items()):
@@ -155,7 +200,7 @@ def _patch_loaded_openinference_references() -> None:
 def _install_patch() -> None:
     global _PATCHED
     if _PATCHED:
-        _patch_loaded_openinference_references()
+        _patch_loaded_references(("openinference.instrumentation",))
         return
 
     from openinference.instrumentation import OITracer
@@ -180,7 +225,7 @@ def _install_patch() -> None:
     trace_api.set_span_in_context = _safe_set_span_in_context
     context_api.set_value = _safe_set_value
     _PATCHED = True
-    _patch_loaded_openinference_references()
+    _patch_loaded_references(("openinference.instrumentation",))
 
 
 def provider_for_openinference(provider: Any) -> Any:
@@ -189,3 +234,14 @@ def provider_for_openinference(provider: Any) -> Any:
         return provider
     _install_patch()
     return _IsolatedOpenInferenceTracerProvider(provider)
+
+
+def provider_for_native_instrumentation(
+    provider: Any, *, module_prefixes: Iterable[str] = ()
+) -> Any:
+    """Adapt native OTel integrations to Neatlogs' provider-local context."""
+    if not _isolation_active():
+        return provider
+    _install_patch()
+    _patch_loaded_references(module_prefixes)
+    return _IsolatedNativeTracerProvider(provider)

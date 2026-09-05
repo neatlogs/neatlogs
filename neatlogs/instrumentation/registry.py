@@ -192,7 +192,7 @@ INSTRUMENTATION_REGISTRY = {
         },
         "autogen": {
             "openllmetry": None,
-            "openinference": "openinference.instrumentation.autogen",
+            "openinference": "openinference.instrumentation.autogen_agentchat",
             "default_span_kind": "AGENT",
         },
         "haystack": {

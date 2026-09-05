@@ -1563,6 +1563,7 @@ class InstrumentationManager:
             "chromadb": "ChromaInstrumentor",
             "beeai": "BeeAIInstrumentor",
             "openai_agents": "OpenAIAgentsInstrumentor",
+            "autogen": "AutogenAgentChatInstrumentor",
             "pydantic_ai": "PydanticAIInstrumentor",
             "mcp": "MCPInstrumentor",
         }
@@ -1594,6 +1595,8 @@ class InstrumentationManager:
                 # not `openai_agents`. Without this, the instrumentor is skipped as
                 # "not installed" and agent/tool/guardrail/handoff spans are never produced.
                 "openai_agents": "agents",
+                "autogen": "autogen_agentchat",
+                "portkey": "portkey_ai",
             }
             import_name = special_imports.get(library) or library.replace("-", "_")
             importlib.import_module(import_name)

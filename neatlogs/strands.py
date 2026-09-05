@@ -1,188 +1,138 @@
-"""
-Neatlogs Strands Agents integration.
+"""Neatlogs integration for Strands Agents."""
 
-Usage:
-    >>> import neatlogs
-    >>> from strands import Agent
-    >>> neatlogs.init(api_key="...", workflow_name="...")   # registers the OTel tracer
-    >>> agent = neatlogs.strands_hooks(Agent(model=model))  # installs the I/O hook
-    >>> response = agent("Hello")
+import copy
+import threading
+import weakref
+from typing import Any, Optional
 
-The Strands Agents SDK emits its OWN OpenTelemetry spans (invoke_agent,
-execute_tool, model `chat` calls) as soon as a global tracer provider exists —
-which ``neatlogs.init()`` registers. Those spans flow into neatlogs automatically
-and the attribute mapper classifies them as AGENT / TOOL / LLM, with token usage
-from the gen_ai.usage.* attributes.
+from openinference.instrumentation.strands_agents import (
+    StrandsAgentsToOpenInferenceProcessor,
+)
 
-However, Strands puts prompt/response CONTENT on span EVENTS (gen_ai.user.message,
-gen_ai.system.message, gen_ai.choice, …) per the OTel GenAI convention — NOT on
-span attributes. neatlogs renders I/O from span attributes, so without help those
-native spans would show tokens but no input/output. ``strands_hooks()`` installs a
-single class-level hook on Strands' own ``Tracer._add_event`` chokepoint: whenever
-Strands records a gen_ai message/choice event, we ALSO set input.value/output.value
-(+ span kind) on the same span. We do NOT create our own spans — Strands' native
-tracing stays the source of truth; we only enrich it.
-"""
+from .instrumentation.openinference_isolation import provider_for_openinference
 
-from typing import Any
+_LOCK = threading.RLock()
+_ACTIVE_PROVIDER: Optional[Any] = None
+_ACTIVE_TRACER: Optional[Any] = None
+_PREVIOUS_TRACER: Optional[Any] = None
+_WRAPPED_AGENTS: list[tuple[Any, Any]] = []
+_PROVIDER_PROCESSORS: "weakref.WeakKeyDictionary[Any, Any]" = weakref.WeakKeyDictionary()
 
-from ._wrap_utils import serialize
 
-_HOOK_INSTALLED = False
+class _NeatlogsStrandsProcessor(StrandsAgentsToOpenInferenceProcessor):
+    def on_end(self, span: Any) -> None:
+        status = span.status
+        interrupted = bool(
+            (getattr(span, "attributes", None) or {}).get("neatlogs.trace.interrupted")
+        )
+        super().on_end(span)
+        if interrupted:
+            # The upstream converter marks non-error spans OK. An interrupted
+            # Neatlogs span deliberately retains the framework's prior status.
+            span._status = status
+
+
+def prepare_strands(provider: Any) -> bool:
+    """Install the Strands-to-OpenInference processor before export processors."""
+    with _LOCK:
+        try:
+            if provider in _PROVIDER_PROCESSORS:
+                return True
+        except TypeError:
+            pass
+
+        processor = _NeatlogsStrandsProcessor()
+        provider.add_span_processor(processor)
+        try:
+            _PROVIDER_PROCESSORS[provider] = processor
+        except TypeError:
+            pass
+    return True
+
+
+def instrument_strands(provider: Any) -> bool:
+    """Route future Strands agents through the current Neatlogs provider."""
+    from strands.telemetry import tracer as tracer_module
+    from strands.telemetry.tracer import Tracer
+
+    prepare_strands(provider)
+    oi_provider = provider_for_openinference(provider)
+
+    global _ACTIVE_PROVIDER, _ACTIVE_TRACER, _PREVIOUS_TRACER
+    with _LOCK:
+        if (
+            _ACTIVE_PROVIDER is provider
+            and _ACTIVE_TRACER is not None
+            and tracer_module._tracer_instance is _ACTIVE_TRACER
+        ):
+            return True
+
+        _restore_strands_locked(tracer_module)
+        previous = tracer_module._tracer_instance
+        tracer = copy.copy(previous) if previous is not None else Tracer()
+        tracer.tracer_provider = oi_provider
+        tracer.tracer = oi_provider.get_tracer(tracer.service_name)
+        tracer_module._tracer_instance = tracer
+
+        _PREVIOUS_TRACER = previous
+        _ACTIVE_TRACER = tracer
+        _ACTIVE_PROVIDER = provider
+    return True
 
 
 def strands_hooks(agent: Any) -> Any:
-    """
-    Install the Strands telemetry I/O hook (idempotent, class-level) and return the
-    agent unchanged. Strands self-instruments via native OTel; this hook only adds
-    input/output content (which Strands keeps on span events) to the span attributes
-    neatlogs renders.
-    """
-    _install_event_hook()
-    try:
-        setattr(agent, "_neatlogs_patched", True)
-    except Exception:
-        pass
+    """Route an existing Strands agent through Neatlogs and return it unchanged."""
+    from .init import _instrument_library
+
+    _instrument_library("strands")
+    with _LOCK:
+        tracer = _ACTIVE_TRACER
+        if tracer is not None and getattr(agent, "tracer", None) is not tracer:
+            _remember_agent(agent, getattr(agent, "tracer", None))
+            agent.tracer = tracer
+        try:
+            setattr(agent, "_neatlogs_patched", True)
+        except Exception:
+            pass
     return agent
 
 
-def _install_event_hook() -> None:
-    global _HOOK_INSTALLED
-    if _HOOK_INSTALLED:
-        return
+def uninstrument_strands() -> None:
+    """Restore the Strands singleton and explicitly wrapped agents."""
     try:
-        from strands.telemetry.tracer import Tracer
+        from strands.telemetry import tracer as tracer_module
     except Exception:
         return
 
-    orig_add_event = getattr(Tracer, "_add_event", None)
-    if orig_add_event is None or getattr(orig_add_event, "_neatlogs_wrapped", False):
-        _HOOK_INSTALLED = True
+    with _LOCK:
+        _restore_strands_locked(tracer_module)
+
+
+def _remember_agent(agent: Any, previous_tracer: Any) -> None:
+    for reference, _ in _WRAPPED_AGENTS:
+        if reference() is agent:
+            return
+    try:
+        reference = weakref.ref(agent)
+    except TypeError:
+        reference = lambda: agent
+    _WRAPPED_AGENTS.append((reference, previous_tracer))
+
+
+def _restore_strands_locked(tracer_module: Any) -> None:
+    global _ACTIVE_PROVIDER, _ACTIVE_TRACER, _PREVIOUS_TRACER
+    active = _ACTIVE_TRACER
+    if active is None:
         return
 
-    def patched_add_event(self, span, event_name, event_attributes=None, *args, **kwargs):
-        orig_add_event(self, span, event_name, event_attributes, *args, **kwargs)
-        try:
-            if span is None or not getattr(span, "is_recording", lambda: False)():
-                return
-            ev_attrs = event_attributes or {}
-            # Classify the span from strands' own gen_ai.operation.name (set at span
-            # creation): chat → llm, execute_tool → tool, invoke_agent → agent, else
-            # chain. We DON'T set neatlogs.span.kind (the mapper does that from the
-            # span name); we only use the op to write I/O under the RIGHT namespace,
-            # because the generic {span_kind}.input mapping can't resolve the kind in
-            # time for these natively-created spans.
-            op = ""
-            try:
-                op = str((span.attributes or {}).get("gen_ai.operation.name", "")).lower()
-            except Exception:
-                op = ""
-            is_tool = op == "execute_tool" or "gen_ai.tool.name" in (
-                getattr(span, "attributes", {}) or {}
-            )
-            in_key = "neatlogs.tool.input" if is_tool else None
-            out_key = "neatlogs.tool.output" if is_tool else None
+    if tracer_module._tracer_instance is active:
+        tracer_module._tracer_instance = _PREVIOUS_TRACER
 
-            # Input-side messages: gen_ai.{system,user,assistant,tool}.message
-            if event_name.startswith("gen_ai.") and event_name.endswith(".message"):
-                role = event_name[len("gen_ai.") : -len(".message")]
-                content = _strands_event_text(ev_attrs.get("content"))
-                if content:
-                    if is_tool:
-                        span.set_attribute("input.value", content)
-                        span.set_attribute("neatlogs.tool.input", content)
-                    else:
-                        _append_input_message(span, role, content)
-            # Output: gen_ai.choice (legacy) or the new latest-convention details event.
-            elif event_name in ("gen_ai.choice", "gen_ai.client.inference.operation.details"):
-                key = "message" if event_name == "gen_ai.choice" else "gen_ai.output.messages"
-                out = _strands_event_text(ev_attrs.get(key))
-                if out:
-                    span.set_attribute("output.value", out)
-                    if is_tool:
-                        span.set_attribute("neatlogs.tool.output", out)
-                    else:
-                        span.set_attribute("neatlogs.llm.output_messages.0.role", "assistant")
-                        span.set_attribute("neatlogs.llm.output_messages.0.content", out)
-                        span.set_attribute(
-                            "neatlogs.llm.output", serialize({"role": "assistant", "content": out})
-                        )
-        except Exception:
-            pass
-
-    patched_add_event._neatlogs_wrapped = True
-    Tracer._add_event = patched_add_event
-    _HOOK_INSTALLED = True
-
-
-# Per-span running index for input messages (kept on the span object itself so
-# concurrent spans don't collide).
-def _append_input_message(span: Any, role: str, content: str) -> None:
-    idx = getattr(span, "_neatlogs_in_idx", 0)
-    span.set_attribute(f"neatlogs.llm.input_messages.{idx}.role", role)
-    span.set_attribute(f"neatlogs.llm.input_messages.{idx}.content", content)
-    try:
-        setattr(span, "_neatlogs_in_idx", idx + 1)
-    except Exception:
-        pass
-    # Maintain a flat input.value blob (latest wins; cheap to overwrite).
-    existing = getattr(span, "_neatlogs_in_msgs", [])
-    existing.append({"role": role, "content": content})
-    try:
-        setattr(span, "_neatlogs_in_msgs", existing)
-    except Exception:
-        pass
-    blob = serialize({"messages": existing})
-    span.set_attribute("input.value", blob)
-    # Flat LLM input the backend reads directly (namespace-correct without relying
-    # on the {span_kind} mapping, which can't resolve the kind for native spans).
-    span.set_attribute("neatlogs.llm.input", blob)
-
-
-def _strands_event_text(content: Any) -> str:
-    """
-    Flatten Strands/Bedrock content into readable text. Content arrives as a JSON
-    string or list of blocks: [{"text": "..."}], [{"toolUse": {...}}],
-    [{"toolResult": {...}}], or [{"role","parts","finish_reason"}].
-    """
-    if content is None:
-        return ""
-    val = content
-    if isinstance(val, str):
-        s = val.strip()
-        if not (s.startswith("[") or s.startswith("{")):
-            return val  # already plain text
-        try:
-            import json
-
-            val = json.loads(s)
-        except Exception:
-            return val
-    return _flatten_blocks(val)
-
-
-def _flatten_blocks(val: Any) -> str:
-    out = []
-    items = val if isinstance(val, list) else [val]
-    for item in items:
-        if isinstance(item, str):
-            out.append(item)
-            continue
-        if not isinstance(item, dict):
-            out.append(str(item))
-            continue
-        if "text" in item:
-            out.append(str(item["text"]))
-        elif "toolUse" in item:
-            tu = item["toolUse"] or {}
-            out.append(f"{tu.get('name', 'tool')}({serialize(tu.get('input', {}))})")
-        elif "toolResult" in item:
-            tr = item["toolResult"] or {}
-            out.append(_flatten_blocks(tr.get("content", tr)))
-        elif "parts" in item:
-            out.append(_flatten_blocks(item["parts"]))
-        elif "content" in item:
-            out.append(_flatten_blocks(item["content"]))
-        else:
-            out.append(serialize(item))
-    return "\n".join(s for s in out if s)
+    for reference, previous in _WRAPPED_AGENTS:
+        agent = reference()
+        if agent is not None and getattr(agent, "tracer", None) is active:
+            agent.tracer = previous
+    _WRAPPED_AGENTS.clear()
+    _ACTIVE_PROVIDER = None
+    _ACTIVE_TRACER = None
+    _PREVIOUS_TRACER = None

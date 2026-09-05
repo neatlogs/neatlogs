@@ -71,6 +71,7 @@ dependencies = [
     "openinference-instrumentation-google-adk>=0.1.8",
     "openinference-instrumentation-autogen-agentchat>=0.1.6",
     "openinference-instrumentation-llama-index>=4.3.9",
+    "openinference-instrumentation-strands-agents>=0.1.7",
 ]
 
 [project.optional-dependencies]
@@ -173,6 +174,9 @@ vertex-ai = [
 ]
 autogen-agentchat = [
     "autogen-agentchat>=0.4.0",
+]
+strands = [
+    "strands-agents>=1.19.0",
 ]
 milvus = [
     # pymilvus and milvus-lite must be the same minor version to avoid a gRPC hang

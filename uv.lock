@@ -4287,6 +4287,7 @@ dependencies = [
     { name = "openinference-instrumentation-portkey" },
     { name = "openinference-instrumentation-pydantic-ai" },
     { name = "openinference-instrumentation-smolagents" },
+    { name = "openinference-instrumentation-strands-agents" },
     { name = "openinference-instrumentation-vertexai" },
     { name = "openinference-semantic-conventions" },
     { name = "opentelemetry-api", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
@@ -4411,6 +4412,9 @@ pydantic-ai = [
 smolagents = [
     { name = "smolagents" },
 ]
+strands = [
+    { name = "strands-agents" },
+]
 vertex-ai = [
     { name = "google-genai" },
 ]
@@ -4500,6 +4504,7 @@ requires-dist = [
     { name = "openinference-instrumentation-portkey", specifier = ">=0.1.7" },
     { name = "openinference-instrumentation-pydantic-ai", specifier = ">=0.1.9" },
     { name = "openinference-instrumentation-smolagents", specifier = ">=0.1.21" },
+    { name = "openinference-instrumentation-strands-agents", specifier = ">=0.1.7" },
     { name = "openinference-instrumentation-vertexai", specifier = ">=0.1.11" },
     { name = "openinference-semantic-conventions", specifier = ">=0.1.13" },
     { name = "opentelemetry-api", specifier = ">=1.35.0" },
@@ -4518,9 +4523,10 @@ requires-dist = [
     { name = "qdrant-client", marker = "extra == 'langchain'", specifier = "<1.16" },
     { name = "requests", specifier = ">=2.31.0" },
     { name = "smolagents", marker = "extra == 'smolagents'", specifier = ">=1.0.0" },
+    { name = "strands-agents", marker = "extra == 'strands'", specifier = ">=1.19.0" },
     { name = "wrapt", specifier = ">=1.0.0" },
 ]
-provides-extras = ["azure-ai-inference", "openai", "azure-openai", "anthropic", "langchain", "langgraph", "crewai", "llama-index", "google-adk", "groq", "agno", "bedrock", "dspy", "litellm", "google-genai", "openai-agents", "guardrails", "haystack", "instructor", "mcp", "mistralai", "portkey", "pydantic-ai", "smolagents", "hermes", "vertexai", "vertex-ai", "autogen-agentchat", "milvus"]
+provides-extras = ["azure-ai-inference", "openai", "azure-openai", "anthropic", "langchain", "langgraph", "crewai", "llama-index", "google-adk", "groq", "agno", "bedrock", "dspy", "litellm", "google-genai", "openai-agents", "guardrails", "haystack", "instructor", "mcp", "mistralai", "portkey", "pydantic-ai", "smolagents", "hermes", "vertexai", "vertex-ai", "autogen-agentchat", "strands", "milvus"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -5452,6 +5458,25 @@ wheels = [
 ]
 
 [[package]]
+name = "openinference-instrumentation-strands-agents"
+version = "0.1.7"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "openinference-semantic-conventions" },
+    { name = "opentelemetry-api", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
+    { name = "opentelemetry-api", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "opentelemetry-sdk", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
+    { name = "opentelemetry-sdk", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "opentelemetry-semantic-conventions", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
+    { name = "opentelemetry-semantic-conventions", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/da/e5/5d04e5035afd547a1ef74bf7832ec5e8544c0555dc117dbda5cfadf6aa1c/openinference_instrumentation_strands_agents-0.1.7.tar.gz", hash = "sha256:c2fc10898bdf90ff662c18871ecf7577ccf19b42e81cc57f5507ba2db4525a26", size = 15556, upload-time = "2026-08-25T05:32:44.114Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e8/ae/54e2886fd21d8849dfdf684999a02317676b3c3c674fe2e89a690c5f2352/openinference_instrumentation_strands_agents-0.1.7-py3-none-any.whl", hash = "sha256:b2c8df548147105802caa17d5227f696d75098c1e7abc63aa56b2b000c184136", size = 17586, upload-time = "2026-08-25T05:32:42.386Z" },
+]
+
+[[package]]
 name = "openinference-instrumentation-vertexai"
 version = "0.1.18"
 source = { registry = "https://pypi.org/simple" }
@@ -5473,11 +5498,11 @@ wheels = [
 
 [[package]]
 name = "openinference-semantic-conventions"
-version = "0.1.32"
+version = "0.1.35"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/05/5e/13ffdb2ba436312cda9ed842ce3416fa5961e36a205df9a18a67eef7f9b3/openinference_semantic_conventions-0.1.32.tar.gz", hash = "sha256:2a3e6723ddce37abc5c43d38c6c7ac05b0f2efcfbe75cc0f135ab14ceb0730f7", size = 13980, upload-time = "2026-08-07T14:29:21.035Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/e0/cd/1c26841447249b9fc402e342b9b3c042f8916b5abb485b8eb4e63ea6397c/openinference_semantic_conventions-0.1.35.tar.gz", hash = "sha256:b64864a5961fee7bf37d2e11491499baab223fac18efe671065dede55ccd5a3a", size = 14262, upload-time = "2026-09-04T20:16:04.645Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/9d/19/2d096333313d45e5f87d08f903cedc3f7298c5690d2e6c4ef236dc22870e/openinference_semantic_conventions-0.1.32-py3-none-any.whl", hash = "sha256:d06c4716faf7537fbabbb6d34e758ec6b3650a18c037661782fc8c3e9fa90f81", size = 11252, upload-time = "2026-08-07T14:29:19.78Z" },
+    { url = "https://files.pythonhosted.org/packages/4d/34/434cedb6f39b14e6eb8f203c33e97cee3907fc7f994d7c3cfcfbd4575787/openinference_semantic_conventions-0.1.35-py3-none-any.whl", hash = "sha256:a418df584fb3ec41d4214ac44562908f596df042c382d1445fafb26df2834cb2", size = 11484, upload-time = "2026-09-04T20:16:03.668Z" },
 ]
 
 [[package]]
@@ -8807,6 +8832,35 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/b5/b4/205b0d5241d934e8add0c38aa924c4f9fb7330834ff11e5444db964ec3f9/starlette-1.6.0.tar.gz", hash = "sha256:d4e3ac5e546444960c710297a3c9fc3f7ebae1b7e963f3d36173b49da535be9b", size = 2716969, upload-time = "2026-08-08T18:27:57.512Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c8/cb/6a6a47d5b464bd08695d254f3da6e7986cc70c9fa5d778eda57538edfe56/starlette-1.6.0-py3-none-any.whl", hash = "sha256:a86dd39d14bb45f85a3d18525215a9ef0cfd1f192ac793220e72598c90335f0c", size = 75969, upload-time = "2026-08-08T18:27:56.196Z" },
+]
+
+[[package]]
+name = "strands-agents"
+version = "1.54.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "boto3" },
+    { name = "botocore" },
+    { name = "docstring-parser" },
+    { name = "httpx" },
+    { name = "jsonschema" },
+    { name = "mcp", version = "1.28.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
+    { name = "mcp", version = "1.29.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "opentelemetry-api", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
+    { name = "opentelemetry-api", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "opentelemetry-instrumentation-threading", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
+    { name = "opentelemetry-instrumentation-threading", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "opentelemetry-sdk", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
+    { name = "opentelemetry-sdk", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "pydantic", version = "2.12.5", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
+    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "pyyaml" },
+    { name = "typing-extensions" },
+    { name = "watchdog" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/74/3d/1e38d7644293bc31405562807933a68bd734e75a269bf24ad94869f51915/strands_agents-1.54.0.tar.gz", hash = "sha256:8351ae5962a0cf51c0c8d6ae928752ab5331671603393aef9d267d1c435aa3c3", size = 1457826, upload-time = "2026-08-27T20:47:16.92Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a3/a2/8bdc61000650649ae10e364698d88f3a4279155f834aefd1fb9ded7cf81b/strands_agents-1.54.0-py3-none-any.whl", hash = "sha256:ca37b9001531596a634e9249f97fb03ce70997e216f6a71d4e8f8182818cbf5c", size = 728301, upload-time = "2026-08-27T20:47:14.764Z" },
 ]
 
 [[package]]

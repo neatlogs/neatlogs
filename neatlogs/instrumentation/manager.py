@@ -41,7 +41,9 @@ class InstrumentationManager:
 
     def instrument_threading(self) -> None:
         try:
-            ThreadingInstrumentor().instrument()
+            instrumentor = ThreadingInstrumentor()
+            if not instrumentor.is_instrumented_by_opentelemetry:
+                instrumentor.instrument()
             if self.debug:
                 logger.info("✅ Instrumented threading (context propagation)")
         except Exception as e:
@@ -147,6 +149,19 @@ class InstrumentationManager:
         if not self._is_library_installed(library):
             if self.debug:
                 logger.info(f"⏭️  Skipped: {library} (not installed)")
+            return
+
+        if library == "strands":
+            try:
+                from ..strands import instrument_strands
+
+                if instrument_strands(self.provider):
+                    self.instrumented.add(library)
+                    if self.debug:
+                        logger.info("✅ strands (native OpenTelemetry)")
+            except Exception as e:
+                if self.debug:
+                    logger.warning(f"⚠️  strands (native OpenTelemetry): {e}")
             return
 
         info = INSTRUMENTATION_REGISTRY["libraries"].get(library)
@@ -272,6 +287,14 @@ class InstrumentationManager:
         except Exception:
             pass
         for library in list(self.instrumented):
+            if library == "strands":
+                try:
+                    from ..strands import uninstrument_strands
+
+                    uninstrument_strands()
+                except Exception:
+                    pass
+                continue
             info = INSTRUMENTATION_REGISTRY["libraries"].get(library) or {}
             for convention in ("neatlogs", "openinference", "openllmetry"):
                 package_name = info.get(convention)

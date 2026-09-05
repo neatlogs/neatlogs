@@ -318,7 +318,7 @@ INSTRUMENTATION_REGISTRY = {
         },
         "strands": {
             "openllmetry": None,
-            "openinference": "openinference.instrumentation.strands",
+            "openinference": "openinference.instrumentation.strands_agents",
             "default_span_kind": "AGENT",
         },
         "pipecat": {

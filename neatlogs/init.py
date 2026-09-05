@@ -716,7 +716,6 @@ def init(
     _instrumentation_manager = manager
 
     manager.instrument_threading()
-    manager.instrument_http()
 
     if instrumentations:
         manager.instrument(libraries=instrumentations)

@@ -190,7 +190,10 @@ def _patch_run(agent: Any) -> None:
         start = time.perf_counter()
         try:
             result = await orig_run(*args, **kwargs)
-        except Exception as e:
+        except BaseException as e:
+            # asyncio.CancelledError inherits BaseException, not Exception. End the
+            # span before propagating cancellation so AGENT/LLM lifecycles do not
+            # remain open until provider shutdown.
             _err(span, e)
             raise
         finally:

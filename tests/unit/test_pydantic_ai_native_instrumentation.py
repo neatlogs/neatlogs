@@ -432,3 +432,33 @@ def test_repeated_identical_init_does_not_duplicate_native_processors():
     spans = exporter.get_finished_spans()
     assert len(_spans_by_kind(spans)["AGENT"]) == 1
     assert len(_spans_by_kind(spans)["LLM"]) == 1
+
+@pytest.mark.asyncio
+async def test_manual_wrapper_ends_agent_span_when_run_is_cancelled():
+    provider = TracerProvider()
+    exporter = InMemorySpanExporter()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    neatlogs.init(
+        api_key="test-key",
+        disable_export=True,
+        instrumentations=[],
+        tracer_provider=provider,
+        register_shutdown_handlers=False,
+    )
+    started = asyncio.Event()
+
+    class BlockingModel(TestModel):
+        async def request(self, *args, **kwargs):
+            started.set()
+            await asyncio.Event().wait()
+
+    agent = neatlogs.wrap(Agent(BlockingModel(), name="cancelled-agent"))
+    task = asyncio.create_task(agent.run("wait forever"))
+    await started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    spans = exporter.get_finished_spans()
+    assert [span.name for span in spans] == ["pydantic_ai.agent.run"]
+    assert spans[0].status.status_code is StatusCode.ERROR

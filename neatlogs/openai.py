@@ -274,7 +274,9 @@ def _patch_async_completions(completions: Any) -> None:
 
         try:
             response = await orig_create(*args, **kwargs)
-        except Exception as e:
+        except BaseException as e:
+            # asyncio.CancelledError inherits BaseException, not Exception. End the
+            # span before propagating so the LLM span is not left open until shutdown.
             span.set_status(StatusCode.ERROR, str(e))
             span.record_exception(e)
             span.end()
@@ -420,7 +422,9 @@ def _patch_method(
             start = time.perf_counter()
             try:
                 response = await orig(*args, **kwargs)
-            except Exception as e:
+            except BaseException as e:
+                # asyncio.CancelledError inherits BaseException, not Exception. End
+                # the span before propagating so it is not left open until shutdown.
                 span.set_status(StatusCode.ERROR, str(e))
                 span.record_exception(e)
                 span.end()
@@ -495,7 +499,9 @@ def _patch_async_responses(responses: Any) -> None:
         start = time.perf_counter()
         try:
             response = await orig_create(*args, **kwargs)
-        except Exception as e:
+        except BaseException as e:
+            # asyncio.CancelledError inherits BaseException, not Exception. End the
+            # span before propagating so the LLM span is not left open until shutdown.
             span.set_status(StatusCode.ERROR, str(e))
             span.record_exception(e)
             span.end()

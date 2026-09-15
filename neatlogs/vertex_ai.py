@@ -160,7 +160,9 @@ def _patch_async_models(models: Any) -> None:
         start = time.perf_counter()
         try:
             response = await orig_generate(*args, **kwargs)
-        except Exception as e:
+        except BaseException as e:
+            # asyncio.CancelledError inherits BaseException, not Exception. End the
+            # span before propagating so the LLM span is not left open until shutdown.
             _err(span, e)
             raise
 

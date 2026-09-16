@@ -322,6 +322,7 @@
         "VECTOR_STORE",
         "MEMORY",
         "GUARDRAIL",
+        "EVALUATOR",
         "LOG",
         "HTTP",
         "UNKNOWN"
@@ -1750,6 +1751,7 @@
             "AGENT",
             "CHAIN",
             "TASK",
+            "EVALUATOR",
             "HTTP",
             "UNKNOWN"
           ]
@@ -1913,6 +1915,7 @@
           "neatlogs.vector_store.*",
           "neatlogs.memory.*",
           "neatlogs.guardrail.*",
+          "neatlogs.evaluator.*",
           "neatlogs.mcp.*",
           "neatlogs.code.*"
         ],

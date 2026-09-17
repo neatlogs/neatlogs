@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "requiredSignals": [
+    "trace-completes",
+    "parent-child-hierarchy",
+    "span-kind-classification",
+    "input-output",
+    "model-provider-metadata",
+    "usage",
+    "errors",
+    "context-propagation",
+    "async-isolation",
+    "no-duplicate-spans",
+    "shutdown-flush"
+  ],
+  "normalizedFields": ["trace_id", "span_id", "parent_span_id", "start_time", "end_time", "duration"]
+}

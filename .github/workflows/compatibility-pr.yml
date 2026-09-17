@@ -1,0 +1,29 @@
+name: Compatibility configuration
+
+on:
+  pull_request:
+    paths:
+      - ".compatibility/**"
+      - "scripts/compatibility/**"
+      - "neatlogs/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/compatibility-*.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - name: Validate compatibility inventory
+        run: python scripts/compatibility/discover_releases.py --validate-only
+      - name: Test compatibility automation
+        run: python -m unittest scripts.compatibility.test_discover_releases

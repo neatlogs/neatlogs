@@ -9,7 +9,7 @@ from typing import Any
 
 TELEMETRY_CONTRACT_VERSION = "2.0.0"
 TELEMETRY_SCHEMA_VERSION = 2
-TELEMETRY_SCHEMA_SHA256 = "ae79717d127e2faa761ad83c8a51a08cae6fce00a04446d46dcc6d1a371818ce"
+TELEMETRY_SCHEMA_SHA256 = "e364a53ace5e79353d95ea1badc3a6e39baceda2b61a4c50832e006214cad3e1"
 
 
 def telemetry_schema_bytes() -> bytes:

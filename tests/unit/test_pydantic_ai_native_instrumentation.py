@@ -461,4 +461,5 @@ async def test_manual_wrapper_ends_agent_span_when_run_is_cancelled():
 
     spans = exporter.get_finished_spans()
     assert [span.name for span in spans] == ["pydantic_ai.agent.run"]
-    assert spans[0].status.status_code is StatusCode.ERROR
+    assert spans[0].attributes["neatlogs.stream.cancelled"] is True
+    assert spans[0].status.status_code is StatusCode.UNSET

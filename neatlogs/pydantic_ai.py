@@ -17,6 +17,7 @@ at the class level so every model request and tool call nests under the active
 agent run (and under user @span / trace() blocks too).
 """
 
+import asyncio
 import contextvars
 import time
 from typing import Any
@@ -190,10 +191,12 @@ def _patch_run(agent: Any) -> None:
         start = time.perf_counter()
         try:
             result = await orig_run(*args, **kwargs)
-        except BaseException as e:
-            # asyncio.CancelledError inherits BaseException, not Exception. End the
-            # span before propagating cancellation so AGENT/LLM lifecycles do not
-            # remain open until provider shutdown.
+        except asyncio.CancelledError:
+            span.set_attribute("neatlogs.stream.cancelled", True)
+            span.set_status(StatusCode.UNSET)
+            span.end()
+            raise
+        except Exception as e:
             _err(span, e)
             raise
         finally:

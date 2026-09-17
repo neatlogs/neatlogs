@@ -9,6 +9,10 @@ on:
         description: "Optional public GitHub issue to exercise the full issue-evidence alert path"
         required: false
         type: string
+      upstream_issue_package:
+        description: "Package to isolate when exercising an upstream issue"
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -32,6 +36,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           UPSTREAM_ISSUE_URL: ${{ inputs.upstream_issue_url }}
         run: gh issue view "$UPSTREAM_ISSUE_URL" --json number,title,state,url,body,labels > compatibility-upstream-issue.json
+      - name: Isolate the issue package
+        if: inputs.upstream_issue_package != ''
+        env:
+          UPSTREAM_ISSUE_PACKAGE: ${{ inputs.upstream_issue_package }}
+        run: |
+          jq --arg package "$UPSTREAM_ISSUE_PACKAGE" '.changes = [.changes[] | select(.package == $package)]' compatibility-release-report.json > compatibility-release-report.tmp.json
+          mv compatibility-release-report.tmp.json compatibility-release-report.json
+          jq -e '.changes | length == 1' compatibility-release-report.json
       - name: Build deterministic upstream evidence
         if: steps.discovery.outputs.changes_found == 'true'
         run: python scripts/compatibility/analyze_upstream.py

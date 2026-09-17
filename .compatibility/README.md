@@ -10,6 +10,10 @@ The inventory is limited to integrations documented for the Python SDK in
 `neatlogs-docs`, including its Python supported-libraries table. Coding agents
 owned by separate repositories are intentionally excluded.
 
+These workflows analyze real published package contents, APIs, dependency
+graphs, and the relevant adapter source. They never initialize Neatlogs, call a
+live model provider, export traces, or query a Neatlogs backend.
+
 ## Pull requests
 
 The pull-request workflow is deterministic and does not receive external

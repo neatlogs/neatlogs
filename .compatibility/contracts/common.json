@@ -1,17 +1,17 @@
 {
   "schemaVersion": 1,
-  "requiredSignals": [
-    "trace-completes",
-    "parent-child-hierarchy",
-    "span-kind-classification",
-    "input-output",
-    "model-provider-metadata",
-    "usage",
-    "errors",
-    "context-propagation",
-    "async-isolation",
-    "no-duplicate-spans",
-    "shutdown-flush"
+  "requiredChecks": [
+    "published-package-resolves",
+    "sdk-wheel-installs-with-version",
+    "referenced-imports-exist",
+    "referenced-call-signatures-remain-compatible",
+    "extras-and-dependencies-resolve",
+    "adapter-hooks-remain-compatible",
+    "supported-version-lines-import"
   ],
-  "normalizedFields": ["trace_id", "span_id", "parent_span_id", "start_time", "end_time", "duration"]
+  "prohibitedChecks": [
+    "live-model-call",
+    "trace-export",
+    "backend-readback"
+  ]
 }

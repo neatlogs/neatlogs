@@ -14,21 +14,34 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 
 
 def validate_configuration(config: dict[str, Any], lock: dict[str, Any]) -> None:
-    if config.get("schemaVersion") != 1 or not isinstance(config.get("integrations"), list):
-        raise ValueError("integrations.json must use schemaVersion 1 and contain integrations[]")
+    if config.get("schemaVersion") != 1 or not isinstance(
+        config.get("integrations"), list
+    ):
+        raise ValueError(
+            "integrations.json must use schemaVersion 1 and contain integrations[]"
+        )
     if lock.get("schemaVersion") != 1 or not isinstance(lock.get("packages"), dict):
-        raise ValueError("versions.lock.json must use schemaVersion 1 and contain packages{}")
+        raise ValueError(
+            "versions.lock.json must use schemaVersion 1 and contain packages{}"
+        )
 
     ids: set[str] = set()
     for integration in config["integrations"]:
         if not integration.get("id") or not integration.get("displayName"):
             raise ValueError("every integration requires id and displayName")
         if not isinstance(integration.get("packages"), list):
-            raise ValueError(f"{integration['id']} requires packages[]")
+            raise TypeError(f"{integration['id']} requires packages[]")
+        if (
+            not isinstance(integration.get("documentationUrls"), list)
+            or not integration["documentationUrls"]
+        ):
+            raise ValueError(f"{integration['id']} requires documentationUrls[]")
         if integration["id"] in ids:
             raise ValueError(f"duplicate integration id: {integration['id']}")
         ids.add(integration["id"])
-        if any(not isinstance(item, str) or not item for item in integration["packages"]):
+        if any(
+            not isinstance(item, str) or not item for item in integration["packages"]
+        ):
             raise ValueError(f"invalid package name for {integration['id']}")
 
 
@@ -77,7 +90,7 @@ def fetch_latest_version(package: str) -> str:
         f"https://pypi.org/pypi/{quote(package, safe='')}/json",
         headers={"User-Agent": "neatlogs-compatibility-monitor/1"},
     )
-    with urlopen(request, timeout=30) as response:  # noqa: S310 - fixed trusted host
+    with urlopen(request, timeout=30) as response:
         metadata = json.load(response)
     latest = metadata.get("info", {}).get("version")
     if not isinstance(latest, str) or not latest:
@@ -94,8 +107,12 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    config = json.loads((REPOSITORY_ROOT / ".compatibility/integrations.json").read_text())
-    lock = json.loads((REPOSITORY_ROOT / ".compatibility/versions.lock.json").read_text())
+    config = json.loads(
+        (REPOSITORY_ROOT / ".compatibility/integrations.json").read_text()
+    )
+    lock = json.loads(
+        (REPOSITORY_ROOT / ".compatibility/versions.lock.json").read_text()
+    )
     validate_configuration(config, lock)
 
     if args.validate_only:

@@ -9,8 +9,18 @@ from scripts.compatibility.discover_releases import (
 CONFIG = {
     "schemaVersion": 1,
     "integrations": [
-        {"id": "one", "displayName": "One", "packages": ["one", "shared"]},
-        {"id": "two", "displayName": "Two", "packages": ["shared"]},
+        {
+            "id": "one",
+            "displayName": "One",
+            "packages": ["one", "shared"],
+            "documentationUrls": ["https://one.example/docs"],
+        },
+        {
+            "id": "two",
+            "displayName": "Two",
+            "packages": ["shared"],
+            "documentationUrls": ["https://two.example/docs"],
+        },
     ],
 }
 LOCK = {"schemaVersion": 1, "packages": {"one": "1.0.0", "shared": "2.0.0"}}
@@ -35,7 +45,10 @@ class DiscoverReleasesTest(unittest.TestCase):
         )
 
     def test_duplicate_ids_are_rejected(self) -> None:
-        invalid = {**CONFIG, "integrations": [*CONFIG["integrations"], CONFIG["integrations"][0]]}
+        invalid = {
+            **CONFIG,
+            "integrations": [*CONFIG["integrations"], CONFIG["integrations"][0]],
+        }
         with self.assertRaisesRegex(ValueError, "duplicate integration id"):
             validate_configuration(invalid, LOCK)
 

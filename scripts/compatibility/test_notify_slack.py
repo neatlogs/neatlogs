@@ -33,6 +33,20 @@ class NotifySlackTests(unittest.TestCase):
     def test_failure_message_does_not_require_report(self):
         self.assertIn("workflow failed", slack_message("failure", None, None, None))
 
+    def test_failure_message_keeps_upstream_issue_context(self):
+        message = slack_message(
+            "failure",
+            None,
+            None,
+            "https://example.test/run",
+            {
+                "title": "multi-hop usage undercounts tokens",
+                "url": "https://github.com/example/sdk/issues/2",
+            },
+        )
+        self.assertIn("multi-hop usage undercounts tokens", message)
+        self.assertIn("github.com/example/sdk/issues/2", message)
+
 
 if __name__ == "__main__":
     unittest.main()

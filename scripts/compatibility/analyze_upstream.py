@@ -369,7 +369,7 @@ def request_json(url: str, headers: dict[str, str] | None = None) -> dict[str, A
 
 def request_bytes(url: str) -> bytes:
     request = Request(url, headers={"User-Agent": "neatlogs-compatibility-monitor/1"})
-    with urlopen(request, timeout=120) as response:
+    with urlopen(request, timeout=300) as response:
         return response.read()
 
 

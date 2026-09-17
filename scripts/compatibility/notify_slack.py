@@ -31,8 +31,14 @@ def slack_message(
     upstream_issue: dict[str, Any] | None = None,
 ) -> str:
     link = f" <{run_url}|Open workflow run>." if run_url else ""
+    issue = (
+        f" Reproduced upstream issue: <{upstream_issue['url']}|"
+        f"{upstream_issue.get('title', upstream_issue['url'])}>."
+        if upstream_issue and upstream_issue.get("url")
+        else ""
+    )
     if status != "success":
-        return f":red_circle: *Python SDK compatibility workflow failed.*{link}"
+        return f":red_circle: *Python SDK compatibility workflow failed.*{issue}{link}"
     changes = (report or {}).get("changes", [])
     packages = ", ".join(
         f"{item['package']} {item.get('previouslyAnalyzed') or 'untracked'} → {item['latest']}"
@@ -42,12 +48,6 @@ def slack_message(
     risk = (
         f" Advisory risk: *{analysis['riskLevel']}*."
         if analysis and analysis.get("riskLevel")
-        else ""
-    )
-    issue = (
-        f" Reproduced upstream issue: <{upstream_issue['url']}|"
-        f"{upstream_issue.get('title', upstream_issue['url'])}>."
-        if upstream_issue and upstream_issue.get("url")
         else ""
     )
     return (

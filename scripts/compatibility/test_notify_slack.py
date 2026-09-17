@@ -18,10 +18,16 @@ class NotifySlackTests(unittest.TestCase):
             },
             {"riskLevel": "high"},
             "https://example.test/run",
+            {
+                "title": "multi-hop usage undercounts tokens",
+                "url": "https://github.com/example/sdk/issues/2",
+            },
         )
         self.assertIn("1 upstream release", message)
         self.assertIn("openai 1 → 2", message)
         self.assertIn("high", message)
+        self.assertIn("multi-hop usage undercounts tokens", message)
+        self.assertIn("github.com/example/sdk/issues/2", message)
         self.assertIn("https://example.test/run", message)
 
     def test_failure_message_does_not_require_report(self):

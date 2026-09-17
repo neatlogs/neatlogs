@@ -28,6 +28,7 @@ def slack_message(
     report: dict[str, Any] | None,
     analysis: dict[str, Any] | None,
     run_url: str | None,
+    upstream_issue: dict[str, Any] | None = None,
 ) -> str:
     link = f" <{run_url}|Open workflow run>." if run_url else ""
     if status != "success":
@@ -43,9 +44,15 @@ def slack_message(
         if analysis and analysis.get("riskLevel")
         else ""
     )
+    issue = (
+        f" Reproduced upstream issue: <{upstream_issue['url']}|"
+        f"{upstream_issue.get('title', upstream_issue['url'])}>."
+        if upstream_issue and upstream_issue.get("url")
+        else ""
+    )
     return (
         f":warning: *Python SDK compatibility review required:* "
-        f"{len(changes)} upstream release(s). {packages}{remaining}.{risk}{link}"
+        f"{len(changes)} upstream release(s). {packages}{remaining}.{risk}{issue}{link}"
     )
 
 
@@ -64,6 +71,12 @@ def main() -> int:
                 optional_json("compatibility-release-report.json"),
                 optional_json("compatibility-llm-analysis.json"),
                 workflow_url(),
+                optional_json(
+                    os.environ.get(
+                        "COMPAT_UPSTREAM_ISSUE_FILE",
+                        "compatibility-upstream-issue.json",
+                    )
+                ),
             )
         }
     ).encode()
@@ -73,7 +86,7 @@ def main() -> int:
         headers={"Content-Type": "application/json"},
         method="POST",
     )
-    with urlopen(request, timeout=30) as response:  # noqa: S310 - operator-configured Slack webhook
+    with urlopen(request, timeout=30) as response:
         if response.status < 200 or response.status >= 300:
             raise RuntimeError(f"Slack webhook returned {response.status}")
     print("Slack compatibility alert sent")

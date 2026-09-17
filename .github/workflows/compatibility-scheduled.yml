@@ -4,6 +4,11 @@ on:
   schedule:
     - cron: "31 */12 * * *"
   workflow_dispatch:
+    inputs:
+      upstream_issue_url:
+        description: "Optional public GitHub issue to exercise the full issue-evidence alert path"
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -21,9 +26,20 @@ jobs:
       - name: Discover PyPI releases
         id: discovery
         run: python scripts/compatibility/discover_releases.py --report=compatibility-release-report.json
+      - name: Capture upstream issue evidence
+        if: inputs.upstream_issue_url != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM_ISSUE_URL: ${{ inputs.upstream_issue_url }}
+        run: gh issue view "$UPSTREAM_ISSUE_URL" --json number,title,state,url,body,labels > compatibility-upstream-issue.json
       - name: Build deterministic upstream evidence
         if: steps.discovery.outputs.changes_found == 'true'
         run: python scripts/compatibility/analyze_upstream.py
+      - name: Attach upstream issue evidence
+        if: steps.discovery.outputs.changes_found == 'true' && inputs.upstream_issue_url != ''
+        run: |
+          jq --slurpfile issue compatibility-upstream-issue.json '.upstreamIssues = $issue' compatibility-evidence.json > compatibility-evidence.tmp.json
+          mv compatibility-evidence.tmp.json compatibility-evidence.json
       - name: Run advisory Gemini impact analysis
         if: steps.discovery.outputs.changes_found == 'true'
         env:
@@ -38,6 +54,8 @@ jobs:
             compatibility-release-report.json
             compatibility-evidence.json
             compatibility-llm-analysis.json
+            compatibility-upstream-issue.json
+          if-no-files-found: ignore
           retention-days: 14
       - name: Create or update discovery issue
         if: steps.discovery.outputs.changes_found == 'true'
@@ -80,4 +98,5 @@ jobs:
           COMPAT_SLACK_WEBHOOK_URL: ${{ secrets.COMPAT_SLACK_WEBHOOK_URL }}
           COMPAT_JOB_STATUS: ${{ job.status }}
           COMPAT_CHANGES_FOUND: ${{ steps.discovery.outputs.changes_found }}
+          COMPAT_UPSTREAM_ISSUE_FILE: compatibility-upstream-issue.json
         run: python scripts/compatibility/notify_slack.py

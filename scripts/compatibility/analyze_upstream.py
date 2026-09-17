@@ -369,7 +369,7 @@ def request_json(url: str, headers: dict[str, str] | None = None) -> dict[str, A
 
 def request_bytes(url: str) -> bytes:
     request = Request(url, headers={"User-Agent": "neatlogs-compatibility-monitor/1"})
-    with urlopen(request, timeout=300) as response:
+    with urlopen(request, timeout=120) as response:
         return response.read()
 
 
@@ -584,7 +584,7 @@ def analyze_with_gemini(
         },
         method="POST",
     )
-    with urlopen(request, timeout=120) as response:
+    with urlopen(request, timeout=300) as response:
         payload = json.load(response)
     candidates = payload.get("candidates", [])
     if not candidates:

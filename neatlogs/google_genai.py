@@ -339,19 +339,22 @@ def _set_input_attributes(span: Any, contents: Any, kwargs: dict) -> None:
             getattr(config, "tools", None) if not isinstance(config, dict) else config.get("tools")
         )
     if tools:
-        for i, tool in enumerate(tools):
+        tool_index = 0
+        for tool in tools:
             if isinstance(tool, dict):
                 fn_decls = tool.get("function_declarations", [])
-                for j, fn in enumerate(fn_decls):
-                    span.set_attribute(f"neatlogs.llm.tools.{i + j}.name", fn.get("name", ""))
+                for fn in fn_decls:
+                    span.set_attribute(f"neatlogs.llm.tools.{tool_index}.name", fn.get("name", ""))
                     if fn.get("description"):
                         span.set_attribute(
-                            f"neatlogs.llm.tools.{i + j}.description", fn["description"]
+                            f"neatlogs.llm.tools.{tool_index}.description", fn["description"]
                         )
                     if fn.get("parameters"):
                         span.set_attribute(
-                            f"neatlogs.llm.tools.{i + j}.input_schema", serialize(fn["parameters"])
+                            f"neatlogs.llm.tools.{tool_index}.input_schema",
+                            serialize(fn["parameters"]),
                         )
+                    tool_index += 1
 
     # Invocation parameters from config
     if config:

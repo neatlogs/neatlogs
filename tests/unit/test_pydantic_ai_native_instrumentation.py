@@ -433,6 +433,7 @@ def test_repeated_identical_init_does_not_duplicate_native_processors():
     assert len(_spans_by_kind(spans)["AGENT"]) == 1
     assert len(_spans_by_kind(spans)["LLM"]) == 1
 
+
 @pytest.mark.asyncio
 async def test_manual_wrapper_ends_agent_span_when_run_is_cancelled():
     provider = TracerProvider()

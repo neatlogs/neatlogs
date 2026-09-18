@@ -32,7 +32,7 @@ def slack_message(
 ) -> str:
     link = f" <{run_url}|Open workflow run>." if run_url else ""
     issue = (
-        f" Reproduced upstream issue: <{upstream_issue['url']}|"
+        f" Referenced upstream issue: <{upstream_issue['url']}|"
         f"{upstream_issue.get('title', upstream_issue['url'])}>."
         if upstream_issue and upstream_issue.get("url")
         else ""

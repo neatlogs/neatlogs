@@ -340,9 +340,7 @@ def _set_input_attributes(span: Any, contents: Any, kwargs: dict) -> None:
             if isinstance(tool, dict):
                 fn_decls = tool.get("function_declarations", [])
                 for fn in fn_decls:
-                    span.set_attribute(
-                        f"neatlogs.llm.tools.{tool_index}.name", fn.get("name", "")
-                    )
+                    span.set_attribute(f"neatlogs.llm.tools.{tool_index}.name", fn.get("name", ""))
                     if fn.get("description"):
                         span.set_attribute(
                             f"neatlogs.llm.tools.{tool_index}.description", fn["description"]

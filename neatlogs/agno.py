@@ -462,7 +462,7 @@ class _AgnoAsyncStreamIter:
         except StopAsyncIteration:
             self._finalize()
             raise
-        except Exception as e:
+        except BaseException as e:
             self._finalize(error=e)
             raise
         self._last = ev

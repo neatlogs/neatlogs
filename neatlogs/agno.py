@@ -248,7 +248,7 @@ def _patch_agent(agent: Any) -> None:
 
             try:
                 result = orig_run(*args, **kwargs)
-            except Exception as e:
+            except BaseException as e:
                 _err(span, e)
                 raise
             finally:
@@ -286,7 +286,7 @@ def _patch_agent(agent: Any) -> None:
 
             try:
                 result = await orig_arun(*args, **kwargs)
-            except Exception as e:
+            except BaseException as e:
                 _err(span, e)
                 raise
             finally:
@@ -333,7 +333,7 @@ def _patch_workflow(workflow: Any) -> None:
                 return _AgnoStreamIter(iterator, span, token, start, sync=True, workflow=True)
             try:
                 result = orig_run(*args, **kwargs)
-            except Exception as e:
+            except BaseException as e:
                 _err(span, e)
                 raise
             finally:
@@ -366,7 +366,7 @@ def _patch_workflow(workflow: Any) -> None:
                 return _AgnoAsyncStreamIter(aiter, span, token, start, workflow=True)
             try:
                 result = await orig_arun(*args, **kwargs)
-            except Exception as e:
+            except BaseException as e:
                 _err(span, e)
                 raise
             finally:
@@ -879,7 +879,7 @@ def _finalize_model(span: Any, result: Any) -> None:
     span.end()
 
 
-def _err(span: Any, e: Exception) -> None:
+def _err(span: Any, e: BaseException) -> None:
     span.set_status(StatusCode.ERROR, str(e))
     span.record_exception(e)
     span.end()

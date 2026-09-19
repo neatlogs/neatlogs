@@ -50,3 +50,34 @@ async def test_arun_cancellation_ends_span_immediately(span_exporter, workflow):
     spans = span_exporter.get_finished_spans()
     assert [span.name for span in spans] == [expected_name]
     assert spans[0].status.status_code.name == "ERROR"
+
+
+@pytest.mark.asyncio
+async def test_async_stream_cancellation_ends_span_immediately(span_exporter):
+    class Stream:
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            await asyncio.Event().wait()
+
+    class Agent:
+        name = "cancelled-stream"
+        model = None
+
+        def arun(self, *args, **kwargs):
+            return Stream()
+
+    agent = Agent()
+    agno._patch_agent(agent)
+    stream = await agent.arun("wait forever", stream=True)
+    task = asyncio.create_task(stream.__anext__())
+    await asyncio.sleep(0)
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    spans = span_exporter.get_finished_spans()
+    assert [span.name for span in spans] == ["agno.agent.arun"]
+    assert spans[0].status.status_code.name == "ERROR"

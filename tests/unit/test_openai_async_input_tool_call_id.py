@@ -25,7 +25,12 @@ class _Completions:
 async def test_async_openai_preserves_input_tool_call_id(tracer_provider, in_memory_span_exporter):
     import neatlogs
 
-    neatlogs.init(api_key="test", disable_export=True, tracer_provider=tracer_provider, register_shutdown_handlers=False)
+    neatlogs.init(
+        api_key="test",
+        disable_export=True,
+        tracer_provider=tracer_provider,
+        register_shutdown_handlers=False,
+    )
     client = SimpleNamespace(chat=SimpleNamespace(completions=_Completions()))
     wrapped = wrap_async_openai_client(client)
 

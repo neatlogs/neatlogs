@@ -457,7 +457,7 @@ def _patch_crew_class(CrewCls: Any) -> None:
             start = time.perf_counter()
             try:
                 results = await orig_kfea(self, *args, **kwargs)
-            except Exception as e:
+            except BaseException as e:
                 _err(span, e)
                 raise
             finally:
@@ -1274,7 +1274,7 @@ def _patch_llm_call(LLM) -> None:
     LLM._neatlogs_patched = True
 
 
-def _err(span: Any, e: Exception) -> None:  # noqa: E305
+def _err(span: Any, e: BaseException) -> None:  # noqa: E305
     span.set_status(StatusCode.ERROR, str(e))
     span.record_exception(e)
     span.end()

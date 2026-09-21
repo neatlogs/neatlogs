@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "requiredChecks": [
+    "published-package-resolves",
+    "sdk-wheel-installs-with-version",
+    "referenced-imports-exist",
+    "referenced-call-signatures-remain-compatible",
+    "extras-and-dependencies-resolve",
+    "adapter-hooks-remain-compatible",
+    "supported-version-lines-import"
+  ],
+  "prohibitedChecks": [
+    "live-model-call",
+    "trace-export",
+    "backend-readback"
+  ]
+}

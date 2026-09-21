@@ -1,0 +1,114 @@
+name: Compatibility release discovery
+
+on:
+  schedule:
+    - cron: "31 */12 * * *"
+  workflow_dispatch:
+    inputs:
+      upstream_issue_url:
+        description: "Optional public GitHub issue to exercise the full issue-evidence alert path"
+        required: false
+        type: string
+      upstream_issue_package:
+        description: "Package to isolate when exercising an upstream issue"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - name: Discover PyPI releases
+        id: discovery
+        run: python scripts/compatibility/discover_releases.py --report=compatibility-release-report.json
+      - name: Capture upstream issue evidence
+        if: inputs.upstream_issue_url != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM_ISSUE_URL: ${{ inputs.upstream_issue_url }}
+        run: gh issue view "$UPSTREAM_ISSUE_URL" --json number,title,state,url,body,labels > compatibility-upstream-issue.json
+      - name: Isolate the issue package
+        if: inputs.upstream_issue_package != ''
+        env:
+          UPSTREAM_ISSUE_PACKAGE: ${{ inputs.upstream_issue_package }}
+        run: |
+          jq --arg package "$UPSTREAM_ISSUE_PACKAGE" '.changes = [.changes[] | select(.package == $package)]' compatibility-release-report.json > compatibility-release-report.tmp.json
+          mv compatibility-release-report.tmp.json compatibility-release-report.json
+          jq -e '.changes | length == 1' compatibility-release-report.json
+      - name: Build deterministic upstream evidence
+        if: steps.discovery.outputs.changes_found == 'true'
+        run: python scripts/compatibility/analyze_upstream.py
+      - name: Attach upstream issue evidence
+        if: steps.discovery.outputs.changes_found == 'true' && inputs.upstream_issue_url != ''
+        run: |
+          jq --slurpfile issue compatibility-upstream-issue.json '.upstreamIssues = $issue' compatibility-evidence.json > compatibility-evidence.tmp.json
+          mv compatibility-evidence.tmp.json compatibility-evidence.json
+      - name: Run advisory Gemini impact analysis
+        if: steps.discovery.outputs.changes_found == 'true'
+        env:
+          COMPAT_GEMINI_API_KEY: ${{ secrets.COMPAT_GEMINI_API_KEY }}
+          COMPAT_GEMINI_MODEL: ${{ vars.COMPAT_GEMINI_MODEL || 'gemini-2.5-flash' }}
+        run: python scripts/compatibility/analyze_upstream.py --llm-only
+      - name: Upload discovery report
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-compatibility-release-report
+          path: |
+            compatibility-release-report.json
+            compatibility-evidence.json
+            compatibility-llm-analysis.json
+            compatibility-upstream-issue.json
+          if-no-files-found: ignore
+          retention-days: 14
+      - name: Create or update discovery issue
+        if: steps.discovery.outputs.changes_found == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('node:fs');
+            const report = JSON.parse(fs.readFileSync('compatibility-release-report.json', 'utf8'));
+            const analysis = JSON.parse(fs.readFileSync('compatibility-llm-analysis.json', 'utf8'));
+            const title = '[compatibility] New Python integration releases detected';
+            const rows = report.changes.map((change) =>
+              `| ${change.package} | ${change.previouslyAnalyzed ?? 'not recorded'} | ${change.latest} | ${change.integrations.join(', ')} |`
+            ).join('\n');
+            const body = [
+              'The scheduled compatibility monitor found releases that have not been analyzed.',
+              '',
+              '| Package | Previously analyzed | Latest | Integrations |',
+              '| --- | --- | --- | --- |',
+              rows,
+              '',
+              '### Advisory impact analysis',
+              '',
+              '```json',
+              JSON.stringify(analysis, null, 2),
+              '```',
+              '',
+              `Workflow run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+            ].join('\n');
+            const issues = await github.rest.issues.listForRepo({ owner: context.repo.owner, repo: context.repo.repo, state: 'open', per_page: 100 });
+            const existing = issues.data.find((issue) => issue.title === title && !issue.pull_request);
+            if (existing) {
+              await github.rest.issues.update({ owner: context.repo.owner, repo: context.repo.repo, issue_number: existing.number, body });
+            } else {
+              await github.rest.issues.create({ owner: context.repo.owner, repo: context.repo.repo, title, body });
+            }
+      - name: Notify Slack of releases or workflow failure
+        if: always()
+        continue-on-error: true
+        env:
+          COMPAT_SLACK_WEBHOOK_URL: ${{ secrets.COMPAT_SLACK_WEBHOOK_URL }}
+          COMPAT_JOB_STATUS: ${{ job.status }}
+          COMPAT_CHANGES_FOUND: ${{ steps.discovery.outputs.changes_found }}
+          COMPAT_UPSTREAM_ISSUE_FILE: compatibility-upstream-issue.json
+        run: python scripts/compatibility/notify_slack.py

@@ -1,0 +1,1 @@
+"""SDK compatibility automation."""

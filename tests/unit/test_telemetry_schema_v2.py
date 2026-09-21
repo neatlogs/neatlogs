@@ -163,3 +163,33 @@ def test_diagnostic_exporter_is_bounded_and_reports_eviction():
         assert diagnostic.dropped_count == 1
     finally:
         provider.shutdown()
+
+
+def test_canonical_llm_preserves_wrapper_tool_definitions():
+    provider = TracerProvider()
+    diagnostic = neatlogs.InMemoryDiagnosticSpanExporter(max_spans=1)
+    provider.add_span_processor(SimpleSpanProcessor(diagnostic))
+    try:
+        span = provider.get_tracer("neatlogs.openai", "1.4.23").start_span("openai.chat")
+        span.set_attribute("neatlogs.span.kind", "llm")
+        span.set_attribute("neatlogs.llm.provider", "openai")
+        span.set_attribute("neatlogs.llm.tools.0.type", "function")
+        span.set_attribute("neatlogs.llm.tools.0.name", "get_weather")
+        span.set_attribute("neatlogs.llm.tools.0.description", "Current weather")
+        span.set_attribute(
+            "neatlogs.llm.tools.0.input_schema",
+            '{"type":"object","properties":{"city":{"type":"string"}}}',
+        )
+        span.end()
+        tools = diagnostic.get_finished_envelopes()[0].to_dict()["semantic"]["request"]["tools"]
+        assert tools == [
+            {
+                "type": "function",
+                "name": "get_weather",
+                "description": "Current weather",
+                "schema": {"type": "object", "properties": {"city": {"type": "string"}}},
+                "configuration": None,
+            }
+        ]
+    finally:
+        provider.shutdown()

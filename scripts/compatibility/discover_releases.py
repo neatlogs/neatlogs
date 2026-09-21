@@ -25,6 +25,13 @@ def validate_configuration(config: dict[str, Any], lock: dict[str, Any]) -> None
             "versions.lock.json must use schemaVersion 1 and contain packages{}"
         )
 
+    configured_packages = watched_packages(config)
+    missing_baselines = [package for package in configured_packages if package not in lock["packages"]]
+    if missing_baselines:
+        raise ValueError(
+            "versions.lock.json is missing baselines for: " + ", ".join(missing_baselines)
+        )
+
     ids: set[str] = set()
     for integration in config["integrations"]:
         if not integration.get("id") or not integration.get("displayName"):

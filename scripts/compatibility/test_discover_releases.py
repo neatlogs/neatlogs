@@ -44,6 +44,10 @@ class DiscoverReleasesTest(unittest.TestCase):
             ],
         )
 
+    def test_missing_package_baseline_is_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "missing baselines for: shared"):
+            validate_configuration(CONFIG, {"schemaVersion": 1, "packages": {"one": "1.0.0"}})
+
     def test_duplicate_ids_are_rejected(self) -> None:
         invalid = {
             **CONFIG,

@@ -311,7 +311,15 @@ def _llm_semantic(span: ReadableSpan, attrs: Mapping[str, Any]) -> dict[str, Any
                 "neatlogs.llm.invocation_parameters.max_tokens",
             )
         ),
-        "stop": [],
+        "stop": (
+            _decode(attrs.get("neatlogs.llm.stop_sequences"))
+            if isinstance(_decode(attrs.get("neatlogs.llm.stop_sequences")), list)
+            else (
+                [_decode(attrs.get("neatlogs.llm.stop_sequences"))]
+                if attrs.get("neatlogs.llm.stop_sequences") is not None
+                else []
+            )
+        ),
         "seed": _integer(attrs.get("neatlogs.llm.invocation_parameters.seed")),
         "frequency_penalty": _number(
             attrs.get("neatlogs.llm.invocation_parameters.frequency_penalty")
@@ -352,7 +360,16 @@ def _llm_semantic(span: ReadableSpan, attrs: Mapping[str, Any]) -> dict[str, Any
                 "neatlogs.llm.model_name",
                 default=None,
             ),
-            "operation": str(_first(attrs, "neatlogs.llm.operation", default="unknown")),
+            "operation": str(
+                _first(
+                    attrs,
+                    "neatlogs.llm.operation",
+                    "neatlogs.llm.operation.name",
+                    "neatlogs.llm.operation.type",
+                    "neatlogs.llm.request_type",
+                    default="unknown",
+                )
+            ),
             "messages": input_messages,
             "tools": tools,
             "parameters": parameters,
@@ -464,11 +481,16 @@ def _semantic(span: ReadableSpan, attrs: Mapping[str, Any], kind: str) -> dict[s
     if kind == "RERANKER":
         return {
             "kind": kind,
-            "model": _first(attrs, "neatlogs.reranker.model", default=None),
+            "model": _first(
+                attrs,
+                "neatlogs.reranker.model",
+                "neatlogs.reranker.model_name",
+                default=None,
+            ),
             "query": _decode(attrs.get("neatlogs.reranker.query")),
             "input_documents": _documents(attrs.get("neatlogs.reranker.input_documents")),
             "output_documents": _documents(attrs.get("neatlogs.reranker.output_documents")),
-            "top_n": _integer(attrs.get("neatlogs.reranker.top_n")),
+            "top_n": _integer(_first(attrs, "neatlogs.reranker.top_n", "neatlogs.reranker.top_k")),
         }
     if kind == "EMBEDDING":
         inputs = _decode(_first(attrs, "neatlogs.embedding.input", default=[]))
@@ -507,7 +529,11 @@ def _semantic(span: ReadableSpan, attrs: Mapping[str, Any], kind: str) -> dict[s
             "kind": kind,
             "name": str(_first(attrs, "neatlogs.guardrail.name", default=span.name)),
             "action": _first(attrs, "neatlogs.guardrail.action", default=None),
-            "triggered": _bool(attrs.get("neatlogs.guardrail.triggered")),
+            "triggered": (
+                _bool(attrs.get("neatlogs.guardrail.triggered"))
+                if attrs.get("neatlogs.guardrail.triggered") is not None
+                else not _bool(attrs.get("neatlogs.guardrail.passed"), default=True)
+            ),
             "score": _number(attrs.get("neatlogs.guardrail.score")),
             "reason": _first(attrs, "neatlogs.guardrail.reason", default=None),
         }

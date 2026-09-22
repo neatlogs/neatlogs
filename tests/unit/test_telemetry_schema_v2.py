@@ -193,3 +193,53 @@ def test_canonical_llm_preserves_wrapper_tool_definitions():
         ]
     finally:
         provider.shutdown()
+
+
+def test_canonical_guardrail_inverts_captured_passed_fallback():
+    provider = TracerProvider()
+    diagnostic = neatlogs.InMemoryDiagnosticSpanExporter(max_spans=1)
+    provider.add_span_processor(SimpleSpanProcessor(diagnostic))
+    try:
+        span = provider.get_tracer("neatlogs.hermes", "1.4.23").start_span("approval")
+        span.set_attribute("neatlogs.span.kind", "guardrail")
+        span.set_attribute("neatlogs.guardrail.name", "approval")
+        span.set_attribute("neatlogs.guardrail.passed", False)
+        span.end()
+        semantic = diagnostic.get_finished_envelopes()[0].to_dict()["semantic"]
+        assert semantic["triggered"] is True
+    finally:
+        provider.shutdown()
+
+
+def test_canonical_reranker_preserves_wrapper_aliases():
+    provider = TracerProvider()
+    diagnostic = neatlogs.InMemoryDiagnosticSpanExporter(max_spans=1)
+    provider.add_span_processor(SimpleSpanProcessor(diagnostic))
+    try:
+        span = provider.get_tracer("neatlogs.openrouter", "1.4.23").start_span("rerank")
+        span.set_attribute("neatlogs.span.kind", "reranker")
+        span.set_attribute("neatlogs.reranker.model_name", "rerank-v3")
+        span.set_attribute("neatlogs.reranker.top_k", 3)
+        span.end()
+        semantic = diagnostic.get_finished_envelopes()[0].to_dict()["semantic"]
+        assert semantic["model"] == "rerank-v3"
+        assert semantic["top_n"] == 3
+    finally:
+        provider.shutdown()
+
+
+def test_canonical_llm_preserves_operation_and_stop_aliases():
+    provider = TracerProvider()
+    diagnostic = neatlogs.InMemoryDiagnosticSpanExporter(max_spans=1)
+    provider.add_span_processor(SimpleSpanProcessor(diagnostic))
+    try:
+        span = provider.get_tracer("neatlogs.langchain", "1.4.23").start_span("chat")
+        span.set_attribute("neatlogs.span.kind", "llm")
+        span.set_attribute("neatlogs.llm.operation.name", "chat")
+        span.set_attribute("neatlogs.llm.stop_sequences", '["END","STOP"]')
+        span.end()
+        request = diagnostic.get_finished_envelopes()[0].to_dict()["semantic"]["request"]
+        assert request["operation"] == "chat"
+        assert request["parameters"]["stop"] == ["END", "STOP"]
+    finally:
+        provider.shutdown()

@@ -243,3 +243,42 @@ def test_canonical_llm_preserves_operation_and_stop_aliases():
         assert request["parameters"]["stop"] == ["END", "STOP"]
     finally:
         provider.shutdown()
+
+
+def test_canonical_llm_falls_back_to_flat_finish_reason():
+    provider = TracerProvider()
+    diagnostic = neatlogs.InMemoryDiagnosticSpanExporter(max_spans=1)
+    provider.add_span_processor(SimpleSpanProcessor(diagnostic))
+    try:
+        span = provider.get_tracer("neatlogs.anthropic", "1.4.23").start_span("messages")
+        span.set_attribute("neatlogs.span.kind", "llm")
+        span.set_attribute("neatlogs.llm.output_messages.0.role", "assistant")
+        span.set_attribute("neatlogs.llm.output_messages.0.content", "done")
+        span.set_attribute("neatlogs.llm.finish_reason", "end_turn")
+        span.end()
+        response = diagnostic.get_finished_envelopes()[0].to_dict()["semantic"]["response"]
+        assert response["choices"][0]["finish_reason"] == "end_turn"
+        assert response["finish_reasons"] == ["end_turn"]
+    finally:
+        provider.shutdown()
+
+
+def test_canonical_tool_preserves_error_result():
+    from opentelemetry.trace import StatusCode
+
+    provider = TracerProvider()
+    diagnostic = neatlogs.InMemoryDiagnosticSpanExporter(max_spans=1)
+    provider.add_span_processor(SimpleSpanProcessor(diagnostic))
+    try:
+        span = provider.get_tracer("neatlogs.claude_agent_sdk", "1.4.23").start_span("Bash")
+        span.set_attribute("neatlogs.span.kind", "tool")
+        span.set_attribute("neatlogs.tool.name", "Bash")
+        span.set_attribute("neatlogs.tool.is_error", True)
+        span.set_attribute("output.value", "exit 1")
+        span.set_status(StatusCode.ERROR)
+        span.end()
+        payload = diagnostic.get_finished_envelopes()[0].to_dict()
+        assert payload["status"]["code"] == "ERROR"
+        assert payload["semantic"]["result"]["is_error"] is True
+    finally:
+        provider.shutdown()

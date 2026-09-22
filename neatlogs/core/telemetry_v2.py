@@ -274,8 +274,21 @@ def _llm_semantic(span: ReadableSpan, attrs: Mapping[str, Any]) -> dict[str, Any
                 "choice_index": index,
                 "message": _message(record, tool_calls_by_choice.get(index, []), "output"),
                 "finish_reason": (
-                    str(attrs[f"neatlogs.llm.choices.{index}.finish_reason"])
-                    if attrs.get(f"neatlogs.llm.choices.{index}.finish_reason") is not None
+                    str(
+                        _first(
+                            attrs,
+                            f"neatlogs.llm.choices.{index}.finish_reason",
+                            "neatlogs.llm.finish_reason" if index == 0 else "",
+                            default=None,
+                        )
+                    )
+                    if _first(
+                        attrs,
+                        f"neatlogs.llm.choices.{index}.finish_reason",
+                        "neatlogs.llm.finish_reason" if index == 0 else "",
+                        default=None,
+                    )
+                    is not None
                     else None
                 ),
             }
@@ -453,7 +466,13 @@ def _tool_semantic(span: ReadableSpan, attrs: Mapping[str, Any], kind: str) -> d
             "choice_index": _integer(attrs.get(f"{prefix}.choice_index")) or 0,
             "tool_index": _integer(attrs.get(f"{prefix}.tool_index")) or 0,
         },
-        "result": {"call_id": call_id, "value": output, "is_error": False, "media": []},
+        "result": {
+            "call_id": call_id,
+            "value": output,
+            "is_error": _bool(attrs.get(f"{prefix}.is_error"))
+            or span.status.status_code.name == "ERROR",
+            "media": [],
+        },
         "requesting_span_id": f"{span.parent.span_id:016x}" if span.parent else None,
         "transport": (
             {"transport": "unknown", "server": None, "method": None, "request_id": None}

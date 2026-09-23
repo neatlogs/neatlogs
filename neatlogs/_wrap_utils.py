@@ -1104,6 +1104,22 @@ def _bounded_object_size(value: Any, limit: int, seen: Optional[set[int]] = None
     return total
 
 
+def _stream_start_perf(span: Any) -> float:
+    """Map the span's start (taken before the provider request) onto perf_counter.
+
+    Stream wrappers are created after the provider call returns, which for SSE
+    clients is after the response headers arrive. Timing from wrapper creation
+    would drop the whole wait for the first byte from ttft and duration.
+    """
+    now = time.perf_counter()
+    start_ns = getattr(span, "start_time", None)
+    if isinstance(start_ns, int) and start_ns > 0:
+        waited = (time.time_ns() - start_ns) / 1e9
+        if waited > 0:
+            return now - waited
+    return now
+
+
 class SyncStreamWrapper:
     """
     Wraps a sync streaming response. Transparently passes through chunks
@@ -1114,7 +1130,7 @@ class SyncStreamWrapper:
         self._stream = stream
         self._span = span
         self._finalizer = finalizer
-        self._start_time = time.perf_counter()
+        self._start_time = _stream_start_perf(span)
         self._first_chunk_time: Optional[float] = None
         self._incremental = hasattr(finalizer, "on_chunk") and hasattr(finalizer, "finish")
         self._chunks: List[Any] = []
@@ -1277,7 +1293,7 @@ class AsyncStreamWrapper:
         self._stream = stream
         self._span = span
         self._finalizer = finalizer
-        self._start_time = time.perf_counter()
+        self._start_time = _stream_start_perf(span)
         self._first_chunk_time: Optional[float] = None
         self._incremental = hasattr(finalizer, "on_chunk") and hasattr(finalizer, "finish")
         self._chunks: List[Any] = []

@@ -185,7 +185,9 @@ def _patch_async_messages(messages: Any) -> None:
 
         try:
             response = await orig_create(*args, **kwargs)
-        except Exception as e:
+        except BaseException as e:
+            # asyncio.CancelledError inherits BaseException, not Exception. End the
+            # span before propagating so the LLM span is not left open until shutdown.
             span.set_status(StatusCode.ERROR, str(e))
             span.record_exception(e)
             span.end()

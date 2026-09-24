@@ -30,6 +30,7 @@ and mini-crews created deep inside a request. ``wrap()`` only binds metadata.
 thread via ThreadingInstrumentor, so the async path is covered with no second span.
 """
 
+import asyncio
 import json
 import os
 import sys
@@ -457,6 +458,9 @@ def _patch_crew_class(CrewCls: Any) -> None:
             start = time.perf_counter()
             try:
                 results = await orig_kfea(self, *args, **kwargs)
+            except asyncio.CancelledError:
+                _cancelled(span)
+                raise
             except Exception as e:
                 _err(span, e)
                 raise
@@ -1272,6 +1276,13 @@ def _patch_llm_call(LLM) -> None:
 
     LLM.call = patched_call
     LLM._neatlogs_patched = True
+
+
+def _cancelled(span: Any) -> None:
+    """End a span for a cancelled task without recording it as an error."""
+    span.set_attribute("neatlogs.stream.cancelled", True)
+    span.set_status(StatusCode.UNSET)
+    span.end()
 
 
 def _err(span: Any, e: Exception) -> None:  # noqa: E305

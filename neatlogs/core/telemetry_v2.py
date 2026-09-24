@@ -296,12 +296,14 @@ def _llm_semantic(span: ReadableSpan, attrs: Mapping[str, Any]) -> dict[str, Any
 
     tools = []
     for _, record in sorted(_indexed(attrs, "neatlogs.llm.tools").items()):
-        name = str(record.get("name") or "")
+        tool_type = str(record.get("type") or "")
+        # Built-in tools (web_search, code_interpreter, ...) often carry only a type.
+        name = str(record.get("name") or tool_type)
         if not name:
             continue
         tools.append(
             {
-                "type": str(record.get("type") or "function"),
+                "type": tool_type or "function",
                 "name": name,
                 "description": (
                     str(record["description"]) if record.get("description") is not None else None

@@ -195,6 +195,32 @@ def test_canonical_llm_preserves_wrapper_tool_definitions():
         provider.shutdown()
 
 
+def test_canonical_llm_keeps_type_only_tools_and_skips_empty_records():
+    provider = TracerProvider()
+    diagnostic = neatlogs.InMemoryDiagnosticSpanExporter(max_spans=1)
+    provider.add_span_processor(SimpleSpanProcessor(diagnostic))
+    try:
+        span = provider.get_tracer("neatlogs.openai", "1.4.23").start_span("openai.responses")
+        span.set_attribute("neatlogs.span.kind", "llm")
+        span.set_attribute("neatlogs.llm.provider", "openai")
+        span.set_attribute("neatlogs.llm.tools.0.type", "web_search")
+        span.set_attribute("neatlogs.llm.tools.1.description", "no name or type")
+        span.set_attribute("neatlogs.llm.tools.2.type", "function")
+        span.set_attribute("neatlogs.llm.tools.2.name", "get_weather")
+        span.end()
+        envelope = diagnostic.get_finished_envelopes()[0].to_dict()
+        tools = envelope["semantic"]["request"]["tools"]
+        assert [(tool["type"], tool["name"]) for tool in tools] == [
+            ("web_search", "web_search"),
+            ("function", "get_weather"),
+        ]
+        assert all(tool["name"] for tool in tools)
+        errors = list(Draft202012Validator(neatlogs.telemetry_schema()).iter_errors(envelope))
+        assert errors == []
+    finally:
+        provider.shutdown()
+
+
 def test_canonical_guardrail_inverts_captured_passed_fallback():
     provider = TracerProvider()
     diagnostic = neatlogs.InMemoryDiagnosticSpanExporter(max_spans=1)

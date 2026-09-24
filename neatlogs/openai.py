@@ -14,6 +14,7 @@ Two usage patterns:
      >>> client.chat.completions.create(...)
 """
 
+import asyncio
 import time
 from typing import Any, List, Optional
 
@@ -274,7 +275,12 @@ def _patch_async_completions(completions: Any) -> None:
 
         try:
             response = await orig_create(*args, **kwargs)
-        except BaseException as e:
+        except asyncio.CancelledError:
+            span.set_attribute("neatlogs.stream.cancelled", True)
+            span.set_status(StatusCode.UNSET)
+            span.end()
+            raise
+        except Exception as e:
             span.set_status(StatusCode.ERROR, str(e))
             span.record_exception(e)
             span.end()
@@ -495,7 +501,12 @@ def _patch_async_responses(responses: Any) -> None:
         start = time.perf_counter()
         try:
             response = await orig_create(*args, **kwargs)
-        except BaseException as e:
+        except asyncio.CancelledError:
+            span.set_attribute("neatlogs.stream.cancelled", True)
+            span.set_status(StatusCode.UNSET)
+            span.end()
+            raise
+        except Exception as e:
             span.set_status(StatusCode.ERROR, str(e))
             span.record_exception(e)
             span.end()

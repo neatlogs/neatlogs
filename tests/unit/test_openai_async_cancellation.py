@@ -86,5 +86,46 @@ async def test_openai_async_cancellation_ends_span(tracer, resource, patch, kwar
     assert len(tracer.spans) == 1
     assert tracer.spans[0].name == name
     assert tracer.spans[0].ended is True
+    assert tracer.spans[0].status.name == "UNSET"
+    assert tracer.spans[0].attributes["neatlogs.stream.cancelled"] is True
+    assert tracer.spans[0].exceptions == []
+
+
+class _FailingCompletions:
+    async def create(self, *args, **kwargs):
+        raise RuntimeError("provider down")
+
+
+class _FailingResponses:
+    async def create(self, *args, **kwargs):
+        raise RuntimeError("provider down")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("resource", "patch", "kwargs"),
+    [
+        (
+            _FailingCompletions,
+            instrumentation._patch_async_completions,
+            {"model": "demo", "messages": []},
+        ),
+        (
+            _FailingResponses,
+            instrumentation._patch_async_responses,
+            {"model": "demo", "input": "hi"},
+        ),
+    ],
+)
+async def test_openai_async_provider_error_still_marks_error(tracer, resource, patch, kwargs):
+    target = resource()
+    patch(target)
+
+    with pytest.raises(RuntimeError, match="provider down"):
+        await target.create(**kwargs)
+
+    assert len(tracer.spans) == 1
+    assert tracer.spans[0].ended is True
     assert tracer.spans[0].status.name == "ERROR"
-    assert isinstance(tracer.spans[0].exceptions[0], asyncio.CancelledError)
+    assert "neatlogs.stream.cancelled" not in tracer.spans[0].attributes
+    assert isinstance(tracer.spans[0].exceptions[0], RuntimeError)

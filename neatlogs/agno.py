@@ -19,6 +19,7 @@ nest under whichever agent/team/workflow run is active — including tools and
 models added after wrap().
 """
 
+import asyncio
 import time
 from typing import Any
 
@@ -248,7 +249,7 @@ def _patch_agent(agent: Any) -> None:
 
             try:
                 result = orig_run(*args, **kwargs)
-            except BaseException as e:
+            except Exception as e:
                 _err(span, e)
                 raise
             finally:
@@ -286,7 +287,10 @@ def _patch_agent(agent: Any) -> None:
 
             try:
                 result = await orig_arun(*args, **kwargs)
-            except BaseException as e:
+            except asyncio.CancelledError:
+                _cancelled(span)
+                raise
+            except Exception as e:
                 _err(span, e)
                 raise
             finally:
@@ -333,7 +337,7 @@ def _patch_workflow(workflow: Any) -> None:
                 return _AgnoStreamIter(iterator, span, token, start, sync=True, workflow=True)
             try:
                 result = orig_run(*args, **kwargs)
-            except BaseException as e:
+            except Exception as e:
                 _err(span, e)
                 raise
             finally:
@@ -366,7 +370,10 @@ def _patch_workflow(workflow: Any) -> None:
                 return _AgnoAsyncStreamIter(aiter, span, token, start, workflow=True)
             try:
                 result = await orig_arun(*args, **kwargs)
-            except BaseException as e:
+            except asyncio.CancelledError:
+                _cancelled(span)
+                raise
+            except Exception as e:
                 _err(span, e)
                 raise
             finally:
@@ -462,18 +469,25 @@ class _AgnoAsyncStreamIter:
         except StopAsyncIteration:
             self._finalize()
             raise
-        except BaseException as e:
+        except asyncio.CancelledError:
+            self._finalize(cancelled=True)
+            raise
+        except Exception as e:
             self._finalize(error=e)
             raise
         self._last = ev
         return ev
 
-    def _finalize(self, error=None):
+    def _finalize(self, error=None, cancelled=False):
         if self._done:
             return
         self._done = True
         detach(self._token)
         duration_ms = (time.perf_counter() - self._start) * 1000
+        if cancelled:
+            self._span.set_attribute("neatlogs.llm.metrics.duration_ms", round(duration_ms, 3))
+            _cancelled(self._span)
+            return
         if error is not None:
             self._span.set_attribute("neatlogs.llm.metrics.duration_ms", round(duration_ms, 3))
             self._span.set_status(StatusCode.ERROR, str(error))
@@ -879,7 +893,14 @@ def _finalize_model(span: Any, result: Any) -> None:
     span.end()
 
 
-def _err(span: Any, e: BaseException) -> None:
+def _cancelled(span: Any) -> None:
+    """End a span for a cancelled task without recording it as an error."""
+    span.set_attribute("neatlogs.stream.cancelled", True)
+    span.set_status(StatusCode.UNSET)
+    span.end()
+
+
+def _err(span: Any, e: Exception) -> None:
     span.set_status(StatusCode.ERROR, str(e))
     span.record_exception(e)
     span.end()

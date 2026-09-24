@@ -11,6 +11,7 @@ class _Span:
         self.attributes = dict(attributes or {})
         self.status = None
         self.ended = False
+        self.exceptions = []
 
     def set_attribute(self, key, value):
         self.attributes[key] = value
@@ -18,8 +19,8 @@ class _Span:
     def set_status(self, status, *_args):
         self.status = status
 
-    def record_exception(self, *_args):
-        pass
+    def record_exception(self, exc, *_args):
+        self.exceptions.append(exc)
 
     def end(self):
         self.ended = True
@@ -57,4 +58,28 @@ async def test_kickoff_for_each_async_cancellation_ends_span(monkeypatch):
     assert len(tracer.spans) == 1
     assert tracer.spans[0].name == "crewai.crew.kickoff_for_each_async"
     assert tracer.spans[0].ended is True
+    assert tracer.spans[0].status.name == "UNSET"
+    assert tracer.spans[0].attributes["neatlogs.stream.cancelled"] is True
+    assert tracer.spans[0].exceptions == []
+
+
+@pytest.mark.asyncio
+async def test_kickoff_for_each_async_error_still_marks_error(monkeypatch):
+    class Crew:
+        async def kickoff_for_each_async(self, inputs):
+            raise RuntimeError("crew failed")
+
+    tracer = _Tracer()
+    monkeypatch.setattr(instrumentation, "get_tracer", lambda: tracer)
+    monkeypatch.setattr(instrumentation, "attach_as_current", lambda _span: object())
+    monkeypatch.setattr(instrumentation, "detach", lambda _token: None)
+    instrumentation._patch_crew_class(Crew)
+
+    with pytest.raises(RuntimeError, match="crew failed"):
+        await Crew().kickoff_for_each_async([{"x": 1}])
+
+    assert len(tracer.spans) == 1
+    assert tracer.spans[0].ended is True
     assert tracer.spans[0].status.name == "ERROR"
+    assert "neatlogs.stream.cancelled" not in tracer.spans[0].attributes
+    assert isinstance(tracer.spans[0].exceptions[0], RuntimeError)

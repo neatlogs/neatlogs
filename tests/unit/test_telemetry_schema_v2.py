@@ -163,3 +163,148 @@ def test_diagnostic_exporter_is_bounded_and_reports_eviction():
         assert diagnostic.dropped_count == 1
     finally:
         provider.shutdown()
+
+
+def test_canonical_llm_preserves_wrapper_tool_definitions():
+    provider = TracerProvider()
+    diagnostic = neatlogs.InMemoryDiagnosticSpanExporter(max_spans=1)
+    provider.add_span_processor(SimpleSpanProcessor(diagnostic))
+    try:
+        span = provider.get_tracer("neatlogs.openai", "1.4.23").start_span("openai.chat")
+        span.set_attribute("neatlogs.span.kind", "llm")
+        span.set_attribute("neatlogs.llm.provider", "openai")
+        span.set_attribute("neatlogs.llm.tools.0.type", "function")
+        span.set_attribute("neatlogs.llm.tools.0.name", "get_weather")
+        span.set_attribute("neatlogs.llm.tools.0.description", "Current weather")
+        span.set_attribute(
+            "neatlogs.llm.tools.0.input_schema",
+            '{"type":"object","properties":{"city":{"type":"string"}}}',
+        )
+        span.end()
+        tools = diagnostic.get_finished_envelopes()[0].to_dict()["semantic"]["request"]["tools"]
+        assert tools == [
+            {
+                "type": "function",
+                "name": "get_weather",
+                "description": "Current weather",
+                "schema": {"type": "object", "properties": {"city": {"type": "string"}}},
+                "configuration": None,
+            }
+        ]
+    finally:
+        provider.shutdown()
+
+
+def test_canonical_llm_keeps_type_only_tools_and_skips_empty_records():
+    provider = TracerProvider()
+    diagnostic = neatlogs.InMemoryDiagnosticSpanExporter(max_spans=1)
+    provider.add_span_processor(SimpleSpanProcessor(diagnostic))
+    try:
+        span = provider.get_tracer("neatlogs.openai", "1.4.23").start_span("openai.responses")
+        span.set_attribute("neatlogs.span.kind", "llm")
+        span.set_attribute("neatlogs.llm.provider", "openai")
+        span.set_attribute("neatlogs.llm.tools.0.type", "web_search")
+        span.set_attribute("neatlogs.llm.tools.1.description", "no name or type")
+        span.set_attribute("neatlogs.llm.tools.2.type", "function")
+        span.set_attribute("neatlogs.llm.tools.2.name", "get_weather")
+        span.end()
+        envelope = diagnostic.get_finished_envelopes()[0].to_dict()
+        tools = envelope["semantic"]["request"]["tools"]
+        assert [(tool["type"], tool["name"]) for tool in tools] == [
+            ("web_search", "web_search"),
+            ("function", "get_weather"),
+        ]
+        assert all(tool["name"] for tool in tools)
+        errors = list(Draft202012Validator(neatlogs.telemetry_schema()).iter_errors(envelope))
+        assert errors == []
+    finally:
+        provider.shutdown()
+
+
+def test_canonical_guardrail_inverts_captured_passed_fallback():
+    provider = TracerProvider()
+    diagnostic = neatlogs.InMemoryDiagnosticSpanExporter(max_spans=1)
+    provider.add_span_processor(SimpleSpanProcessor(diagnostic))
+    try:
+        span = provider.get_tracer("neatlogs.hermes", "1.4.23").start_span("approval")
+        span.set_attribute("neatlogs.span.kind", "guardrail")
+        span.set_attribute("neatlogs.guardrail.name", "approval")
+        span.set_attribute("neatlogs.guardrail.passed", False)
+        span.end()
+        semantic = diagnostic.get_finished_envelopes()[0].to_dict()["semantic"]
+        assert semantic["triggered"] is True
+    finally:
+        provider.shutdown()
+
+
+def test_canonical_reranker_preserves_wrapper_aliases():
+    provider = TracerProvider()
+    diagnostic = neatlogs.InMemoryDiagnosticSpanExporter(max_spans=1)
+    provider.add_span_processor(SimpleSpanProcessor(diagnostic))
+    try:
+        span = provider.get_tracer("neatlogs.openrouter", "1.4.23").start_span("rerank")
+        span.set_attribute("neatlogs.span.kind", "reranker")
+        span.set_attribute("neatlogs.reranker.model_name", "rerank-v3")
+        span.set_attribute("neatlogs.reranker.top_k", 3)
+        span.end()
+        semantic = diagnostic.get_finished_envelopes()[0].to_dict()["semantic"]
+        assert semantic["model"] == "rerank-v3"
+        assert semantic["top_n"] == 3
+    finally:
+        provider.shutdown()
+
+
+def test_canonical_llm_preserves_operation_and_stop_aliases():
+    provider = TracerProvider()
+    diagnostic = neatlogs.InMemoryDiagnosticSpanExporter(max_spans=1)
+    provider.add_span_processor(SimpleSpanProcessor(diagnostic))
+    try:
+        span = provider.get_tracer("neatlogs.langchain", "1.4.23").start_span("chat")
+        span.set_attribute("neatlogs.span.kind", "llm")
+        span.set_attribute("neatlogs.llm.operation.name", "chat")
+        span.set_attribute("neatlogs.llm.stop_sequences", '["END","STOP"]')
+        span.end()
+        request = diagnostic.get_finished_envelopes()[0].to_dict()["semantic"]["request"]
+        assert request["operation"] == "chat"
+        assert request["parameters"]["stop"] == ["END", "STOP"]
+    finally:
+        provider.shutdown()
+
+
+def test_canonical_llm_falls_back_to_flat_finish_reason():
+    provider = TracerProvider()
+    diagnostic = neatlogs.InMemoryDiagnosticSpanExporter(max_spans=1)
+    provider.add_span_processor(SimpleSpanProcessor(diagnostic))
+    try:
+        span = provider.get_tracer("neatlogs.anthropic", "1.4.23").start_span("messages")
+        span.set_attribute("neatlogs.span.kind", "llm")
+        span.set_attribute("neatlogs.llm.output_messages.0.role", "assistant")
+        span.set_attribute("neatlogs.llm.output_messages.0.content", "done")
+        span.set_attribute("neatlogs.llm.finish_reason", "end_turn")
+        span.end()
+        response = diagnostic.get_finished_envelopes()[0].to_dict()["semantic"]["response"]
+        assert response["choices"][0]["finish_reason"] == "end_turn"
+        assert response["finish_reasons"] == ["end_turn"]
+    finally:
+        provider.shutdown()
+
+
+def test_canonical_tool_preserves_error_result():
+    from opentelemetry.trace import StatusCode
+
+    provider = TracerProvider()
+    diagnostic = neatlogs.InMemoryDiagnosticSpanExporter(max_spans=1)
+    provider.add_span_processor(SimpleSpanProcessor(diagnostic))
+    try:
+        span = provider.get_tracer("neatlogs.claude_agent_sdk", "1.4.23").start_span("Bash")
+        span.set_attribute("neatlogs.span.kind", "tool")
+        span.set_attribute("neatlogs.tool.name", "Bash")
+        span.set_attribute("neatlogs.tool.is_error", True)
+        span.set_attribute("output.value", "exit 1")
+        span.set_status(StatusCode.ERROR)
+        span.end()
+        payload = diagnostic.get_finished_envelopes()[0].to_dict()
+        assert payload["status"]["code"] == "ERROR"
+        assert payload["semantic"]["result"]["is_error"] is True
+    finally:
+        provider.shutdown()

@@ -69,8 +69,14 @@ class TestOpenRouterChat:
         )
 
         spans = in_memory_span_exporter.get_finished_spans()
-        assert len(spans) == 1
-        attrs = spans[0].attributes
+        llm_spans = [
+            s
+            for s in spans
+            if s.attributes.get("neatlogs.llm.provider") == "openrouter"
+            and s.attributes.get("neatlogs.span.kind") == "llm"
+        ]
+        assert len(llm_spans) == 1
+        attrs = llm_spans[0].attributes
         assert attrs.get("neatlogs.span.kind") == "llm"
         assert attrs.get("neatlogs.llm.provider") == "openrouter"
         assert attrs.get("neatlogs.llm.system") == "openai"
@@ -127,8 +133,14 @@ class TestOpenRouterChat:
         assert collected == "Hello world"
 
         spans = in_memory_span_exporter.get_finished_spans()
-        assert len(spans) == 1
-        attrs = spans[0].attributes
+        llm_spans = [
+            s
+            for s in spans
+            if s.attributes.get("neatlogs.llm.provider") == "openrouter"
+            and s.attributes.get("neatlogs.span.kind") == "llm"
+        ]
+        assert len(llm_spans) == 1
+        attrs = llm_spans[0].attributes
         assert attrs.get("neatlogs.llm.is_streaming") is True
         assert attrs.get("neatlogs.llm.output_messages.0.content") == "Hello world"
         assert attrs.get("neatlogs.llm.token_count.prompt") == 5

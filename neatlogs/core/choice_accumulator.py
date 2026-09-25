@@ -22,6 +22,11 @@ def _get(value: Any, name: str, default=None):
     return getattr(value, name, default)
 
 
+def _finish_reason(value: Any) -> str:
+    """Use an enum's wire value ("STOP"), not str(enum) ("FinishReason.STOP")."""
+    return str(getattr(value, "value", value))
+
+
 def _string(value: Any) -> str:
     if isinstance(value, str):
         return value
@@ -92,7 +97,7 @@ class ChoiceAccumulator:
             self._add_tools(index, _get(message, "tool_calls", None))
             finish_reason = _get(value, "finish_reason", None)
             if finish_reason is not None:
-                choice.finish_reason = str(finish_reason)
+                choice.finish_reason = _finish_reason(finish_reason)
 
     def add_single_response(
         self,
@@ -164,7 +169,7 @@ class ChoiceAccumulator:
                         self._add_media(choice, media_references(inline_data, "output"))
             finish_reason = _get(candidate, "finish_reason", None)
             if finish_reason is not None:
-                choice.finish_reason = str(finish_reason)
+                choice.finish_reason = _finish_reason(finish_reason)
 
     def add_google_chunk(self, span: Any, chunk: Any) -> None:
         chunk_index = self.chunk_count
@@ -236,7 +241,7 @@ class ChoiceAccumulator:
             self._add_tools(index, tools)
             finish_reason = _get(value, "finish_reason", None)
             if finish_reason is not None:
-                choice.finish_reason = str(finish_reason)
+                choice.finish_reason = _finish_reason(finish_reason)
             summary.append(
                 {
                     "choice_index": index,

@@ -32,6 +32,8 @@ from opentelemetry.trace import StatusCode
 from ._wrap_utils import (
     AsyncStreamWrapper,
     SyncStreamWrapper,
+    _safe_finalize,
+    _telemetry_fallback,
     get_provider_tracer,
     is_suppressed,
     serialize,
@@ -102,11 +104,14 @@ def _patch_models(models: Any) -> None:
         if is_suppressed():
             return orig_generate(*args, **kwargs)
 
-        model = kwargs.get("model", args[0] if args else "")
-        contents = kwargs.get("contents", args[1] if len(args) > 1 else "")
+        try:
+            model = kwargs.get("model", args[0] if args else "")
+            contents = kwargs.get("contents", args[1] if len(args) > 1 else "")
 
-        span = _start_span(model, stream=False)
-        _set_input_attributes(span, contents, kwargs)
+            span = _start_span(model, stream=False)
+            _set_input_attributes(span, contents, kwargs)
+        except Exception:
+            return _telemetry_fallback(orig_generate, *args, **kwargs)
 
         start = time.perf_counter()
         try:
@@ -115,7 +120,7 @@ def _patch_models(models: Any) -> None:
             _err(span, e)
             raise
 
-        _finalize_response(span, response, (time.perf_counter() - start) * 1000)
+        _safe_finalize(span, _finalize_response, response, (time.perf_counter() - start) * 1000)
         return response
 
     models.generate_content = patched_generate_content
@@ -126,11 +131,14 @@ def _patch_models(models: Any) -> None:
             if is_suppressed():
                 return orig_stream(*args, **kwargs)
 
-            model = kwargs.get("model", args[0] if args else "")
-            contents = kwargs.get("contents", args[1] if len(args) > 1 else "")
+            try:
+                model = kwargs.get("model", args[0] if args else "")
+                contents = kwargs.get("contents", args[1] if len(args) > 1 else "")
 
-            span = _start_span(model, stream=True)
-            _set_input_attributes(span, contents, kwargs)
+                span = _start_span(model, stream=True)
+                _set_input_attributes(span, contents, kwargs)
+            except Exception:
+                return _telemetry_fallback(orig_stream, *args, **kwargs)
 
             try:
                 stream = orig_stream(*args, **kwargs)
@@ -155,11 +163,14 @@ def _patch_async_models(models: Any) -> None:
         if is_suppressed():
             return await orig_generate(*args, **kwargs)
 
-        model = kwargs.get("model", args[0] if args else "")
-        contents = kwargs.get("contents", args[1] if len(args) > 1 else "")
+        try:
+            model = kwargs.get("model", args[0] if args else "")
+            contents = kwargs.get("contents", args[1] if len(args) > 1 else "")
 
-        span = _start_span(model, stream=False)
-        _set_input_attributes(span, contents, kwargs)
+            span = _start_span(model, stream=False)
+            _set_input_attributes(span, contents, kwargs)
+        except Exception:
+            return await _telemetry_fallback(orig_generate, *args, **kwargs)
 
         start = time.perf_counter()
         try:
@@ -168,7 +179,7 @@ def _patch_async_models(models: Any) -> None:
             _err(span, e)
             raise
 
-        _finalize_response(span, response, (time.perf_counter() - start) * 1000)
+        _safe_finalize(span, _finalize_response, response, (time.perf_counter() - start) * 1000)
         return response
 
     models.generate_content = patched_generate_content
@@ -181,11 +192,14 @@ def _patch_async_models(models: Any) -> None:
             if is_suppressed():
                 return await orig_stream(*args, **kwargs)
 
-            model = kwargs.get("model", args[0] if args else "")
-            contents = kwargs.get("contents", args[1] if len(args) > 1 else "")
+            try:
+                model = kwargs.get("model", args[0] if args else "")
+                contents = kwargs.get("contents", args[1] if len(args) > 1 else "")
 
-            span = _start_span(model, stream=True)
-            _set_input_attributes(span, contents, kwargs)
+                span = _start_span(model, stream=True)
+                _set_input_attributes(span, contents, kwargs)
+            except Exception:
+                return await _telemetry_fallback(orig_stream, *args, **kwargs)
 
             try:
                 stream = await orig_stream(*args, **kwargs)
@@ -498,15 +512,21 @@ def _patch_models_extra(models: Any, is_async: bool) -> None:
             async def patched_embed(*args, **kwargs):
                 if is_suppressed():
                     return await orig(*args, **kwargs)
-                span = get_provider_tracer().start_span(
-                    name="vertex_ai.models.embed_content", attributes=_embed_attrs(kwargs)
-                )
+                try:
+                    span = get_provider_tracer().start_span(
+                        name="vertex_ai.models.embed_content", attributes=_embed_attrs(kwargs)
+                    )
+                except Exception:
+                    return await _telemetry_fallback(orig, *args, **kwargs)
                 try:
                     resp = await orig(*args, **kwargs)
                 except Exception as e:
                     _err(span, e)
                     raise
-                _embed_finalize(span, resp)
+                try:
+                    _embed_finalize(span, resp)
+                except Exception:
+                    pass
                 return resp
 
         else:
@@ -514,15 +534,21 @@ def _patch_models_extra(models: Any, is_async: bool) -> None:
             def patched_embed(*args, **kwargs):
                 if is_suppressed():
                     return orig(*args, **kwargs)
-                span = get_provider_tracer().start_span(
-                    name="vertex_ai.models.embed_content", attributes=_embed_attrs(kwargs)
-                )
+                try:
+                    span = get_provider_tracer().start_span(
+                        name="vertex_ai.models.embed_content", attributes=_embed_attrs(kwargs)
+                    )
+                except Exception:
+                    return _telemetry_fallback(orig, *args, **kwargs)
                 try:
                     resp = orig(*args, **kwargs)
                 except Exception as e:
                     _err(span, e)
                     raise
-                _embed_finalize(span, resp)
+                try:
+                    _embed_finalize(span, resp)
+                except Exception:
+                    pass
                 return resp
 
         models.embed_content = patched_embed
@@ -554,15 +580,21 @@ def _patch_models_extra(models: Any, is_async: bool) -> None:
             async def patched_ct(*args, **kwargs):
                 if is_suppressed():
                     return await orig_ct(*args, **kwargs)
-                span = get_provider_tracer().start_span(
-                    name="vertex_ai.models.count_tokens", attributes=_ct_attrs(kwargs)
-                )
+                try:
+                    span = get_provider_tracer().start_span(
+                        name="vertex_ai.models.count_tokens", attributes=_ct_attrs(kwargs)
+                    )
+                except Exception:
+                    return await _telemetry_fallback(orig_ct, *args, **kwargs)
                 try:
                     resp = await orig_ct(*args, **kwargs)
                 except Exception as e:
                     _err(span, e)
                     raise
-                _ct_finalize(span, resp)
+                try:
+                    _ct_finalize(span, resp)
+                except Exception:
+                    pass
                 return resp
 
         else:
@@ -570,15 +602,21 @@ def _patch_models_extra(models: Any, is_async: bool) -> None:
             def patched_ct(*args, **kwargs):
                 if is_suppressed():
                     return orig_ct(*args, **kwargs)
-                span = get_provider_tracer().start_span(
-                    name="vertex_ai.models.count_tokens", attributes=_ct_attrs(kwargs)
-                )
+                try:
+                    span = get_provider_tracer().start_span(
+                        name="vertex_ai.models.count_tokens", attributes=_ct_attrs(kwargs)
+                    )
+                except Exception:
+                    return _telemetry_fallback(orig_ct, *args, **kwargs)
                 try:
                     resp = orig_ct(*args, **kwargs)
                 except Exception as e:
                     _err(span, e)
                     raise
-                _ct_finalize(span, resp)
+                try:
+                    _ct_finalize(span, resp)
+                except Exception:
+                    pass
                 return resp
 
         models.count_tokens = patched_ct
@@ -613,7 +651,7 @@ def _patch_chat_classes() -> None:
             except Exception as e:
                 _err(span, e)
                 raise
-            _finalize_response(span, resp, (time.perf_counter() - start) * 1000)
+            _safe_finalize(span, _finalize_response, resp, (time.perf_counter() - start) * 1000)
             return resp
 
         Chat.send_message = patched_send
@@ -653,7 +691,7 @@ def _patch_chat_classes() -> None:
             except Exception as e:
                 _err(span, e)
                 raise
-            _finalize_response(span, resp, (time.perf_counter() - start) * 1000)
+            _safe_finalize(span, _finalize_response, resp, (time.perf_counter() - start) * 1000)
             return resp
 
         AsyncChat.send_message = patched_asend

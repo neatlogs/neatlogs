@@ -282,23 +282,52 @@ def _llm_semantic(span: ReadableSpan, attrs: Mapping[str, Any]) -> dict[str, Any
         )
 
     parameters = {
-        "temperature": _number(attrs.get("neatlogs.llm.invocation_parameters.temperature")),
-        "top_p": _number(attrs.get("neatlogs.llm.invocation_parameters.top_p")),
-        "top_k": _number(attrs.get("neatlogs.llm.invocation_parameters.top_k")),
+        # Canonical invocation_parameters.* keys stay authoritative; fall back to
+        # the flat wrapper keys (bedrock, langchain, hermes) when they are absent.
+        "temperature": _number(
+            _first(
+                attrs,
+                "neatlogs.llm.invocation_parameters.temperature",
+                "neatlogs.llm.temperature",
+            )
+        ),
+        "top_p": _number(
+            _first(
+                attrs,
+                "neatlogs.llm.invocation_parameters.top_p",
+                "neatlogs.llm.top_p",
+            )
+        ),
+        "top_k": _number(
+            _first(
+                attrs,
+                "neatlogs.llm.invocation_parameters.top_k",
+                "neatlogs.llm.top_k",
+            )
+        ),
         "max_output_tokens": _integer(
             _first(
                 attrs,
                 "neatlogs.llm.invocation_parameters.max_output_tokens",
                 "neatlogs.llm.invocation_parameters.max_tokens",
+                "neatlogs.llm.max_tokens",
             )
         ),
         "stop": [],
         "seed": _integer(attrs.get("neatlogs.llm.invocation_parameters.seed")),
         "frequency_penalty": _number(
-            attrs.get("neatlogs.llm.invocation_parameters.frequency_penalty")
+            _first(
+                attrs,
+                "neatlogs.llm.invocation_parameters.frequency_penalty",
+                "neatlogs.llm.frequency_penalty",
+            )
         ),
         "presence_penalty": _number(
-            attrs.get("neatlogs.llm.invocation_parameters.presence_penalty")
+            _first(
+                attrs,
+                "neatlogs.llm.invocation_parameters.presence_penalty",
+                "neatlogs.llm.presence_penalty",
+            )
         ),
         "response_format": _decode(attrs.get("neatlogs.llm.invocation_parameters.response_format")),
         "reasoning": _decode(attrs.get("neatlogs.llm.invocation_parameters.reasoning")),

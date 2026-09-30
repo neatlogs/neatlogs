@@ -1,5 +1,7 @@
 from types import SimpleNamespace
+
 import pytest
+
 from neatlogs.vertex_ai import _set_input_attributes
 
 

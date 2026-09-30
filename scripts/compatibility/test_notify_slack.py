@@ -85,6 +85,21 @@ class NotifySlackTests(unittest.TestCase):
                 "https://github.com/neatlogs/neatlogs/actions/runs/36571240360",
             )
 
+    def test_draft_pr_is_linked_with_unverified_scope(self):
+        message = slack_message(
+            "success", {"changes": [{"package": "openai", "previouslyAnalyzed": "1", "latest": "2"}]},
+            {"riskLevel": "high"}, "https://example.test/run",
+            smoke_summary={"counts": {"pass": 1, "fail": 0, "blocked": 0, "not-tested": 0}, "smokeRegressions": 0},
+            proposal_status={"status": "proposed", "deferredCandidates": [{"package": "other"}]},
+            validation_status={"status": "validated"},
+            publish_status={"status": "created", "prUrl": "https://github.com/neatlogs/neatlogs/pull/200"},
+        )
+        self.assertIn("Draft fix PR", message)
+        self.assertIn("/pull/200", message)
+        self.assertIn("Gemini advisory: high potential risk (unverified)", message)
+        self.assertIn("behavior fix unverified", message)
+        self.assertIn("1 candidate(s) deferred", message)
+
 
 if __name__ == "__main__":
     unittest.main()

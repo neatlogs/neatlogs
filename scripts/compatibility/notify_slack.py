@@ -34,12 +34,17 @@ def slack_message(
     review_issue_url: str | None = None,
     gemini_status: str | None = None,
     smoke_summary: dict[str, Any] | None = None,
+    proposal_status: dict[str, Any] | None = None,
+    validation_status: dict[str, Any] | None = None,
+    publish_status: dict[str, Any] | None = None,
 ) -> str:
     links = []
     if review_issue_url:
         links.append(f"<{review_issue_url}|Review issue>")
     if run_url:
         links.append(f"<{run_url}|Workflow run and evidence>")
+    if publish_status and publish_status.get("prUrl"):
+        links.append(f"<{publish_status['prUrl']}|Draft fix PR>")
     link = f" {' · '.join(links)}." if links else ""
     issue = (
         f" Referenced upstream issue: <{upstream_issue['url']}|"
@@ -82,10 +87,29 @@ def slack_message(
         headline = ":warning: *Python SDK: upstream releases newer than the monitored baseline.*"
     release_count = f"{len(changes)} upstream release{'s' if len(changes) != 1 else ''}"
     release_detail = f" {release_count}: {packages}{remaining}." if changes else ""
+    proposal = ""
+    if publish_status and publish_status.get("status") == "failed":
+        proposal = f" Draft PR creation failed: {str(publish_status.get('reason', 'unknown'))[:150]}."
+    elif validation_status and validation_status.get("status") == "failed":
+        proposal = f" Proposed fix failed validation: {str(validation_status.get('reason', 'unknown'))[:150]}."
+    elif publish_status and publish_status.get("status") == "already-covered":
+        proposal = " Existing fix PR found; human code review required."
+    elif publish_status and publish_status.get("status") == "created":
+        if validation_status and validation_status.get("redGreen") == "red-before-green-after":
+            proposal = " Draft fix PR opened; focused red/green test passed. Human code review required."
+        else:
+            proposal = " Draft Gemini-proposed fix PR opened; behavior fix unverified. Human code review required."
+    elif proposal_status:
+        proposal = f" Fix proposal: {proposal_status.get('status', 'unknown')}."
+        if proposal_status.get("status") in {"no-safe-fix", "rejected", "unavailable"}:
+            proposal += f" {str(proposal_status.get('reason', ''))[:120]}."
+    deferred = len((proposal_status or {}).get("deferredCandidates", []))
+    if deferred:
+        proposal += f" {deferred} candidate(s) deferred to later runs."
     return (
         f"{headline}{release_detail} {verification}"
         f"Checks cover install, dependencies, and instrumentation activation only. "
-        f"{advisory} Alerts repeat until the baseline is updated.{issue}{link}"
+        f"{advisory}{proposal} Alerts repeat until the baseline is updated.{issue}{link}"
     )
 
 
@@ -113,6 +137,9 @@ def main() -> int:
                 os.environ.get("COMPAT_REVIEW_ISSUE_URL"),
                 os.environ.get("COMPAT_GEMINI_STEP_STATUS"),
                 optional_json("compatibility-smoke-summary.json"),
+                optional_json("compatibility-fix-status.json"),
+                optional_json("compatibility-validation-status.json"),
+                optional_json("compatibility-publish-status.json"),
             )
         }
     ).encode()

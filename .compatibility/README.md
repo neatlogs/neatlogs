@@ -13,10 +13,11 @@ owned by separate repositories are intentionally excluded.
 These workflows analyze real published package contents, exported APIs,
 dependency graphs, changed source excerpts, the relevant adapter source, and
 the official project documentation URLs declared for every integration.
-Documentation fetch failures are retained as evidence gaps. The deterministic
-checks never initialize Neatlogs, call a live model provider, export traces, or
-query a Neatlogs backend. The scheduled workflow separately calls Gemini for
-its advisory assessment when an API key is configured.
+Documentation fetch failures are retained as evidence gaps. The pull-request
+checks do not initialize Neatlogs; the scheduled activation checks do so with
+export disabled. Neither check calls a live model provider or a Neatlogs
+backend. The scheduled workflow separately calls Gemini when an API key is
+configured.
 
 ## Pull requests
 
@@ -36,8 +37,11 @@ Twice a day, the scheduled workflow:
    instrumentation activation without calling a provider;
 4. independently records exported API, source, adapter, and documentation
    evidence and optionally asks Gemini for an advisory assessment;
-5. creates or updates a review issue and optionally alerts Slack when newer
-   releases are detected. It does not create a fix pull request.
+5. creates or updates a review issue, then asks Gemini for a concrete fix
+   decision on one package/integration candidate per run;
+6. validates a bounded adapter-source patch in a separate job without model
+   or write credentials, and opens or reuses a draft PR only if validation
+   passes. It never merges the PR. Slack reports the result.
 
 The Gemini assessment is unverified advice about possible compatibility risk,
 not a test result. A latest-version pass covers only this activation smoke
@@ -48,6 +52,18 @@ trigger later alerts until the analyzed-version baseline is updated. A failed
 Gemini request is reported as an unavailable advisory while the deterministic
 results, evidence, and review issue remain available.
 
+A high advisory score alone cannot create a PR. The separate fix proposal must
+name the changed package and integration, cite evidence, and replace an exact,
+unique excerpt in a current SDK adapter. Workflow, configuration, and arbitrary
+file edits are rejected. Validation runs compatibility automation tests,
+focused SDK tests, and an exact latest-version activation check. When Gemini
+supplies a regression test, it must fail on the original SDK and pass after
+the patch. A draft without that focused red/green proof is explicitly marked
+unverified for human review. One candidate is attempted per run, prioritizing
+baseline-passing activation failures. Other candidates are listed as deferred.
+An existing PR for the
+same package/version/integration is reused rather than overwritten.
+
 Configure these GitHub Actions settings:
 
 - Secret `COMPAT_GEMINI_API_KEY` (optional): a dedicated, quota-limited Gemini
@@ -57,8 +73,14 @@ Configure these GitHub Actions settings:
   `gemini-2.5-flash`.
 - Secret `COMPAT_SLACK_WEBHOOK_URL` (optional): a channel-specific Slack
   Incoming Webhook. Without it, Slack notification is skipped.
+- Secret `COMPAT_PR_TOKEN` (recommended for draft PR creation): a narrowly
+  scoped GitHub App token or PAT with repository contents and pull-request write
+  access. The workflow falls back to `GITHUB_TOKEN`, but PRs created with that
+  token may not trigger normal pull-request CI. Repository Actions settings must
+  allow workflows to create pull requests.
 
 Organization-level secrets scoped only to the SDK repositories are preferred.
-The credentials are used only by the scheduled/default-branch workflow and are
-never passed to pull-request jobs. Slack failures are non-blocking; alerts are
-sent when PyPI has versions newer than the tracked baseline or when the workflow fails.
+Model and write credentials are confined to separate scheduled jobs and are
+never passed to generated-code validation or pull-request CI jobs. Slack
+failures are non-blocking; alerts are sent when PyPI has versions newer than
+the tracked baseline or when the workflow fails.

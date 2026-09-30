@@ -16,7 +16,6 @@ on:
 
 permissions:
   contents: read
-  issues: write
 
 jobs:
   discover:
@@ -170,6 +169,11 @@ jobs:
     if: always() && needs.discover.outputs.changes_found == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    outputs:
+      issue_url: ${{ steps.review_issue.outputs.url }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -273,24 +277,217 @@ jobs:
               const created = await github.rest.issues.create({ owner: context.repo.owner, repo: context.repo.repo, title, body });
               core.setOutput('url', created.data.html_url);
             }
+
+  propose:
+    needs: [report, analyze, smoke]
+    if: always() && needs.report.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      available: ${{ steps.proposal.outputs.available }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - uses: actions/download-artifact@v4
+        with:
+          name: python-compatibility-release-report
+      - name: Request one bounded SDK fix proposal
+        id: proposal
+        env:
+          COMPAT_GEMINI_API_KEY: ${{ secrets.COMPAT_GEMINI_API_KEY }}
+          COMPAT_GEMINI_MODEL: ${{ vars.COMPAT_GEMINI_MODEL || 'gemini-2.5-flash' }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python scripts/compatibility/propose_fix.py generate
+          if [ -f compatibility-fix-proposal.json ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Upload proposal and deferred candidates
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-compatibility-fix-proposal
+          path: |
+            compatibility-fix-proposal.json
+            compatibility-fix-status.json
+          if-no-files-found: ignore
+          retention-days: 14
+
+  validate_fix:
+    needs: propose
+    if: needs.propose.outputs.available == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - uses: actions/download-artifact@v4
+        with:
+          name: python-compatibility-release-report
+      - uses: actions/download-artifact@v4
+        with:
+          name: python-compatibility-fix-proposal
+      - name: Install deterministic validation tooling
+        run: python -m pip install --disable-pip-version-check build -e . -r .github/requirements-test.txt
+      - name: Apply patch and validate without secrets
+        run: python scripts/compatibility/validate_fix.py
+      - name: Upload validation result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-compatibility-fix-validation
+          path: compatibility-validation-status.json
+          if-no-files-found: ignore
+          retention-days: 14
+
+  publish_fix:
+    needs: [report, propose, validate_fix]
+    if: needs.validate_fix.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - uses: actions/download-artifact@v4
+        with:
+          name: python-compatibility-release-report
+      - uses: actions/download-artifact@v4
+        with:
+          name: python-compatibility-fix-proposal
+      - uses: actions/download-artifact@v4
+        with:
+          name: python-compatibility-fix-validation
+      - name: Create or reuse a draft review PR
+        env:
+          GH_TOKEN: ${{ secrets.COMPAT_PR_TOKEN || github.token }}
+          COMPAT_REVIEW_ISSUE_URL: ${{ needs.report.outputs.issue_url }}
+          COMPAT_WORKFLOW_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: python scripts/compatibility/publish_fix_pr.py
+      - name: Upload draft PR outcome
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-compatibility-fix-published
+          path: compatibility-publish-status.json
+          if-no-files-found: ignore
+          retention-days: 14
+
+  notify:
+    needs: [discover, analyze, smoke, report, propose, validate_fix, publish_fix]
+    if: always() && needs.discover.outputs.changes_found == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: python-compatibility-release-report
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: python-compatibility-fix-proposal
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: python-compatibility-fix-validation
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: python-compatibility-fix-published
+      - name: Attach proposal outcome to review issue
+        if: needs.report.outputs.issue_url != ''
+        continue-on-error: true
+        uses: actions/github-script@v7
+        env:
+          COMPAT_REVIEW_ISSUE_URL: ${{ needs.report.outputs.issue_url }}
+        with:
+          script: |
+            const fs = require('node:fs');
+            const read = (path) => fs.existsSync(path) ? JSON.parse(fs.readFileSync(path, 'utf8')) : null;
+            const proposal = read('compatibility-fix-status.json');
+            const validation = read('compatibility-validation-status.json');
+            const published = read('compatibility-publish-status.json');
+            const issueUrl = process.env.COMPAT_REVIEW_ISSUE_URL;
+            const issueNumber = Number(issueUrl.split('/').pop());
+            const issue = await github.rest.issues.get({owner: context.repo.owner, repo: context.repo.repo, issue_number: issueNumber});
+            const start = '<!-- compatibility-fix-status:start -->';
+            const end = '<!-- compatibility-fix-status:end -->';
+            const details = [
+              start,
+              '### Automated draft fix proposal',
+              'One candidate is assessed per scheduled run. Baseline-passing activation failures take priority; remaining candidates are listed below.',
+              'Proposal: ' + (proposal?.status || 'unavailable') + (proposal?.reason ? ' — ' + proposal.reason : ''),
+              'Validation: ' + (validation?.status || 'not run') + (validation?.reason ? ' — ' + validation.reason : ''),
+              'Validation scope: ' + (validation?.validationLimit || 'not available'),
+              'Draft PR: ' + (published?.prUrl || published?.status || 'not opened'),
+              'Deferred candidates: ' + JSON.stringify(proposal?.deferredCandidates || []),
+              end,
+            ].join('\n');
+            const prior = issue.data.body || '';
+            const first = prior.indexOf(start);
+            const last = prior.indexOf(end);
+            const withoutOld = first >= 0 && last > first
+              ? (prior.slice(0, first) + prior.slice(last + end.length)).trimEnd()
+              : prior.trimEnd();
+            await github.rest.issues.update({owner: context.repo.owner, repo: context.repo.repo, issue_number: issueNumber, body: withoutOld + '\n\n' + details});
       - name: Notify Slack
         if: always()
         continue-on-error: true
         env:
           COMPAT_SLACK_WEBHOOK_URL: ${{ secrets.COMPAT_SLACK_WEBHOOK_URL }}
-          COMPAT_JOB_STATUS: ${{ (needs.analyze.result == 'success' && needs.smoke.result == 'success') && 'success' || 'failure' }}
+          COMPAT_JOB_STATUS: ${{ (needs.report.result == 'success' && needs.analyze.result == 'success' && needs.smoke.result == 'success' && needs.propose.result == 'success' && needs.validate_fix.result != 'failure' && needs.publish_fix.result != 'failure') && 'success' || 'failure' }}
           COMPAT_CHANGES_FOUND: ${{ needs.discover.outputs.changes_found }}
           COMPAT_GEMINI_STEP_STATUS: ${{ needs.analyze.outputs.gemini_outcome }}
-          COMPAT_SMOKE_JOB_STATUS: ${{ needs.smoke.result }}
-          COMPAT_REVIEW_ISSUE_URL: ${{ steps.review_issue.outputs.url }}
+          COMPAT_REVIEW_ISSUE_URL: ${{ needs.report.outputs.issue_url }}
           COMPAT_UPSTREAM_ISSUE_FILE: compatibility-upstream-issue.json
         run: python scripts/compatibility/notify_slack.py
-      - name: Fail after reporting activation smoke regressions
+      - name: Fail after reporting deterministic regression or draft PR failure
+        if: always()
+        env:
+          COMPAT_PROPOSE_RESULT: ${{ needs.propose.result }}
+          COMPAT_VALIDATE_RESULT: ${{ needs.validate_fix.result }}
+          COMPAT_PUBLISH_RESULT: ${{ needs.publish_fix.result }}
         run: |
           python - <<'PY'
           import json
+          import os
           from pathlib import Path
           summary = json.loads(Path('compatibility-smoke-summary.json').read_text())
           if summary['smokeRegressions']:
               raise SystemExit(f"{summary['smokeRegressions']} baseline-passing activation smoke regression(s)")
+          if os.environ['COMPAT_PROPOSE_RESULT'] == 'failure':
+              raise SystemExit("Gemini fix proposal job failed")
+          if os.environ['COMPAT_VALIDATE_RESULT'] == 'failure':
+              raise SystemExit("Generated fix validation failed")
+          if os.environ['COMPAT_PUBLISH_RESULT'] == 'failure':
+              raise SystemExit("Draft PR creation failed")
           PY

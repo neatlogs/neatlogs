@@ -1,4 +1,4 @@
-"""Publish a validated text patch as one idempotent draft review PR."""
+"""Publish a validated text patch as one idempotent review PR."""
 
 from __future__ import annotations
 
@@ -9,11 +9,16 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from scripts.compatibility.propose_fix import apply_proposal, proposal_branch
+from scripts.compatibility.propose_fix import (
+    apply_proposal, is_bot_draft_pr, proposal_branch,
+)
+
+BOT_AUTHOR_EMAIL = "compatibility-bot@users.noreply.github.com"
 
 
 def command(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -23,7 +28,22 @@ def command(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
     return result
 
 
-def publish() -> dict[str, str]:
+def ready_proof(
+    pull: dict[str, Any], *, fetched_sha: str, fetched_tree: str,
+    fetched_parent: str, fetched_author_email: str, fetched_subject: str,
+    base_sha: str, local_tree: str, expected_subject: str,
+) -> bool:
+    return (
+        is_bot_draft_pr(pull)
+        and pull.get("headRefOid") == fetched_sha
+        and fetched_tree == local_tree
+        and fetched_parent == base_sha
+        and fetched_author_email == BOT_AUTHOR_EMAIL
+        and fetched_subject == expected_subject
+    )
+
+
+def publish() -> dict[str, Any]:
     proposal_bytes = Path("compatibility-fix-proposal.json").read_bytes()
     proposal = json.loads(proposal_bytes)
     evidence = json.loads(Path("compatibility-evidence.json").read_text())
@@ -40,11 +60,9 @@ def publish() -> dict[str, str]:
     repository = os.environ["GITHUB_REPOSITORY"]
     existing = json.loads(command(
         "gh", "pr", "list", "--repo", repository, "--head", branch,
-        "--state", "all", "--limit", "20", "--json", "url,state",
+        "--state", "all", "--limit", "20", "--json", "url,state,isDraft,author,headRefOid",
     ).stdout)
-    if existing:
-        return {"status": "already-covered", "prUrl": existing[0]["url"],
-                "reason": f"Existing PR is {existing[0]['state']}"}
+    existing.sort(key=lambda item: item["state"] != "OPEN")
     changed = apply_proposal(proposal, candidate, evidence)
     if set(changed) != set(validation.get("changedFiles", [])):
         raise ValueError("Publisher paths differ from isolated validation")
@@ -55,12 +73,50 @@ def publish() -> dict[str, str]:
         raise ValueError("Staged paths differ from validated proposal")
     command("git", "diff", "--cached", "--check")
     command("git", "config", "user.name", "neatlogs-compatibility-bot")
-    command("git", "config", "user.email", "compatibility-bot@users.noreply.github.com")
-    command("git", "-c", "core.hooksPath=/dev/null", "commit", "-m",
-            f"fix: Python {candidate['package']} {candidate['latestVersion']} compatibility")
+    command("git", "config", "user.email", BOT_AUTHOR_EMAIL)
+    subject = f"fix: Python {candidate['package']} {candidate['latestVersion']} compatibility"
+    command("git", "-c", "core.hooksPath=/dev/null", "commit", "-m", subject)
     local_tree = command("git", "rev-parse", "HEAD^{tree}").stdout.strip()
     command("gh", "auth", "setup-git")
     remote = command("git", "ls-remote", "--heads", "origin", branch).stdout.strip()
+    if existing:
+        pull = existing[0]
+        status: dict[str, Any] = {
+            "status": "already-covered", "prUrl": pull["url"],
+            "state": pull["state"], "isDraft": pull["isDraft"],
+            "reason": f"Existing PR is {pull['state']}",
+        }
+        if not is_bot_draft_pr(pull):
+            return status
+        if not remote:
+            status["reason"] = "Existing bot draft has no remote branch; human review required"
+            return status
+        command("git", "fetch", "origin", branch)
+        fresh = json.loads(command(
+            "gh", "pr", "view", pull["url"], "--repo", repository,
+            "--json", "url,state,isDraft,author,headRefOid",
+        ).stdout)
+        status["state"] = fresh["state"]
+        status["isDraft"] = fresh["isDraft"]
+        proof = ready_proof(
+            fresh,
+            fetched_sha=command("git", "rev-parse", "FETCH_HEAD").stdout.strip(),
+            fetched_tree=command("git", "rev-parse", "FETCH_HEAD^{tree}").stdout.strip(),
+            fetched_parent=command("git", "show", "-s", "--format=%P", "FETCH_HEAD").stdout.strip(),
+            fetched_author_email=command("git", "show", "-s", "--format=%ae", "FETCH_HEAD").stdout.strip(),
+            fetched_subject=command("git", "show", "-s", "--format=%s", "FETCH_HEAD").stdout.strip(),
+            base_sha=base_sha, local_tree=local_tree, expected_subject=subject,
+        )
+        if not proof:
+            status["reason"] = "Existing draft is not proven bot-owned and unchanged; human must mark ready"
+            return status
+        try:
+            command("gh", "pr", "ready", pull["url"], "--repo", repository)
+        except RuntimeError as error:
+            return {"status": "failed", "prUrl": pull["url"], "state": "OPEN",
+                    "isDraft": True, "reason": f"Could not mark existing bot PR ready: {error}"}
+        return {"status": "ready", "prUrl": pull["url"], "state": "OPEN", "isDraft": False,
+                "reason": "Validated, unchanged bot PR marked ready for review"}
     if remote:
         command("git", "fetch", "origin", branch)
         remote_tree = command("git", "rev-parse", "FETCH_HEAD^{tree}").stdout.strip()
@@ -86,30 +142,31 @@ def publish() -> dict[str, str]:
             f"Validation: {validation['validationLimit']}.\n\n"
             f"Latest-version activation after patch: {validation.get('postPatchSmoke', 'unknown')}.\n\n"
             f"Related review issue: {issue}\n\nWorkflow run: {run_url}\n\n"
-            "This is a draft for human code review. It must not be merged without reviewing the upstream evidence and the generated diff.\n"
+            "This Gemini-proposed patch needs human code review. Automation does not approve or merge it.\n"
         )
         body_path = body.name
     try:
         created = command(
             "gh", "pr", "create", "--repo", repository, "--base", default_branch, "--head", branch,
-            "--draft", "--title",
+            "--title",
             f"fix: review Python {candidate['package']} {candidate['latestVersion']} compatibility",
             "--body-file", body_path,
         )
     finally:
         Path(body_path).unlink(missing_ok=True)
-    return {"status": "created", "prUrl": created.stdout.strip(), "branch": branch}
+    return {"status": "created", "prUrl": created.stdout.strip(), "branch": branch,
+            "state": "OPEN", "isDraft": False}
 
 
 def main() -> int:
     try:
         status = publish()
-        code = 0
+        code = 1 if status.get("status") == "failed" else 0
     except Exception as error:
         status = {"status": "failed", "reason": str(error)[:1000]}
         code = 1
     Path("compatibility-publish-status.json").write_text(json.dumps(status, indent=2) + "\n")
-    print(f"Draft PR: {status['status']}: {status.get('prUrl', status.get('reason', ''))}")
+    print(f"Fix PR: {status['status']}: {status.get('prUrl', status.get('reason', ''))}")
     return code
 
 

@@ -379,13 +379,13 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: python-compatibility-fix-validation
-      - name: Create or reuse a draft review PR
+      - name: Create or reuse a review PR
         env:
           GH_TOKEN: ${{ secrets.COMPAT_PR_TOKEN || github.token }}
           COMPAT_REVIEW_ISSUE_URL: ${{ needs.report.outputs.issue_url }}
           COMPAT_WORKFLOW_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: python scripts/compatibility/publish_fix_pr.py
-      - name: Upload draft PR outcome
+      - name: Upload review PR outcome
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -443,12 +443,15 @@ jobs:
             const end = '<!-- compatibility-fix-status:end -->';
             const details = [
               start,
-              '### Automated draft fix proposal',
+              '### Automated fix proposal',
               'One candidate is assessed per scheduled run. Baseline-passing activation failures take priority; remaining candidates are listed below.',
               'Proposal: ' + (proposal?.status || 'unavailable') + (proposal?.reason ? ' — ' + proposal.reason : ''),
               'Validation: ' + (validation?.status || 'not run') + (validation?.reason ? ' — ' + validation.reason : ''),
               'Validation scope: ' + (validation?.validationLimit || 'not available'),
-              'Draft PR: ' + (published?.prUrl || published?.status || 'not opened'),
+              'Fix PR: ' + (published?.prUrl || published?.status || 'not opened') +
+                (published?.isDraft ? ' (existing PR remains draft)' : '') +
+                (published?.state && published.state !== 'OPEN' ? ' (' + published.state + ')' : ''),
+              'Existing matching PRs at proposal time: ' + JSON.stringify((proposal?.alreadyCoveredPullRequests || []).slice(0, 10)),
               'Deferred candidates: ' + JSON.stringify(proposal?.deferredCandidates || []),
               end,
             ].join('\n');
@@ -470,7 +473,7 @@ jobs:
           COMPAT_REVIEW_ISSUE_URL: ${{ needs.report.outputs.issue_url }}
           COMPAT_UPSTREAM_ISSUE_FILE: compatibility-upstream-issue.json
         run: python scripts/compatibility/notify_slack.py
-      - name: Fail after reporting deterministic regression or draft PR failure
+      - name: Fail after reporting deterministic regression or PR failure
         if: always()
         env:
           COMPAT_PROPOSE_RESULT: ${{ needs.propose.result }}
@@ -489,5 +492,5 @@ jobs:
           if os.environ['COMPAT_VALIDATE_RESULT'] == 'failure':
               raise SystemExit("Generated fix validation failed")
           if os.environ['COMPAT_PUBLISH_RESULT'] == 'failure':
-              raise SystemExit("Draft PR creation failed")
+              raise SystemExit("Fix PR creation failed")
           PY

@@ -38,13 +38,29 @@ def slack_message(
     validation_status: dict[str, Any] | None = None,
     publish_status: dict[str, Any] | None = None,
 ) -> str:
+    covered_drafts = [
+        item for item in (proposal_status or {}).get("alreadyCoveredPullRequests", [])
+        if item.get("state") == "OPEN" and item.get("isDraft")
+        and not (
+            publish_status and publish_status.get("status") == "ready"
+            and item.get("url") == publish_status.get("prUrl")
+        )
+    ]
     links = []
     if review_issue_url:
         links.append(f"<{review_issue_url}|Review issue>")
     if run_url:
         links.append(f"<{run_url}|Workflow run and evidence>")
     if publish_status and publish_status.get("prUrl"):
-        links.append(f"<{publish_status['prUrl']}|Draft fix PR>")
+        if publish_status.get("isDraft"):
+            label = "Existing draft fix PR"
+        elif publish_status.get("state") in {"CLOSED", "MERGED"}:
+            label = "Previous fix PR"
+        else:
+            label = "Fix PR for review"
+        links.append(f"<{publish_status['prUrl']}|{label}>")
+    elif covered_drafts and covered_drafts[0].get("url"):
+        links.append(f"<{covered_drafts[0]['url']}|Existing draft fix PR>")
     link = f" {' · '.join(links)}." if links else ""
     issue = (
         f" Referenced upstream issue: <{upstream_issue['url']}|"
@@ -74,7 +90,16 @@ def slack_message(
             f"{counts.get('not-tested', 0)} not tested. "
         )
         if regressions:
-            verification += f"{regressions} baseline-passing activation smoke regression(s). "
+            affected = [
+                f"{item['package']}/{item['integration']}"
+                for item in smoke_summary.get("results", [])
+                if item.get("comparison") == "smoke-regression"
+            ]
+            names = (
+                f" ({', '.join(affected[:3])}{', +more' if len(affected) > 3 else ''})"
+                if affected else ""
+            )
+            verification += f"{regressions} baseline-passing activation smoke regression(s){names}. "
         elif counts.get("fail", 0):
             verification += "Latest failures need triage; no baseline-passing regression established. "
     else:
@@ -89,20 +114,46 @@ def slack_message(
     release_detail = f" {release_count}: {packages}{remaining}." if changes else ""
     proposal = ""
     if publish_status and publish_status.get("status") == "failed":
-        proposal = f" Draft PR creation failed: {str(publish_status.get('reason', 'unknown'))[:150]}."
+        if publish_status.get("isDraft") and publish_status.get("prUrl"):
+            proposal = f" Existing bot draft PR could not be marked ready: {str(publish_status.get('reason', 'unknown'))[:150]}."
+        else:
+            proposal = f" Fix PR could not be opened: {str(publish_status.get('reason', 'unknown'))[:150]}."
     elif validation_status and validation_status.get("status") == "failed":
-        proposal = f" Proposed fix failed validation: {str(validation_status.get('reason', 'unknown'))[:150]}."
+        proposal = f" Gemini proposed a fix, but validation failed: {str(validation_status.get('reason', 'unknown'))[:150]}. No PR opened."
     elif publish_status and publish_status.get("status") == "already-covered":
-        proposal = " Existing fix PR found; human code review required."
+        if publish_status.get("state") in {"CLOSED", "MERGED"}:
+            proposal = f" Previous fix PR is {publish_status['state'].lower()}; no new PR opened."
+        elif publish_status.get("isDraft"):
+            proposal = " Existing fix PR remains draft; a human must mark it ready for review."
+        else:
+            proposal = " Existing fix PR is open for human code review."
     elif publish_status and publish_status.get("status") == "created":
         if validation_status and validation_status.get("redGreen") == "red-before-green-after":
-            proposal = " Draft fix PR opened; focused red/green test passed. Human code review required."
+            proposal = " Fix PR opened for review; focused red/green test passed. Human code review required."
         else:
-            proposal = " Draft Gemini-proposed fix PR opened; behavior fix unverified. Human code review required."
+            proposal = " Gemini-proposed fix PR opened for review; behavior fix unverified. Human code review required."
+    elif publish_status and publish_status.get("status") == "ready":
+        proposal = " Existing validated bot fix PR marked ready for human review."
+    elif proposal_status and proposal_status.get("status") == "proposed":
+        if validation_status and validation_status.get("status") == "validated":
+            proposal = " Gemini proposed a fix and validation passed, but PR publication is unconfirmed."
+        else:
+            proposal = " Gemini proposed a fix; validation result unavailable. No PR confirmed."
     elif proposal_status:
-        proposal = f" Fix proposal: {proposal_status.get('status', 'unknown')}."
-        if proposal_status.get("status") in {"no-safe-fix", "rejected", "unavailable"}:
-            proposal += f" {str(proposal_status.get('reason', ''))[:120]}."
+        proposal_labels = {
+            "no-safe-fix": "Gemini did not produce a concrete safe fix",
+            "rejected": "Gemini fix proposal failed or was rejected",
+            "unavailable": "Gemini fix proposal is unavailable",
+        }
+        label = proposal_labels.get(
+            proposal_status.get("status"), "Gemini fix proposal status unknown"
+        )
+        proposal = f" {label}: {str(proposal_status.get('reason', 'unknown'))[:120]}. No PR opened."
+    if covered_drafts and not (
+        publish_status and publish_status.get("status") == "already-covered"
+        and publish_status.get("isDraft")
+    ):
+        proposal += f" {len(covered_drafts)} matching fix PR(s) remain draft; mark ready manually."
     deferred = len((proposal_status or {}).get("deferredCandidates", []))
     if deferred:
         proposal += f" {deferred} candidate(s) deferred to later runs."

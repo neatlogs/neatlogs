@@ -42,6 +42,16 @@ def generated_test_path(candidate: dict[str, Any]) -> str:
     )
 
 
+def is_bot_draft_pr(pull: dict[str, Any]) -> bool:
+    author = pull.get("author") or {}
+    return (
+        pull.get("state") == "OPEN"
+        and pull.get("isDraft") is True
+        and author.get("is_bot") is True
+        and bool(author.get("login"))
+    )
+
+
 def candidate_options(
     summary: dict[str, Any], analysis: dict[str, Any], evidence: dict[str, Any]
 ) -> list[dict[str, Any]]:
@@ -222,15 +232,21 @@ def generate() -> int:
     analysis = json.loads(analysis_path.read_text()) if analysis_path.exists() else {}
     repository = os.environ.get("GITHUB_REPOSITORY")
     covered: set[str] = set()
+    covered_pulls: list[dict[str, Any]] = []
     if repository and os.environ.get("GH_TOKEN"):
         listed = subprocess.run(
-            ["gh", "pr", "list", "--repo", repository, "--state", "all", "--limit", "100", "--json", "headRefName"],
+            ["gh", "pr", "list", "--repo", repository, "--state", "all", "--limit", "100",
+             "--json", "headRefName,url,state,isDraft,author"],
             capture_output=True, text=True, check=False, timeout=30,
         )
         if listed.returncode != 0:
             Path("compatibility-fix-status.json").write_text(json.dumps({"status": "unavailable", "reason": "Could not list existing PR branches"}) + "\n")
             return 0
-        covered = {item["headRefName"] for item in json.loads(listed.stdout)}
+        covered_pulls = json.loads(listed.stdout)
+        covered = {
+            item["headRefName"] for item in covered_pulls
+            if not is_bot_draft_pr(item)
+        }
     options = candidate_options(summary, analysis, evidence)
     candidate = choose_candidate(summary, analysis, evidence, covered)
     deferred = [
@@ -238,7 +254,11 @@ def generate() -> int:
          "latestVersion": item["latestVersion"], "basis": item["basis"]}
         for item in options if item is not candidate and proposal_branch(item) not in covered
     ]
-    status: dict[str, Any] = {"status": "no-safe-fix", "reason": "No actionable candidate with adapter evidence"}
+    reason = (
+        "Every candidate with adapter evidence already has a review PR"
+        if options and not candidate else "No actionable candidate with adapter evidence"
+    )
+    status: dict[str, Any] = {"status": "no-safe-fix", "reason": reason}
     if candidate:
         api_key = os.environ.get("COMPAT_GEMINI_API_KEY")
         if not api_key:
@@ -259,6 +279,12 @@ def generate() -> int:
                 status = {"status": "rejected", "reason": str(error)[:500]}
     status["deferredCandidates"] = deferred
     status["alreadyCoveredBranches"] = sorted(proposal_branch(item) for item in options if proposal_branch(item) in covered)
+    candidate_branches = {proposal_branch(item) for item in options}
+    status["alreadyCoveredPullRequests"] = [
+        {"branch": item["headRefName"], "url": item["url"],
+         "state": item["state"], "isDraft": item["isDraft"]}
+        for item in covered_pulls if item["headRefName"] in candidate_branches
+    ]
     Path("compatibility-fix-status.json").write_text(json.dumps(status, indent=2) + "\n")
     print(f"Fix proposal: {status['status']}: {status.get('reason', '')}")
     return 0

@@ -40,8 +40,8 @@ Twice a day, the scheduled workflow:
 5. creates or updates a review issue, then asks Gemini for a concrete fix
    decision on one package/integration candidate per run;
 6. validates a bounded adapter-source patch in a separate job without model
-   or write credentials, and opens or reuses a draft PR only if validation
-   passes. It never merges the PR. Slack reports the result.
+   or write credentials, and opens or reuses a regular review PR only if
+   validation passes. It never approves or merges the PR. Slack reports the result.
 
 The Gemini assessment is unverified advice about possible compatibility risk,
 not a test result. A latest-version pass covers only this activation smoke
@@ -58,11 +58,14 @@ unique excerpt in a current SDK adapter. Workflow, configuration, and arbitrary
 file edits are rejected. Validation runs compatibility automation tests,
 focused SDK tests, and an exact latest-version activation check. When Gemini
 supplies a regression test, it must fail on the original SDK and pass after
-the patch. A draft without that focused red/green proof is explicitly marked
+the patch. A review PR without that focused red/green proof is explicitly marked
 unverified for human review. One candidate is attempted per run, prioritizing
 baseline-passing activation failures. Other candidates are listed as deferred.
-An existing PR for the
-same package/version/integration is reused rather than overwritten.
+An existing PR for the same package/version/integration is reused rather than
+overwritten. An open bot-authored draft is marked ready only if its branch,
+parent commit, and tree exactly match the newly validated patch. Any draft
+with human edits or uncertain ownership stays draft and is linked for a human
+to review and mark ready.
 
 Configure these GitHub Actions settings:
 
@@ -73,7 +76,7 @@ Configure these GitHub Actions settings:
   `gemini-2.5-flash`.
 - Secret `COMPAT_SLACK_WEBHOOK_URL` (optional): a channel-specific Slack
   Incoming Webhook. Without it, Slack notification is skipped.
-- Secret `COMPAT_PR_TOKEN` (recommended for draft PR creation): a narrowly
+- Secret `COMPAT_PR_TOKEN` (recommended for review PR creation): a narrowly
   scoped GitHub App token or PAT with repository contents and pull-request write
   access. The workflow falls back to `GITHUB_TOKEN`, but PRs created with that
   token may not trigger normal pull-request CI. Repository Actions settings must

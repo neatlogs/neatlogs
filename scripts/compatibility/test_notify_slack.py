@@ -85,7 +85,7 @@ class NotifySlackTests(unittest.TestCase):
                 "https://github.com/neatlogs/neatlogs/actions/runs/36571240360",
             )
 
-    def test_draft_pr_is_linked_with_unverified_scope(self):
+    def test_review_pr_is_linked_with_unverified_scope(self):
         message = slack_message(
             "success", {"changes": [{"package": "openai", "previouslyAnalyzed": "1", "latest": "2"}]},
             {"riskLevel": "high"}, "https://example.test/run",
@@ -94,11 +94,107 @@ class NotifySlackTests(unittest.TestCase):
             validation_status={"status": "validated"},
             publish_status={"status": "created", "prUrl": "https://github.com/neatlogs/neatlogs/pull/200"},
         )
-        self.assertIn("Draft fix PR", message)
+        self.assertIn("Fix PR for review", message)
         self.assertIn("/pull/200", message)
         self.assertIn("Gemini advisory: high potential risk (unverified)", message)
         self.assertIn("behavior fix unverified", message)
         self.assertIn("1 candidate(s) deferred", message)
+
+    def test_validation_failure_explains_no_pr_and_keeps_links(self):
+        message = slack_message(
+            "failure", None, {"riskLevel": "high"},
+            "https://github.com/neatlogs/neatlogs/actions/runs/123",
+            review_issue_url="https://github.com/neatlogs/neatlogs/issues/42",
+            proposal_status={"status": "proposed"},
+            validation_status={"status": "failed", "reason": "focused test failed"},
+        )
+        self.assertIn("Gemini proposed a fix, but validation failed", message)
+        self.assertIn("focused test failed", message)
+        self.assertIn("No PR opened", message)
+        self.assertIn("issues/42", message)
+        self.assertIn("actions/runs/123", message)
+
+    def test_pr_creation_failure_is_distinct_from_a_test_regression(self):
+        message = slack_message(
+            "failure", None, {"riskLevel": "low"}, "https://example.test/run",
+            smoke_summary={
+                "counts": {"pass": 0, "fail": 1, "blocked": 0, "not-tested": 0},
+                "smokeRegressions": 1,
+                "results": [{"package": "openai", "integration": "openai", "comparison": "smoke-regression"}],
+            },
+            proposal_status={"status": "proposed"},
+            validation_status={"status": "validated", "redGreen": "red-before-green-after"},
+            publish_status={"status": "failed", "reason": "GitHub denied PR creation"},
+        )
+        self.assertIn("activation smoke regression detected", message)
+        self.assertIn("openai/openai", message)
+        self.assertIn("Gemini advisory: low potential risk (unverified)", message)
+        self.assertIn("Fix PR could not be opened", message)
+        self.assertIn("GitHub denied PR creation", message)
+
+    def test_gemini_proposal_without_validation_does_not_claim_a_pr(self):
+        message = slack_message(
+            "success", None, {"riskLevel": "high"}, "https://example.test/run",
+            proposal_status={"status": "proposed"},
+        )
+        self.assertIn("Gemini proposed a fix; validation result unavailable", message)
+        self.assertIn("No PR confirmed", message)
+        self.assertIn("Gemini advisory: high potential risk (unverified)", message)
+
+    def test_reused_draft_or_closed_pr_is_described_accurately(self):
+        draft_url = "https://github.com/neatlogs/neatlogs/pull/201"
+        draft = slack_message(
+            "success", None, None, "https://example.test/run",
+            publish_status={"status": "already-covered", "prUrl": draft_url,
+                            "state": "OPEN", "isDraft": True},
+        )
+        self.assertIn("remains draft", draft)
+        self.assertIn("Existing draft fix PR", draft)
+        self.assertIn(draft_url, draft)
+        closed = slack_message(
+            "success", None, None, "https://example.test/run",
+            publish_status={"status": "already-covered", "prUrl": draft_url,
+                            "state": "CLOSED", "isDraft": False},
+        )
+        self.assertIn("Previous fix PR is closed; no new PR opened", closed)
+        self.assertNotIn("human code review required", closed)
+
+    def test_covered_draft_is_visible_when_candidate_is_skipped(self):
+        message = slack_message(
+            "success", None, None, "https://example.test/run",
+            proposal_status={"status": "no-safe-fix", "reason": "Already covered",
+                             "alreadyCoveredPullRequests": [{
+                                 "url": "https://github.com/neatlogs/neatlogs/pull/202",
+                                 "state": "OPEN", "isDraft": True,
+                             }]},
+        )
+        self.assertIn("matching fix PR(s) remain draft", message)
+        self.assertIn("/pull/202", message)
+
+    def test_matching_bot_draft_marked_ready_is_not_reported_as_still_draft(self):
+        url = "https://github.com/neatlogs/neatlogs/pull/203"
+        message = slack_message(
+            "success", None, None, "https://example.test/run",
+            proposal_status={"status": "proposed", "alreadyCoveredPullRequests": [{
+                "url": url, "state": "OPEN", "isDraft": True,
+            }]},
+            validation_status={"status": "validated"},
+            publish_status={"status": "ready", "prUrl": url, "state": "OPEN", "isDraft": False},
+        )
+        self.assertIn("marked ready for human review", message)
+        self.assertIn("Fix PR for review", message)
+        self.assertNotIn("remain draft", message)
+
+    def test_bot_draft_ready_failure_retains_link_and_reason(self):
+        message = slack_message(
+            "failure", None, None, "https://example.test/run",
+            publish_status={"status": "failed", "prUrl": "https://github.com/neatlogs/neatlogs/pull/204",
+                            "state": "OPEN", "isDraft": True, "reason": "GitHub denied readiness"},
+        )
+        self.assertIn("could not be marked ready", message)
+        self.assertIn("GitHub denied readiness", message)
+        self.assertIn("Existing draft fix PR", message)
+        self.assertIn("/pull/204", message)
 
 
 if __name__ == "__main__":

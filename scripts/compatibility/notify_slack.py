@@ -20,7 +20,9 @@ def workflow_url() -> str | None:
         os.environ.get("GITHUB_REPOSITORY"),
         os.environ.get("GITHUB_RUN_ID"),
     )
-    return "/".join(values) if all(values) else None
+    if not all(values):
+        return None
+    return f"{values[0].rstrip('/')}/{values[1]}/actions/runs/{values[2]}"
 
 
 def slack_message(
@@ -29,8 +31,15 @@ def slack_message(
     analysis: dict[str, Any] | None,
     run_url: str | None,
     upstream_issue: dict[str, Any] | None = None,
+    review_issue_url: str | None = None,
+    gemini_status: str | None = None,
 ) -> str:
-    link = f" <{run_url}|Open workflow run>." if run_url else ""
+    links = []
+    if review_issue_url:
+        links.append(f"<{review_issue_url}|Review issue>")
+    if run_url:
+        links.append(f"<{run_url}|Workflow run and evidence>")
+    link = f" {' · '.join(links)}." if links else ""
     issue = (
         f" Referenced upstream issue: <{upstream_issue['url']}|"
         f"{upstream_issue.get('title', upstream_issue['url'])}>."
@@ -38,21 +47,35 @@ def slack_message(
         else ""
     )
     if status != "success":
-        return f":red_circle: *Python SDK compatibility workflow failed.*{issue}{link}"
+        count = len((report or {}).get("changes", []))
+        releases = f" after detecting {count} upstream releases" if count else ""
+        if gemini_status == "failure":
+            reason = str((analysis or {}).get("error", "Gemini request failed"))[:180]
+            detail = f"Gemini advisory analysis failed: {reason}."
+        else:
+            detail = "Compatibility monitor failed before review completed."
+        return (
+            f":red_circle: *Python SDK compatibility workflow failed{releases}.* {detail} "
+            f"No SDK regression is confirmed; newer versions were not smoke tested. "
+            f"Release alerts repeat until the monitored baseline is updated.{issue}{link}"
+        )
     changes = (report or {}).get("changes", [])
     packages = ", ".join(
         f"{item['package']} {item.get('previouslyAnalyzed') or 'untracked'} → {item['latest']}"
-        for item in changes[:8]
+        for item in changes[:4]
     )
-    remaining = f", +{len(changes) - 8} more" if len(changes) > 8 else ""
+    remaining = f", +{len(changes) - 4} more" if len(changes) > 4 else ""
     risk = (
-        f" Advisory risk: *{analysis['riskLevel']}*."
+        f" Gemini advisory: *{analysis['riskLevel']} potential risk* (unverified)."
         if analysis and analysis.get("riskLevel")
-        else ""
+        else " Gemini advisory unavailable."
     )
+    release_count = f"{len(changes)} upstream release{'s' if len(changes) != 1 else ''}"
     return (
-        f":warning: *Python SDK compatibility review required:* "
-        f"{len(changes)} upstream release(s). {packages}{remaining}.{risk}{issue}{link}"
+        f":warning: *Python SDK: upstream releases newer than the monitored baseline.* "
+        f"{release_count}: {packages}{remaining}.{risk} "
+        f"No SDK regression is confirmed; this run did not smoke test the new versions. "
+        f"Alerts repeat until the baseline is updated.{issue}{link}"
     )
 
 
@@ -77,6 +100,8 @@ def main() -> int:
                         "compatibility-upstream-issue.json",
                     )
                 ),
+                os.environ.get("COMPAT_REVIEW_ISSUE_URL"),
+                os.environ.get("COMPAT_GEMINI_STEP_STATUS"),
             )
         }
     ).encode()

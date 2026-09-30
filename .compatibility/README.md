@@ -13,8 +13,10 @@ owned by separate repositories are intentionally excluded.
 These workflows analyze real published package contents, exported APIs,
 dependency graphs, changed source excerpts, the relevant adapter source, and
 the official project documentation URLs declared for every integration.
-Documentation fetch failures are retained as evidence gaps. They never initialize Neatlogs, call a
-live model provider, export traces, or query a Neatlogs backend.
+Documentation fetch failures are retained as evidence gaps. The deterministic
+checks never initialize Neatlogs, call a live model provider, export traces, or
+query a Neatlogs backend. The scheduled workflow separately calls Gemini for
+its advisory assessment when an API key is configured.
 
 ## Pull requests
 
@@ -31,10 +33,15 @@ Twice a day, the scheduled workflow:
 2. records dependency, exported API, source-content, adapter-source, and
    official project-documentation evidence;
 3. optionally asks Gemini for an advisory impact assessment;
-4. updates a GitHub issue and optionally alerts Slack when review is needed.
+4. creates or updates a review issue and optionally alerts Slack when newer
+   releases are detected. It does not create a fix pull request.
 
-The Gemini assessment is advisory only. It cannot change a compatibility
-verdict or make a workflow pass.
+The Gemini assessment is unverified advice about possible compatibility risk,
+not a confirmed regression. This workflow does not install or smoke test the
+newest package versions. It compares PyPI with the tracked analyzed-version
+baseline, so the same releases can trigger alerts on later runs until that
+baseline is updated. A failed Gemini request leaves the workflow failed while
+the evidence artifact and review issue remain available.
 
 Configure these GitHub Actions settings:
 
@@ -49,4 +56,4 @@ Configure these GitHub Actions settings:
 Organization-level secrets scoped only to the SDK repositories are preferred.
 The credentials are used only by the scheduled/default-branch workflow and are
 never passed to pull-request jobs. Slack failures are non-blocking; alerts are
-sent only for newly discovered releases or workflow failures.
+sent when PyPI has versions newer than the tracked baseline or when the workflow fails.

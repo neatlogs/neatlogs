@@ -53,12 +53,14 @@ jobs:
           jq --slurpfile issue compatibility-upstream-issue.json '.upstreamIssues = $issue' compatibility-evidence.json > compatibility-evidence.tmp.json
           mv compatibility-evidence.tmp.json compatibility-evidence.json
       - name: Run advisory Gemini impact analysis
+        id: review
         if: steps.discovery.outputs.changes_found == 'true'
         env:
           COMPAT_GEMINI_API_KEY: ${{ secrets.COMPAT_GEMINI_API_KEY }}
           COMPAT_GEMINI_MODEL: ${{ vars.COMPAT_GEMINI_MODEL || 'gemini-2.5-flash' }}
         run: python scripts/compatibility/analyze_upstream.py --llm-only
       - name: Upload discovery report
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: python-compatibility-release-report
@@ -70,28 +72,48 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
       - name: Create or update discovery issue
-        if: steps.discovery.outputs.changes_found == 'true'
+        id: review_issue
+        if: always() && steps.discovery.outputs.changes_found == 'true'
         uses: actions/github-script@v7
         with:
           script: |
             const fs = require('node:fs');
             const report = JSON.parse(fs.readFileSync('compatibility-release-report.json', 'utf8'));
-            const analysis = JSON.parse(fs.readFileSync('compatibility-llm-analysis.json', 'utf8'));
+            const analysis = fs.existsSync('compatibility-llm-analysis.json')
+              ? JSON.parse(fs.readFileSync('compatibility-llm-analysis.json', 'utf8'))
+              : { skipped: true, reason: 'Gemini analysis did not complete' };
             const title = '[compatibility] New Python integration releases detected';
             const rows = report.changes.map((change) =>
               `| ${change.package} | ${change.previouslyAnalyzed ?? 'not recorded'} | ${change.latest} | ${change.integrations.join(', ')} |`
             ).join('\n');
+            const briefItems = (items) => (items || []).slice(0, 15).map((item) =>
+              (typeof item === 'string' ? item : JSON.stringify(item)).slice(0, 500)
+            );
+            const issueAnalysis = {
+              summary: String(analysis.summary || '').slice(0, 2000),
+              riskLevel: analysis.riskLevel,
+              findings: briefItems(analysis.findings),
+              additionalFindingsInArtifact: Math.max(0, (analysis.findings || []).length - 15),
+              recommendedTests: briefItems(analysis.recommendedTests),
+              additionalTestsInArtifact: Math.max(0, (analysis.recommendedTests || []).length - 15),
+              packagesReviewed: analysis.packagesReviewed,
+              failed: analysis.failed,
+              skipped: analysis.skipped,
+              reason: analysis.reason,
+              error: analysis.error,
+            };
             const body = [
-              'The scheduled compatibility monitor found releases that have not been analyzed.',
+              'The scheduled compatibility monitor found new upstream releases. No SDK regression is confirmed by this alert.',
               '',
               '| Package | Previously analyzed | Latest | Integrations |',
               '| --- | --- | --- | --- |',
               rows,
               '',
-              '### Advisory impact analysis',
+              '### Gemini advisory impact analysis (unverified)',
+              'The advisory identifies possible risks for human review; it does not confirm a regression. Full analysis and deterministic evidence are in the workflow artifact.',
               '',
               '```json',
-              JSON.stringify(analysis, null, 2),
+              JSON.stringify(issueAnalysis, null, 2),
               '```',
               '',
               `Workflow run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
@@ -100,8 +122,10 @@ jobs:
             const existing = issues.data.find((issue) => issue.title === title && !issue.pull_request);
             if (existing) {
               await github.rest.issues.update({ owner: context.repo.owner, repo: context.repo.repo, issue_number: existing.number, body });
+              core.setOutput('url', existing.html_url);
             } else {
-              await github.rest.issues.create({ owner: context.repo.owner, repo: context.repo.repo, title, body });
+              const created = await github.rest.issues.create({ owner: context.repo.owner, repo: context.repo.repo, title, body });
+              core.setOutput('url', created.data.html_url);
             }
       - name: Notify Slack of releases or workflow failure
         if: always()
@@ -110,5 +134,7 @@ jobs:
           COMPAT_SLACK_WEBHOOK_URL: ${{ secrets.COMPAT_SLACK_WEBHOOK_URL }}
           COMPAT_JOB_STATUS: ${{ job.status }}
           COMPAT_CHANGES_FOUND: ${{ steps.discovery.outputs.changes_found }}
+          COMPAT_GEMINI_STEP_STATUS: ${{ steps.review.conclusion }}
+          COMPAT_REVIEW_ISSUE_URL: ${{ steps.review_issue.outputs.url }}
           COMPAT_UPSTREAM_ISSUE_FILE: compatibility-upstream-issue.json
         run: python scripts/compatibility/notify_slack.py

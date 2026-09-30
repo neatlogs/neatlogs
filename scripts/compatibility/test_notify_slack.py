@@ -1,6 +1,7 @@
 import unittest
+from unittest.mock import patch
 
-from scripts.compatibility.notify_slack import slack_message
+from scripts.compatibility.notify_slack import slack_message, workflow_url
 
 
 class NotifySlackTests(unittest.TestCase):
@@ -29,6 +30,8 @@ class NotifySlackTests(unittest.TestCase):
         self.assertIn("multi-hop usage undercounts tokens", message)
         self.assertIn("github.com/example/sdk/issues/2", message)
         self.assertIn("https://example.test/run", message)
+        self.assertIn("unverified", message)
+        self.assertIn("No SDK regression is confirmed", message)
 
     def test_failure_message_does_not_require_report(self):
         self.assertIn("workflow failed", slack_message("failure", None, None, None))
@@ -46,6 +49,28 @@ class NotifySlackTests(unittest.TestCase):
         )
         self.assertIn("multi-hop usage undercounts tokens", message)
         self.assertIn("github.com/example/sdk/issues/2", message)
+
+    def test_gemini_failure_has_reason_and_review_issue(self):
+        message = slack_message(
+            "failure", None, {"failed": True, "error": "Gemini HTTP 400: input too long"},
+            "https://github.com/neatlogs/neatlogs/actions/runs/123", None,
+            "https://github.com/neatlogs/neatlogs/issues/42", "failure",
+        )
+        self.assertIn("Gemini advisory analysis failed", message)
+        self.assertIn("HTTP 400", message)
+        self.assertIn("issues/42", message)
+        self.assertIn("actions/runs/123", message)
+
+    def test_workflow_url_uses_actions_runs_path(self):
+        with patch.dict("os.environ", {
+            "GITHUB_SERVER_URL": "https://github.com",
+            "GITHUB_REPOSITORY": "neatlogs/neatlogs",
+            "GITHUB_RUN_ID": "36571240360",
+        }):
+            self.assertEqual(
+                workflow_url(),
+                "https://github.com/neatlogs/neatlogs/actions/runs/36571240360",
+            )
 
 
 if __name__ == "__main__":

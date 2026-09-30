@@ -34,7 +34,9 @@ class LatestVersionChecksTests(unittest.TestCase):
             commands.append((command, kwargs))
             return {"ok": True, "exitCode": 0, "output": "ok"}
 
-        with patch("scripts.compatibility.run_latest_version_checks.run_command", side_effect=fake_run):
+        with patch.dict("os.environ", {"PYTHONPATH": "/checkout"}), patch(
+            "scripts.compatibility.run_latest_version_checks.run_command", side_effect=fake_run,
+        ):
             result = check_version(
                 package="openai", version="2.0.0", integration="openai",
                 extra="openai", wheel=Path("dist/neatlogs-test.whl"),
@@ -43,6 +45,9 @@ class LatestVersionChecksTests(unittest.TestCase):
         self.assertIn("openai==2.0.0", commands[1][0])
         self.assertTrue(any(arg.endswith("neatlogs-test.whl[openai]") for arg in commands[1][0]))
         self.assertEqual(commands[3][1]["env"]["COMPAT_LIBRARY"], "openai")
+        self.assertEqual(commands[3][1]["cwd"].name, ".venv")
+        self.assertTrue(all("PYTHONPATH" not in kwargs["env"] for _, kwargs in commands))
+        self.assertIn("Neatlogs was imported from the checkout", commands[3][0][2])
 
     def test_missing_extra_is_explicitly_not_tested(self):
         result = not_tested_pair("package", "1", "2", "adapter", "No extra")

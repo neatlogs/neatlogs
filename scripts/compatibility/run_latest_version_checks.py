@@ -24,6 +24,8 @@ PROBE = """
 import importlib
 import importlib.metadata
 import os
+import sys
+from pathlib import Path
 
 package = os.environ["COMPAT_PACKAGE"]
 expected_version = os.environ["COMPAT_VERSION"]
@@ -32,6 +34,9 @@ actual_version = importlib.metadata.version(package)
 assert actual_version == expected_version, f"{package}: expected {expected_version}, got {actual_version}"
 
 import neatlogs
+assert Path(neatlogs.__file__).resolve().is_relative_to(Path(sys.prefix).resolve()), (
+    f"Neatlogs was imported from the checkout instead of the isolated environment: {neatlogs.__file__}"
+)
 neatlogs.init(
     api_key="compatibility-only",
     instrumentations=[library],
@@ -57,12 +62,14 @@ def instrumented_library(integration: str) -> str:
 
 
 def run_command(
-    command: list[str], *, timeout: int, env: dict[str, str] | None = None
+    command: list[str], *, timeout: int, env: dict[str, str] | None = None,
+    cwd: Path | None = None,
 ) -> dict[str, Any]:
     try:
         result = subprocess.run(
             command,
             env=env,
+            cwd=cwd,
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -82,13 +89,19 @@ def check_version(
 ) -> dict[str, Any]:
     if not version:
         return {"status": "not-tested", "stage": "version", "reason": "No recorded baseline version"}
+    isolated_env = os.environ.copy()
+    isolated_env.pop("PYTHONPATH", None)
+    isolated_env.pop("PYTHONHOME", None)
     with tempfile.TemporaryDirectory(prefix="neatlogs-compat-") as temporary:
         environment = Path(temporary) / ".venv"
-        created = run_command([sys.executable, "-m", "venv", str(environment)], timeout=60)
+        created = run_command(
+            [sys.executable, "-m", "venv", str(environment)], timeout=60,
+            env=isolated_env,
+        )
         if not created["ok"]:
             return {"status": "not-tested", "stage": "environment", "reason": created["output"]}
         python = environment / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
-        pip_env = {**os.environ, "PIP_DISABLE_PIP_VERSION_CHECK": "1", "PIP_NO_INPUT": "1"}
+        pip_env = {**isolated_env, "PIP_DISABLE_PIP_VERSION_CHECK": "1", "PIP_NO_INPUT": "1"}
         installed = run_command(
             [
                 str(python), "-m", "pip", "install", "--progress-bar", "off",
@@ -100,17 +113,25 @@ def check_version(
         )
         if not installed["ok"]:
             return {"status": "blocked", "stage": "install", "reason": installed["output"]}
-        checked = run_command([str(python), "-m", "pip", "check"], timeout=30)
+        checked = run_command(
+            [str(python), "-m", "pip", "check"], timeout=30,
+            env=isolated_env,
+        )
         if not checked["ok"]:
             return {"status": "fail", "stage": "dependency-check", "reason": checked["output"]}
-        probe_env = {
-            **os.environ,
-            "COMPAT_PACKAGE": package,
-            "COMPAT_VERSION": version,
-            "COMPAT_LIBRARY": instrumented_library(integration),
-            "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
-        }
-        probed = run_command([str(python), "-c", PROBE], timeout=60, env=probe_env)
+        probe_env = isolated_env.copy()
+        probe_env.update(
+            {
+                "COMPAT_PACKAGE": package,
+                "COMPAT_VERSION": version,
+                "COMPAT_LIBRARY": instrumented_library(integration),
+                "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
+            }
+        )
+        probed = run_command(
+            [str(python), "-c", PROBE], timeout=60, env=probe_env,
+            cwd=environment,
+        )
         if not probed["ok"]:
             return {"status": "fail", "stage": "instrumentation-activation", "reason": probed["output"]}
         return {"status": "pass", "stage": "instrumentation-activation", "reason": probed["output"].strip()}

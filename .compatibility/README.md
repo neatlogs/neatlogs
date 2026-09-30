@@ -30,18 +30,23 @@ SDK import surface.
 Twice a day, the scheduled workflow:
 
 1. compares the analyzed version lock with PyPI;
-2. records dependency, exported API, source-content, adapter-source, and
-   official project-documentation evidence;
-3. optionally asks Gemini for an advisory impact assessment;
-4. creates or updates a review issue and optionally alerts Slack when newer
+2. builds the SDK wheel once and, for each changed package/integration pair,
+   compares the tracked and latest published versions in separate environments;
+3. checks exact-version installation, dependency consistency, and Neatlogs
+   instrumentation activation without calling a provider;
+4. independently records exported API, source, adapter, and documentation
+   evidence and optionally asks Gemini for an advisory assessment;
+5. creates or updates a review issue and optionally alerts Slack when newer
    releases are detected. It does not create a fix pull request.
 
 The Gemini assessment is unverified advice about possible compatibility risk,
-not a confirmed regression. This workflow does not install or smoke test the
-newest package versions. It compares PyPI with the tracked analyzed-version
-baseline, so the same releases can trigger alerts on later runs until that
-baseline is updated. A failed Gemini request leaves the workflow failed while
-the evidence artifact and review issue remain available.
+not a test result. A latest-version pass covers only this activation smoke
+check, not the full SDK behavior. A baseline-passing/latest-failing check is
+reported as an activation smoke regression; other failures need triage.
+Blocked and missing checks are explicitly reported. The same releases can
+trigger later alerts until the analyzed-version baseline is updated. A failed
+Gemini request is reported as an unavailable advisory while the deterministic
+results, evidence, and review issue remain available.
 
 Configure these GitHub Actions settings:
 

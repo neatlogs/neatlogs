@@ -22,6 +22,10 @@ jobs:
   discover:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    outputs:
+      changes_found: ${{ steps.discovery.outputs.changes_found }}
+      matrix: ${{ steps.matrix.outputs.matrix }}
+      wheel_built: ${{ steps.wheel.outcome == 'success' }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -44,22 +48,149 @@ jobs:
           jq --arg package "$UPSTREAM_ISSUE_PACKAGE" '.changes = [.changes[] | select(.package == $package)]' compatibility-release-report.json > compatibility-release-report.tmp.json
           mv compatibility-release-report.tmp.json compatibility-release-report.json
           jq -e '.changes | length == 1' compatibility-release-report.json
-      - name: Build deterministic upstream evidence
+      - name: Prepare independent package and integration checks
+        id: matrix
         if: steps.discovery.outputs.changes_found == 'true'
+        run: |
+          matrix=$(jq -c '{include: [.changes[] as $change | $change.integrations[] | {package: $change.package, baseline: $change.previouslyAnalyzed, latest: $change.latest, integration: .}]}' compatibility-release-report.json)
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+      - name: Build the SDK wheel once
+        id: wheel
+        if: steps.discovery.outputs.changes_found == 'true'
+        continue-on-error: true
+        run: |
+          python -m pip install --disable-pip-version-check build
+          python -m build --wheel
+      - name: Upload discovery inputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-compatibility-discovery
+          path: |
+            compatibility-release-report.json
+            compatibility-upstream-issue.json
+          if-no-files-found: ignore
+          retention-days: 14
+      - name: Upload SDK wheel
+        if: steps.wheel.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-compatibility-wheel
+          path: dist/neatlogs-*.whl
+          retention-days: 14
+      - name: Notify Slack if discovery fails
+        if: failure()
+        continue-on-error: true
+        env:
+          COMPAT_SLACK_WEBHOOK_URL: ${{ secrets.COMPAT_SLACK_WEBHOOK_URL }}
+          COMPAT_JOB_STATUS: failure
+        run: python scripts/compatibility/notify_slack.py
+
+  analyze:
+    needs: discover
+    if: needs.discover.outputs.changes_found == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      gemini_outcome: ${{ steps.review.outcome }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - uses: actions/download-artifact@v4
+        with:
+          name: python-compatibility-discovery
+      - name: Build deterministic upstream evidence
         run: python scripts/compatibility/analyze_upstream.py
       - name: Attach upstream issue evidence
-        if: steps.discovery.outputs.changes_found == 'true' && inputs.upstream_issue_url != ''
+        if: inputs.upstream_issue_url != ''
         run: |
           jq --slurpfile issue compatibility-upstream-issue.json '.upstreamIssues = $issue' compatibility-evidence.json > compatibility-evidence.tmp.json
           mv compatibility-evidence.tmp.json compatibility-evidence.json
       - name: Run advisory Gemini impact analysis
         id: review
-        if: steps.discovery.outputs.changes_found == 'true'
+        continue-on-error: true
         env:
           COMPAT_GEMINI_API_KEY: ${{ secrets.COMPAT_GEMINI_API_KEY }}
           COMPAT_GEMINI_MODEL: ${{ vars.COMPAT_GEMINI_MODEL || 'gemini-2.5-flash' }}
         run: python scripts/compatibility/analyze_upstream.py --llm-only
-      - name: Upload discovery report
+      - name: Upload evidence and advisory
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-compatibility-analysis
+          path: |
+            compatibility-evidence.json
+            compatibility-llm-analysis.json
+          if-no-files-found: ignore
+          retention-days: 14
+
+  smoke:
+    needs: discover
+    if: needs.discover.outputs.changes_found == 'true' && needs.discover.outputs.wheel_built == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix: ${{ fromJSON(needs.discover.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+      - uses: actions/download-artifact@v4
+        with:
+          name: python-compatibility-wheel
+          path: dist
+      - name: Compare tracked and latest versions in isolated environments
+        env:
+          COMPAT_PACKAGE: ${{ matrix.package }}
+          COMPAT_BASELINE: ${{ matrix.baseline }}
+          COMPAT_LATEST: ${{ matrix.latest }}
+          COMPAT_INTEGRATION: ${{ matrix.integration }}
+        run: |
+          python scripts/compatibility/run_latest_version_checks.py \
+            --package "$COMPAT_PACKAGE" --baseline "$COMPAT_BASELINE" \
+            --latest "$COMPAT_LATEST" --integration "$COMPAT_INTEGRATION" \
+            --output "smoke-results/$COMPAT_PACKAGE--$COMPAT_INTEGRATION.json"
+      - name: Upload this comparison
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-compatibility-smoke-${{ matrix.package }}-${{ matrix.integration }}
+          path: smoke-results/*.json
+          if-no-files-found: ignore
+          retention-days: 14
+
+  report:
+    needs: [discover, analyze, smoke]
+    if: always() && needs.discover.outputs.changes_found == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - uses: actions/download-artifact@v4
+        with:
+          name: python-compatibility-discovery
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: python-compatibility-analysis
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          pattern: python-compatibility-smoke-*
+          merge-multiple: true
+          path: smoke-results
+      - name: Summarize every expected comparison
+        run: python scripts/compatibility/summarize_latest_version_checks.py
+      - name: Upload combined report
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -68,24 +199,32 @@ jobs:
             compatibility-release-report.json
             compatibility-evidence.json
             compatibility-llm-analysis.json
+            compatibility-smoke-summary.json
             compatibility-upstream-issue.json
           if-no-files-found: ignore
           retention-days: 14
-      - name: Create or update discovery issue
+      - name: Create or update review issue
         id: review_issue
-        if: always() && steps.discovery.outputs.changes_found == 'true'
         uses: actions/github-script@v7
         with:
           script: |
             const fs = require('node:fs');
             const report = JSON.parse(fs.readFileSync('compatibility-release-report.json', 'utf8'));
+            const smoke = JSON.parse(fs.readFileSync('compatibility-smoke-summary.json', 'utf8'));
             const analysis = fs.existsSync('compatibility-llm-analysis.json')
               ? JSON.parse(fs.readFileSync('compatibility-llm-analysis.json', 'utf8'))
               : { skipped: true, reason: 'Gemini analysis did not complete' };
             const title = '[compatibility] New Python integration releases detected';
-            const rows = report.changes.map((change) =>
-              `| ${change.package} | ${change.previouslyAnalyzed ?? 'not recorded'} | ${change.latest} | ${change.integrations.join(', ')} |`
+            const rows = smoke.results.map((item) =>
+              '| ' + item.package + ' | ' + item.integration + ' | ' +
+              (item.baselineVersion || 'not recorded') + ' / ' + item.baseline.status + ' | ' +
+              item.latestVersion + ' / ' + item.latest.status +
+              ' (' + (item.latest.stage || 'no stage') + ') | ' + item.comparison + ' |'
             ).join('\n');
+            const blocked = smoke.results.filter((item) => item.latest.status === 'blocked').slice(0, 10).map((item) =>
+              '- ' + item.package + '/' + item.integration + ': ' +
+              String(item.latest.reason || 'Install did not complete').replace(/\s+/g, ' ').slice(-400)
+            );
             const briefItems = (items) => (items || []).slice(0, 15).map((item) =>
               (typeof item === 'string' ? item : JSON.stringify(item)).slice(0, 500)
             );
@@ -93,30 +232,37 @@ jobs:
               summary: String(analysis.summary || '').slice(0, 2000),
               riskLevel: analysis.riskLevel,
               findings: briefItems(analysis.findings),
-              additionalFindingsInArtifact: Math.max(0, (analysis.findings || []).length - 15),
               recommendedTests: briefItems(analysis.recommendedTests),
-              additionalTestsInArtifact: Math.max(0, (analysis.recommendedTests || []).length - 15),
-              packagesReviewed: analysis.packagesReviewed,
               failed: analysis.failed,
               skipped: analysis.skipped,
               reason: analysis.reason,
               error: analysis.error,
             };
+            const fence = String.fromCharCode(96).repeat(3);
             const body = [
-              'The scheduled compatibility monitor found new upstream releases. No SDK regression is confirmed by this alert.',
+              'The scheduled monitor compared published versions with the tracked baseline.',
+              'A pass means the exact version installed, dependencies checked, and Neatlogs instrumentation activated in an isolated environment. It does not cover provider calls or the full regression suite.',
+              'An activation smoke regression means the tracked baseline passed that specific check and the latest version failed. Other failures need triage.',
               '',
-              '| Package | Previously analyzed | Latest | Integrations |',
-              '| --- | --- | --- | --- |',
+              '| Package | Integration | Baseline / result | Latest / result and stage | Comparison |',
+              '| --- | --- | --- | --- | --- |',
               rows,
               '',
-              '### Gemini advisory impact analysis (unverified)',
-              'The advisory identifies possible risks for human review; it does not confirm a regression. Full analysis and deterministic evidence are in the workflow artifact.',
+              'Latest-version counts: ' + JSON.stringify(smoke.counts) +
+                '; baseline-passing activation smoke regressions: ' + smoke.smokeRegressions + '.',
               '',
-              '```json',
+              '### Blocked installs (first 10)',
+              blocked.length ? blocked.join('\n') : 'None.',
+              'Full per-version output and deterministic evidence are in the workflow artifacts.',
+              '',
+              '### Gemini advisory (unverified)',
+              'Gemini identifies possible risks for review; it does not override the executed checks.',
+              fence + 'json',
               JSON.stringify(issueAnalysis, null, 2),
-              '```',
+              fence,
               '',
-              `Workflow run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+              'Workflow run: ' + context.serverUrl + '/' + context.repo.owner + '/' +
+                context.repo.repo + '/actions/runs/' + context.runId,
             ].join('\n');
             const issues = await github.rest.issues.listForRepo({ owner: context.repo.owner, repo: context.repo.repo, state: 'open', per_page: 100 });
             const existing = issues.data.find((issue) => issue.title === title && !issue.pull_request);
@@ -127,14 +273,24 @@ jobs:
               const created = await github.rest.issues.create({ owner: context.repo.owner, repo: context.repo.repo, title, body });
               core.setOutput('url', created.data.html_url);
             }
-      - name: Notify Slack of releases or workflow failure
+      - name: Notify Slack
         if: always()
         continue-on-error: true
         env:
           COMPAT_SLACK_WEBHOOK_URL: ${{ secrets.COMPAT_SLACK_WEBHOOK_URL }}
-          COMPAT_JOB_STATUS: ${{ job.status }}
-          COMPAT_CHANGES_FOUND: ${{ steps.discovery.outputs.changes_found }}
-          COMPAT_GEMINI_STEP_STATUS: ${{ steps.review.conclusion }}
+          COMPAT_JOB_STATUS: ${{ (needs.analyze.result == 'success' && needs.smoke.result == 'success') && 'success' || 'failure' }}
+          COMPAT_CHANGES_FOUND: ${{ needs.discover.outputs.changes_found }}
+          COMPAT_GEMINI_STEP_STATUS: ${{ needs.analyze.outputs.gemini_outcome }}
+          COMPAT_SMOKE_JOB_STATUS: ${{ needs.smoke.result }}
           COMPAT_REVIEW_ISSUE_URL: ${{ steps.review_issue.outputs.url }}
           COMPAT_UPSTREAM_ISSUE_FILE: compatibility-upstream-issue.json
         run: python scripts/compatibility/notify_slack.py
+      - name: Fail after reporting activation smoke regressions
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          summary = json.loads(Path('compatibility-smoke-summary.json').read_text())
+          if summary['smokeRegressions']:
+              raise SystemExit(f"{summary['smokeRegressions']} baseline-passing activation smoke regression(s)")
+          PY

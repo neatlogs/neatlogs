@@ -31,7 +31,7 @@ class NotifySlackTests(unittest.TestCase):
         self.assertIn("github.com/example/sdk/issues/2", message)
         self.assertIn("https://example.test/run", message)
         self.assertIn("unverified", message)
-        self.assertIn("No SDK regression is confirmed", message)
+        self.assertIn("Latest-version smoke results unavailable", message)
 
     def test_failure_message_does_not_require_report(self):
         self.assertIn("workflow failed", slack_message("failure", None, None, None))
@@ -56,10 +56,23 @@ class NotifySlackTests(unittest.TestCase):
             "https://github.com/neatlogs/neatlogs/actions/runs/123", None,
             "https://github.com/neatlogs/neatlogs/issues/42", "failure",
         )
-        self.assertIn("Gemini advisory analysis failed", message)
+        self.assertIn("Gemini advisory failed", message)
         self.assertIn("HTTP 400", message)
         self.assertIn("issues/42", message)
         self.assertIn("actions/runs/123", message)
+
+    def test_verified_smoke_regression_is_separate_from_gemini(self):
+        message = slack_message(
+            "success", {"changes": [{"package": "openai", "previouslyAnalyzed": "1", "latest": "2"}]},
+            {"riskLevel": "low"}, "https://example.test/run", smoke_summary={
+                "counts": {"pass": 0, "fail": 1, "blocked": 0, "not-tested": 0},
+                "smokeRegressions": 1,
+            },
+        )
+        self.assertIn("activation smoke regression detected", message)
+        self.assertIn("1 baseline-passing", message)
+        self.assertIn("Gemini advisory: low potential risk (unverified)", message)
+        self.assertIn("Checks cover install, dependencies, and instrumentation activation only", message)
 
     def test_workflow_url_uses_actions_runs_path(self):
         with patch.dict("os.environ", {

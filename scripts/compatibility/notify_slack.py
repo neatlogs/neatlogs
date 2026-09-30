@@ -33,6 +33,7 @@ def slack_message(
     upstream_issue: dict[str, Any] | None = None,
     review_issue_url: str | None = None,
     gemini_status: str | None = None,
+    smoke_summary: dict[str, Any] | None = None,
 ) -> str:
     links = []
     if review_issue_url:
@@ -46,36 +47,45 @@ def slack_message(
         if upstream_issue and upstream_issue.get("url")
         else ""
     )
-    if status != "success":
-        count = len((report or {}).get("changes", []))
-        releases = f" after detecting {count} upstream releases" if count else ""
-        if gemini_status == "failure":
-            reason = str((analysis or {}).get("error", "Gemini request failed"))[:180]
-            detail = f"Gemini advisory analysis failed: {reason}."
-        else:
-            detail = "Compatibility monitor failed before review completed."
-        return (
-            f":red_circle: *Python SDK compatibility workflow failed{releases}.* {detail} "
-            f"No SDK regression is confirmed; newer versions were not smoke tested. "
-            f"Release alerts repeat until the monitored baseline is updated.{issue}{link}"
-        )
     changes = (report or {}).get("changes", [])
     packages = ", ".join(
         f"{item['package']} {item.get('previouslyAnalyzed') or 'untracked'} → {item['latest']}"
         for item in changes[:4]
     )
     remaining = f", +{len(changes) - 4} more" if len(changes) > 4 else ""
-    risk = (
-        f" Gemini advisory: *{analysis['riskLevel']} potential risk* (unverified)."
-        if analysis and analysis.get("riskLevel")
-        else " Gemini advisory unavailable."
-    )
+    if gemini_status == "failure":
+        reason = str((analysis or {}).get("error", "Gemini request failed"))[:180]
+        advisory = f"Gemini advisory failed: {reason}."
+    elif analysis and analysis.get("riskLevel"):
+        advisory = f"Gemini advisory: {analysis['riskLevel']} potential risk (unverified)."
+    else:
+        advisory = "Gemini advisory unavailable."
+    counts = (smoke_summary or {}).get("counts", {})
+    regressions = (smoke_summary or {}).get("smokeRegressions", 0)
+    if smoke_summary:
+        verification = (
+            f"Latest-version package/integration checks: {counts.get('pass', 0)} pass, "
+            f"{counts.get('fail', 0)} fail, {counts.get('blocked', 0)} blocked installs, "
+            f"{counts.get('not-tested', 0)} not tested. "
+        )
+        if regressions:
+            verification += f"{regressions} baseline-passing activation smoke regression(s). "
+        elif counts.get("fail", 0):
+            verification += "Latest failures need triage; no baseline-passing regression established. "
+    else:
+        verification = "Latest-version smoke results unavailable. "
+    if regressions:
+        headline = ":red_circle: *Python SDK activation smoke regression detected.*"
+    elif status != "success":
+        headline = ":red_circle: *Python SDK compatibility workflow failed.*"
+    else:
+        headline = ":warning: *Python SDK: upstream releases newer than the monitored baseline.*"
     release_count = f"{len(changes)} upstream release{'s' if len(changes) != 1 else ''}"
+    release_detail = f" {release_count}: {packages}{remaining}." if changes else ""
     return (
-        f":warning: *Python SDK: upstream releases newer than the monitored baseline.* "
-        f"{release_count}: {packages}{remaining}.{risk} "
-        f"No SDK regression is confirmed; this run did not smoke test the new versions. "
-        f"Alerts repeat until the baseline is updated.{issue}{link}"
+        f"{headline}{release_detail} {verification}"
+        f"Checks cover install, dependencies, and instrumentation activation only. "
+        f"{advisory} Alerts repeat until the baseline is updated.{issue}{link}"
     )
 
 
@@ -102,6 +112,7 @@ def main() -> int:
                 ),
                 os.environ.get("COMPAT_REVIEW_ISSUE_URL"),
                 os.environ.get("COMPAT_GEMINI_STEP_STATUS"),
+                optional_json("compatibility-smoke-summary.json"),
             )
         }
     ).encode()

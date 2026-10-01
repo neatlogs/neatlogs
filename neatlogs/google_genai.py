@@ -524,7 +524,7 @@ def _patch_models_extra(models: Any, is_async: bool) -> None:
                 )
                 try:
                     resp = await orig(*args, **kwargs)
-                except Exception as e:
+                except BaseException as e:  # asyncio.CancelledError inherits BaseException
                     _err(span, e)
                     raise
                 _embed_finalize(span, resp)
@@ -578,7 +578,7 @@ def _patch_models_extra(models: Any, is_async: bool) -> None:
                 )
                 try:
                     resp = await orig_ct(*args, **kwargs)
-                except Exception as e:
+                except BaseException as e:  # asyncio.CancelledError inherits BaseException
                     _err(span, e)
                     raise
                 _ct_finalize(span, resp)
@@ -671,7 +671,7 @@ def _patch_chat_classes() -> None:
             start = time.perf_counter()
             try:
                 resp = await orig_asend(self, message, *args, **kwargs)
-            except Exception as e:
+            except BaseException as e:  # asyncio.CancelledError inherits BaseException
                 _err(span, e)
                 raise
             _finalize_response(span, resp, (time.perf_counter() - start) * 1000)
@@ -692,7 +692,7 @@ def _patch_chat_classes() -> None:
                 span = _start_chat_span(self, message, stream=True)
                 try:
                     stream = await orig_asend_stream(self, message, *args, **kwargs)
-                except Exception as e:
+                except BaseException as e:  # asyncio.CancelledError inherits BaseException
                     _err(span, e)
                     raise
                 return AsyncStreamWrapper(stream, span, GoogleStreamFinalizer())

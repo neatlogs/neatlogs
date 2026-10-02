@@ -1,10 +1,14 @@
 import unittest
 from unittest.mock import patch
 
-from scripts.compatibility.notify_slack import slack_message, workflow_url
+from scripts.compatibility.notify_slack import short_reason, slack_message, workflow_url
 
 
 class NotifySlackTests(unittest.TestCase):
+    def test_long_reason_is_shortened_at_a_word_boundary(self):
+        self.assertEqual(short_reason("alpha beta gamma", 10), "alpha…")
+        self.assertEqual(short_reason("clear reason.", 20), "clear reason.")
+
     def test_release_message_contains_evidence_summary(self):
         message = slack_message(
             "success",

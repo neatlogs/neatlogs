@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import textwrap
 from pathlib import Path
 from typing import Any
 from urllib.request import Request, urlopen
@@ -12,6 +13,11 @@ def optional_json(path: str) -> dict[str, Any] | None:
         return json.loads(Path(path).read_text())
     except (FileNotFoundError, json.JSONDecodeError):
         return None
+
+
+def short_reason(value: Any, width: int) -> str:
+    result = textwrap.shorten(str(value), width=width, placeholder="…")
+    return result if result.endswith("…") else result.rstrip(".") + "."
 
 
 def workflow_url() -> str | None:
@@ -75,8 +81,8 @@ def slack_message(
     )
     remaining = f", +{len(changes) - 4} more" if len(changes) > 4 else ""
     if gemini_status == "failure":
-        reason = str((analysis or {}).get("error", "Gemini request failed"))[:180]
-        advisory = f"Gemini advisory failed: {reason}."
+        reason = short_reason((analysis or {}).get("error", "Gemini request failed"), 180)
+        advisory = f"Gemini advisory failed: {reason}"
     elif analysis and analysis.get("riskLevel"):
         advisory = f"Gemini advisory: {analysis['riskLevel']} potential risk (unverified)."
     else:
@@ -115,11 +121,11 @@ def slack_message(
     proposal = ""
     if publish_status and publish_status.get("status") == "failed":
         if publish_status.get("isDraft") and publish_status.get("prUrl"):
-            proposal = f" Existing bot draft PR could not be marked ready: {str(publish_status.get('reason', 'unknown'))[:150]}."
+            proposal = f" Existing bot draft PR could not be marked ready: {short_reason(publish_status.get('reason', 'unknown'), 150)}"
         else:
-            proposal = f" Fix PR could not be opened: {str(publish_status.get('reason', 'unknown'))[:150]}."
+            proposal = f" Fix PR could not be opened: {short_reason(publish_status.get('reason', 'unknown'), 150)}"
     elif validation_status and validation_status.get("status") == "failed":
-        proposal = f" Gemini proposed a fix, but validation failed: {str(validation_status.get('reason', 'unknown'))[:150]}. No PR opened."
+        proposal = f" Gemini proposed a fix, but validation failed: {short_reason(validation_status.get('reason', 'unknown'), 150)} No PR opened."
     elif publish_status and publish_status.get("status") == "already-covered":
         if publish_status.get("state") in {"CLOSED", "MERGED"}:
             proposal = f" Previous fix PR is {publish_status['state'].lower()}; no new PR opened."
@@ -148,7 +154,7 @@ def slack_message(
         label = proposal_labels.get(
             proposal_status.get("status"), "Gemini fix proposal status unknown"
         )
-        proposal = f" {label}: {str(proposal_status.get('reason', 'unknown'))[:120]}. No PR opened."
+        proposal = f" {label}: {short_reason(proposal_status.get('reason', 'unknown'), 120)} No PR opened."
     if covered_drafts and not (
         publish_status and publish_status.get("status") == "already-covered"
         and publish_status.get("isDraft")

@@ -9,6 +9,7 @@ import os
 import re
 import subprocess
 import sys
+import textwrap
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -102,6 +103,20 @@ def choose_candidate(
     if rotation is None:
         rotation = int(datetime.now(timezone.utc).timestamp() // (12 * 3600))
     return pool[rotation % len(pool)]
+
+
+def deferred_candidates(
+    options: list[dict[str, Any]], candidate: dict[str, Any] | None,
+    covered_branches: set[str],
+) -> list[dict[str, Any]]:
+    selected_branch = proposal_branch(candidate) if candidate else None
+    return [
+        {"package": item["package"], "integration": item["integration"],
+         "latestVersion": item["latestVersion"], "basis": item["basis"]}
+        for item in options
+        if proposal_branch(item) not in covered_branches
+        and proposal_branch(item) != selected_branch
+    ]
 
 
 def allowed_adapter_paths(candidate: dict[str, Any], evidence: dict[str, Any]) -> set[str]:
@@ -249,11 +264,7 @@ def generate() -> int:
         }
     options = candidate_options(summary, analysis, evidence)
     candidate = choose_candidate(summary, analysis, evidence, covered)
-    deferred = [
-        {"package": item["package"], "integration": item["integration"],
-         "latestVersion": item["latestVersion"], "basis": item["basis"]}
-        for item in options if item is not candidate and proposal_branch(item) not in covered
-    ]
+    deferred = deferred_candidates(options, candidate, covered)
     reason = (
         "Every candidate with adapter evidence already has a review PR"
         if options and not candidate else "No actionable candidate with adapter evidence"
@@ -274,7 +285,7 @@ def generate() -> int:
                     Path("compatibility-fix-proposal.json").write_text(json.dumps(proposal, indent=2) + "\n")
                     status = {"status": "proposed", "package": candidate["package"], "integration": candidate["integration"], "basis": candidate["basis"]}
                 else:
-                    status = {"status": "no-safe-fix", "reason": str(proposal.get("reason", "Gemini declined to propose a fix"))[:500]}
+                    status = {"status": "no-safe-fix", "reason": textwrap.shorten(str(proposal.get("reason", "Gemini declined to propose a fix")), width=500, placeholder="…")}
             except Exception as error:
                 status = {"status": "rejected", "reason": str(error)[:500]}
     status["deferredCandidates"] = deferred

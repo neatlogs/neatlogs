@@ -7,6 +7,7 @@ from scripts.compatibility.propose_fix import (
     allowed_adapter_paths,
     candidate_options,
     choose_candidate,
+    deferred_candidates,
     generated_test_path,
     proposal_branch,
     validate_proposal,
@@ -41,6 +42,17 @@ class ProposeFixTests(unittest.TestCase):
         self.assertEqual(
             choose_candidate(summary, {}, evidence(), {proposal_branch(selected)}, rotation=0)["package"],
             "alpha",
+        )
+
+    def test_deferred_candidates_exclude_selected_candidate_by_branch(self):
+        selected = choose_candidate({}, {}, evidence(), rotation=0)
+        # Candidate selection builds a separate list from the reporting path.
+        options = candidate_options({}, {}, evidence())
+        self.assertIsNot(selected, options[0])
+        self.assertEqual(
+            deferred_candidates(options, selected, set()),
+            [{"package": "beta", "integration": "openai", "latestVersion": "2",
+              "basis": "upstream-and-adapter-evidence-review"}],
         )
 
     def test_only_exact_adapter_source_replacement_is_allowed(self):

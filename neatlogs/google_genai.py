@@ -361,11 +361,22 @@ def _set_input_attributes(span: Any, contents: Any, kwargs: dict) -> None:
             else config.__dict__ if hasattr(config, "__dict__") else {}
         )
         if isinstance(cfg, dict):
-            for param in ("temperature", "top_p", "top_k", "max_output_tokens"):
+            params = {}
+            for param in (
+                "temperature",
+                "top_p",
+                "top_k",
+                "max_output_tokens",
+                "frequency_penalty",
+                "presence_penalty",
+            ):
                 val = cfg.get(param)
                 if val is not None:
                     attr_name = "max_tokens" if param == "max_output_tokens" else param
                     span.set_attribute(f"neatlogs.llm.{attr_name}", val)
+                    params[attr_name] = val
+            if params:
+                span.set_attribute("neatlogs.llm.invocation_parameters", serialize(params))
 
 
 def _finalize_response(span: Any, response: Any, duration_ms: float) -> None:

@@ -110,17 +110,48 @@ def wrap_bedrock_client(client: Any) -> Any:
     if service_name not in (None, "bedrock-runtime"):
         return client
 
-    if hasattr(client, "converse"):
-        _patch_converse(client)
-    if hasattr(client, "converse_stream"):
-        _patch_converse_stream(client)
-    if hasattr(client, "invoke_model"):
-        _patch_invoke_model(client)
-    if hasattr(client, "invoke_model_with_response_stream"):
-        _patch_invoke_model_stream(client)
+    try:
+        if hasattr(client, "converse"):
+            _patch_converse(client)
+        if hasattr(client, "converse_stream"):
+            _patch_converse_stream(client)
+        if hasattr(client, "invoke_model"):
+            _patch_invoke_model(client)
+        if hasattr(client, "invoke_model_with_response_stream"):
+            _patch_invoke_model_stream(client)
+    except Exception:
+        return client
 
     client._neatlogs_bedrock_patched = True
     return client
+
+
+def _safe(fn, *args, **kw):
+    """Run a patch helper without raising; swallow unexpected errors."""
+    try:
+        return fn(*args, **kw)
+    except Exception:
+        return None
+
+
+def _record_error(span: Any, error: Exception) -> None:
+    try:
+        span.set_status(StatusCode.ERROR, str(error))
+        span.record_exception(error)
+        span.end()
+    except Exception:
+        pass
+
+
+def _finish_ok(span: Any, finalize) -> None:
+    try:
+        finalize()
+    except Exception:
+        try:
+            span.set_status(StatusCode.OK)
+            span.end()
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -248,47 +279,85 @@ def _set_converse_usage(span: Any, usage: Any) -> None:
 
 
 def _patch_converse(client: Any) -> None:
-    orig = client.converse
+    converse = getattr(client, "converse", None)
+    if converse is None or getattr(converse, "_neatlogs_patched", False):
+        return
+    orig = converse
 
     def patched(*args, **kwargs):
         if is_suppressed():
             return orig(*args, **kwargs)
-        span = _start_span("bedrock.converse", kwargs.get("modelId"), is_stream=False)
-        _set_converse_input(span, kwargs)
-        start = time.perf_counter()
+        span = None
+        try:
+            span = _start_span("bedrock.converse", kwargs.get("modelId"), is_stream=False)
+            _set_converse_input(span, kwargs)
+            start = time.perf_counter()
+        except Exception:
+            if span is not None:
+                try:
+                    span.end()
+                except Exception:
+                    pass
+            return orig(*args, **kwargs)
+
         try:
             response = orig(*args, **kwargs)
         except Exception as e:
-            _err(span, e)
+            try:
+                _record_error(span, e)
+            except Exception:
+                pass
             raise
-        _finalize_converse(span, response, (time.perf_counter() - start) * 1000)
+
+        duration_ms = (time.perf_counter() - start) * 1000
+        _finish_ok(span, lambda: _finalize_converse(span, response, duration_ms))
         return response
 
     client.converse = patched
+    client.converse._neatlogs_patched = True
 
 
 def _patch_converse_stream(client: Any) -> None:
-    orig = client.converse_stream
+    converse_stream = getattr(client, "converse_stream", None)
+    if converse_stream is None or getattr(converse_stream, "_neatlogs_patched", False):
+        return
+    orig = converse_stream
 
     def patched(*args, **kwargs):
         if is_suppressed():
             return orig(*args, **kwargs)
-        span = _start_span("bedrock.converse_stream", kwargs.get("modelId"), is_stream=True)
-        _set_converse_input(span, kwargs)
-        start = time.perf_counter()
+        span = None
+        try:
+            span = _start_span("bedrock.converse_stream", kwargs.get("modelId"), is_stream=True)
+            _set_converse_input(span, kwargs)
+            start = time.perf_counter()
+        except Exception:
+            if span is not None:
+                try:
+                    span.end()
+                except Exception:
+                    pass
+            return orig(*args, **kwargs)
+
         try:
             response = orig(*args, **kwargs)
         except Exception as e:
-            _err(span, e)
+            try:
+                _record_error(span, e)
+            except Exception:
+                pass
             raise
+
         stream = response.get("stream") if isinstance(response, dict) else None
         if stream is None:
-            _ok(span, (time.perf_counter() - start) * 1000)
+            duration_ms = (time.perf_counter() - start) * 1000
+            _finish_ok(span, lambda: _ok(span, duration_ms))
             return response
         response["stream"] = _wrap_converse_stream(stream, span, start)
         return response
 
     client.converse_stream = patched
+    client.converse_stream._neatlogs_patched = True
 
 
 def _wrap_converse_stream(stream: Any, span: Any, start: float):
@@ -502,40 +571,55 @@ def _is_embedding_model(model_id: Any) -> bool:
 
 
 def _patch_invoke_model(client: Any) -> None:
-    orig = client.invoke_model
+    invoke = getattr(client, "invoke_model", None)
+    if invoke is None or getattr(invoke, "_neatlogs_patched", False):
+        return
+    orig = invoke
 
     def patched(*args, **kwargs):
         if is_suppressed():
             return orig(*args, **kwargs)
-        model_id = kwargs.get("modelId")
-        vendor = _vendor_from_model(model_id)
-        is_embedding = _is_embedding_model(model_id)
-        body_in = _decode_body(kwargs.get("body"))
+        span = None
+        try:
+            model_id = kwargs.get("modelId")
+            vendor = _vendor_from_model(model_id)
+            is_embedding = _is_embedding_model(model_id)
+            body_in = _decode_body(kwargs.get("body"))
 
-        if is_embedding:
-            span = get_provider_tracer().start_span(
-                name="bedrock.invoke_model",
-                attributes={
-                    "neatlogs.span.kind": "embedding",
-                    "neatlogs.llm.provider": _PROVIDER,
-                    "neatlogs.embedding.model_name": str(model_id or ""),
-                },
-            )
-            text = body_in.get("inputText") or body_in.get("texts") or body_in.get("input_text")
-            if text:
-                span.set_attribute(
-                    "neatlogs.embedding.text",
-                    (text if isinstance(text, str) else serialize(text))[:10000],
+            if is_embedding:
+                span = get_provider_tracer().start_span(
+                    name="bedrock.invoke_model",
+                    attributes={
+                        "neatlogs.span.kind": "embedding",
+                        "neatlogs.llm.provider": _PROVIDER,
+                        "neatlogs.embedding.model_name": str(model_id or ""),
+                    },
                 )
-        else:
-            span = _start_span("bedrock.invoke_model", model_id, is_stream=False)
-            _set_invoke_input(span, vendor, body_in)
+                text = body_in.get("inputText") or body_in.get("texts") or body_in.get("input_text")
+                if text:
+                    span.set_attribute(
+                        "neatlogs.embedding.text",
+                        (text if isinstance(text, str) else serialize(text))[:10000],
+                    )
+            else:
+                span = _start_span("bedrock.invoke_model", model_id, is_stream=False)
+                _set_invoke_input(span, vendor, body_in)
 
-        start = time.perf_counter()
+            start = time.perf_counter()
+        except Exception:
+            if span is not None:
+                try:
+                    span.end()
+                except Exception:
+                    pass
+            return orig(*args, **kwargs)
         try:
             response = orig(*args, **kwargs)
         except Exception as e:
-            _err(span, e)
+            try:
+                _err(span, e)
+            except Exception:
+                pass
             raise
         # Reading the StreamingBody consumes it; read once, parse, then replace
         # with a fresh body so the caller still gets the bytes.
@@ -552,6 +636,7 @@ def _patch_invoke_model(client: Any) -> None:
         return response
 
     client.invoke_model = patched
+    client.invoke_model._neatlogs_patched = True
 
 
 def _finalize_invoke_embedding(span: Any, body: dict, duration_ms: float) -> None:
@@ -573,20 +658,37 @@ def _finalize_invoke_embedding(span: Any, body: dict, duration_ms: float) -> Non
 
 
 def _patch_invoke_model_stream(client: Any) -> None:
-    orig = client.invoke_model_with_response_stream
+    invoke_stream = getattr(client, "invoke_model_with_response_stream", None)
+    if invoke_stream is None or getattr(invoke_stream, "_neatlogs_patched", False):
+        return
+    orig = invoke_stream
 
     def patched(*args, **kwargs):
         if is_suppressed():
             return orig(*args, **kwargs)
-        model_id = kwargs.get("modelId")
-        vendor = _vendor_from_model(model_id)
-        span = _start_span("bedrock.invoke_model_with_response_stream", model_id, is_stream=True)
-        _set_invoke_input(span, vendor, _decode_body(kwargs.get("body")))
-        start = time.perf_counter()
+        span = None
+        try:
+            model_id = kwargs.get("modelId")
+            vendor = _vendor_from_model(model_id)
+            span = _start_span(
+                "bedrock.invoke_model_with_response_stream", model_id, is_stream=True
+            )
+            _set_invoke_input(span, vendor, _decode_body(kwargs.get("body")))
+            start = time.perf_counter()
+        except Exception:
+            if span is not None:
+                try:
+                    span.end()
+                except Exception:
+                    pass
+            return orig(*args, **kwargs)
         try:
             response = orig(*args, **kwargs)
         except Exception as e:
-            _err(span, e)
+            try:
+                _err(span, e)
+            except Exception:
+                pass
             raise
         body = response.get("body") if isinstance(response, dict) else None
         if body is None:
@@ -596,6 +698,7 @@ def _patch_invoke_model_stream(client: Any) -> None:
         return response
 
     client.invoke_model_with_response_stream = patched
+    client.invoke_model_with_response_stream._neatlogs_patched = True
 
 
 def _wrap_invoke_stream(body: Any, span: Any, vendor: str, start: float):

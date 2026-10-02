@@ -163,3 +163,21 @@ def test_diagnostic_exporter_is_bounded_and_reports_eviction():
         assert diagnostic.dropped_count == 1
     finally:
         provider.shutdown()
+
+
+def test_canonical_telemetry_preserves_evaluator_kind():
+    provider = TracerProvider()
+    diagnostic = neatlogs.InMemoryDiagnosticSpanExporter(max_spans=1)
+    provider.add_span_processor(SimpleSpanProcessor(diagnostic))
+
+    try:
+        span = provider.get_tracer("neatlogs.evaluator").start_span("score_relevance")
+        span.set_attribute("openinference.span.kind", "EVALUATOR")
+        span.end()
+
+        payload = diagnostic.get_finished_envelopes()[0].to_dict()
+        Draft202012Validator(neatlogs.telemetry_schema()).validate(payload)
+        assert payload["kind"] == "EVALUATOR"
+        assert payload["semantic"]["kind"] == "EVALUATOR"
+    finally:
+        provider.shutdown()

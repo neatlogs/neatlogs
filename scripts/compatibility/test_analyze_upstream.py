@@ -21,6 +21,12 @@ from scripts.compatibility.analyze_upstream import (
     extract_python_api,
     evidence_batches,
     official_documentation_urls,
+    fetch_official_documentation,
+    _safe_official_url,
+    _public_documentation_address,
+    _PinnedHTTPConnection,
+    _PinnedHTTPSConnection,
+    _fetch_public_documentation,
     _analyze_gemini_batch,
     MAX_GEMINI_BATCH_BYTES,
     MAX_GEMINI_PACKAGE_BYTES,
@@ -141,6 +147,58 @@ class AnalyzeUpstreamTests(unittest.TestCase):
             ),
             "Migration Use runtime_context.",
         )
+
+    def test_documentation_urls_reject_private_targets(self):
+        for url in (
+            "http://127.0.0.1/private", "http://172.20.0.1/private",
+            "http://192.168.1.1/private", "http://169.254.169.254/latest",
+            "http://localhost/private", "http://service.internal/private",
+            "http://user:password@example.com/private",
+            "ftp://docs.example.test/private", "file:///etc/passwd",
+            "http://[fc00::1]/private", "http://[::1]/private",
+        ):
+            with self.subTest(url=url):
+                self.assertIsNone(_safe_official_url(url))
+    def test_documentation_dns_is_checked_before_http_request(self):
+        source = {"kind": "documentation", "url": "https://docs.example.test/start"}
+        with patch("scripts.compatibility.analyze_upstream.socket.getaddrinfo",
+                   return_value=[(2, 1, 6, "", ("172.20.0.1", 443))]), \
+             patch("scripts.compatibility.analyze_upstream.socket.create_connection") as connect:
+            result = fetch_official_documentation([source])
+        self.assertIn("non-public address", result[0]["error"])
+        connect.assert_not_called()
+
+    def test_documentation_rejects_mixed_public_and_private_dns_answers(self):
+        with patch("scripts.compatibility.analyze_upstream.socket.getaddrinfo",
+                   return_value=[(2, 1, 6, "", ("8.8.8.8", 443)),
+                                 (2, 1, 6, "", ("10.0.0.1", 443))]):
+            with self.assertRaisesRegex(ValueError, "non-public address"):
+                _public_documentation_address("https://docs.example.test/")
+        with patch("scripts.compatibility.analyze_upstream.socket.getaddrinfo",
+                   return_value=[(10, 1, 6, "", ("2606:4700:4700::1111", 443, 0, 0)),
+                                 (10, 1, 6, "", ("fc00::1", 443, 0, 0))]):
+            with self.assertRaisesRegex(ValueError, "non-public address"):
+                _public_documentation_address("https://docs.example.test/")
+
+    def test_documentation_uses_validated_ip_and_does_not_follow_redirect(self):
+        with patch("scripts.compatibility.analyze_upstream.socket.create_connection") as connect:
+            connection = _PinnedHTTPConnection("docs.example.test", 80, "8.8.8.8")
+            connection.connect()
+            connect.assert_called_once_with(("8.8.8.8", 80), 15)
+        with patch("scripts.compatibility.analyze_upstream.socket.create_connection") as connect, \
+             patch("scripts.compatibility.analyze_upstream.ssl.create_default_context") as context:
+            connection = _PinnedHTTPSConnection("docs.example.test", 443, "2606:4700:4700::1111")
+            connection.connect()
+            connect.assert_called_once_with(("2606:4700:4700::1111", 443), 15)
+            context.return_value.wrap_socket.assert_called_once_with(
+                connect.return_value, server_hostname="docs.example.test",
+            )
+        with patch("scripts.compatibility.analyze_upstream._public_documentation_address", return_value="8.8.8.8"), \
+             patch("scripts.compatibility.analyze_upstream._PinnedHTTPConnection") as connection_type:
+            connection_type.return_value.getresponse.return_value.status = 302
+            with self.assertRaisesRegex(ValueError, "redirects are not followed"):
+                _fetch_public_documentation("http://docs.example.test/start")
+            connection_type.return_value.close.assert_called_once()
 
     def test_large_evidence_is_bounded_and_every_package_is_reviewed(self):
         packages = []

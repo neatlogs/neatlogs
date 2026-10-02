@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import os
 import subprocess
 import sys
 import tempfile
@@ -21,6 +22,31 @@ def run(command: list[str], timeout: int) -> subprocess.CompletedProcess[str]:
                           check=False, timeout=timeout)
 
 
+def workspace_snapshot(root: Path = ROOT) -> dict[str, str]:
+    """Hash tracked and visible untracked files to detect generated-test side effects."""
+    paths = subprocess.check_output(
+        ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+        cwd=root,
+    )
+    return {
+        path: hashlib.sha256((root / path).read_bytes()).hexdigest()
+        for raw in paths.split(b"\0") if raw
+        for path in [os.fsdecode(raw)]
+    }
+
+
+def changed_paths(before: dict[str, str], after: dict[str, str]) -> set[str]:
+    return {path for path in before.keys() | after.keys() if before.get(path) != after.get(path)}
+
+
+def require_post_patch_smoke(smoke: dict[str, object]) -> None:
+    if smoke.get("status") != "pass":
+        raise RuntimeError(
+            "Patched latest-version activation check did not pass: "
+            f"{smoke.get('status', 'missing')}: {str(smoke.get('reason', ''))[-1000:]}"
+        )
+
+
 def validate() -> dict[str, object]:
     proposal_bytes = Path("compatibility-fix-proposal.json").read_bytes()
     proposal = json.loads(proposal_bytes)
@@ -30,6 +56,7 @@ def validate() -> dict[str, object]:
     if proposal["baseSha"] != base:
         raise ValueError("Proposal base SHA does not match validation checkout")
     validate_proposal(proposal, candidate, evidence)
+    original_snapshot = workspace_snapshot()
     red_green = "not-proven"
     test = proposal.get("regressionTest")
     if test:
@@ -45,8 +72,12 @@ def validate() -> dict[str, object]:
                 )
         finally:
             test_path.unlink(missing_ok=True)
+        if workspace_snapshot() != original_snapshot:
+            raise RuntimeError("Generated regression test modified unexpected workspace files")
     changed = apply_proposal(proposal, candidate, evidence)
-    Path("compatibility-validated-proposal.json").write_text(json.dumps(proposal, indent=2) + "\n")
+    patched_snapshot = workspace_snapshot()
+    if changed_paths(original_snapshot, patched_snapshot) != set(changed):
+        raise RuntimeError("Patch changed files outside the validated proposal")
     diff = run(["git", "diff", "--check"], 20)
     if diff.returncode != 0:
         raise RuntimeError(f"Patch whitespace check failed: {diff.stderr[-1000:]}")
@@ -78,10 +109,9 @@ def validate() -> dict[str, object]:
             package=candidate["package"], version=candidate["latestVersion"],
             integration=candidate["integration"], extra=integration["extra"], wheel=wheel,
         )
-    if smoke["status"] in {"fail", "not-tested"} or (
-        candidate["basis"] == "activation-smoke-regression" and smoke["status"] != "pass"
-    ):
-        raise RuntimeError(f"Patched latest-version activation check did not pass: {smoke['status']}: {smoke.get('reason', '')[-1000:]}")
+    require_post_patch_smoke(smoke)
+    if workspace_snapshot() != patched_snapshot:
+        raise RuntimeError("Validation tests modified unexpected workspace files")
     scope = ["Compatibility automation tests passed"]
     if red_green == "red-before-green-after":
         scope.append("focused generated test failed before and passed after the patch")
@@ -99,6 +129,7 @@ def validate() -> dict[str, object]:
         "status": "validated",
         "proposalSha256": hashlib.sha256(proposal_bytes).hexdigest(),
         "changedFiles": changed,
+        "changedFileSha256": {path: patched_snapshot[path] for path in changed},
         "redGreen": red_green,
         "postPatchSmoke": smoke["status"],
         "focusedTests": [str(path.relative_to(ROOT)) for path in focused],

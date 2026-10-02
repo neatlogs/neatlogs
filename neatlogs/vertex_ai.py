@@ -36,6 +36,7 @@ from ._wrap_utils import (
     is_suppressed,
     serialize,
 )
+from .core.choice_accumulator import ChoiceAccumulator
 from .core.media import set_media_attributes
 
 _PROVIDER = "vertex_ai"
@@ -311,44 +312,9 @@ def _set_input_attributes(span: Any, contents: Any, kwargs: dict) -> None:
 
 def _finalize_response(span: Any, response: Any, duration_ms: float) -> None:
     """Extract attributes from a non-streaming GenerateContentResponse."""
-    candidates = getattr(response, "candidates", None) or []
-    text_parts: List[str] = []
-    tool_call_idx = 0
-
-    for candidate in candidates:
-        content = getattr(candidate, "content", None)
-        if not content:
-            continue
-        parts = getattr(content, "parts", None) or []
-        for part in parts:
-            if getattr(part, "text", None) and not getattr(part, "thought", False):
-                text_parts.append(part.text)
-            elif getattr(part, "thought", False) and getattr(part, "text", None):
-                span.set_attribute("neatlogs.llm.output_messages.0.thinking", part.text)
-            elif getattr(part, "function_call", None):
-                fc = part.function_call
-                span.set_attribute(
-                    f"neatlogs.llm.tool_calls.{tool_call_idx}.name", getattr(fc, "name", "")
-                )
-                args = getattr(fc, "args", None)
-                span.set_attribute(
-                    f"neatlogs.llm.tool_calls.{tool_call_idx}.arguments",
-                    serialize(args) if args else "{}",
-                )
-                tool_call_idx += 1
-
-        finish_reason = getattr(candidate, "finish_reason", None)
-        if finish_reason:
-            span.set_attribute("neatlogs.llm.finish_reason", str(finish_reason))
-
-    if text_parts:
-        span.set_attribute("neatlogs.llm.output_messages.0.role", "assistant")
-        span.set_attribute("neatlogs.llm.output_messages.0.content", "".join(text_parts))
-    set_media_attributes(span, "neatlogs.llm.output_messages.0", candidates, "output")
-
-    usage = getattr(response, "usage_metadata", None)
-    if usage:
-        _set_usage_attributes(span, usage)
+    accumulator = ChoiceAccumulator()
+    accumulator.add_google_response(response)
+    accumulator.apply(span)
 
     span.set_attribute("neatlogs.llm.metrics.duration_ms", round(duration_ms, 3))
     span.set_status(StatusCode.OK)

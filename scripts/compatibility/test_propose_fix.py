@@ -1,7 +1,9 @@
+import io
 import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from scripts.compatibility.propose_fix import (
     apply_proposal,
@@ -13,6 +15,7 @@ from scripts.compatibility.propose_fix import (
     generated_test_path,
     no_sdk_patch_surface,
     proposal_branch,
+    request_proposal,
     validate_proposal,
 )
 
@@ -27,6 +30,30 @@ def evidence():
 
 
 class ProposeFixTests(unittest.TestCase):
+    def test_shared_helper_context_reaches_proposal_but_cannot_be_edited(self):
+        package_evidence = evidence()
+        package_evidence["packages"][0]["integrations"][0]["relatedSource"] = [
+            {"path": "neatlogs/_wrap_utils.py", "content": "shared helper marker",
+             "focusExcerpt": "shared helper marker"},
+        ]
+        response = {"candidates": [{"content": {"parts": [
+            {"text": json.dumps({"decision": "no_safe_fix", "reason": "test"})}
+        ]}}]}
+        with patch("scripts.compatibility.propose_fix.urlopen",
+                   return_value=io.BytesIO(json.dumps(response).encode())) as urlopen_mock:
+            request_proposal(
+                {"package": "alpha", "integration": "openai", "latestVersion": "2"},
+                package_evidence, "test-key", "test-model",
+            )
+        request = urlopen_mock.call_args.args[0]
+        prompt = json.loads(request.data)["contents"][0]["parts"][0]["text"]
+        self.assertIn("shared helper marker", prompt)
+        self.assertIn("read-only context", prompt)
+        self.assertEqual(
+            allowed_adapter_paths({"package": "alpha", "integration": "openai"}, package_evidence),
+            {"neatlogs/alpha.py"},
+        )
+
     def test_version_lock_advances_only_evidence_bound_fixed_package(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

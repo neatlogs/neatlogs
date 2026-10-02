@@ -21,6 +21,7 @@ from scripts.compatibility.analyze_upstream import (
     extract_python_api,
     evidence_batches,
     official_documentation_urls,
+    relevant_integrations,
     fetch_official_documentation,
     _safe_official_url,
     _public_documentation_address,
@@ -32,9 +33,38 @@ from scripts.compatibility.analyze_upstream import (
     MAX_GEMINI_PACKAGE_BYTES,
     main,
 )
+from scripts.compatibility.propose_fix import allowed_adapter_paths
 
 
 class AnalyzeUpstreamTests(unittest.TestCase):
+    def test_imported_shared_helpers_reach_gemini_context_but_not_patch_allowlist(self):
+        root = Path(__file__).resolve().parents[2]
+        config = json.loads((root / ".compatibility/integrations.json").read_text())
+        integrations = relevant_integrations(config, ["google-genai", "vertex-google-genai"])
+        package = {
+            "package": "google-genai", "previousVersion": "2.23.0", "latestVersion": "2.27.0",
+            "integrations": integrations,
+        }
+        evidence = {"ecosystem": "pypi", "packages": [package]}
+        for integration in integrations:
+            self.assertEqual(
+                {source["path"] for source in integration["relatedSource"]},
+                {"neatlogs/_wrap_utils.py", "neatlogs/core/choice_accumulator.py"},
+            )
+        compact = compact_package(package)
+        self.assertLessEqual(len(json.dumps(compact).encode()), MAX_GEMINI_PACKAGE_BYTES)
+        self.assertEqual(len(compact["relatedSource"]), 2)
+        helper_context = "\n".join(source["content"] for source in compact["relatedSource"])
+        self.assertIn("_stream_start_perf", helper_context)
+        self.assertIn("_finish_reason", helper_context)
+        self.assertIn("relatedSource", json.dumps(evidence_batches(evidence)))
+        self.assertEqual(
+            allowed_adapter_paths(
+                {"package": "google-genai", "integration": "google-genai"}, evidence,
+            ),
+            {"neatlogs/google_genai.py"},
+        )
+
     def test_diff_objects(self):
         self.assertEqual(
             diff_objects({"requires_python": ">=3.9"}, {"requires_python": ">=3.10"}),

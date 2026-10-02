@@ -263,6 +263,11 @@ NEATLOGS_ENDPOINT=https://ingest.neatlogs.com   # optional — this is the defau
 
 Get your API key from the [NeatLogs dashboard](https://app.neatlogs.com). Full `init()` options: [reference](https://docs.neatlogs.com/reference/init-reference).
 
+For EU projects, once the regional dashboard is available, get the API key from
+[eu.app.neatlogs.com](https://eu.app.neatlogs.com/settings/api-keys) and set
+`NEATLOGS_ENDPOINT=https://eu.ingest.neatlogs.com` for telemetry. The dashboard
+and ingest URLs serve different purposes.
+
 ### Doctor diagnostics
 
 Validate the SDK's final normalized and masked telemetry envelope without sending data:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import hashlib
 import os
+import stat
 import subprocess
 import sys
 import tempfile
@@ -28,11 +29,21 @@ def workspace_snapshot(root: Path = ROOT) -> dict[str, str]:
         ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
         cwd=root,
     )
-    return {
-        path: hashlib.sha256((root / path).read_bytes()).hexdigest()
-        for raw in paths.split(b"\0") if raw
-        for path in [os.fsdecode(raw)]
-    }
+    snapshot = {}
+    for raw in paths.split(b"\0"):
+        if not raw:
+            continue
+        path = os.fsdecode(raw)
+        target = root / path
+        mode = target.lstat().st_mode
+        if stat.S_ISLNK(mode):
+            content = b"symlink\0" + os.fsencode(os.readlink(target))
+        elif stat.S_ISREG(mode):
+            content = b"file\0" + target.read_bytes()
+        else:
+            raise ValueError(f"Workspace contains unsupported file type: {path}")
+        snapshot[path] = hashlib.sha256(content).hexdigest()
+    return snapshot
 
 
 def changed_paths(before: dict[str, str], after: dict[str, str]) -> set[str]:
@@ -129,7 +140,10 @@ def validate() -> dict[str, object]:
         "status": "validated",
         "proposalSha256": hashlib.sha256(proposal_bytes).hexdigest(),
         "changedFiles": changed,
-        "changedFileSha256": {path: patched_snapshot[path] for path in changed},
+    "changedFileSha256": {
+        path: hashlib.sha256((ROOT / path).read_bytes()).hexdigest()
+        for path in changed
+    },
         "redGreen": red_green,
         "postPatchSmoke": smoke["status"],
         "focusedTests": [str(path.relative_to(ROOT)) for path in focused],

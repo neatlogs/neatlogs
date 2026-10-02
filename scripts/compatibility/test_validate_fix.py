@@ -39,6 +39,22 @@ class ValidateFixTests(unittest.TestCase):
                 changed_paths(original, workspace_snapshot(root)),
             )
 
+    def test_workspace_snapshot_records_symlink_without_reading_target(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            checkout = root / "checkout"
+            checkout.mkdir()
+            subprocess.run(["git", "init", "-q"], cwd=checkout, check=True)
+            outside = root / "outside-secret.txt"
+            outside.write_text("first\n")
+            (checkout / "outside-link").symlink_to(outside)
+            first = workspace_snapshot(checkout)
+            outside.write_text("second\n")
+            self.assertEqual(first, workspace_snapshot(checkout))
+            (checkout / "outside-link").unlink()
+            (checkout / "outside-link").symlink_to(root / "different-target")
+            self.assertNotEqual(first, workspace_snapshot(checkout))
+
     def test_publisher_rejects_content_different_from_validated_patch(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -56,6 +72,10 @@ class ValidateFixTests(unittest.TestCase):
                 require_validated_content(["adapter.py"], validation, root)
             with self.assertRaisesRegex(ValueError, "paths differ"):
                 require_validated_content(["other.py"], validation, root)
+            target.unlink()
+            target.symlink_to(root / "elsewhere.py")
+            with self.assertRaisesRegex(ValueError, "not a regular file"):
+                require_validated_content(["adapter.py"], validation, root)
 
 
 if __name__ == "__main__":

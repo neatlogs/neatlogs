@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import hashlib
 import os
+import stat
 import subprocess
 import sys
 import tempfile
@@ -51,10 +52,12 @@ def require_validated_content(
     validated_hashes = validation.get("changedFileSha256")
     if not isinstance(validated_hashes, dict) or set(validated_hashes) != set(changed):
         raise ValueError("Isolated validation did not record every changed file hash")
-    actual_hashes = {
-        path: hashlib.sha256((root / path).read_bytes()).hexdigest()
-        for path in changed
-    }
+    actual_hashes = {}
+    for path in changed:
+        target = root / path
+        if not target.resolve().is_relative_to(root.resolve()) or not stat.S_ISREG(target.lstat().st_mode):
+            raise ValueError(f"Publisher patch path is not a regular file inside checkout: {path}")
+        actual_hashes[path] = hashlib.sha256(target.read_bytes()).hexdigest()
     if actual_hashes != validated_hashes:
         raise ValueError("Publisher patch content differs from isolated validation")
 

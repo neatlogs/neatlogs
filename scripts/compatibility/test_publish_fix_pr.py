@@ -10,6 +10,7 @@ from unittest.mock import patch
 from scripts.compatibility.propose_fix import is_bot_draft_pr
 from scripts.compatibility.publish_fix_pr import (
     BOT_AUTHOR_EMAIL, publish, ready_proof, require_complete_integration_checks,
+    require_reproduced_fix,
 )
 
 
@@ -49,6 +50,9 @@ class PublishFixPrTests(unittest.TestCase):
                 "validationLimit": "Focused test passed; behavior still needs human review",
                 "postPatchSmoke": "pass",
                 "postPatchIntegrationResults": [{"integration": "openai", "status": "pass"}],
+                "basis": "upstream-and-adapter-evidence-review",
+                "redGreen": "red-before-green-after",
+                "reproduction": "focused-red-green",
             }))
             commands = []
 
@@ -109,6 +113,23 @@ class PublishFixPrTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(ValueError, "Not every affected integration"):
                 require_complete_integration_checks(candidate, evidence, bad)
+
+    def test_publisher_rejects_unreproduced_advisory_fix(self):
+        advisory = {"basis": "upstream-and-adapter-evidence-review"}
+        with self.assertRaisesRegex(ValueError, "no reproducible"):
+            require_reproduced_fix(advisory, {"basis": advisory["basis"],
+                                             "redGreen": "not-proven", "reproduction": "not-proven"})
+        require_reproduced_fix(advisory, {"basis": advisory["basis"],
+                                          "redGreen": "red-before-green-after",
+                                          "reproduction": "focused-red-green"})
+        smoke = {"basis": "activation-smoke-regression", "package": "openai",
+                 "integration": "openai", "latestVersion": "3", "smoke": {
+                     "package": "openai", "integration": "openai", "latestVersion": "3",
+                     "comparison": "smoke-regression", "baseline": {"status": "pass"},
+                     "latest": {"status": "fail"},
+                 }}
+        require_reproduced_fix(smoke, {"basis": smoke["basis"], "redGreen": "not-proven",
+                                        "reproduction": "activation-smoke-baseline-pass-latest-fail-patched-pass"})
 
     def test_only_open_bot_drafts_can_be_reconsidered(self):
         pull = {

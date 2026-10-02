@@ -448,6 +448,7 @@ jobs:
               '### Automated fix proposal',
               'One candidate is assessed per scheduled run. Baseline-passing activation failures take priority; remaining candidates are listed below.',
               'Proposal: ' + (proposal?.status || 'unavailable') + (proposal?.reason ? ' — ' + proposal.reason : ''),
+              'Assessed candidate: ' + JSON.stringify(proposal?.selectedCandidate || null),
               'Validation: ' + (validation?.status || 'not run') + (validation?.reason ? ' — ' + validation.reason : ''),
               'Validation scope: ' + (validation?.validationLimit || 'not available'),
               'Fix PR: ' + (published?.prUrl || published?.status || 'not opened') +

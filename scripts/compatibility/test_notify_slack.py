@@ -175,8 +175,33 @@ class NotifySlackTests(unittest.TestCase):
         )
         self.assertIn("activation smoke regression detected", message)
         self.assertIn("1 baseline-passing", message)
-        self.assertIn("Gemini advisory: low potential risk (unverified)", message)
+        self.assertIn("Gemini advisory: low potential risk (unverified; this alone does not establish an SDK regression)", message)
         self.assertIn("Checks cover install, dependencies, and instrumentation activation only", message)
+
+    def test_inconclusive_failures_and_blocked_installs_name_the_assessed_candidate(self):
+        message = slack_message(
+            "success", {"changes": [{"package": "google-genai", "previouslyAnalyzed": "2.23.0",
+                                      "latest": "2.27.0"}]},
+            {"riskLevel": "high"}, "https://example.test/run",
+            smoke_summary={
+                "counts": {"pass": 0, "fail": 1, "blocked": 1, "not-tested": 0},
+                "smokeRegressions": 0,
+                "results": [
+                    {"latest": {"status": "fail"}, "baseline": {"status": "fail"}},
+                    {"latest": {"status": "blocked"}, "baseline": {"status": "pass"}},
+                ],
+            },
+            proposal_status={"status": "rejected", "reason": "Regression test has no test function",
+                             "selectedCandidate": {"package": "google-genai", "integration": "google-genai",
+                                                   "latestVersion": "2.27.0",
+                                                   "basis": "upstream-and-adapter-evidence-review"}},
+        )
+        self.assertIn("upstream checks need triage", message)
+        self.assertIn("1 latest failure(s) also failed at the recorded baseline", message)
+        self.assertIn("Blocked installs need dependency or toolchain triage", message)
+        self.assertIn("No baseline-passing regression established", message)
+        self.assertIn("Assessed google-genai/google-genai 2.27.0", message)
+        self.assertIn("unverified; this alone does not establish an SDK regression", message)
 
     def test_workflow_url_uses_actions_runs_path(self):
         with patch.dict("os.environ", {
@@ -189,19 +214,20 @@ class NotifySlackTests(unittest.TestCase):
                 "https://github.com/neatlogs/neatlogs/actions/runs/36571240360",
             )
 
-    def test_review_pr_is_linked_with_unverified_scope(self):
+    def test_review_pr_is_linked_with_reproduction_scope(self):
         message = slack_message(
             "success", {"changes": [{"package": "openai", "previouslyAnalyzed": "1", "latest": "2"}]},
             {"riskLevel": "high"}, "https://example.test/run",
             smoke_summary={"counts": {"pass": 1, "fail": 0, "blocked": 0, "not-tested": 0}, "smokeRegressions": 0},
             proposal_status={"status": "proposed", "deferredCandidates": [{"package": "other"}]},
-            validation_status={"status": "validated"},
+            validation_status={"status": "validated", "redGreen": "red-before-green-after",
+                               "reproduction": "focused-red-green"},
             publish_status={"status": "created", "prUrl": "https://github.com/neatlogs/neatlogs/pull/200"},
         )
         self.assertIn("Fix PR for review", message)
         self.assertIn("/pull/200", message)
-        self.assertIn("Gemini advisory: high potential risk (unverified)", message)
-        self.assertIn("behavior fix unverified", message)
+        self.assertIn("Gemini advisory: high potential risk (unverified; this alone does not establish an SDK regression)", message)
+        self.assertIn("focused red/green test passed", message)
         self.assertIn("1 candidate(s) deferred", message)
 
     def test_validation_failure_explains_no_pr_and_keeps_links(self):
@@ -232,7 +258,7 @@ class NotifySlackTests(unittest.TestCase):
         )
         self.assertIn("activation smoke regression detected", message)
         self.assertIn("openai/openai", message)
-        self.assertIn("Gemini advisory: low potential risk (unverified)", message)
+        self.assertIn("Gemini advisory: low potential risk (unverified; this alone does not establish an SDK regression)", message)
         self.assertIn("Fix PR could not be opened", message)
         self.assertIn("GitHub denied PR creation", message)
 
@@ -243,7 +269,7 @@ class NotifySlackTests(unittest.TestCase):
         )
         self.assertIn("Gemini proposed a fix; validation result unavailable", message)
         self.assertIn("No PR confirmed", message)
-        self.assertIn("Gemini advisory: high potential risk (unverified)", message)
+        self.assertIn("Gemini advisory: high potential risk (unverified; this alone does not establish an SDK regression)", message)
 
     def test_reused_draft_or_closed_pr_is_described_accurately(self):
         draft_url = "https://github.com/neatlogs/neatlogs/pull/201"

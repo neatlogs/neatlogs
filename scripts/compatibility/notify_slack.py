@@ -147,11 +147,15 @@ def slack_message(
         reason = short_reason((analysis or {}).get("error", "Gemini request failed"), 180)
         advisory = f"Gemini advisory failed: {reason}"
     elif analysis and analysis.get("riskLevel"):
-        advisory = f"Gemini advisory: {analysis['riskLevel']} potential risk (unverified)."
+        advisory = (
+            f"Gemini advisory: {analysis['riskLevel']} potential risk "
+            "(unverified; this alone does not establish an SDK regression)."
+        )
     else:
         advisory = "Gemini advisory unavailable."
     counts = (smoke_summary or {}).get("counts", {})
     regressions = (smoke_summary or {}).get("smokeRegressions", 0)
+    results = (smoke_summary or {}).get("results", [])
     if smoke_summary:
         verification = (
             f"Latest-version package/integration checks: {counts.get('pass', 0)} pass, "
@@ -169,14 +173,30 @@ def slack_message(
                 if affected else ""
             )
             verification += f"{regressions} baseline-passing activation smoke regression(s){names}. "
-        elif counts.get("fail", 0):
-            verification += "Latest failures need triage; no baseline-passing regression established. "
+        else:
+            preexisting = sum(
+                item.get("latest", {}).get("status") == "fail"
+                and item.get("baseline", {}).get("status") == "fail"
+                for item in results
+            )
+            if preexisting:
+                verification += (
+                    f"{preexisting} latest failure(s) also failed at the recorded baseline. "
+                )
+            if counts.get("fail", 0) > preexisting:
+                verification += "Other latest failures need triage. "
+            if counts.get("blocked", 0):
+                verification += "Blocked installs need dependency or toolchain triage. "
+            if counts.get("fail", 0) or counts.get("blocked", 0):
+                verification += "No baseline-passing regression established by these checks. "
     else:
         verification = "Latest-version smoke results unavailable. "
     if regressions:
         headline = ":red_circle: *Python SDK activation smoke regression detected.*"
     elif status != "success":
         headline = ":red_circle: *Python SDK compatibility workflow failed.*"
+    elif counts.get("fail", 0) or counts.get("blocked", 0) or counts.get("not-tested", 0):
+        headline = ":warning: *Python SDK: upstream checks need triage.*"
     else:
         headline = ":warning: *Python SDK: upstream releases newer than the monitored baseline.*"
     release_count = f"{len(changes)} upstream release{'s' if len(changes) != 1 else ''}"
@@ -199,8 +219,10 @@ def slack_message(
     elif publish_status and publish_status.get("status") == "created":
         if validation_status and validation_status.get("redGreen") == "red-before-green-after":
             proposal = " Fix PR opened for review; focused red/green test passed. Human code review required."
+        elif validation_status and validation_status.get("reproduction") == "activation-smoke-baseline-pass-latest-fail-patched-pass":
+            proposal = " Fix PR opened for review; activation check passed at baseline, failed at latest, and passed after the patch. Human code review required."
         else:
-            proposal = " Gemini-proposed fix PR opened for review; behavior fix unverified. Human code review required."
+            proposal = " Fix PR opened for review; validation details unavailable. Human code review required."
     elif publish_status and publish_status.get("status") == "ready":
         proposal = " Existing validated bot fix PR marked ready for human review."
     elif proposal_status and proposal_status.get("status") == "proposed":
@@ -218,6 +240,13 @@ def slack_message(
             proposal_status.get("status"), "Gemini fix proposal status unknown"
         )
         proposal = f" {label}: {short_reason(proposal_status.get('reason', 'unknown'), 120)} No PR opened."
+    selected = (proposal_status or {}).get("selectedCandidate")
+    if selected and selected.get("package") and selected.get("integration"):
+        proposal = (
+            f" Assessed {selected['package']}/{selected['integration']}"
+            f" {selected.get('latestVersion', '')} ({selected.get('basis', 'candidate')})."
+            + proposal
+        )
     if covered_drafts and not (
         publish_status and publish_status.get("status") == "already-covered"
         and publish_status.get("isDraft")

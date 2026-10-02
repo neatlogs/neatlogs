@@ -1,14 +1,17 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
 
 from scripts.compatibility.propose_fix import (
     apply_proposal,
+    advance_version_lock,
     allowed_adapter_paths,
     candidate_options,
     choose_candidate,
     deferred_candidates,
     generated_test_path,
+    no_sdk_patch_surface,
     proposal_branch,
     validate_proposal,
 )
@@ -24,6 +27,37 @@ def evidence():
 
 
 class ProposeFixTests(unittest.TestCase):
+    def test_version_lock_advances_only_evidence_bound_fixed_package(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / ".compatibility/versions.lock.json"
+            target.parent.mkdir()
+            target.write_text(json.dumps({
+                "schemaVersion": 1, "packages": {"alpha": "1", "beta": "9"},
+            }) + "\n")
+            release = {"packages": [{"package": "alpha", "previousVersion": "1",
+                                     "latestVersion": "2", "integrations": []}]}
+            self.assertEqual(
+                advance_version_lock({"package": "alpha", "latestVersion": "2"}, release, root),
+                ".compatibility/versions.lock.json",
+            )
+            self.assertEqual(json.loads(target.read_text())["packages"], {"alpha": "2", "beta": "9"})
+            with self.assertRaisesRegex(ValueError, "baseline does not match"):
+                advance_version_lock({"package": "alpha", "latestVersion": "2"}, release, root)
+
+    def test_unmapped_integration_is_reported_without_allowing_shared_registry_edits(self):
+        package_evidence = evidence()
+        package_evidence["packages"][0]["integrations"] = [
+            {"id": "groq", "adapterSource": []},
+        ]
+        self.assertEqual(no_sdk_patch_surface(package_evidence), [
+            {"package": "alpha", "integration": "groq", "latestVersion": "2"},
+        ])
+        self.assertEqual(
+            [(item["package"], item["integration"]) for item in candidate_options({}, {}, package_evidence)],
+            [("beta", "openai")],
+        )
+
     def test_candidates_do_not_depend_on_high_advisory_score_and_rotate(self):
         items = candidate_options({"results": []}, {"riskLevel": "low", "findings": []}, evidence())
         self.assertEqual([item["package"] for item in items], ["alpha", "beta"])

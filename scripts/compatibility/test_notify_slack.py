@@ -46,7 +46,20 @@ class NotifySlackTests(unittest.TestCase):
             return []
 
     def test_live_passing_review_without_safe_fix_sends_no_slack_post(self):
-        self.assertEqual(self.webhook_posts(self.live_review_files()), [])
+        files = self.live_review_files()
+        files["compatibility-fix-status.json"]["noSdkPatchSurface"] = [
+            {"package": "google-genai", "integration": "unmapped", "latestVersion": "2.27.0"},
+        ]
+        self.assertEqual(self.webhook_posts(files), [])
+
+    def test_actionable_alert_explains_unmapped_patch_surface(self):
+        files = self.live_review_files()
+        files["compatibility-fix-status.json"]["noSdkPatchSurface"] = [
+            {"package": "groq", "integration": "groq", "latestVersion": "2"},
+        ]
+        messages = self.webhook_posts(files, status="failure")
+        self.assertEqual(len(messages), 1)
+        self.assertIn("No integration-specific SDK patch source for 1 pair(s) (groq/groq)", messages[0])
 
     def test_actionable_or_incomplete_reviews_still_send_slack(self):
         cases = {}

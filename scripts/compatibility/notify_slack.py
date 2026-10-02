@@ -226,6 +226,16 @@ def slack_message(
     deferred = len((proposal_status or {}).get("deferredCandidates", []))
     if deferred:
         proposal += f" {deferred} candidate(s) deferred to later runs."
+    no_surface = (proposal_status or {}).get("noSdkPatchSurface", [])
+    if no_surface:
+        examples = ", ".join(
+            f"{item['package']}/{item['integration']}" for item in no_surface[:2]
+        )
+        remainder = f", +{len(no_surface) - 2} more" if len(no_surface) > 2 else ""
+        proposal += (
+            f" No integration-specific SDK patch source for {len(no_surface)} pair(s)"
+            f" ({examples}{remainder}); automatic fix generation skipped those pairs."
+        )
     return (
         f"{headline}{release_detail} {verification}"
         f"Checks cover install, dependencies, and instrumentation activation only. "

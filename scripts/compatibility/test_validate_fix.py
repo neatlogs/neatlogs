@@ -3,16 +3,37 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from scripts.compatibility.publish_fix_pr import require_validated_content
 from scripts.compatibility.validate_fix import (
     changed_paths,
+    check_affected_integrations,
     require_post_patch_smoke,
     workspace_snapshot,
 )
 
 
 class ValidateFixTests(unittest.TestCase):
+    def test_every_affected_integration_must_pass_before_lock_advances(self):
+        candidate = {"package": "openai", "latestVersion": "3", "integration": "openai"}
+        evidence = {"packages": [{"package": "openai", "integrations": [
+            {"id": "openai"}, {"id": "azure-openai"},
+        ]}]}
+        config = {"integrations": [
+            {"id": "openai", "packages": ["openai"], "extra": "openai"},
+            {"id": "azure-openai", "packages": ["openai"], "extra": "azure-openai"},
+        ]}
+        with patch("scripts.compatibility.validate_fix.check_version",
+                   side_effect=[{"status": "pass"}, {"status": "pass"}]) as check:
+            results = check_affected_integrations(candidate, evidence, config, Path("wheel.whl"))
+        self.assertEqual([item["integration"] for item in results], ["openai", "azure-openai"])
+        self.assertEqual(check.call_count, 2)
+        with patch("scripts.compatibility.validate_fix.check_version",
+                   side_effect=[{"status": "pass"}, {"status": "blocked", "reason": "constraint"}]):
+            with self.assertRaisesRegex(RuntimeError, "azure-openai.*blocked"):
+                check_affected_integrations(candidate, evidence, config, Path("wheel.whl"))
+
     def test_only_passing_post_patch_smoke_can_validate(self):
         require_post_patch_smoke({"status": "pass"})
         for status in ("blocked", "fail", "not-tested"):

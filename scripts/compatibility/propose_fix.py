@@ -85,6 +85,21 @@ def candidate_options(
     return [item for item in candidates if allowed_adapter_paths(item, evidence)]
 
 
+def no_sdk_patch_surface(evidence: dict[str, Any]) -> list[dict[str, str]]:
+    """Report release pairs without an integration-specific, editable SDK source."""
+    missing = []
+    for package in evidence.get("packages", []):
+        for integration in package.get("integrations", []):
+            candidate = {"package": package["package"], "integration": integration["id"]}
+            if not allowed_adapter_paths(candidate, evidence):
+                missing.append({
+                    "package": package["package"],
+                    "integration": integration["id"],
+                    "latestVersion": package["latestVersion"],
+                })
+    return missing
+
+
 def choose_candidate(
     summary: dict[str, Any], analysis: dict[str, Any], evidence: dict[str, Any],
     covered_branches: set[str] | None = None,
@@ -205,6 +220,31 @@ def apply_proposal(
     return changed
 
 
+def advance_version_lock(
+    candidate: dict[str, Any], evidence: dict[str, Any], root: Path = ROOT,
+) -> str:
+    """Advance only the validated package after every affected integration passes."""
+    matches = [
+        item for item in evidence.get("packages", [])
+        if item.get("package") == candidate["package"]
+    ]
+    if len(matches) != 1:
+        raise ValueError("Fixed package is missing or duplicated in release evidence")
+    package = matches[0]
+    previous = package.get("previousVersion")
+    latest = package.get("latestVersion")
+    if not isinstance(previous, str) or not isinstance(latest, str) or latest != candidate["latestVersion"]:
+        raise ValueError("Fixed package version does not match release evidence")
+    path = ".compatibility/versions.lock.json"
+    target = root / path
+    lock = json.loads(target.read_text())
+    if lock.get("schemaVersion") != 1 or lock.get("packages", {}).get(candidate["package"]) != previous:
+        raise ValueError("Tracked package baseline does not match release evidence")
+    lock["packages"][candidate["package"]] = latest
+    target.write_text(json.dumps(lock, indent=2) + "\n")
+    return path
+
+
 def request_proposal(candidate: dict[str, Any], evidence: dict[str, Any], api_key: str, model: str) -> dict[str, Any]:
     package = next(item for item in evidence["packages"] if item["package"] == candidate["package"])
     adapter = [
@@ -255,7 +295,10 @@ def generate() -> int:
             capture_output=True, text=True, check=False, timeout=30,
         )
         if listed.returncode != 0:
-            Path("compatibility-fix-status.json").write_text(json.dumps({"status": "unavailable", "reason": "Could not list existing PR branches"}) + "\n")
+            Path("compatibility-fix-status.json").write_text(json.dumps({
+                "status": "unavailable", "reason": "Could not list existing PR branches",
+                "noSdkPatchSurface": no_sdk_patch_surface(evidence),
+            }) + "\n")
             return 0
         covered_pulls = json.loads(listed.stdout)
         covered = {
@@ -289,6 +332,7 @@ def generate() -> int:
             except Exception as error:
                 status = {"status": "rejected", "reason": str(error)[:500]}
     status["deferredCandidates"] = deferred
+    status["noSdkPatchSurface"] = no_sdk_patch_surface(evidence)
     status["alreadyCoveredBranches"] = sorted(proposal_branch(item) for item in options if proposal_branch(item) in covered)
     candidate_branches = {proposal_branch(item) for item in options}
     status["alreadyCoveredPullRequests"] = [

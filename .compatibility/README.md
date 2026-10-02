@@ -40,8 +40,10 @@ Twice a day, the scheduled workflow:
 5. creates or updates a review issue, then asks Gemini for a concrete fix
    decision on one package/integration candidate per run;
 6. validates a bounded adapter-source patch in a separate job without model
-   or write credentials, and opens or reuses a regular review PR only if
-   validation passes. It never approves or merges the PR.
+   or write credentials, checks the patched wheel against the latest release
+   for every affected integration, and includes a deterministic update of only
+   that package's tracked version in a regular review PR if all checks pass.
+   It never approves or merges the PR.
 
 The Gemini assessment is unverified advice about possible compatibility risk,
 not a test result. A latest-version pass covers only this activation smoke
@@ -64,6 +66,11 @@ supplies a regression test, it must fail on the original SDK and pass after
 the patch. A review PR without that focused red/green proof is explicitly marked
 unverified for human review. One candidate is attempted per run, prioritizing
 baseline-passing activation failures. Other candidates are listed as deferred.
+The tracked version advances only when the generated fix PR is merged after
+human review. A blocked or failed post-patch check leaves the tracked version
+unchanged and prevents publication. Integrations without an integration-specific
+SDK adapter source are recorded as coverage gaps; the automation does not let
+Gemini edit the shared registry or unrelated SDK files for those integrations.
 An existing PR for the same package/version/integration is reused rather than
 overwritten. An open bot-authored draft is marked ready only if its branch,
 parent commit, and tree exactly match the newly validated patch. Any draft

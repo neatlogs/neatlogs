@@ -14,7 +14,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from scripts.compatibility.propose_fix import apply_proposal, validate_proposal
+from scripts.compatibility.propose_fix import advance_version_lock, apply_proposal, validate_proposal
 from scripts.compatibility.run_latest_version_checks import check_version
 
 
@@ -56,6 +56,38 @@ def require_post_patch_smoke(smoke: dict[str, object]) -> None:
             "Patched latest-version activation check did not pass: "
             f"{smoke.get('status', 'missing')}: {str(smoke.get('reason', ''))[-1000:]}"
         )
+
+
+def check_affected_integrations(
+    candidate: dict[str, object], evidence: dict[str, object],
+    config: dict[str, object], wheel: Path,
+) -> list[dict[str, str]]:
+    package = next(
+        (item for item in evidence["packages"] if item["package"] == candidate["package"]),
+        None,
+    )
+    if not package:
+        raise ValueError("Fixed package is missing from release evidence")
+    configured = [
+        item for item in config["integrations"]
+        if item.get("releaseMonitoring", True) and candidate["package"] in item["packages"]
+    ]
+    if not configured or {item["id"] for item in configured} != {
+        item["id"] for item in package["integrations"]
+    }:
+        raise ValueError("Affected integration set differs from release evidence")
+    results = []
+    for integration in configured:
+        smoke = check_version(
+            package=candidate["package"], version=candidate["latestVersion"],
+            integration=integration["id"], extra=integration["extra"], wheel=wheel,
+        )
+        try:
+            require_post_patch_smoke(smoke)
+        except RuntimeError as error:
+            raise RuntimeError(f"{integration['id']}: {error}") from error
+        results.append({"integration": integration["id"], "status": smoke["status"]})
+    return results
 
 
 def validate() -> dict[str, object]:
@@ -110,19 +142,21 @@ def validate() -> dict[str, object]:
     if proposal.get("regressionTest"):
         red_green = "red-before-green-after"
     config = json.loads((ROOT / ".compatibility/integrations.json").read_text())
-    integration = next(item for item in config["integrations"] if item["id"] == candidate["integration"])
     with tempfile.TemporaryDirectory(prefix="neatlogs-compat-fixed-wheel-") as directory:
         built = run([sys.executable, "-m", "build", "--wheel", "--outdir", directory], 180)
         if built.returncode != 0:
             raise RuntimeError(f"Patched SDK wheel build failed: {(built.stdout + built.stderr)[-2000:]}")
         wheel = next(Path(directory).glob("neatlogs-*.whl"))
-        smoke = check_version(
-            package=candidate["package"], version=candidate["latestVersion"],
-            integration=candidate["integration"], extra=integration["extra"], wheel=wheel,
-        )
-    require_post_patch_smoke(smoke)
+        checked_integrations = check_affected_integrations(candidate, evidence, config, wheel)
     if workspace_snapshot() != patched_snapshot:
         raise RuntimeError("Validation tests modified unexpected workspace files")
+    changed.append(advance_version_lock(candidate, evidence, ROOT))
+    validated_snapshot = workspace_snapshot()
+    if changed_paths(original_snapshot, validated_snapshot) != set(changed):
+        raise RuntimeError("Validated patch and version lock changed unexpected workspace files")
+    final_diff = run(["git", "diff", "--check"], 20)
+    if final_diff.returncode != 0:
+        raise RuntimeError(f"Validated patch whitespace check failed: {final_diff.stderr[-1000:]}")
     scope = ["Compatibility automation tests passed"]
     if red_green == "red-before-green-after":
         scope.append("focused generated test failed before and passed after the patch")
@@ -133,8 +167,8 @@ def validate() -> dict[str, object]:
         scope.append(f"{existing_count} existing adapter test file(s) passed")
     else:
         scope.append("no existing adapter test file matched")
-    scope.append(f"patched latest-version activation: {smoke['status']}")
-    if red_green != "red-before-green-after" or smoke["status"] != "pass":
+    scope.append(f"patched latest-version activation passed for all {len(checked_integrations)} affected integration(s)")
+    if red_green != "red-before-green-after":
         scope.append("behavior change remains unverified")
     return {
         "status": "validated",
@@ -145,7 +179,8 @@ def validate() -> dict[str, object]:
         for path in changed
     },
         "redGreen": red_green,
-        "postPatchSmoke": smoke["status"],
+        "postPatchSmoke": "pass",
+        "postPatchIntegrationResults": checked_integrations,
         "focusedTests": [str(path.relative_to(ROOT)) for path in focused],
         "compatibilityAutomationTests": "passed",
         "basis": candidate["basis"],

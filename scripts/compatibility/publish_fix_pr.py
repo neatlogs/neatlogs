@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 from scripts.compatibility.propose_fix import (
-    apply_proposal, is_bot_draft_pr, proposal_branch,
+    advance_version_lock, apply_proposal, is_bot_draft_pr, proposal_branch,
 )
 
 BOT_AUTHOR_EMAIL = "compatibility-bot@users.noreply.github.com"
@@ -62,6 +62,26 @@ def require_validated_content(
         raise ValueError("Publisher patch content differs from isolated validation")
 
 
+def require_complete_integration_checks(
+    candidate: dict[str, Any], evidence: dict[str, Any], validation: dict[str, Any],
+) -> None:
+    package = next(
+        (item for item in evidence.get("packages", []) if item.get("package") == candidate["package"]),
+        None,
+    )
+    expected = {item["id"] for item in package.get("integrations", [])} if package else set()
+    results = validation.get("postPatchIntegrationResults")
+    if (
+        validation.get("postPatchSmoke") != "pass"
+        or not expected
+        or not isinstance(results, list)
+        or len(results) != len(expected)
+        or {item.get("integration") for item in results if isinstance(item, dict)} != expected
+        or any(not isinstance(item, dict) or item.get("status") != "pass" for item in results)
+    ):
+        raise ValueError("Not every affected integration passed patched latest-version activation")
+
+
 def publish() -> dict[str, Any]:
     proposal_bytes = Path("compatibility-fix-proposal.json").read_bytes()
     proposal = json.loads(proposal_bytes)
@@ -72,6 +92,7 @@ def publish() -> dict[str, Any]:
     if validation.get("proposalSha256") != hashlib.sha256(proposal_bytes).hexdigest():
         raise ValueError("Validation result does not match the original proposal")
     candidate = proposal["candidate"]
+    require_complete_integration_checks(candidate, evidence, validation)
     base_sha = command("git", "rev-parse", "HEAD").stdout.strip()
     if base_sha != proposal.get("baseSha"):
         raise ValueError("Proposal base SHA differs from publisher checkout")
@@ -83,6 +104,7 @@ def publish() -> dict[str, Any]:
     ).stdout)
     existing.sort(key=lambda item: item["state"] != "OPEN")
     changed = apply_proposal(proposal, candidate, evidence)
+    changed.append(advance_version_lock(candidate, evidence, ROOT))
     require_validated_content(changed, validation, ROOT)
     command("git", "switch", "-c", branch)
     command("git", "add", "--", *changed)

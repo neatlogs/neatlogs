@@ -8,7 +8,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 from scripts.compatibility.propose_fix import is_bot_draft_pr
-from scripts.compatibility.publish_fix_pr import BOT_AUTHOR_EMAIL, publish, ready_proof
+from scripts.compatibility.publish_fix_pr import (
+    BOT_AUTHOR_EMAIL, publish, ready_proof, require_complete_integration_checks,
+)
 
 
 class PublishFixPrTests(unittest.TestCase):
@@ -18,6 +20,10 @@ class PublishFixPrTests(unittest.TestCase):
             target = root / "neatlogs" / "openai.py"
             target.parent.mkdir()
             target.write_text("original\n")
+            lock_path = root / ".compatibility" / "versions.lock.json"
+            lock_path.parent.mkdir()
+            lock_path.write_text(json.dumps({"schemaVersion": 1, "packages": {"openai": "2.0.0"}}) + "\n")
+            updated_lock = json.dumps({"schemaVersion": 1, "packages": {"openai": "3.0.0"}}, indent=2).encode() + b"\n"
             proposal = {
                 "baseSha": "base-sha",
                 "candidate": {"package": "openai", "latestVersion": "3.0.0",
@@ -28,14 +34,21 @@ class PublishFixPrTests(unittest.TestCase):
             }
             proposal_bytes = json.dumps(proposal).encode()
             (root / "compatibility-fix-proposal.json").write_bytes(proposal_bytes)
-            (root / "compatibility-evidence.json").write_text(json.dumps({"packages": []}))
+            (root / "compatibility-evidence.json").write_text(json.dumps({"packages": [{
+                "package": "openai", "previousVersion": "2.0.0", "latestVersion": "3.0.0",
+                "integrations": [{"id": "openai"}],
+            }]}))
             (root / "compatibility-validation-status.json").write_text(json.dumps({
                 "status": "validated",
                 "proposalSha256": hashlib.sha256(proposal_bytes).hexdigest(),
-                "changedFiles": ["neatlogs/openai.py"],
-                "changedFileSha256": {"neatlogs/openai.py": hashlib.sha256(b"patched\n").hexdigest()},
+                "changedFiles": ["neatlogs/openai.py", ".compatibility/versions.lock.json"],
+                "changedFileSha256": {
+                    "neatlogs/openai.py": hashlib.sha256(b"patched\n").hexdigest(),
+                    ".compatibility/versions.lock.json": hashlib.sha256(updated_lock).hexdigest(),
+                },
                 "validationLimit": "Focused test passed; behavior still needs human review",
                 "postPatchSmoke": "pass",
+                "postPatchIntegrationResults": [{"integration": "openai", "status": "pass"}],
             }))
             commands = []
 
@@ -46,7 +59,7 @@ class PublishFixPrTests(unittest.TestCase):
                 elif args[:3] == ("git", "rev-parse", "HEAD^{tree}"):
                     output = "patched-tree\n"
                 elif args[:3] == ("git", "diff", "--cached") and "--name-only" in args:
-                    output = "neatlogs/openai.py\n"
+                    output = "neatlogs/openai.py\n.compatibility/versions.lock.json\n"
                 elif args[:3] == ("git", "ls-remote", "--heads"):
                     output = ""
                 elif args[:3] == ("gh", "pr", "list"):
@@ -74,9 +87,28 @@ class PublishFixPrTests(unittest.TestCase):
             finally:
                 os.chdir(previous_directory)
             self.assertEqual(result["status"], "created")
+            self.assertEqual(json.loads(lock_path.read_text())["packages"], {"openai": "3.0.0"})
             create = next(args for args in commands if args[:3] == ("gh", "pr", "create"))
             self.assertNotIn("--draft", create)
             self.assertIn(("git", "push", "origin", "HEAD:refs/heads/compat/python/openai-3-0-0-openai"), commands)
+
+    def test_publisher_requires_every_affected_integration_to_pass(self):
+        candidate = {"package": "openai"}
+        evidence = {"packages": [{"package": "openai", "integrations": [
+            {"id": "openai"}, {"id": "azure-openai"},
+        ]}]}
+        validation = {"postPatchSmoke": "pass", "postPatchIntegrationResults": [
+            {"integration": "openai", "status": "pass"},
+            {"integration": "azure-openai", "status": "pass"},
+        ]}
+        require_complete_integration_checks(candidate, evidence, validation)
+        for bad in (
+            {**validation, "postPatchIntegrationResults": validation["postPatchIntegrationResults"][:1]},
+            {**validation, "postPatchIntegrationResults": [validation["postPatchIntegrationResults"][0],
+                                                        {"integration": "azure-openai", "status": "blocked"}]},
+        ):
+            with self.assertRaisesRegex(ValueError, "Not every affected integration"):
+                require_complete_integration_checks(candidate, evidence, bad)
 
     def test_only_open_bot_drafts_can_be_reconsidered(self):
         pull = {

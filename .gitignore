@@ -47,7 +47,8 @@ run_*.log
 *_spans*.log
 .env
 .venv
-docs
+docs/*
+!docs/counterfactual-replay.md
 neatlogs.jsonl
 logs/
 .python-version

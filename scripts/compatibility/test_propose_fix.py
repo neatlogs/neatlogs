@@ -1,14 +1,21 @@
+import io
+import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from scripts.compatibility.propose_fix import (
     apply_proposal,
+    advance_version_lock,
     allowed_adapter_paths,
     candidate_options,
     choose_candidate,
+    deferred_candidates,
     generated_test_path,
+    no_sdk_patch_surface,
     proposal_branch,
+    request_proposal,
     validate_proposal,
 )
 
@@ -23,6 +30,61 @@ def evidence():
 
 
 class ProposeFixTests(unittest.TestCase):
+    def test_shared_helper_context_reaches_proposal_but_cannot_be_edited(self):
+        package_evidence = evidence()
+        package_evidence["packages"][0]["integrations"][0]["relatedSource"] = [
+            {"path": "neatlogs/_wrap_utils.py", "content": "shared helper marker",
+             "focusExcerpt": "shared helper marker"},
+        ]
+        response = {"candidates": [{"content": {"parts": [
+            {"text": json.dumps({"decision": "no_safe_fix", "reason": "test"})}
+        ]}}]}
+        with patch("scripts.compatibility.propose_fix.urlopen",
+                   return_value=io.BytesIO(json.dumps(response).encode())) as urlopen_mock:
+            request_proposal(
+                {"package": "alpha", "integration": "openai", "latestVersion": "2"},
+                package_evidence, "test-key", "test-model",
+            )
+        request = urlopen_mock.call_args.args[0]
+        prompt = json.loads(request.data)["contents"][0]["parts"][0]["text"]
+        self.assertIn("shared helper marker", prompt)
+        self.assertIn("read-only context", prompt)
+        self.assertEqual(
+            allowed_adapter_paths({"package": "alpha", "integration": "openai"}, package_evidence),
+            {"neatlogs/alpha.py"},
+        )
+
+    def test_version_lock_advances_only_evidence_bound_fixed_package(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / ".compatibility/versions.lock.json"
+            target.parent.mkdir()
+            target.write_text(json.dumps({
+                "schemaVersion": 1, "packages": {"alpha": "1", "beta": "9"},
+            }) + "\n")
+            release = {"packages": [{"package": "alpha", "previousVersion": "1",
+                                     "latestVersion": "2", "integrations": []}]}
+            self.assertEqual(
+                advance_version_lock({"package": "alpha", "latestVersion": "2"}, release, root),
+                ".compatibility/versions.lock.json",
+            )
+            self.assertEqual(json.loads(target.read_text())["packages"], {"alpha": "2", "beta": "9"})
+            with self.assertRaisesRegex(ValueError, "baseline does not match"):
+                advance_version_lock({"package": "alpha", "latestVersion": "2"}, release, root)
+
+    def test_unmapped_integration_is_reported_without_allowing_shared_registry_edits(self):
+        package_evidence = evidence()
+        package_evidence["packages"][0]["integrations"] = [
+            {"id": "groq", "adapterSource": []},
+        ]
+        self.assertEqual(no_sdk_patch_surface(package_evidence), [
+            {"package": "alpha", "integration": "groq", "latestVersion": "2"},
+        ])
+        self.assertEqual(
+            [(item["package"], item["integration"]) for item in candidate_options({}, {}, package_evidence)],
+            [("beta", "openai")],
+        )
+
     def test_candidates_do_not_depend_on_high_advisory_score_and_rotate(self):
         items = candidate_options({"results": []}, {"riskLevel": "low", "findings": []}, evidence())
         self.assertEqual([item["package"] for item in items], ["alpha", "beta"])
@@ -41,6 +103,17 @@ class ProposeFixTests(unittest.TestCase):
         self.assertEqual(
             choose_candidate(summary, {}, evidence(), {proposal_branch(selected)}, rotation=0)["package"],
             "alpha",
+        )
+
+    def test_deferred_candidates_exclude_selected_candidate_by_branch(self):
+        selected = choose_candidate({}, {}, evidence(), rotation=0)
+        # Candidate selection builds a separate list from the reporting path.
+        options = candidate_options({}, {}, evidence())
+        self.assertIsNot(selected, options[0])
+        self.assertEqual(
+            deferred_candidates(options, selected, set()),
+            [{"package": "beta", "integration": "openai", "latestVersion": "2",
+              "basis": "upstream-and-adapter-evidence-review"}],
         )
 
     def test_only_exact_adapter_source_replacement_is_allowed(self):

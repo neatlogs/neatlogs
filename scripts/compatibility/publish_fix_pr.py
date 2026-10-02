@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import hashlib
 import os
+import stat
 import subprocess
 import sys
 import tempfile
@@ -15,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 from scripts.compatibility.propose_fix import (
-    apply_proposal, is_bot_draft_pr, proposal_branch,
+    advance_version_lock, apply_proposal, is_bot_draft_pr, proposal_branch,
 )
 
 BOT_AUTHOR_EMAIL = "compatibility-bot@users.noreply.github.com"
@@ -43,6 +44,44 @@ def ready_proof(
     )
 
 
+def require_validated_content(
+    changed: list[str], validation: dict[str, Any], root: Path = ROOT,
+) -> None:
+    if set(changed) != set(validation.get("changedFiles", [])):
+        raise ValueError("Publisher paths differ from isolated validation")
+    validated_hashes = validation.get("changedFileSha256")
+    if not isinstance(validated_hashes, dict) or set(validated_hashes) != set(changed):
+        raise ValueError("Isolated validation did not record every changed file hash")
+    actual_hashes = {}
+    for path in changed:
+        target = root / path
+        if not target.resolve().is_relative_to(root.resolve()) or not stat.S_ISREG(target.lstat().st_mode):
+            raise ValueError(f"Publisher patch path is not a regular file inside checkout: {path}")
+        actual_hashes[path] = hashlib.sha256(target.read_bytes()).hexdigest()
+    if actual_hashes != validated_hashes:
+        raise ValueError("Publisher patch content differs from isolated validation")
+
+
+def require_complete_integration_checks(
+    candidate: dict[str, Any], evidence: dict[str, Any], validation: dict[str, Any],
+) -> None:
+    package = next(
+        (item for item in evidence.get("packages", []) if item.get("package") == candidate["package"]),
+        None,
+    )
+    expected = {item["id"] for item in package.get("integrations", [])} if package else set()
+    results = validation.get("postPatchIntegrationResults")
+    if (
+        validation.get("postPatchSmoke") != "pass"
+        or not expected
+        or not isinstance(results, list)
+        or len(results) != len(expected)
+        or {item.get("integration") for item in results if isinstance(item, dict)} != expected
+        or any(not isinstance(item, dict) or item.get("status") != "pass" for item in results)
+    ):
+        raise ValueError("Not every affected integration passed patched latest-version activation")
+
+
 def publish() -> dict[str, Any]:
     proposal_bytes = Path("compatibility-fix-proposal.json").read_bytes()
     proposal = json.loads(proposal_bytes)
@@ -53,6 +92,7 @@ def publish() -> dict[str, Any]:
     if validation.get("proposalSha256") != hashlib.sha256(proposal_bytes).hexdigest():
         raise ValueError("Validation result does not match the original proposal")
     candidate = proposal["candidate"]
+    require_complete_integration_checks(candidate, evidence, validation)
     base_sha = command("git", "rev-parse", "HEAD").stdout.strip()
     if base_sha != proposal.get("baseSha"):
         raise ValueError("Proposal base SHA differs from publisher checkout")
@@ -64,8 +104,8 @@ def publish() -> dict[str, Any]:
     ).stdout)
     existing.sort(key=lambda item: item["state"] != "OPEN")
     changed = apply_proposal(proposal, candidate, evidence)
-    if set(changed) != set(validation.get("changedFiles", [])):
-        raise ValueError("Publisher paths differ from isolated validation")
+    changed.append(advance_version_lock(candidate, evidence, ROOT))
+    require_validated_content(changed, validation, ROOT)
     command("git", "switch", "-c", branch)
     command("git", "add", "--", *changed)
     staged = set(command("git", "diff", "--cached", "--name-only").stdout.splitlines())

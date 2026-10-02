@@ -1,10 +1,114 @@
+import copy
+import json
 import unittest
 from unittest.mock import patch
 
-from scripts.compatibility.notify_slack import slack_message, workflow_url
+from scripts.compatibility.notify_slack import main, short_reason, slack_message, workflow_url
 
 
 class NotifySlackTests(unittest.TestCase):
+    @staticmethod
+    def live_review_files():
+        report = {"changes": [{
+            "package": "google-genai", "previouslyAnalyzed": "2.23.0",
+            "latest": "2.27.0", "integrations": ["google-genai", "vertex-google-genai"],
+        }]}
+        results = [{
+            "package": "google-genai", "integration": integration,
+            "baselineVersion": "2.23.0", "latestVersion": "2.27.0",
+            "baseline": {"status": "pass"}, "latest": {"status": "pass"},
+            "comparison": "latest-smoke-passed",
+        } for integration in report["changes"][0]["integrations"]]
+        return {
+            "compatibility-release-report.json": report,
+            "compatibility-llm-analysis.json": {"riskLevel": "medium"},
+            "compatibility-smoke-summary.json": {
+                "pairCount": 2, "counts": {"pass": 2, "fail": 0, "blocked": 0, "not-tested": 0},
+                "smokeRegressions": 0, "results": results,
+            },
+            "compatibility-fix-status.json": {"status": "no-safe-fix", "reason": "No concrete safe fix"},
+        }
+
+    def webhook_posts(self, files, *, status="success", gemini_status="success"):
+        env = {
+            "COMPAT_SLACK_WEBHOOK_URL": "https://slack.example.invalid/webhook",
+            "COMPAT_JOB_STATUS": status,
+            "COMPAT_CHANGES_FOUND": "true",
+            "COMPAT_GEMINI_STEP_STATUS": gemini_status,
+        }
+        with patch.dict("os.environ", env, clear=True), \
+                patch("scripts.compatibility.notify_slack.optional_json", side_effect=files.get), \
+                patch("scripts.compatibility.notify_slack.urlopen") as post:
+            post.return_value.__enter__.return_value.status = 200
+            self.assertEqual(main(), 0)
+            if post.called:
+                return [json.loads(call.args[0].data)["text"] for call in post.call_args_list]
+            return []
+
+    def test_live_passing_review_without_safe_fix_sends_no_slack_post(self):
+        files = self.live_review_files()
+        files["compatibility-fix-status.json"]["noSdkPatchSurface"] = [
+            {"package": "google-genai", "integration": "unmapped", "latestVersion": "2.27.0"},
+        ]
+        self.assertEqual(self.webhook_posts(files), [])
+
+    def test_actionable_alert_explains_unmapped_patch_surface(self):
+        files = self.live_review_files()
+        files["compatibility-fix-status.json"]["noSdkPatchSurface"] = [
+            {"package": "groq", "integration": "groq", "latestVersion": "2"},
+        ]
+        messages = self.webhook_posts(files, status="failure")
+        self.assertEqual(len(messages), 1)
+        self.assertIn("No integration-specific SDK patch source for 1 pair(s) (groq/groq)", messages[0])
+
+    def test_actionable_or_incomplete_reviews_still_send_slack(self):
+        cases = {}
+        cases["workflow failure"] = (self.live_review_files(), "failure", "success")
+        regression = self.live_review_files()
+        regression["compatibility-smoke-summary.json"]["results"][0]["latest"]["status"] = "fail"
+        regression["compatibility-smoke-summary.json"]["results"][0]["comparison"] = "smoke-regression"
+        regression["compatibility-smoke-summary.json"]["counts"] = {
+            "pass": 1, "fail": 1, "blocked": 0, "not-tested": 0,
+        }
+        regression["compatibility-smoke-summary.json"]["smokeRegressions"] = 1
+        cases["activation regression"] = (regression, "success", "success")
+        blocked = self.live_review_files()
+        blocked["compatibility-smoke-summary.json"]["results"][0]["latest"]["status"] = "blocked"
+        blocked["compatibility-smoke-summary.json"]["counts"] = {
+            "pass": 1, "fail": 0, "blocked": 1, "not-tested": 0,
+        }
+        cases["blocked install"] = (blocked, "success", "success")
+        missing = self.live_review_files()
+        missing.pop("compatibility-smoke-summary.json")
+        cases["missing smoke evidence"] = (missing, "success", "success")
+        cases["Gemini failure"] = (self.live_review_files(), "success", "failure")
+        missing_advisory = self.live_review_files()
+        missing_advisory.pop("compatibility-llm-analysis.json")
+        cases["missing Gemini evidence"] = (missing_advisory, "success", "success")
+        rejected = self.live_review_files()
+        rejected["compatibility-fix-status.json"]["status"] = "rejected"
+        cases["proposal failure"] = (rejected, "success", "success")
+        validation = self.live_review_files()
+        validation["compatibility-fix-status.json"]["status"] = "proposed"
+        validation["compatibility-validation-status.json"] = {"status": "failed", "reason": "test failed"}
+        cases["validation failure"] = (validation, "success", "success")
+        publisher = copy.deepcopy(validation)
+        publisher["compatibility-validation-status.json"] = {"status": "validated"}
+        publisher["compatibility-publish-status.json"] = {"status": "failed", "reason": "GitHub denied PR"}
+        cases["publisher failure"] = (publisher, "success", "success")
+        opened = copy.deepcopy(publisher)
+        opened["compatibility-publish-status.json"] = {
+            "status": "created", "prUrl": "https://github.com/neatlogs/neatlogs/pull/200",
+        }
+        cases["fix PR opened"] = (opened, "success", "success")
+        for name, (files, status, gemini_status) in cases.items():
+            with self.subTest(name=name):
+                self.assertEqual(len(self.webhook_posts(files, status=status, gemini_status=gemini_status)), 1)
+
+    def test_long_reason_is_shortened_at_a_word_boundary(self):
+        self.assertEqual(short_reason("alpha beta gamma", 10), "alpha…")
+        self.assertEqual(short_reason("clear reason.", 20), "clear reason.")
+
     def test_release_message_contains_evidence_summary(self):
         message = slack_message(
             "success",

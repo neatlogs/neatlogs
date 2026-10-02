@@ -136,6 +136,8 @@ jobs:
       matrix: ${{ fromJSON(needs.discover.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
@@ -326,7 +328,7 @@ jobs:
     needs: propose
     if: needs.propose.outputs.available == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 45
     permissions:
       contents: read
     steps:
@@ -453,6 +455,7 @@ jobs:
                 (published?.state && published.state !== 'OPEN' ? ' (' + published.state + ')' : ''),
               'Existing matching PRs at proposal time: ' + JSON.stringify((proposal?.alreadyCoveredPullRequests || []).slice(0, 10)),
               'Deferred candidates: ' + JSON.stringify(proposal?.deferredCandidates || []),
+              'Release/integration pairs without integration-specific SDK patch source: ' + JSON.stringify(proposal?.noSdkPatchSurface || []),
               end,
             ].join('\n');
             const prior = issue.data.body || '';

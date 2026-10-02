@@ -18,6 +18,7 @@ LIBRARY_ALIASES = {
     "vertex-google-genai": "vertex_ai",
     "legacy-vertex-ai": "vertexai",
     "autogen-agentchat": "autogen",
+    "mistral": "mistralai",
 }
 
 PROBE = """

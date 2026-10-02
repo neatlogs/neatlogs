@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import argparse
 import ast
+import http.client
 import io
+import ipaddress
 import json
 import os
 import re
+import socket
+import ssl
 import tarfile
 import time
 import zipfile
@@ -274,15 +278,76 @@ def _safe_official_url(value: Any) -> str | None:
         return None
     cleaned = re.sub(r"^git\+", "", value).removesuffix(".git")
     parsed = urlparse(cleaned)
-    if parsed.scheme not in {"https", "http"}:
+    if parsed.scheme not in {"https", "http"} or not parsed.hostname or parsed.username or parsed.password:
         return None
-    if parsed.hostname in {"localhost", "127.0.0.1", "::1"}:
+    host = parsed.hostname.rstrip(".").lower()
+    if host == "localhost" or host.endswith((".localhost", ".local", ".internal")):
         return None
-    if parsed.hostname and re.match(
-        r"^(?:10\.|192\.168\.|169\.254\.)", parsed.hostname
-    ):
+    try:
+        if not ipaddress.ip_address(host).is_global:
+            return None
+    except ValueError:
+        pass
+    try:
+        parsed.port
+    except ValueError:
         return None
     return cleaned
+
+
+def _public_documentation_address(url: str) -> str:
+    parsed = urlparse(url)
+    host = parsed.hostname
+    if not host:
+        raise ValueError("Documentation URL has no hostname")
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    addresses = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    if not addresses or any(
+        not ipaddress.ip_address(address[4][0]).is_global for address in addresses
+    ):
+        raise ValueError("Documentation URL resolves to a non-public address")
+    return addresses[0][4][0]
+
+
+class _PinnedHTTPConnection(http.client.HTTPConnection):
+    def __init__(self, host: str, port: int, address: str):
+        super().__init__(host, port, timeout=15)
+        self._validated_address = address
+
+    def connect(self) -> None:
+        self.sock = socket.create_connection((self._validated_address, self.port), self.timeout)
+
+
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    def __init__(self, host: str, port: int, address: str):
+        super().__init__(host, port, timeout=15, context=ssl.create_default_context())
+        self._validated_address = address
+
+    def connect(self) -> None:
+        sock = socket.create_connection((self._validated_address, self.port), self.timeout)
+        self.sock = self._context.wrap_socket(sock, server_hostname=self.host)
+
+
+def _fetch_public_documentation(url: str) -> tuple[bytes, str]:
+    parsed = urlparse(url)
+    address = _public_documentation_address(url)
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    connection_type = _PinnedHTTPSConnection if parsed.scheme == "https" else _PinnedHTTPConnection
+    connection = connection_type(parsed.hostname, port, address)
+    try:
+        path = parsed.path or "/"
+        if parsed.query:
+            path += "?" + parsed.query
+        connection.request("GET", path, headers={
+            "User-Agent": "neatlogs-compatibility-monitor/1",
+            "Accept": "text/html,text/plain,application/json",
+        })
+        response = connection.getresponse()
+        if not 200 <= response.status < 300:
+            raise ValueError(f"Documentation HTTP {response.status}; redirects are not followed")
+        return response.read(MAX_DOCUMENTATION_BYTES + 1), response.headers.get("Content-Type", "")
+    finally:
+        connection.close()
 
 
 def official_documentation_urls(metadata: dict[str, Any]) -> list[dict[str, str]]:
@@ -336,28 +401,18 @@ def fetch_official_documentation(sources: list[dict[str, str]]) -> list[dict[str
     results = []
     for source in sources:
         try:
-            request = Request(
-                source["url"],
-                headers={
-                    "User-Agent": "neatlogs-compatibility-monitor/1",
-                    "Accept": "text/html,text/plain,application/json",
-                },
-            )
-            with urlopen(request, timeout=15) as response:
-                content = response.read(MAX_DOCUMENTATION_BYTES + 1)
-                truncated = len(content) > MAX_DOCUMENTATION_BYTES
-                content = content[:MAX_DOCUMENTATION_BYTES]
-                results.append(
-                    {
-                        **source,
-                        "finalUrl": response.geturl(),
-                        "content": documentation_text(
-                            content.decode("utf-8", errors="replace"),
-                            response.headers.get("Content-Type", ""),
-                        ),
-                        "truncated": truncated,
-                    }
-                )
+            url = _safe_official_url(source["url"])
+            if not url:
+                raise ValueError("Documentation URL is not a public HTTP(S) URL")
+            content, content_type = _fetch_public_documentation(url)
+            truncated = len(content) > MAX_DOCUMENTATION_BYTES
+            content = content[:MAX_DOCUMENTATION_BYTES]
+            results.append({
+                **source,
+                "finalUrl": url,
+                "content": documentation_text(content.decode("utf-8", errors="replace"), content_type),
+                "truncated": truncated,
+            })
         except Exception as error:  # noqa: BLE001 - an evidence gap must be recorded, not hide the release
             results.append({**source, "error": str(error)})
     return results

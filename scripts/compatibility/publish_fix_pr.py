@@ -43,6 +43,22 @@ def ready_proof(
     )
 
 
+def require_validated_content(
+    changed: list[str], validation: dict[str, Any], root: Path = ROOT,
+) -> None:
+    if set(changed) != set(validation.get("changedFiles", [])):
+        raise ValueError("Publisher paths differ from isolated validation")
+    validated_hashes = validation.get("changedFileSha256")
+    if not isinstance(validated_hashes, dict) or set(validated_hashes) != set(changed):
+        raise ValueError("Isolated validation did not record every changed file hash")
+    actual_hashes = {
+        path: hashlib.sha256((root / path).read_bytes()).hexdigest()
+        for path in changed
+    }
+    if actual_hashes != validated_hashes:
+        raise ValueError("Publisher patch content differs from isolated validation")
+
+
 def publish() -> dict[str, Any]:
     proposal_bytes = Path("compatibility-fix-proposal.json").read_bytes()
     proposal = json.loads(proposal_bytes)
@@ -64,8 +80,7 @@ def publish() -> dict[str, Any]:
     ).stdout)
     existing.sort(key=lambda item: item["state"] != "OPEN")
     changed = apply_proposal(proposal, candidate, evidence)
-    if set(changed) != set(validation.get("changedFiles", [])):
-        raise ValueError("Publisher paths differ from isolated validation")
+    require_validated_content(changed, validation, ROOT)
     command("git", "switch", "-c", branch)
     command("git", "add", "--", *changed)
     staged = set(command("git", "diff", "--cached", "--name-only").stdout.splitlines())

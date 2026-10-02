@@ -22,6 +22,11 @@ def _get(value: Any, name: str, default=None):
     return getattr(value, name, default)
 
 
+def _finish_reason(value: Any) -> str:
+    """Use an enum's wire value ("STOP"), not str(enum) ("FinishReason.STOP")."""
+    return str(getattr(value, "value", value))
+
+
 def _string(value: Any) -> str:
     if isinstance(value, str):
         return value
@@ -55,6 +60,7 @@ class _Choice:
     media_records_dropped: int = 0
     finish_reason: str | None = None
     tool_calls: dict[int, _ToolCall] = field(default_factory=dict)
+    google_tool_positions: dict[str, int] = field(default_factory=dict)
 
 
 class ChoiceAccumulator:
@@ -92,7 +98,7 @@ class ChoiceAccumulator:
             self._add_tools(index, _get(message, "tool_calls", None))
             finish_reason = _get(value, "finish_reason", None)
             if finish_reason is not None:
-                choice.finish_reason = str(finish_reason)
+                choice.finish_reason = _finish_reason(finish_reason)
 
     def add_single_response(
         self,
@@ -139,7 +145,6 @@ class ChoiceAccumulator:
                 role = _get(content, "role", None)
                 if role:
                     choice.role = "assistant" if str(role) == "model" else str(role)
-                tool_index = 0
                 for part in _get(content, "parts", None) or []:
                     text = _get(part, "text", None)
                     if text is not None and _get(part, "thought", False):
@@ -148,8 +153,20 @@ class ChoiceAccumulator:
                         choice.content.append(str(text))
                     function_call = _get(part, "function_call", None)
                     if function_call is not None:
-                        tool = choice.tool_calls.setdefault(tool_index, _ToolCall(type="function"))
                         call_id = _get(function_call, "id", None)
+                        # Gemini streams complete function calls, often one per
+                        # chunk. Positions must survive across chunks so a later
+                        # call never merges into an earlier one; only a repeated
+                        # provider ID refers to the same call.
+                        tool_index = (
+                            choice.google_tool_positions.get(str(call_id)) if call_id else None
+                        )
+                        repeated = tool_index is not None
+                        if tool_index is None:
+                            tool_index = len(choice.tool_calls)
+                            if call_id:
+                                choice.google_tool_positions[str(call_id)] = tool_index
+                        tool = choice.tool_calls.setdefault(tool_index, _ToolCall(type="function"))
                         name = _get(function_call, "name", None)
                         arguments = _get(function_call, "args", None)
                         if call_id:
@@ -157,14 +174,16 @@ class ChoiceAccumulator:
                         if name:
                             tool.name = str(name)
                         if arguments is not None:
+                            if repeated:
+                                # Gemini args are whole objects, not fragments.
+                                tool.arguments = BoundedTextAccumulator()
                             tool.arguments.append(_string(arguments))
-                        tool_index += 1
                     inline_data = _get(part, "inline_data", None) or _get(part, "file_data", None)
                     if inline_data is not None:
                         self._add_media(choice, media_references(inline_data, "output"))
             finish_reason = _get(candidate, "finish_reason", None)
             if finish_reason is not None:
-                choice.finish_reason = str(finish_reason)
+                choice.finish_reason = _finish_reason(finish_reason)
 
     def add_google_chunk(self, span: Any, chunk: Any) -> None:
         chunk_index = self.chunk_count
@@ -236,7 +255,7 @@ class ChoiceAccumulator:
             self._add_tools(index, tools)
             finish_reason = _get(value, "finish_reason", None)
             if finish_reason is not None:
-                choice.finish_reason = str(finish_reason)
+                choice.finish_reason = _finish_reason(finish_reason)
             summary.append(
                 {
                     "choice_index": index,

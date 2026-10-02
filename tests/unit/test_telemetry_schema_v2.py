@@ -1,4 +1,3 @@
-import hashlib
 import json
 
 from jsonschema import Draft202012Validator
@@ -23,7 +22,10 @@ EXPECTED_PRECEDENCE = [
 def test_canonical_telemetry_schema_is_packaged_verbatim():
     schema_bytes = neatlogs.telemetry_schema_bytes()
 
-    assert hashlib.sha256(schema_bytes).hexdigest() == neatlogs.TELEMETRY_SCHEMA_SHA256
+    # Hash the LF-normalized form: Windows checkouts (core.autocrlf) store
+    # this file with CRLF, which must not count as a contract change.
+    assert neatlogs.telemetry_schema_digest(schema_bytes) == neatlogs.TELEMETRY_SCHEMA_SHA256
+    assert neatlogs.telemetry_schema_digest() == neatlogs.TELEMETRY_SCHEMA_SHA256
     assert json.loads(schema_bytes) == neatlogs.telemetry_schema()
     neatlogs.verify_telemetry_schema()
 

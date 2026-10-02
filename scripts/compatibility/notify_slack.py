@@ -31,6 +31,69 @@ def workflow_url() -> str | None:
     return f"{values[0].rstrip('/')}/{values[1]}/actions/runs/{values[2]}"
 
 
+def should_notify(
+    status: str,
+    report: dict[str, Any] | None,
+    analysis: dict[str, Any] | None,
+    gemini_status: str | None,
+    smoke_summary: dict[str, Any] | None,
+    proposal_status: dict[str, Any] | None,
+    validation_status: dict[str, Any] | None,
+    publish_status: dict[str, Any] | None,
+    upstream_issue: dict[str, Any] | None = None,
+) -> bool:
+    """Silence only a complete, passing release review with no proposed fix."""
+    if (
+        status != "success"
+        or gemini_status != "success"
+        or upstream_issue
+        or not report
+        or not analysis
+        or not smoke_summary
+        or not proposal_status
+        or proposal_status.get("status") != "no-safe-fix"
+        or validation_status is not None
+        or publish_status is not None
+    ):
+        return True
+    if any(
+        item.get("state") == "OPEN" and item.get("isDraft")
+        for item in proposal_status.get("alreadyCoveredPullRequests", [])
+    ):
+        return True
+    try:
+        expected = {
+            (change["package"], integration):
+                (change.get("previouslyAnalyzed"), change["latest"])
+            for change in report["changes"]
+            for integration in change["integrations"]
+        }
+        results = smoke_summary["results"]
+        counts = smoke_summary["counts"]
+        if (
+            not expected
+            or len(expected) != len(results)
+            or smoke_summary["pairCount"] != len(expected)
+            or smoke_summary["smokeRegressions"] != 0
+            or counts["pass"] != len(expected)
+            or any(counts[key] for key in ("fail", "blocked", "not-tested"))
+        ):
+            return True
+        for result in results:
+            pair = (result["package"], result["integration"])
+            if (
+                pair not in expected
+                or (result["baselineVersion"], result["latestVersion"]) != expected[pair]
+                or result["baseline"]["status"] != "pass"
+                or result["latest"]["status"] != "pass"
+                or result["comparison"] != "latest-smoke-passed"
+            ):
+                return True
+    except (KeyError, TypeError, ValueError):
+        return True
+    return False
+
+
 def slack_message(
     status: str,
     report: dict[str, Any] | None,
@@ -166,7 +229,7 @@ def slack_message(
     return (
         f"{headline}{release_detail} {verification}"
         f"Checks cover install, dependencies, and instrumentation activation only. "
-        f"{advisory}{proposal} Alerts repeat until the baseline is updated.{issue}{link}"
+        f"{advisory}{proposal}{issue}{link}"
     )
 
 
@@ -178,25 +241,36 @@ def main() -> int:
     status = os.environ.get("COMPAT_JOB_STATUS", "unknown")
     if status == "success" and os.environ.get("COMPAT_CHANGES_FOUND") != "true":
         return 0
+    report = optional_json("compatibility-release-report.json")
+    analysis = optional_json("compatibility-llm-analysis.json")
+    upstream_issue = optional_json(
+        os.environ.get("COMPAT_UPSTREAM_ISSUE_FILE", "compatibility-upstream-issue.json")
+    )
+    gemini_status = os.environ.get("COMPAT_GEMINI_STEP_STATUS")
+    smoke_summary = optional_json("compatibility-smoke-summary.json")
+    proposal_status = optional_json("compatibility-fix-status.json")
+    validation_status = optional_json("compatibility-validation-status.json")
+    publish_status = optional_json("compatibility-publish-status.json")
+    if not should_notify(
+        status, report, analysis, gemini_status, smoke_summary, proposal_status,
+        validation_status, publish_status, upstream_issue,
+    ):
+        print("Slack notification suppressed: both version checks passed and no fix was proposed")
+        return 0
     body = json.dumps(
         {
             "text": slack_message(
                 status,
-                optional_json("compatibility-release-report.json"),
-                optional_json("compatibility-llm-analysis.json"),
+                report,
+                analysis,
                 workflow_url(),
-                optional_json(
-                    os.environ.get(
-                        "COMPAT_UPSTREAM_ISSUE_FILE",
-                        "compatibility-upstream-issue.json",
-                    )
-                ),
+                upstream_issue,
                 os.environ.get("COMPAT_REVIEW_ISSUE_URL"),
-                os.environ.get("COMPAT_GEMINI_STEP_STATUS"),
-                optional_json("compatibility-smoke-summary.json"),
-                optional_json("compatibility-fix-status.json"),
-                optional_json("compatibility-validation-status.json"),
-                optional_json("compatibility-publish-status.json"),
+                gemini_status,
+                smoke_summary,
+                proposal_status,
+                validation_status,
+                publish_status,
             )
         }
     ).encode()

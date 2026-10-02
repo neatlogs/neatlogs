@@ -41,14 +41,17 @@ Twice a day, the scheduled workflow:
    decision on one package/integration candidate per run;
 6. validates a bounded adapter-source patch in a separate job without model
    or write credentials, and opens or reuses a regular review PR only if
-   validation passes. It never approves or merges the PR. Slack reports the result.
+   validation passes. It never approves or merges the PR.
 
 The Gemini assessment is unverified advice about possible compatibility risk,
 not a test result. A latest-version pass covers only this activation smoke
 check, not the full SDK behavior. A baseline-passing/latest-failing check is
 reported as an activation smoke regression; other failures need triage.
-Blocked and missing checks are explicitly reported. The same releases can
-trigger later alerts until the analyzed-version baseline is updated. A failed
+Blocked and missing checks are explicitly reported. Slack alerts on an
+activation regression, an incomplete or failed check, a Gemini or fix-workflow
+failure, or a generated fix PR opened for review. A passing release-only run
+where Gemini proposes no safe fix still updates the review issue and artifacts
+without posting to Slack. Actionable alerts may recur until addressed. A failed
 Gemini request is reported as an unavailable advisory while the deterministic
 results, evidence, and review issue remain available.
 
@@ -85,5 +88,4 @@ Configure these GitHub Actions settings:
 Organization-level secrets scoped only to the SDK repositories are preferred.
 Model and write credentials are confined to separate scheduled jobs and are
 never passed to generated-code validation or pull-request CI jobs. Slack
-failures are non-blocking; alerts are sent when PyPI has versions newer than
-the tracked baseline or when the workflow fails.
+failures are non-blocking.

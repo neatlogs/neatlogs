@@ -45,3 +45,15 @@ def test_application_import_aliases_report_missing_dependencies(monkeypatch):
 
     assert manager._is_library_installed("autogen") is False
     assert manager._is_library_installed("portkey") is False
+
+
+def test_langgraph_loads_langchain_instrumentor():
+    assert INSTRUMENTATION_REGISTRY["libraries"]["langgraph"]["auto_load"] == ["langchain"]
+
+    instrumented = []
+    manager = InstrumentationManager(TracerProvider())
+    manager._instrument_dual = instrumented.append
+
+    manager.instrument(libraries=["langgraph"])
+
+    assert sorted(instrumented) == ["langchain", "langgraph"]

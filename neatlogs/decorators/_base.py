@@ -100,18 +100,56 @@ def _serialize_obj(obj: Any) -> Any:
         except Exception:
             pass
 
-    # Last resort: convert to string
-    return str(obj)
+    # Last resort: convert to string. Guard against objects whose
+    # __str__/__repr__ raises — telemetry capture must never crash the
+    # application it is observing.
+    try:
+        return str(obj)
+    except Exception:
+        return f"<unserializable {type(obj).__name__}>"
+
+
+def _sanitize_non_finite(obj: Any) -> Any:
+    """Recursively replace non-finite floats (NaN/Infinity/-Infinity) with a
+    string form so the serialized output is valid JSON. These tokens are not
+    valid JSON per RFC 8259 and are rejected by strict parsers such as
+    JavaScript's JSON.parse."""
+    if isinstance(obj, float):
+        if obj != obj:  # NaN
+            return "NaN"
+        if obj == float("inf"):
+            return "Infinity"
+        if obj == float("-inf"):
+            return "-Infinity"
+        return obj
+    if isinstance(obj, dict):
+        return {k: _sanitize_non_finite(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_sanitize_non_finite(v) for v in obj]
+    return obj
 
 
 def _safe_json_dumps(value: Any) -> str:
     try:
-        # Use custom serializer that handles complex objects
+        # Use custom serializer that handles complex objects.
+        # allow_nan=False keeps output RFC 8259-compliant: bare NaN/Infinity/
+        # -Infinity are not valid JSON and are rejected by strict parsers such
+        # as JavaScript's JSON.parse. This matches doctor_v2's json.dumps usage.
         serialized = _serialize_obj(value)
-        return json.dumps(serialized)
+        try:
+            return json.dumps(serialized, allow_nan=False)
+        except ValueError:
+            # Non-finite float present: sanitize to string tokens so the data
+            # is still captured (not lost) and the result stays valid JSON.
+            return json.dumps(_sanitize_non_finite(serialized), allow_nan=False)
     except Exception:
-        # Final fallback: convert entire value to string
-        return json.dumps(str(value))
+        # Final fallback: convert entire value to string. str() can itself
+        # raise (a broken __str__/__repr__), so guard it too — this function
+        # must never propagate an exception into the traced application.
+        try:
+            return json.dumps(str(value))
+        except Exception:
+            return json.dumps(f"<unserializable {type(value).__name__}>")
 
 
 def _bind_call_args(

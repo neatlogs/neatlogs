@@ -59,9 +59,12 @@ def trace(
     - Don't use just to "create a span" - auto-instrumentation handles that
 
     **Session-Aware Trace Creation:**
-    - If `session_id` is set in init() AND no active parent span exists,
-      this creates a NEW root trace (for multi-turn conversations).
+    - If a ``session_id`` is set on this ``trace()``/``span()`` root (or via
+      ``neatlogs.identify()``) AND no active parent span exists, this creates a
+      NEW root trace (for multi-turn conversations).
     - Otherwise, creates a normal child span within the existing trace.
+    - Note: ``session_id`` is no longer an ``init()`` argument; set it per-root
+      on ``trace()``/``span()``, or use ``identify()`` for wrapper-only code.
 
     Args:
         name: Span name
@@ -97,12 +100,13 @@ def trace(
 
         Use Case 2: Multi-turn sessions:
 
-        >>> neatlogs.init(api_key="...", session_id="user-123")
+        >>> neatlogs.init(api_key="...")
         >>>
-        >>> with trace(name="turn_1"):  # New root trace (same session)
+        >>> # Pass session_id on each root trace (or call neatlogs.identify()).
+        >>> with trace(name="turn_1", session_id="user-123"):  # New root (same session)
         ...     agent.run("Hello")
         >>>
-        >>> with trace(name="turn_2"):  # New root trace (same session)
+        >>> with trace(name="turn_2", session_id="user-123"):  # New root (same session)
         ...     agent.run("Tell me more")
 
         Use Case 3: Grouping multiple operations in main:

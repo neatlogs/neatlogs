@@ -2,7 +2,6 @@
 
 import asyncio
 
-import anthropic
 import pytest
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
@@ -10,8 +9,13 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
 
-from neatlogs import _wrap_utils as w
-from neatlogs.anthropic import wrap_anthropic_client, wrap_async_anthropic_client
+anthropic = pytest.importorskip("anthropic")
+
+from neatlogs import _wrap_utils as w  # noqa: E402
+from neatlogs.anthropic import (  # noqa: E402
+    wrap_anthropic_client,
+    wrap_async_anthropic_client,
+)
 
 try:
     import httpx2 as httpx

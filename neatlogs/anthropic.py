@@ -470,7 +470,14 @@ class _SyncStreamManagerWrapper:
         self._finalized = False
 
     def __enter__(self):
-        self._stream = self._stream_mgr.__enter__()
+        try:
+            self._stream = self._stream_mgr.__enter__()
+        except Exception as e:
+            self._span.set_status(StatusCode.ERROR, str(e))
+            self._span.record_exception(e)
+            self._span.end()
+            self._finalized = True
+            raise
         return _SyncStreamIterator(self)
 
     def __exit__(self, *args):
@@ -522,7 +529,14 @@ class _AsyncStreamManagerWrapper:
         self._finalized = False
 
     async def __aenter__(self):
-        self._stream = await self._stream_mgr.__aenter__()
+        try:
+            self._stream = await self._stream_mgr.__aenter__()
+        except Exception as e:
+            self._span.set_status(StatusCode.ERROR, str(e))
+            self._span.record_exception(e)
+            self._span.end()
+            self._finalized = True
+            raise
         return _AsyncStreamIterator(self)
 
     async def __aexit__(self, *args):

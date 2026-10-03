@@ -18,6 +18,7 @@ sys.path.insert(0, str(ROOT))
 from scripts.compatibility.propose_fix import (
     advance_version_lock, apply_proposal, is_bot_draft_pr, proposal_branch,
 )
+from scripts.compatibility.validate_fix import require_reproduction
 
 BOT_AUTHOR_EMAIL = "compatibility-bot@users.noreply.github.com"
 
@@ -82,6 +83,17 @@ def require_complete_integration_checks(
         raise ValueError("Not every affected integration passed patched latest-version activation")
 
 
+def require_reproduced_fix(candidate: dict[str, Any], validation: dict[str, Any]) -> None:
+    if validation.get("basis") != candidate.get("basis"):
+        raise ValueError("Validation basis differs from selected candidate")
+    try:
+        expected = require_reproduction(candidate, validation.get("redGreen", "not-proven"))
+    except RuntimeError as error:
+        raise ValueError("Validated fix has no reproducible before/after failure") from error
+    if validation.get("reproduction") != expected:
+        raise ValueError("Validated fix has no reproducible before/after failure")
+
+
 def publish() -> dict[str, Any]:
     proposal_bytes = Path("compatibility-fix-proposal.json").read_bytes()
     proposal = json.loads(proposal_bytes)
@@ -93,6 +105,7 @@ def publish() -> dict[str, Any]:
         raise ValueError("Validation result does not match the original proposal")
     candidate = proposal["candidate"]
     require_complete_integration_checks(candidate, evidence, validation)
+    require_reproduced_fix(candidate, validation)
     base_sha = command("git", "rev-parse", "HEAD").stdout.strip()
     if base_sha != proposal.get("baseSha"):
         raise ValueError("Proposal base SHA differs from publisher checkout")

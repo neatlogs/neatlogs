@@ -10,6 +10,7 @@ from scripts.compatibility.validate_fix import (
     changed_paths,
     check_affected_integrations,
     require_post_patch_smoke,
+    require_reproduction,
     workspace_snapshot,
 )
 
@@ -39,6 +40,25 @@ class ValidateFixTests(unittest.TestCase):
         for status in ("blocked", "fail", "not-tested"):
             with self.subTest(status=status), self.assertRaisesRegex(RuntimeError, status):
                 require_post_patch_smoke({"status": status, "reason": "upstream install failed"})
+
+    def test_reproduction_requires_red_green_or_recorded_smoke_regression(self):
+        advisory = {"package": "openai", "integration": "openai", "latestVersion": "3",
+                    "basis": "upstream-and-adapter-evidence-review"}
+        self.assertEqual(require_reproduction(advisory, "red-before-green-after"), "focused-red-green")
+        with self.assertRaisesRegex(RuntimeError, "No reproducible regression"):
+            require_reproduction(advisory, "not-proven")
+        smoke = {**advisory, "basis": "activation-smoke-regression", "smoke": {
+            "package": "openai", "integration": "openai", "latestVersion": "3",
+            "comparison": "smoke-regression", "baseline": {"status": "pass"},
+            "latest": {"status": "fail"},
+        }}
+        self.assertEqual(
+            require_reproduction(smoke, "not-proven"),
+            "activation-smoke-baseline-pass-latest-fail-patched-pass",
+        )
+        smoke["smoke"]["baseline"]["status"] = "fail"
+        with self.assertRaisesRegex(RuntimeError, "No reproducible regression"):
+            require_reproduction(smoke, "not-proven")
 
     def test_workspace_snapshot_detects_generated_test_side_effects(self):
         with tempfile.TemporaryDirectory() as directory:

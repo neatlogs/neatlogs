@@ -98,7 +98,6 @@ langchain = [
 ]
 langgraph = [
     "langgraph>=1.0.4",
-    "langchain>=1.1.2",
     "langchain-core>=0.3.0",
     "langchain-openai>=1.1.3",
 ]

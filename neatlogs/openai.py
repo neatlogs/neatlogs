@@ -174,7 +174,7 @@ def _patch_completions(completions: Any) -> None:
             "frequency_penalty",
             "presence_penalty",
         ):
-            if param in kwargs and kwargs[param] is not None:
+            if _is_set(kwargs.get(param)):
                 span.set_attribute(f"neatlogs.llm.{param}", kwargs[param])
 
         # User-supplied metadata (top-level `metadata=` or `extra_body={"metadata": ...}`).
@@ -268,7 +268,7 @@ def _patch_async_completions(completions: Any) -> None:
             "frequency_penalty",
             "presence_penalty",
         ):
-            if param in kwargs and kwargs[param] is not None:
+            if _is_set(kwargs.get(param)):
                 span.set_attribute(f"neatlogs.llm.{param}", kwargs[param])
 
         # User-supplied metadata (top-level `metadata=` or `extra_body={"metadata": ...}`).
@@ -339,6 +339,16 @@ def _patch_responses(responses: Any) -> None:
 
     responses.create = patched_create
     responses._neatlogs_patched = True
+
+
+def _is_set(value: Any) -> bool:
+    """
+    True when a request kwarg carries a real value. The OpenAI SDK fills unset
+    optional params with ``Omit`` / ``NotGiven`` sentinels (for example when
+    ``chat.completions.stream()`` forwards its defaults to ``create()``). They
+    are not valid span attribute values, so treat them like ``None``.
+    """
+    return value is not None and type(value).__name__ not in ("Omit", "NotGiven")
 
 
 def _set_request_metadata(span: Any, kwargs: dict) -> None:

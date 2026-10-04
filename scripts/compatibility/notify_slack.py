@@ -1,11 +1,101 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import re
 import textwrap
 from pathlib import Path
 from typing import Any
 from urllib.request import Request, urlopen
+
+
+ALERT_MARKER = re.compile(r"<!-- compatibility-slack-fingerprint:v1:([0-9a-f]{64}) -->")
+
+
+def blocker_classification(outcome: dict[str, Any]) -> str | None:
+    if outcome.get("status") != "blocked":
+        return None
+    reason = str(outcome.get("reason", "")).lower()
+    if "timed out" in reason:
+        return "timeout"
+    if "resolutionimpossible" in reason or "conflicting dependencies" in reason:
+        return "dependency-conflict"
+    if "no matching distribution" in reason or "could not find a version" in reason:
+        return "package-unavailable"
+    if "requires-python" in reason or "requires python" in reason:
+        return "python-version"
+    if "connection" in reason or "network" in reason:
+        return "network"
+    return "other-install-block"
+
+
+def repeatable_review_fingerprint(
+    status: str,
+    report: dict[str, Any] | None,
+    analysis: dict[str, Any] | None,
+    gemini_status: str | None,
+    smoke_summary: dict[str, Any] | None,
+    proposal_status: dict[str, Any] | None,
+    validation_status: dict[str, Any] | None,
+    publish_status: dict[str, Any] | None,
+    upstream_issue: dict[str, Any] | None,
+) -> str | None:
+    """Identify complete, unchanged inconclusive reviews; never silence actionable events."""
+    if (
+        status != "success" or gemini_status != "success" or upstream_issue
+        or not report or not analysis or not smoke_summary
+        or not proposal_status or proposal_status.get("status") != "no-safe-fix"
+        or proposal_status.get("alreadyCoveredPullRequests")
+        or validation_status is not None or publish_status is not None
+    ):
+        return None
+    try:
+        changes = report["changes"]
+        results = smoke_summary["results"]
+        counts = smoke_summary["counts"]
+        expected = {
+            (change["package"], integration):
+                (change.get("previouslyAnalyzed"), change["latest"])
+            for change in changes for integration in change["integrations"]
+        }
+        if (
+            not expected or len(expected) != len(results)
+            or smoke_summary["pairCount"] != len(expected)
+            or smoke_summary["smokeRegressions"] != 0
+            or counts["not-tested"] != 0
+            or counts["fail"] + counts["blocked"] == 0
+            or sum(counts[key] for key in ("pass", "fail", "blocked", "not-tested")) != len(expected)
+        ):
+            return None
+        observed = {}
+        for result in results:
+            pair = result["package"], result["integration"]
+            baseline = result["baseline"]
+            latest = result["latest"]
+            latest_status = latest["status"]
+            if (
+                pair not in expected or pair in observed
+                or (result["baselineVersion"], result["latestVersion"]) != expected[pair]
+                or latest_status not in ("pass", "fail", "blocked")
+                or (latest_status == "fail" and baseline["status"] != "fail")
+                or result["comparison"] == "smoke-regression"
+            ):
+                return None
+            observed[pair] = (
+                *expected[pair], baseline["status"], baseline.get("stage"),
+                latest_status, latest.get("stage"), result["comparison"],
+                blocker_classification(latest),
+            )
+        if {key: sum(item["latest"]["status"] == key for item in results)
+            for key in ("pass", "fail", "blocked")} != {
+                key: counts[key] for key in ("pass", "fail", "blocked")
+            }:
+            return None
+        payload = [[*pair, *observed[pair]] for pair in sorted(observed)]
+        return hashlib.sha256(json.dumps(payload, separators=(",", ":")).encode()).hexdigest()
+    except (KeyError, TypeError, ValueError):
+        return None
 
 
 def optional_json(path: str) -> dict[str, Any] | None:
@@ -251,12 +341,26 @@ def main() -> int:
     proposal_status = optional_json("compatibility-fix-status.json")
     validation_status = optional_json("compatibility-validation-status.json")
     publish_status = optional_json("compatibility-publish-status.json")
+    review_issue_url = os.environ.get("COMPAT_REVIEW_ISSUE_URL")
     if not should_notify(
         status, report, analysis, gemini_status, smoke_summary, proposal_status,
         validation_status, publish_status, upstream_issue,
     ):
+        if review_issue_url:
+            # A clean review ends the previous inconclusive finding's lifetime.
+            Path("compatibility-sent-slack-marker.txt").write_text("")
         print("Slack notification suppressed: both version checks passed and no fix was proposed")
         return 0
+    fingerprint = repeatable_review_fingerprint(
+        status, report, analysis, gemini_status, smoke_summary, proposal_status,
+        validation_status, publish_status, upstream_issue,
+    )
+    prior_marker = Path("compatibility-prior-slack-marker.txt")
+    if fingerprint and review_issue_url and prior_marker.exists():
+        match = ALERT_MARKER.fullmatch(prior_marker.read_text().strip())
+        if match and match.group(1) == fingerprint:
+            print("Slack notification suppressed: unchanged inconclusive review; issue and artifacts updated")
+            return 0
     body = json.dumps(
         {
             "text": slack_message(
@@ -265,7 +369,7 @@ def main() -> int:
                 analysis,
                 workflow_url(),
                 upstream_issue,
-                os.environ.get("COMPAT_REVIEW_ISSUE_URL"),
+                review_issue_url,
                 gemini_status,
                 smoke_summary,
                 proposal_status,
@@ -283,6 +387,11 @@ def main() -> int:
     with urlopen(request, timeout=30) as response:
         if response.status < 200 or response.status >= 300:
             raise RuntimeError(f"Slack webhook returned {response.status}")
+    if review_issue_url:
+        # Empty content clears an older fingerprint after an actionable alert.
+        Path("compatibility-sent-slack-marker.txt").write_text(
+            f"<!-- compatibility-slack-fingerprint:v1:{fingerprint} -->\n" if fingerprint else ""
+        )
     print("Slack compatibility alert sent")
     return 0
 

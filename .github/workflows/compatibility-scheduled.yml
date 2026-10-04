@@ -273,7 +273,10 @@ jobs:
             const issues = await github.rest.issues.listForRepo({ owner: context.repo.owner, repo: context.repo.repo, state: 'open', per_page: 100 });
             const existing = issues.data.find((issue) => issue.title === title && !issue.pull_request);
             if (existing) {
-              await github.rest.issues.update({ owner: context.repo.owner, repo: context.repo.repo, issue_number: existing.number, body });
+              // Keep the last successfully posted Slack finding across issue refreshes.
+              const priorMarker = (existing.body || '').match(/<!-- compatibility-slack-fingerprint:v1:[0-9a-f]{64} -->/);
+              const updatedBody = priorMarker ? body + '\n\n' + priorMarker[0] : body;
+              await github.rest.issues.update({ owner: context.repo.owner, repo: context.repo.repo, issue_number: existing.number, body: updatedBody });
               core.setOutput('url', existing.html_url);
             } else {
               const created = await github.rest.issues.create({ owner: context.repo.owner, repo: context.repo.repo, title, body });
@@ -466,7 +469,21 @@ jobs:
               ? (prior.slice(0, first) + prior.slice(last + end.length)).trimEnd()
               : prior.trimEnd();
             await github.rest.issues.update({owner: context.repo.owner, repo: context.repo.repo, issue_number: issueNumber, body: withoutOld + '\n\n' + details});
+      - name: Read last Slack finding from review issue
+        if: needs.report.outputs.issue_url != ''
+        continue-on-error: true
+        uses: actions/github-script@v7
+        env:
+          COMPAT_REVIEW_ISSUE_URL: ${{ needs.report.outputs.issue_url }}
+        with:
+          script: |
+            const fs = require('node:fs');
+            const issueNumber = Number(process.env.COMPAT_REVIEW_ISSUE_URL.split('/').pop());
+            const issue = await github.rest.issues.get({owner: context.repo.owner, repo: context.repo.repo, issue_number: issueNumber});
+            const marker = (issue.data.body || '').match(/<!-- compatibility-slack-fingerprint:v1:[0-9a-f]{64} -->/);
+            if (marker) fs.writeFileSync('compatibility-prior-slack-marker.txt', marker[0] + '\n');
       - name: Notify Slack
+        id: notify_slack
         if: always()
         continue-on-error: true
         env:
@@ -477,6 +494,25 @@ jobs:
           COMPAT_REVIEW_ISSUE_URL: ${{ needs.report.outputs.issue_url }}
           COMPAT_UPSTREAM_ISSUE_FILE: compatibility-upstream-issue.json
         run: python scripts/compatibility/notify_slack.py
+      - name: Record successfully sent Slack finding
+        if: always() && steps.notify_slack.outcome == 'success' && needs.report.outputs.issue_url != ''
+        continue-on-error: true
+        uses: actions/github-script@v7
+        env:
+          COMPAT_REVIEW_ISSUE_URL: ${{ needs.report.outputs.issue_url }}
+        with:
+          script: |
+            const fs = require('node:fs');
+            const path = 'compatibility-sent-slack-marker.txt';
+            if (!fs.existsSync(path)) return;
+            const marker = fs.readFileSync(path, 'utf8').trim();
+            if (marker && !/^<!-- compatibility-slack-fingerprint:v1:[0-9a-f]{64} -->$/.test(marker)) throw new Error('Invalid Slack finding marker');
+            const issueNumber = Number(process.env.COMPAT_REVIEW_ISSUE_URL.split('/').pop());
+            const issue = await github.rest.issues.get({owner: context.repo.owner, repo: context.repo.repo, issue_number: issueNumber});
+            const oldMarker = /\n*<!-- compatibility-slack-fingerprint:v1:[0-9a-f]{64} -->/g;
+            const currentBody = (issue.data.body || '').replace(oldMarker, '').trimEnd();
+            const body = marker ? currentBody + '\n\n' + marker : currentBody;
+            await github.rest.issues.update({owner: context.repo.owner, repo: context.repo.repo, issue_number: issueNumber, body});
       - name: Fail after reporting deterministic regression or PR failure
         if: always()
         env:

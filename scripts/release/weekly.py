@@ -83,7 +83,7 @@ def plan(apply: bool) -> dict:
     if relation < 0:
         raise ValueError(f"source {current} is behind PyPI {published}")
     if relation > 0:
-        if releases.get(current):
+        if current in releases:
             raise ValueError(f"{current} already exists on PyPI")
         target, bump, description = current, False, "version already patched in source"
         tagged = git("rev-parse", "--verify", f"refs/tags/v{current}^{{commit}}", check=False)
@@ -100,7 +100,7 @@ def plan(apply: bool) -> dict:
         major, minor, patch = map(int, current.split("."))
         target, bump = f"{major}.{minor}.{patch + 1}", True
         retry_tag = ""
-        if releases.get(target):
+        if target in releases:
             raise ValueError(f"{target} already exists on PyPI")
     lock_text = LOCK.read_text()
     if f'[[package]]\nname = "neatlogs"\nversion = "{current}"' not in lock_text:

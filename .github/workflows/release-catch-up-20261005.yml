@@ -33,13 +33,13 @@ jobs:
 
           message=':package: *Published artifacts — October 5, 2026 (catch-up)*'
           message+=$'\n'
-          message+='These packages were published before release notifications were enabled.'
+          message+='These versions are confirmed published. TypeScript and Claude Code runs later timed out while waiting for npm visibility.'
           message+=$'\n'
-          message+='• *Python SDK* `neatlogs 1.4.24` — <https://pypi.org/project/neatlogs/1.4.24/|PyPI> · <https://github.com/neatlogs/neatlogs/actions/runs/37285293561|publish run>'
+          message+='• *Python SDK* `neatlogs 1.4.24` — <https://pypi.org/project/neatlogs/1.4.24/|PyPI> · <https://github.com/neatlogs/neatlogs/actions/runs/37285293561|workflow run>'
           message+=$'\n'
-          message+='• *TypeScript SDK* `neatlogs@1.1.25` — <https://www.npmjs.com/package/neatlogs/v/1.1.25|npm> · <https://github.com/neatlogs/neatlogs-typescript/actions/runs/37286308308|publish run>'
+          message+='• *TypeScript SDK* `neatlogs@1.1.25` — <https://www.npmjs.com/package/neatlogs/v/1.1.25|npm> · <https://github.com/neatlogs/neatlogs-typescript/actions/runs/37286308308|workflow run>'
           message+=$'\n'
-          message+='• *Claude Code* `@neatlogs/claude-code@0.1.9` — <https://www.npmjs.com/package/@neatlogs/claude-code/v/0.1.9|npm> · <https://github.com/neatlogs/neatlogs-claude-code/actions/runs/37292360836|publish run>'
+          message+='• *Claude Code* `@neatlogs/claude-code@0.1.9` — <https://www.npmjs.com/package/@neatlogs/claude-code/v/0.1.9|npm> · <https://github.com/neatlogs/neatlogs-claude-code/actions/runs/37292360836|workflow run>'
           payload=$(jq -n --arg text "$message" '{text: $text}')
           response=$(curl --fail --silent --show-error --retry 2 --retry-all-errors \
             --max-time 15 --header 'Content-type: application/json' \

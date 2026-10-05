@@ -1,4 +1,4 @@
-"""Plan and optionally apply a direct weekly PyPI release."""
+"""Plan and optionally apply a direct daily PyPI release."""
 from __future__ import annotations
 
 import argparse
@@ -123,5 +123,5 @@ if __name__ == "__main__":
     try:
         sys.exit(main())
     except (ValueError, RuntimeError, subprocess.CalledProcessError, OSError) as error:
-        print(f"weekly release planning failed: {error}", file=sys.stderr)
+        print(f"daily release planning failed: {error}", file=sys.stderr)
         sys.exit(1)

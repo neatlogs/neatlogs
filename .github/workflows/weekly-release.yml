@@ -1,8 +1,8 @@
-name: Weekly Python release
+name: Daily Python release
 
 on:
   schedule:
-    - cron: '11 8 * * 1'
+    - cron: '11 8 * * *'
   workflow_dispatch:
 
 permissions:
@@ -17,6 +17,9 @@ jobs:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    outputs:
+      action: ${{ steps.plan.outputs.action }}
+      version: ${{ steps.plan.outputs.version }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -144,3 +147,26 @@ jobs:
           done
           echo "PyPI did not report neatlogs ${RELEASE_VERSION}" >&2
           exit 1
+
+  notify:
+    name: Notify Slack after verified PyPI publication
+    needs: release
+    if: needs.release.result == 'success' && needs.release.outputs.action == 'publish'
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Post release notification
+        shell: bash
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.COMPAT_SLACK_WEBHOOK_URL }}
+          RELEASE_VERSION: ${{ needs.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          test -n "$SLACK_WEBHOOK_URL" || { echo 'COMPAT_SLACK_WEBHOOK_URL is missing' >&2; exit 1; }
+          message=":white_check_mark: *Python SDK neatlogs ${RELEASE_VERSION} published to PyPI*"
+          message+=$'\n'
+          message+="<https://pypi.org/project/neatlogs/${RELEASE_VERSION}/|PyPI package> · <https://github.com/${GITHUB_REPOSITORY}/tree/v${RELEASE_VERSION}|Release tag> · <https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}|Workflow run>"
+          payload=$(jq -n --arg text "$message" '{text: $text}')
+          response=$(curl --fail --silent --show-error --retry 2 --retry-all-errors --max-time 15 \
+            --header 'Content-type: application/json' --data "$payload" "$SLACK_WEBHOOK_URL")
+          test "$response" = ok || { echo "Slack webhook returned an unexpected response: $response" >&2; exit 1; }

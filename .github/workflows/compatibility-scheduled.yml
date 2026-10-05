@@ -488,21 +488,11 @@ jobs:
       - name: Fail after reporting deterministic regression or PR failure
         if: always()
         env:
+          COMPAT_DISCOVER_RESULT: ${{ needs.discover.result }}
+          COMPAT_ANALYZE_RESULT: ${{ needs.analyze.result }}
+          COMPAT_SMOKE_RESULT: ${{ needs.smoke.result }}
+          COMPAT_REPORT_RESULT: ${{ needs.report.result }}
           COMPAT_PROPOSE_RESULT: ${{ needs.propose.result }}
           COMPAT_VALIDATE_RESULT: ${{ needs.validate_fix.result }}
           COMPAT_PUBLISH_RESULT: ${{ needs.publish_fix.result }}
-        run: |
-          python - <<'PY'
-          import json
-          import os
-          from pathlib import Path
-          summary = json.loads(Path('compatibility-smoke-summary.json').read_text())
-          if summary['smokeRegressions']:
-              raise SystemExit(f"{summary['smokeRegressions']} baseline-passing activation smoke regression(s)")
-          if os.environ['COMPAT_PROPOSE_RESULT'] == 'failure':
-              raise SystemExit("Gemini fix proposal job failed")
-          if os.environ['COMPAT_VALIDATE_RESULT'] == 'failure':
-              raise SystemExit("Generated fix validation failed")
-          if os.environ['COMPAT_PUBLISH_RESULT'] == 'failure':
-              raise SystemExit("Fix PR creation failed")
-          PY
+        run: python scripts/compatibility/finalize_run.py

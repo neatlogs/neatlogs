@@ -1005,6 +1005,32 @@ def get_provider_tracer() -> "_AutoRootTracer":
     return _AutoRootTracer(get_tracer())
 
 
+def message_as_dict(msg: Any) -> dict:
+    """Return a chat message as a plain dict.
+
+    Chat APIs accept either dicts or SDK message objects (for example the
+    ``ChatCompletionMessage`` a caller appends straight from a previous
+    response). Telemetry code that reads ``msg.get(...)`` must not crash on
+    the objects.
+    """
+    if isinstance(msg, dict):
+        return msg
+    for name in ("model_dump", "dict"):
+        dump = getattr(msg, name, None)
+        if callable(dump):
+            try:
+                out = dump()
+                if isinstance(out, dict):
+                    return out
+            except Exception:
+                pass
+    return {
+        key: getattr(msg, key)
+        for key in ("role", "content", "tool_call_id")
+        if getattr(msg, key, None) is not None
+    }
+
+
 def serialize(obj: Any, max_length: Optional[int] = DEFAULT_MAX_CAPTURE_VALUE_BYTES) -> str:
     """Safe JSON serialization with explicit, byte-aware overflow diagnostics."""
     from .core.media import sanitize_media_payload

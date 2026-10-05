@@ -3,7 +3,7 @@ import json
 import unittest
 from unittest.mock import patch
 
-from scripts.compatibility.notify_slack import main, short_reason, slack_message, workflow_url
+from scripts.compatibility.notify_slack import main, short_reason, slack_message, slack_payload, workflow_url
 
 
 class NotifySlackTests(unittest.TestCase):
@@ -72,12 +72,6 @@ class NotifySlackTests(unittest.TestCase):
         }
         regression["compatibility-smoke-summary.json"]["smokeRegressions"] = 1
         cases["activation regression"] = (regression, "success", "success")
-        blocked = self.live_review_files()
-        blocked["compatibility-smoke-summary.json"]["results"][0]["latest"]["status"] = "blocked"
-        blocked["compatibility-smoke-summary.json"]["counts"] = {
-            "pass": 1, "fail": 0, "blocked": 1, "not-tested": 0,
-        }
-        cases["blocked install"] = (blocked, "success", "success")
         missing = self.live_review_files()
         missing.pop("compatibility-smoke-summary.json")
         cases["missing smoke evidence"] = (missing, "success", "success")
@@ -85,6 +79,9 @@ class NotifySlackTests(unittest.TestCase):
         missing_advisory = self.live_review_files()
         missing_advisory.pop("compatibility-llm-analysis.json")
         cases["missing Gemini evidence"] = (missing_advisory, "success", "success")
+        malformed = self.live_review_files()
+        malformed["compatibility-llm-analysis.json"] = []
+        cases["malformed Gemini evidence"] = (malformed, "success", "success")
         rejected = self.live_review_files()
         rejected["compatibility-fix-status.json"]["status"] = "rejected"
         cases["proposal failure"] = (rejected, "success", "success")
@@ -104,6 +101,35 @@ class NotifySlackTests(unittest.TestCase):
         for name, (files, status, gemini_status) in cases.items():
             with self.subTest(name=name):
                 self.assertEqual(len(self.webhook_posts(files, status=status, gemini_status=gemini_status)), 1)
+
+    def test_baseline_failures_and_blocked_installs_never_alert_without_regression(self):
+        files = self.live_review_files()
+        smoke = files["compatibility-smoke-summary.json"]
+        smoke["results"][0]["baseline"]["status"] = "fail"
+        smoke["results"][0]["latest"]["status"] = "fail"
+        smoke["results"][0]["comparison"] = "latest-failure-needs-triage"
+        smoke["results"][1]["latest"]["status"] = "blocked"
+        smoke["results"][1]["comparison"] = "latest-install-blocked"
+        smoke["counts"] = {"pass": 0, "fail": 1, "blocked": 1, "not-tested": 0}
+        self.assertEqual(self.webhook_posts(files), [])
+        files["compatibility-release-report.json"]["changes"][0]["latest"] = "2.28.0"
+        for result in smoke["results"]:
+            result["latestVersion"] = "2.28.0"
+        self.assertEqual(self.webhook_posts(files), [], "New release alone is not an alert")
+        smoke["results"][0]["baseline"]["status"] = "pass"
+        smoke["results"][0]["comparison"] = "smoke-regression"
+        smoke["smokeRegressions"] = 1
+        self.assertEqual(len(self.webhook_posts(files)), 1)
+
+    def test_inconsistent_or_missing_comparison_evidence_alerts(self):
+        files = self.live_review_files()
+        smoke = files["compatibility-smoke-summary.json"]
+        smoke["results"][0]["latest"]["status"] = "fail"
+        smoke["counts"] = {"pass": 1, "fail": 1, "blocked": 0, "not-tested": 0}
+        self.assertEqual(len(self.webhook_posts(files)), 1)
+        smoke["results"][0]["comparison"] = "smoke-regression"
+        smoke["smokeRegressions"] = 1
+        self.assertEqual(len(self.webhook_posts(files)), 1)
 
     def test_long_reason_is_shortened_at_a_word_boundary(self):
         self.assertEqual(short_reason("alpha beta gamma", 10), "alpha…")
@@ -128,13 +154,13 @@ class NotifySlackTests(unittest.TestCase):
                 "url": "https://github.com/example/sdk/issues/2",
             },
         )
-        self.assertIn("1 newer upstream release", message)
+        self.assertIn("1 newer release", message)
         self.assertIn("openai 1 → 2", message)
         self.assertNotIn("high potential risk", message)
         self.assertIn("Upstream issue", message)
         self.assertIn("github.com/example/sdk/issues/2", message)
         self.assertIn("https://example.test/run", message)
-        self.assertIn("regression status unknown", message)
+        self.assertIn("*Regression:* status unknown", message)
 
     def test_failure_message_does_not_require_report(self):
         self.assertIn("compatibility automation failed", slack_message("failure", None, None, None))
@@ -198,7 +224,7 @@ class NotifySlackTests(unittest.TestCase):
                                                    "latestVersion": "2.27.0",
                                                    "basis": "upstream-and-adapter-evidence-review"}},
         )
-        self.assertIn("no confirmed regression — triage failed or blocked checks", message)
+        self.assertIn("fix attempt rejected", message)
         self.assertIn("1 fail (1 also failed at baseline) · 1 blocked", message)
         self.assertIn("none found in the tested activation scope", message)
         self.assertIn("proposal rejected: Regression test has no test function", message)
@@ -353,17 +379,48 @@ class NotifySlackTests(unittest.TestCase):
                              "deferredCandidates": [{"package": "other"}] * 37},
         )
         lines = message.splitlines()
-        self.assertEqual(len(lines), 4)
-        self.assertIn("no confirmed regression — triage failed or blocked checks", lines[0])
-        self.assertIn("50 pass · 6 fail (6 also failed at baseline) · 5 blocked", lines[1])
-        self.assertIn("none found in the tested activation scope", lines[1])
-        self.assertIn("51 newer upstream releases (e.g. agno 3.0.9 → 3.1.1, anthropic 1.6.0 → 1.11.0)", lines[1])
-        self.assertIn("not opened — no safe code-specific fix", lines[2])
-        self.assertIn("Triage preexisting failures", lines[3])
-        self.assertIn("issues/125", lines[3])
-        self.assertIn("actions/runs/37085105195", lines[3])
+        self.assertTrue(any("*Checks:* 50 pass · 6 fail (6 also failed at baseline) · 5 blocked" in line for line in lines))
+        self.assertIn("*Regression:* none found in the tested activation scope.", lines)
+        self.assertIn("*Upstream:* 51 newer releases (e.g. agno 3.0.9 → 3.1.1, anthropic 1.6.0 → 1.11.0).", lines)
+        self.assertTrue(any("not opened — no safe code-specific fix" in line for line in lines))
+        self.assertTrue(any("Triage preexisting failures" in line for line in lines))
+        self.assertTrue(any("issues/125" in line for line in lines))
+        self.assertTrue(any("actions/runs/37085105195" in line for line in lines))
         self.assertNotIn("high potential risk", message)
         self.assertNotIn("37 candidate", message)
+
+    def test_actionable_alert_posts_block_kit_with_text_fallback(self):
+        files = self.live_review_files()
+        smoke = files["compatibility-smoke-summary.json"]
+        smoke["results"][0]["latest"]["status"] = "fail"
+        smoke["results"][0]["comparison"] = "smoke-regression"
+        smoke["counts"] = {"pass": 1, "fail": 1, "blocked": 0, "not-tested": 0}
+        smoke["smokeRegressions"] = 1
+        env = {
+            "COMPAT_SLACK_WEBHOOK_URL": "https://slack.example.invalid/webhook",
+            "COMPAT_JOB_STATUS": "success", "COMPAT_CHANGES_FOUND": "true",
+            "COMPAT_GEMINI_STEP_STATUS": "success",
+            "COMPAT_REVIEW_ISSUE_URL": "https://github.com/neatlogs/neatlogs/issues/125",
+            "GITHUB_SERVER_URL": "https://github.com",
+            "GITHUB_REPOSITORY": "neatlogs/neatlogs", "GITHUB_RUN_ID": "123",
+        }
+        with patch.dict("os.environ", env, clear=True), \
+                patch("scripts.compatibility.notify_slack.optional_json", side_effect=files.get), \
+                patch("scripts.compatibility.notify_slack.urlopen") as post:
+            post.return_value.__enter__.return_value.status = 200
+            self.assertEqual(main(), 0)
+            payload = json.loads(post.call_args.args[0].data)
+        self.assertEqual(payload["blocks"][2]["type"], "divider")
+        sections = [block["text"]["text"] for block in payload["blocks"] if block["type"] == "section"]
+        self.assertEqual(len(sections), 4)
+        self.assertIn("regression candidate", sections[0])
+        self.assertIn("*Checks:*", sections[1])
+        self.assertIn("*Regression:*", sections[1])
+        self.assertIn("*Fix PR:*", sections[2])
+        self.assertIn("*Next step:*", sections[3])
+        self.assertIn("actions/runs/123", sections[3])
+        self.assertIn("\n\n", payload["text"])
+        self.assertEqual(slack_payload(payload["text"]), payload)
 
 
 if __name__ == "__main__":

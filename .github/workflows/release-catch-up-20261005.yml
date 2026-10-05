@@ -1,0 +1,50 @@
+name: Announce October 5 published artifacts
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  announce:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify published versions and send one catch-up announcement
+        shell: bash
+        env:
+          RELEASE_SLACK_WEBHOOK_URL: ${{ secrets.RELEASE_SLACK_WEBHOOK_URL }}
+        run: |
+          set -euo pipefail
+          test -n "$RELEASE_SLACK_WEBHOOK_URL" || {
+            echo '::error::RELEASE_SLACK_WEBHOOK_URL is missing' >&2
+            exit 1
+          }
+
+          python_version=$(curl --fail --silent --show-error --retry 2 \
+            https://pypi.org/pypi/neatlogs/1.4.24/json | jq -r '.info.version')
+          typescript_version=$(curl --fail --silent --show-error --retry 2 \
+            https://registry.npmjs.org/neatlogs/1.1.25 | jq -r '.version')
+          claude_version=$(curl --fail --silent --show-error --retry 2 \
+            'https://registry.npmjs.org/@neatlogs%2fclaude-code/0.1.9' | jq -r '.version')
+          test "$python_version" = 1.4.24
+          test "$typescript_version" = 1.1.25
+          test "$claude_version" = 0.1.9
+
+          message=':package: *Published artifacts — October 5, 2026 (catch-up)*'
+          message+=$'\n'
+          message+='These packages were published before release notifications were enabled.'
+          message+=$'\n'
+          message+='• *Python SDK* `neatlogs 1.4.24` — <https://pypi.org/project/neatlogs/1.4.24/|PyPI> · <https://github.com/neatlogs/neatlogs/actions/runs/37285293561|publish run>'
+          message+=$'\n'
+          message+='• *TypeScript SDK* `neatlogs@1.1.25` — <https://www.npmjs.com/package/neatlogs/v/1.1.25|npm> · <https://github.com/neatlogs/neatlogs-typescript/actions/runs/37286308308|publish run>'
+          message+=$'\n'
+          message+='• *Claude Code* `@neatlogs/claude-code@0.1.9` — <https://www.npmjs.com/package/@neatlogs/claude-code/v/0.1.9|npm> · <https://github.com/neatlogs/neatlogs-claude-code/actions/runs/37292360836|publish run>'
+          payload=$(jq -n --arg text "$message" '{text: $text}')
+          response=$(curl --fail --silent --show-error --retry 2 --retry-all-errors \
+            --max-time 15 --header 'Content-type: application/json' \
+            --data "$payload" "$RELEASE_SLACK_WEBHOOK_URL")
+          test "$response" = ok || {
+            echo "::error::Slack did not confirm the catch-up announcement: $response" >&2
+            exit 1
+          }

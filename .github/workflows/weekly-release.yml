@@ -1,0 +1,146 @@
+name: Weekly Python release
+
+on:
+  schedule:
+    - cron: '11 8 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: weekly-python-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Decide whether a release is due
+        id: plan
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/release/weekly.py --apply > "$RUNNER_TEMP/release-plan.json"
+          cat "$RUNNER_TEMP/release-plan.json"
+          echo "action=$(jq -r .action "$RUNNER_TEMP/release-plan.json")" >> "$GITHUB_OUTPUT"
+          echo "version=$(jq -r .version "$RUNNER_TEMP/release-plan.json")" >> "$GITHUB_OUTPUT"
+          echo "commit=$(jq -r '.commit // false' "$RUNNER_TEMP/release-plan.json")" >> "$GITHUB_OUTPUT"
+          echo "retry_tag=$(jq -r '.retry_tag // empty' "$RUNNER_TEMP/release-plan.json")" >> "$GITHUB_OUTPUT"
+
+      - name: Restore exact source of an unpublished tagged release
+        if: steps.plan.outputs.retry_tag != ''
+        env:
+          RETRY_TAG: ${{ steps.plan.outputs.retry_tag }}
+        run: git checkout --detach "$RETRY_TAG"
+
+      - name: Check publishing credentials
+        if: steps.plan.outputs.action == 'publish'
+        shell: bash
+        env:
+          RELEASE_APP_ID: ${{ secrets.RELEASE_APP_ID }}
+          RELEASE_APP_PRIVATE_KEY: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+        run: |
+          test -n "$RELEASE_APP_ID" || { echo 'RELEASE_APP_ID is missing' >&2; exit 1; }
+          test -n "$RELEASE_APP_PRIVATE_KEY" || { echo 'RELEASE_APP_PRIVATE_KEY is missing' >&2; exit 1; }
+          test -n "$PYPI_API_TOKEN" || { echo 'PYPI_API_TOKEN is missing' >&2; exit 1; }
+
+      - name: Build and test the wheel and source distribution
+        if: steps.plan.outputs.action == 'publish'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check build uv==0.11.16
+          uv lock --check
+          python -m build
+          wheel=$(find dist -maxdepth 1 -name '*.whl' -print -quit)
+          sdist=$(find dist -maxdepth 1 -name '*.tar.gz' -print -quit)
+          test -n "$wheel" && test -n "$sdist"
+          for kind in wheel sdist; do
+            python -m venv "$RUNNER_TEMP/neatlogs-$kind"
+            if [[ "$kind" == wheel ]]; then
+              "$RUNNER_TEMP/neatlogs-$kind/bin/python" -m pip install "$wheel"
+            else
+              "$RUNNER_TEMP/neatlogs-$kind/bin/python" -m pip install "$sdist"
+            fi
+            "$RUNNER_TEMP/neatlogs-$kind/bin/python" -m pip check
+            (cd "$RUNNER_TEMP" && "$RUNNER_TEMP/neatlogs-$kind/bin/python" "$GITHUB_WORKSPACE/tests/release/wheel_smoke.py")
+          done
+
+      - name: Create a repository-scoped release token
+        if: steps.plan.outputs.action == 'publish'
+        id: release-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
+
+      - name: Commit version and tag exact release source
+        if: steps.plan.outputs.action == 'publish'
+        shell: bash
+        env:
+          RELEASE_TOKEN: ${{ steps.release-token.outputs.token }}
+          RELEASE_VERSION: ${{ steps.plan.outputs.version }}
+          RELEASE_COMMIT: ${{ steps.plan.outputs.commit }}
+        run: |
+          set -euo pipefail
+          git config user.name 'neatlogs-release[bot]'
+          git config user.email 'neatlogs-release[bot]@users.noreply.github.com'
+          git remote set-url origin "https://x-access-token:${RELEASE_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          if [[ "$RELEASE_COMMIT" == true ]]; then
+            git add pyproject.toml uv.lock
+            git diff --cached --check
+            git commit -m "chore(release): neatlogs ${RELEASE_VERSION}"
+            git push origin HEAD:refs/heads/main
+          fi
+          git diff --exit-code
+          tag="v${RELEASE_VERSION}"
+          if git rev-parse --verify "refs/tags/${tag}^{commit}" >/dev/null 2>&1; then
+            test "$(git rev-list -n 1 "$tag")" = "$(git rev-parse HEAD)" || {
+              echo "Existing ${tag} points to another commit" >&2; exit 1;
+            }
+          else
+            git tag -a "$tag" -m "Release ${RELEASE_VERSION}"
+          fi
+          git push origin "refs/tags/${tag}"
+
+      - name: Publish to PyPI
+        if: steps.plan.outputs.action == 'publish'
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets.PYPI_API_TOKEN }}
+
+      - name: Verify the published version
+        if: steps.plan.outputs.action == 'publish'
+        env:
+          RELEASE_VERSION: ${{ steps.plan.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3 4 5 6; do
+            if python - "$RELEASE_VERSION" <<'PY'
+          import json, sys, urllib.request
+          with urllib.request.urlopen(f'https://pypi.org/pypi/neatlogs/{sys.argv[1]}/json', timeout=15) as response:
+              data = json.load(response)
+          assert data['info']['version'] == sys.argv[1]
+          PY
+            then
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "PyPI did not report neatlogs ${RELEASE_VERSION}" >&2
+          exit 1

@@ -228,6 +228,20 @@ class NotifySlackTests(unittest.TestCase):
         self.assertIn("HTTP 400", message)
         self.assertIn("issues/42", message)
         self.assertIn("actions/runs/123", message)
+        self.assertIn("*Why alerted:* Gemini review did not complete", message)
+
+    def test_failed_fix_proposal_is_named_as_automation_not_regression(self):
+        files = self.live_review_files()
+        message = slack_message(
+            "success", files["compatibility-release-report.json"],
+            files["compatibility-llm-analysis.json"], "https://example.test/run",
+            gemini_status="success",
+            smoke_summary=files["compatibility-smoke-summary.json"],
+            proposal_status={"status": "rejected", "reason": "Malformed JSON"},
+        )
+        self.assertIn("*Regression:* none found in the tested activation scope", message)
+        self.assertIn("*Why alerted:* Gemini's fix proposal could not be used", message)
+        self.assertIn("did not establish an SDK regression", message)
 
     def test_verified_smoke_regression_is_separate_from_gemini(self):
         message = slack_message(

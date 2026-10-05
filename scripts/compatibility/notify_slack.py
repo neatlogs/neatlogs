@@ -180,6 +180,18 @@ def slack_message(
     else:
         checked = "*Checks:* results unavailable."
         regression = "*Regression:* status unknown."
+    why_alerted = None
+    if not regressions:
+        if published == "failed":
+            why_alerted = "*Why alerted:* a validated fix could not be published. This is not a confirmed activation regression."
+        elif (validation_status or {}).get("status") == "failed":
+            why_alerted = "*Why alerted:* the proposed fix failed validation. This is not a confirmed activation regression."
+        elif (proposal_status or {}).get("status") in {"rejected", "unavailable"}:
+            why_alerted = "*Why alerted:* Gemini's fix proposal could not be used. The bounded checks did not establish an SDK regression."
+        elif gemini_status == "failure" or (analysis or {}).get("failed"):
+            why_alerted = "*Why alerted:* Gemini review did not complete. Passing bounded checks cannot establish full SDK compatibility."
+        elif status != "success" or automation_incomplete:
+            why_alerted = "*Why alerted:* compatibility automation did not complete; this is not a confirmed SDK regression."
     changes = (report or {}).get("changes", [])
     if changes:
         examples = ", ".join(
@@ -262,7 +274,7 @@ def slack_message(
         links.append(f"<{upstream_issue['url']}|Upstream issue>")
     if pr_url and published not in {"created", "ready", "already-covered", "failed"}:
         links.append(f"<{pr_url}|Fix PR>")
-    evidence = "\n".join(item for item in (checked, regression, upstream) if item)
+    evidence = "\n".join(item for item in (checked, regression, why_alerted, upstream) if item)
     next_step = f"*Next step:* {action}"
     link_text = f"\n{' · '.join(links)}" if links else ""
     return f"{headline}\n\n{evidence}\n\n{pr}\n{next_step}{link_text}"

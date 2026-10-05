@@ -21,7 +21,9 @@ class NotifySlackTests(unittest.TestCase):
         } for integration in report["changes"][0]["integrations"]]
         return {
             "compatibility-release-report.json": report,
-            "compatibility-llm-analysis.json": {"riskLevel": "medium"},
+            "compatibility-llm-analysis.json": {
+                "riskLevel": "medium", "findings": [], "recommendedTests": [],
+            },
             "compatibility-smoke-summary.json": {
                 "pairCount": 2, "counts": {"pass": 2, "fail": 0, "blocked": 0, "not-tested": 0},
                 "smokeRegressions": 0, "results": results,
@@ -175,6 +177,9 @@ class NotifySlackTests(unittest.TestCase):
         malformed = self.live_review_files()
         malformed["compatibility-llm-analysis.json"] = []
         cases["malformed Gemini evidence"] = (malformed, "success", "success")
+        incomplete_advisory = self.live_review_files()
+        incomplete_advisory["compatibility-llm-analysis.json"] = {"riskLevel": "low"}
+        cases["incomplete Gemini evidence"] = (incomplete_advisory, "success", "success")
         rejected = self.live_review_files()
         rejected["compatibility-fix-status.json"]["status"] = "rejected"
         cases["proposal failure"] = (rejected, "success", "success")

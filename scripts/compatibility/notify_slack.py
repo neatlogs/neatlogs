@@ -48,12 +48,17 @@ def should_notify(
         and analysis.get("failed") is True
         and isinstance(analysis.get("error"), str) and bool(analysis["error"])
     )
+    complete_advisory = (
+        gemini_status == "success" and isinstance(analysis, dict)
+        and analysis.get("riskLevel") in {"low", "medium", "high"}
+        and isinstance(analysis.get("findings"), list)
+        and isinstance(analysis.get("recommendedTests"), list)
+    )
     if (
         status != "success"
-        or (gemini_status != "success" and not recorded_advisory_failure)
+        or not (complete_advisory or recorded_advisory_failure)
         or not isinstance(report, dict)
         or not isinstance(analysis, dict)
-        or (analysis.get("failed") and not recorded_advisory_failure)
         or analysis.get("skipped")
         or not isinstance(smoke_summary, dict)
         or not isinstance(proposal_status, dict)

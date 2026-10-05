@@ -379,6 +379,19 @@ def _finalize_responses_response(span: Any, response: Any, duration_ms: float) -
         span.set_attribute("neatlogs.llm.output_messages.0.role", "assistant")
         span.set_attribute("neatlogs.llm.output_messages.0.content", output_text)
 
+    tool_index = 0
+    for item in getattr(response, "output", None) or []:
+        if getattr(item, "type", None) != "function_call":
+            continue
+        prefix = f"neatlogs.llm.tool_calls.{tool_index}"
+        span.set_attribute(
+            f"{prefix}.id", getattr(item, "call_id", None) or getattr(item, "id", None) or ""
+        )
+        span.set_attribute(f"{prefix}.type", "function")
+        span.set_attribute(f"{prefix}.name", getattr(item, "name", None) or "")
+        span.set_attribute(f"{prefix}.arguments", getattr(item, "arguments", None) or "")
+        tool_index += 1
+
     model = getattr(response, "model", None)
     if model:
         span.set_attribute("neatlogs.llm.model_name", model)

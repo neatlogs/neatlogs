@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       upstream_issue_url:
-        description: "Optional public GitHub issue to exercise the full issue-evidence alert path"
+        description: "Optional public GitHub issue to include as review evidence"
         required: false
         type: string
       upstream_issue_package:
@@ -469,7 +469,6 @@ jobs:
             await github.rest.issues.update({owner: context.repo.owner, repo: context.repo.repo, issue_number: issueNumber, body: withoutOld + '\n\n' + details});
       - name: Notify Slack
         if: always()
-        continue-on-error: true
         env:
           COMPAT_SLACK_WEBHOOK_URL: ${{ secrets.COMPAT_SLACK_WEBHOOK_URL }}
           COMPAT_JOB_STATUS: ${{ (needs.report.result == 'success' && needs.analyze.result == 'success' && needs.smoke.result == 'success' && needs.propose.result == 'success' && needs.validate_fix.result != 'failure' && needs.publish_fix.result != 'failure') && 'success' || 'failure' }}

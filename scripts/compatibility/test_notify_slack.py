@@ -52,6 +52,34 @@ class NotifySlackTests(unittest.TestCase):
         ]
         self.assertEqual(self.webhook_posts(files), [])
 
+    def test_manual_upstream_issue_is_evidence_not_an_alert_by_itself(self):
+        files = self.live_review_files()
+        files["compatibility-upstream-issue.json"] = {
+            "title": "Potential upstream behavior change",
+            "url": "https://github.com/example/upstream/issues/123",
+        }
+        self.assertEqual(self.webhook_posts(files), [])
+        files["compatibility-smoke-summary.json"]["results"][0]["latest"]["status"] = "fail"
+        files["compatibility-smoke-summary.json"]["results"][0]["comparison"] = "smoke-regression"
+        files["compatibility-smoke-summary.json"]["smokeRegressions"] = 1
+        files["compatibility-smoke-summary.json"]["counts"] = {
+            "pass": 1, "fail": 1, "blocked": 0, "not-tested": 0,
+        }
+        messages = self.webhook_posts(files)
+        self.assertEqual(len(messages), 1)
+        self.assertIn("Upstream issue", messages[0])
+
+    def test_actionable_alert_without_slack_webhook_fails_the_job(self):
+        files = self.live_review_files()
+        with patch.dict("os.environ", {
+            "COMPAT_JOB_STATUS": "failure",
+            "COMPAT_CHANGES_FOUND": "true",
+            "COMPAT_GEMINI_STEP_STATUS": "success",
+        }, clear=True), patch(
+            "scripts.compatibility.notify_slack.optional_json", side_effect=files.get,
+        ), self.assertRaisesRegex(RuntimeError, "could not be delivered"):
+            main()
+
     def test_actionable_alert_explains_unmapped_patch_surface(self):
         files = self.live_review_files()
         files["compatibility-fix-status.json"]["noSdkPatchSurface"] = [

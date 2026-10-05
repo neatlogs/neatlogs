@@ -789,65 +789,83 @@ def _analyze_gemini_batch(
         ]
     )
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{quote(model, safe='')}:generateContent"
-    request = Request(
-        url,
-        data=json.dumps(
-            {
-                "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-                "generationConfig": {
-                    "responseMimeType": "application/json",
-                    "temperature": 0.1,
-                },
-            }
-        ).encode(),
-        headers={
-            "Content-Type": "application/json",
-            "x-goog-api-key": api_key,
-        },
-        method="POST",
-    )
     package_names = ", ".join(item["package"] for item in evidence["packages"])
-    for attempt in range(3):
-        try:
-            with urlopen(request, timeout=180) as response:
-                payload = json.load(response)
-            break
-        except HTTPError as error:
-            raw = error.read(4096).decode("utf-8", errors="replace")
+    flash = model.startswith("gemini-2.5-flash")
+    for response_attempt in range(2 if flash else 1):
+        generation_config: dict[str, Any] = {
+            "responseMimeType": "application/json", "temperature": 0.1,
+        }
+        if flash:
+            # Bound thought tokens so an otherwise useful JSON response is not truncated.
+            generation_config["thinkingConfig"] = {
+                "thinkingBudget": 1024 if response_attempt == 0 else 0,
+            }
+        request = Request(
+            url,
+            data=json.dumps({
+                "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+                "generationConfig": generation_config,
+            }).encode(),
+            headers={"Content-Type": "application/json", "x-goog-api-key": api_key},
+            method="POST",
+        )
+        for attempt in range(3):
             try:
-                error_payload = json.loads(raw).get("error", {})
-                detail = (
-                    error_payload.get("message", raw)
-                    if isinstance(error_payload, dict)
-                    else raw
-                )
-            except json.JSONDecodeError:
-                detail = raw
-            if error.code in {429, 500, 502, 503, 504} and attempt < 2:
-                retry_after = error.headers.get("Retry-After") if error.headers else None
-                delay = (
-                    min(int(retry_after), 60)
-                    if retry_after and retry_after.isdigit()
-                    else (10 * (attempt + 1) if error.code == 429 else 2**attempt)
-                )
-                time.sleep(delay)
+                with urlopen(request, timeout=180) as response:
+                    payload = json.load(response)
+                break
+            except HTTPError as error:
+                raw = error.read(4096).decode("utf-8", errors="replace")
+                try:
+                    error_payload = json.loads(raw).get("error", {})
+                    detail = (
+                        error_payload.get("message", raw)
+                        if isinstance(error_payload, dict)
+                        else raw
+                    )
+                except json.JSONDecodeError:
+                    detail = raw
+                if error.code in {429, 500, 502, 503, 504} and attempt < 2:
+                    retry_after = error.headers.get("Retry-After") if error.headers else None
+                    delay = (
+                        min(int(retry_after), 60)
+                        if retry_after and retry_after.isdigit()
+                        else (10 * (attempt + 1) if error.code == 429 else 2**attempt)
+                    )
+                    time.sleep(delay)
+                    continue
+                raise RuntimeError(
+                    f"Gemini HTTP {error.code}: {str(detail).replace(api_key, '[redacted]')[:1000]} "
+                    f"(batch: {package_names})"
+                ) from error
+            except OSError as error:
+                raise RuntimeError(f"Gemini request failed for {package_names}: {error}") from error
+        candidates = payload.get("candidates", [])
+        if not candidates:
+            raise ValueError("Gemini returned no candidates")
+        candidate = candidates[0]
+        text = "".join(
+            part.get("text", "") for part in candidate.get("content", {}).get("parts", [])
+        )
+        if candidate.get("finishReason") == "MAX_TOKENS":
+            if flash and response_attempt == 0:
                 continue
-            raise RuntimeError(
-                f"Gemini HTTP {error.code}: {str(detail).replace(api_key, '[redacted]')[:1000]} "
-                f"(batch: {package_names})"
-            ) from error
-        except OSError as error:
-            raise RuntimeError(f"Gemini request failed for {package_names}: {error}") from error
-    candidates = payload.get("candidates", [])
-    if not candidates:
-        raise ValueError("Gemini returned no candidates")
-    text = "".join(
-        part.get("text", "")
-        for part in candidates[0].get("content", {}).get("parts", [])
-    )
-    if not text:
-        raise ValueError("Gemini returned no analysis text")
-    analysis = json.loads(text)
+            raise ValueError(f"Gemini analysis exhausted its output token limit for {package_names}")
+        if candidate.get("finishReason") not in (None, "STOP"):
+            raise ValueError(f"Gemini analysis ended with {candidate['finishReason']} for {package_names}")
+        if not text:
+            if flash and response_attempt == 0:
+                continue
+            raise ValueError("Gemini returned no analysis text")
+        try:
+            analysis = json.loads(text)
+        except json.JSONDecodeError as error:
+            if flash and response_attempt == 0:
+                continue
+            raise ValueError(f"Gemini returned malformed analysis JSON for {package_names}") from error
+        break
+    else:
+        raise ValueError(f"Gemini analysis exhausted its output token limit for {package_names}")
     if not isinstance(analysis, dict) or analysis.get("riskLevel") not in {
         "low", "medium", "high"
     }:

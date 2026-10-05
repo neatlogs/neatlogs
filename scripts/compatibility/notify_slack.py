@@ -46,7 +46,6 @@ def should_notify(
     if (
         status != "success"
         or gemini_status != "success"
-        or upstream_issue
         or not isinstance(report, dict)
         or not isinstance(analysis, dict)
         or analysis.get("failed")
@@ -308,8 +307,7 @@ def main() -> int:
         return 0
     webhook = os.environ.get("COMPAT_SLACK_WEBHOOK_URL")
     if not webhook:
-        print("Slack notification skipped: COMPAT_SLACK_WEBHOOK_URL is not configured")
-        return 0
+        raise RuntimeError("Actionable compatibility alert could not be delivered: COMPAT_SLACK_WEBHOOK_URL is not configured")
     # A malformed artifact is itself alert-worthy; render the remaining evidence safely.
     report = report if isinstance(report, dict) else None
     analysis = analysis if isinstance(analysis, dict) else None

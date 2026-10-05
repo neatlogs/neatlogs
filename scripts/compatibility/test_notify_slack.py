@@ -277,7 +277,7 @@ class NotifySlackTests(unittest.TestCase):
                                                    "latestVersion": "2.27.0",
                                                    "basis": "upstream-and-adapter-evidence-review"}},
         )
-        self.assertIn("fix attempt rejected", message)
+        self.assertIn("Gemini fix proposal rejected", message)
         self.assertIn("1 fail (1 also failed at baseline) · 1 blocked", message)
         self.assertIn("none found in the tested activation scope", message)
         self.assertIn("proposal rejected: Regression test has no test function", message)
@@ -319,6 +319,7 @@ class NotifySlackTests(unittest.TestCase):
             validation_status={"status": "failed", "reason": "focused test failed"},
         )
         self.assertIn("proposed fix failed validation", message)
+        self.assertIn("Python SDK: proposed fix failed validation", message)
         self.assertIn("focused test failed", message)
         self.assertIn("not opened", message)
         self.assertIn("issues/42", message)

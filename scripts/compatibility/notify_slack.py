@@ -154,8 +154,10 @@ def slack_message(
         headline = f":red_circle: *Python SDK: {regressions} activation regression candidate(s) — review the evidence.*"
     elif published == "failed":
         headline = ":red_circle: *Python SDK: fix PR publication failed — inspect the run.*"
-    elif (validation_status or {}).get("status") == "failed" or (proposal_status or {}).get("status") == "rejected":
-        headline = ":warning: *Python SDK: fix attempt rejected — review validation evidence.*"
+    elif (validation_status or {}).get("status") == "failed":
+        headline = ":warning: *Python SDK: proposed fix failed validation — review evidence.*"
+    elif (proposal_status or {}).get("status") == "rejected":
+        headline = ":warning: *Python SDK: Gemini fix proposal rejected — inspect AI review.*"
     elif status != "success" or gemini_status not in {None, "success"} or automation_incomplete:
         headline = ":red_circle: *Python SDK: compatibility automation failed — inspect the run.*"
     elif smoke_summary is None:

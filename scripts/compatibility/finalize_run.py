@@ -30,6 +30,8 @@ def failure_reason(
     for name in ("discover", "analyze", "smoke", "report", "propose"):
         if jobs.get(name) != "success":
             return f"Compatibility {name} job did not complete"
+    if jobs.get("issue_update") != "success":
+        return "Compatibility review issue update did not complete"
     for name in ("validate", "publish"):
         if jobs.get(name) == "failure":
             return f"Compatibility {name} job failed"
@@ -47,7 +49,7 @@ def failure_reason(
     if validation is None:
         return "Generated fix validation status is missing"
     if validation.get("status") == "rejected" and validation.get("kind") == "candidate-rejected":
-        return None if published is None else "Rejected generated fix was unexpectedly published"
+        return None if published is None and jobs.get("publish") == "skipped" else "Unexpected publication after generated fix rejection"
     if validation.get("status") != "validated":
         return "Generated fix validation did not complete"
     if jobs.get("publish") != "success":
@@ -64,7 +66,8 @@ def main() -> int:
         read_status("compatibility-validation-status.json"),
         read_status("compatibility-publish-status.json"),
         {name: os.environ.get(f"COMPAT_{name.upper()}_RESULT", "") for name in (
-            "discover", "analyze", "smoke", "report", "propose", "validate", "publish"
+            "discover", "analyze", "smoke", "report", "propose", "validate", "publish",
+            "issue_update",
         )},
     )
     if reason:

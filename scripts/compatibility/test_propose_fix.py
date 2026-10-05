@@ -155,6 +155,14 @@ class ProposeFixTests(unittest.TestCase):
             "alpha",
         )
 
+    def test_persistent_regression_does_not_starve_other_release_reviews(self):
+        summary = {"results": [{
+            "package": "beta", "integration": "openai", "comparison": "smoke-regression",
+        }]}
+        selected = [choose_candidate(summary, {}, evidence(), rotation=slot)["package"]
+                    for slot in range(6)]
+        self.assertEqual(selected, ["beta", "beta", "alpha", "beta", "beta", "alpha"])
+
     def test_deferred_candidates_exclude_selected_candidate_by_branch(self):
         selected = choose_candidate({}, {}, evidence(), rotation=0)
         # Candidate selection builds a separate list from the reporting path.

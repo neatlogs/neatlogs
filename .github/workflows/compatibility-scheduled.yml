@@ -435,8 +435,8 @@ jobs:
         with:
           name: python-compatibility-fix-published
       - name: Attach proposal outcome to review issue
+        id: attach_issue
         if: needs.report.outputs.issue_url != ''
-        continue-on-error: true
         uses: actions/github-script@v7
         env:
           COMPAT_REVIEW_ISSUE_URL: ${{ needs.report.outputs.issue_url }}
@@ -455,7 +455,7 @@ jobs:
             const details = [
               start,
               '### Automated fix proposal',
-              'One candidate is assessed per scheduled run. Baseline-passing activation failures take priority; remaining candidates are listed below.',
+              'One candidate is assessed per scheduled run. When both kinds are pending, baseline-passing activation failures get two of every three slots and other release reviews get one; remaining candidates are listed below.',
               'Proposal: ' + (proposal?.status || 'unavailable') + (proposal?.reason ? ' — ' + proposal.reason : ''),
               'Assessed candidate: ' + JSON.stringify(proposal?.selectedCandidate || null),
               'Validation: ' + (validation?.status || 'not run') + (validation?.reason ? ' — ' + validation.reason : ''),
@@ -479,7 +479,8 @@ jobs:
         if: always()
         env:
           COMPAT_SLACK_WEBHOOK_URL: ${{ secrets.COMPAT_SLACK_WEBHOOK_URL }}
-          COMPAT_JOB_STATUS: ${{ (needs.report.result == 'success' && needs.analyze.result == 'success' && needs.smoke.result == 'success' && needs.propose.result == 'success' && needs.validate_fix.result != 'failure' && needs.publish_fix.result != 'failure') && 'success' || 'failure' }}
+          COMPAT_JOB_STATUS: ${{ (needs.report.result == 'success' && needs.analyze.result == 'success' && needs.smoke.result == 'success' && needs.propose.result == 'success' && needs.validate_fix.result != 'failure' && needs.publish_fix.result != 'failure' && steps.attach_issue.outcome == 'success') && 'success' || 'failure' }}
+          COMPAT_ISSUE_UPDATE_STATUS: ${{ steps.attach_issue.outcome }}
           COMPAT_CHANGES_FOUND: ${{ needs.discover.outputs.changes_found }}
           COMPAT_GEMINI_STEP_STATUS: ${{ needs.analyze.outputs.gemini_outcome }}
           COMPAT_REVIEW_ISSUE_URL: ${{ needs.report.outputs.issue_url }}
@@ -495,4 +496,5 @@ jobs:
           COMPAT_PROPOSE_RESULT: ${{ needs.propose.result }}
           COMPAT_VALIDATE_RESULT: ${{ needs.validate_fix.result }}
           COMPAT_PUBLISH_RESULT: ${{ needs.publish_fix.result }}
+          COMPAT_ISSUE_UPDATE_RESULT: ${{ steps.attach_issue.outcome }}
         run: python scripts/compatibility/finalize_run.py

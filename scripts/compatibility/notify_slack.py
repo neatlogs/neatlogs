@@ -157,6 +157,7 @@ def slack_message(
     proposal_status: dict[str, Any] | None = None,
     validation_status: dict[str, Any] | None = None,
     publish_status: dict[str, Any] | None = None,
+    issue_update_status: str | None = None,
 ) -> str:
     counts = (smoke_summary or {}).get("counts", {})
     regressions = (smoke_summary or {}).get("smokeRegressions", 0)
@@ -177,10 +178,12 @@ def slack_message(
         report is None or analysis is None or proposal_status is None
         or bool((analysis or {}).get("failed") or (analysis or {}).get("skipped"))
     )
-    if published in {"created", "ready"}:
-        headline = ":large_green_circle: *Python SDK: validated fix PR ready — review code and tests.*"
-    elif regressions:
+    if regressions:
         headline = f":red_circle: *Python SDK: {regressions} activation regression candidate(s) — review the evidence.*"
+    elif issue_update_status == "failure":
+        headline = ":red_circle: *Python SDK: compatibility review issue could not be updated.*"
+    elif published in {"created", "ready"}:
+        headline = ":large_green_circle: *Python SDK: validated fix PR ready — review code and tests.*"
     elif published == "failed":
         headline = ":red_circle: *Python SDK: fix PR publication failed — inspect the run.*"
     elif (validation_status or {}).get("status") == "failed":
@@ -274,10 +277,12 @@ def slack_message(
     if covered_drafts and published not in {"created", "ready", "already-covered"}:
         pr += f" <{covered_drafts[0]['url']}|Existing draft fix PR> remains draft."
 
-    if published in {"created", "ready"}:
-        action = "Review the PR and its validation evidence."
-    elif regressions:
+    if regressions:
         action = "Investigate the candidate regression and fix attempt."
+    elif issue_update_status == "failure":
+        action = "Inspect the issue update failure in the workflow run."
+    elif published in {"created", "ready"}:
+        action = "Review the PR and its validation evidence."
     elif published == "failed" or (validation_status or {}).get("status") == "failed" or (proposal_status or {}).get("status") == "rejected":
         action = "Inspect the failed fix attempt in the run and issue."
     elif status != "success" or gemini_status not in {None, "success"} or automation_incomplete:
@@ -307,7 +312,8 @@ def slack_message(
         links.append(f"<{upstream_issue['url']}|Upstream issue>")
     if pr_url and published not in {"created", "ready", "already-covered", "failed"}:
         links.append(f"<{pr_url}|Fix PR>")
-    evidence = "\n".join(item for item in (checked, regression, why_alerted, upstream) if item)
+    reporting = "*Reporting:* review issue update failed; use the workflow artifacts." if issue_update_status == "failure" else None
+    evidence = "\n".join(item for item in (checked, regression, why_alerted, reporting, upstream) if item)
     next_step = f"*Next step:* {action}"
     link_text = f"\n{' · '.join(links)}" if links else ""
     return f"{headline}\n\n{evidence}\n\n{pr}\n{next_step}{link_text}"
@@ -364,6 +370,7 @@ def main() -> int:
     message = slack_message(
         status, report, analysis, workflow_url(), upstream_issue, review_issue_url,
         gemini_status, smoke_summary, proposal_status, validation_status, publish_status,
+        os.environ.get("COMPAT_ISSUE_UPDATE_STATUS"),
     )
     body = json.dumps(slack_payload(message)).encode()
     request = Request(

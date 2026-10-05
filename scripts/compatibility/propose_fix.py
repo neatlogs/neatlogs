@@ -114,9 +114,15 @@ def choose_candidate(
     regressions = [
         item for item in options if item["basis"] == "activation-smoke-regression"
     ]
-    pool = regressions or options
     if rotation is None:
         rotation = int(datetime.now(timezone.utc).timestamp() // (12 * 3600))
+    reviews = [item for item in options if item["basis"] != "activation-smoke-regression"]
+    if regressions and reviews:
+        # One of every three runs reviews a different release even when an
+        # unresolved smoke regression stays in the backlog indefinitely.
+        pool = reviews if rotation % 3 == 2 else regressions
+        return pool[(rotation // 3) % len(pool)]
+    pool = regressions or reviews
     return pool[rotation % len(pool)]
 
 

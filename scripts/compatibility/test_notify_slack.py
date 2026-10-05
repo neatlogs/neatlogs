@@ -313,6 +313,20 @@ class NotifySlackTests(unittest.TestCase):
         self.assertIn("*Why alerted:* Gemini's fix proposal could not be used", message)
         self.assertIn("did not establish an SDK regression", message)
 
+    def test_failed_review_issue_update_has_a_distinct_alert(self):
+        files = self.live_review_files()
+        message = slack_message(
+            "failure", files["compatibility-release-report.json"],
+            files["compatibility-llm-analysis.json"], "https://example.test/run",
+            gemini_status="success",
+            smoke_summary=files["compatibility-smoke-summary.json"],
+            proposal_status=files["compatibility-fix-status.json"],
+            issue_update_status="failure",
+        )
+        self.assertIn("review issue could not be updated", message)
+        self.assertIn("*Reporting:* review issue update failed", message)
+        self.assertIn("Inspect the issue update failure", message)
+
     def test_verified_smoke_regression_is_separate_from_gemini(self):
         message = slack_message(
             "success", {"changes": [{"package": "openai", "previouslyAnalyzed": "1", "latest": "2"}]},

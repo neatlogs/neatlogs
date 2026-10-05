@@ -225,6 +225,8 @@ class ProposeFixTests(unittest.TestCase):
                             self.assertEqual(generate(), 0)
                             status = json.loads((root / "compatibility-fix-status.json").read_text())
                             self.assertEqual(status["status"], expected)
+                            if expected == "rejected":
+                                self.assertEqual(status["kind"], "unsafe-proposal")
                             self.assertEqual(status["selectedCandidate"], {
                                 "package": "alpha", "integration": "openai", "latestVersion": "2",
                                 "basis": "upstream-and-adapter-evidence-review",

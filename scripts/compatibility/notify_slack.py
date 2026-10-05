@@ -43,12 +43,17 @@ def should_notify(
     upstream_issue: dict[str, Any] | None = None,
 ) -> bool:
     """Notify only about regression candidates, fix PRs, or incomplete automation."""
+    recorded_advisory_failure = (
+        gemini_status == "failure" and isinstance(analysis, dict)
+        and analysis.get("failed") is True
+        and isinstance(analysis.get("error"), str) and bool(analysis["error"])
+    )
     if (
         status != "success"
-        or gemini_status != "success"
+        or (gemini_status != "success" and not recorded_advisory_failure)
         or not isinstance(report, dict)
         or not isinstance(analysis, dict)
-        or analysis.get("failed")
+        or (analysis.get("failed") and not recorded_advisory_failure)
         or analysis.get("skipped")
         or not isinstance(smoke_summary, dict)
         or not isinstance(proposal_status, dict)
@@ -56,18 +61,31 @@ def should_notify(
         or (publish_status is not None and not isinstance(publish_status, dict))
     ):
         return True
-    if proposal_status.get("status") not in {"no-safe-fix", "proposed"}:
+    proposal = proposal_status.get("status")
+    safe_proposal_rejection = (
+        proposal == "rejected" and proposal_status.get("kind") == "unsafe-proposal"
+    )
+    safe_validation_rejection = (
+        proposal == "proposed" and isinstance(validation_status, dict)
+        and validation_status.get("status") == "rejected"
+        and validation_status.get("kind") == "candidate-rejected"
+    )
+    if proposal not in {"no-safe-fix", "proposed"} and not safe_proposal_rejection:
         return True
-    if validation_status and validation_status.get("status") != "validated":
+    if safe_proposal_rejection and (validation_status is not None or publish_status is not None):
+        return True
+    if validation_status and validation_status.get("status") != "validated" and not safe_validation_rejection:
         return True
     published = (publish_status or {}).get("status")
     if published in {"created", "ready", "failed"}:
         return True
     if published not in {None, "already-covered"}:
         return True
-    if proposal_status.get("status") == "proposed" and published != "already-covered":
+    if safe_validation_rejection and publish_status is not None:
         return True
-    if validation_status and published != "already-covered":
+    if proposal == "proposed" and published != "already-covered" and not safe_validation_rejection:
+        return True
+    if validation_status and published != "already-covered" and not safe_validation_rejection:
         return True
     try:
         expected = {
@@ -83,7 +101,6 @@ def should_notify(
             or len(expected) != len(results)
             or smoke_summary["pairCount"] != len(expected)
             or smoke_summary["smokeRegressions"] != 0
-            or counts["not-tested"] != 0
             or sum(counts[key] for key in ("pass", "fail", "blocked", "not-tested")) != len(expected)
         ):
             return True
@@ -96,19 +113,26 @@ def should_notify(
                 pair not in expected
                 or pair in observed
                 or (result["baselineVersion"], result["latestVersion"]) != expected[pair]
-                or latest not in {"pass", "fail", "blocked"}
-                or (latest == "fail" and baseline != "fail")
+                or baseline not in {"pass", "fail", "blocked", "not-tested"}
+                or latest not in {"pass", "fail", "blocked", "not-tested"}
+                or (latest == "fail" and baseline == "pass")
+                or (latest == "not-tested" and (
+                    not result["latest"].get("stage")
+                    or not result["latest"].get("reason")
+                    or result["latest"]["reason"] == "Matrix result missing"
+                ))
                 or result["comparison"] != {
                     "pass": "latest-smoke-passed",
                     "fail": "latest-failure-needs-triage",
                     "blocked": "latest-install-blocked",
+                    "not-tested": "not-tested",
                 }[latest]
             ):
                 return True
             observed.add(pair)
         if any(
             counts[key] != sum(result["latest"]["status"] == key for result in results)
-            for key in ("pass", "fail", "blocked")
+            for key in ("pass", "fail", "blocked", "not-tested")
         ):
             return True
     except (AttributeError, KeyError, TypeError, ValueError):
@@ -225,6 +249,8 @@ def slack_message(
             pr = f"*Fix PR:* not opened — publication failed: {reason}"
     elif validation_status and validation_status.get("status") == "failed":
         pr = f"*Fix PR:* not opened — proposed fix failed validation: {short_reason(validation_status.get('reason', 'unknown'), 110)}"
+    elif validation_status and validation_status.get("status") == "rejected":
+        pr = f"*Fix PR:* not opened — proposed fix failed safety validation: {short_reason(validation_status.get('reason', 'unknown'), 110)}"
     elif proposal_status and proposal_status.get("status") == "rejected":
         pr = f"*Fix PR:* not opened — proposal rejected: {short_reason(proposal_status.get('reason', 'unknown'), 110)}"
     elif proposal_status and proposal_status.get("status") == "no-safe-fix":

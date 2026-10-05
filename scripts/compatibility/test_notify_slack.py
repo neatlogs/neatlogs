@@ -69,6 +69,71 @@ class NotifySlackTests(unittest.TestCase):
         self.assertEqual(len(messages), 1)
         self.assertIn("Upstream issue", messages[0])
 
+    def test_unsafe_advisory_proposal_is_issue_only_without_regression(self):
+        files = self.live_review_files()
+        files["compatibility-fix-status.json"] = {
+            "status": "rejected", "kind": "unsafe-proposal",
+            "reason": "Regression test has no test function",
+        }
+        self.assertEqual(self.webhook_posts(files), [])
+        files["compatibility-fix-status.json"].pop("kind")
+        self.assertEqual(len(self.webhook_posts(files)), 1, "Unclassified failure must alert")
+        files["compatibility-fix-status.json"]["kind"] = "unsafe-proposal"
+        smoke = files["compatibility-smoke-summary.json"]
+        smoke["results"][0]["latest"]["status"] = "fail"
+        smoke["results"][0]["comparison"] = "smoke-regression"
+        smoke["counts"] = {"pass": 1, "fail": 1, "blocked": 0, "not-tested": 0}
+        smoke["smokeRegressions"] = 1
+        self.assertEqual(len(self.webhook_posts(files)), 1, "Recorded regression must still alert")
+
+    def test_rejected_advisory_fix_validation_is_issue_only(self):
+        files = self.live_review_files()
+        files["compatibility-fix-status.json"] = {"status": "proposed"}
+        files["compatibility-validation-status.json"] = {
+            "status": "rejected", "kind": "candidate-rejected",
+            "reason": "Supplied regression test did not fail on the original SDK",
+        }
+        self.assertEqual(self.webhook_posts(files), [])
+        files["compatibility-validation-status.json"]["status"] = "failed"
+        self.assertEqual(len(self.webhook_posts(files)), 1, "Tooling failure must still alert")
+        files["compatibility-validation-status.json"]["status"] = "rejected"
+        smoke = files["compatibility-smoke-summary.json"]
+        smoke["results"][0]["latest"]["status"] = "fail"
+        smoke["results"][0]["comparison"] = "smoke-regression"
+        smoke["counts"] = {"pass": 1, "fail": 1, "blocked": 0, "not-tested": 0}
+        smoke["smokeRegressions"] = 1
+        self.assertIn("failed safety validation", self.webhook_posts(files)[0])
+
+    def test_recorded_optional_advisory_failure_is_issue_only_without_regression(self):
+        files = self.live_review_files()
+        files["compatibility-llm-analysis.json"] = {
+            "failed": True, "error": "Gemini exhausted its output token limit",
+        }
+        self.assertEqual(self.webhook_posts(files, gemini_status="failure"), [])
+        smoke = files["compatibility-smoke-summary.json"]
+        smoke["results"][0]["latest"]["status"] = "fail"
+        smoke["results"][0]["comparison"] = "smoke-regression"
+        smoke["counts"] = {"pass": 1, "fail": 1, "blocked": 0, "not-tested": 0}
+        smoke["smokeRegressions"] = 1
+        message = self.webhook_posts(files, gemini_status="failure")[0]
+        self.assertIn("activation regression candidate", message)
+        self.assertIn("Gemini analysis failed", message)
+
+    def test_recorded_not_tested_result_is_issue_only_but_missing_matrix_result_alerts(self):
+        files = self.live_review_files()
+        smoke = files["compatibility-smoke-summary.json"]
+        smoke["results"][1]["latest"] = {
+            "status": "not-tested", "stage": "environment",
+            "reason": "Could not create isolated environment",
+        }
+        smoke["results"][1]["comparison"] = "not-tested"
+        smoke["counts"] = {"pass": 1, "fail": 0, "blocked": 0, "not-tested": 1}
+        self.assertEqual(self.webhook_posts(files), [])
+        smoke["results"][1]["latest"] = {
+            "status": "not-tested", "reason": "Matrix result missing",
+        }
+        self.assertEqual(len(self.webhook_posts(files)), 1)
+
     def test_actionable_alert_without_slack_webhook_fails_the_job(self):
         files = self.live_review_files()
         with patch.dict("os.environ", {

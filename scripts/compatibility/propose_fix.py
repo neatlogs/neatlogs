@@ -352,15 +352,19 @@ def generate() -> int:
                 model = os.environ.get("COMPAT_GEMINI_MODEL", "gemini-2.5-flash")
                 proposal = request_proposal(candidate, evidence, api_key, model)
                 if proposal.get("decision") == "propose_fix":
-                    validate_proposal(proposal, candidate, evidence)
-                    proposal["candidate"] = candidate
-                    proposal["baseSha"] = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
-                    Path("compatibility-fix-proposal.json").write_text(json.dumps(proposal, indent=2) + "\n")
-                    status = {"status": "proposed", "package": candidate["package"], "integration": candidate["integration"], "basis": candidate["basis"]}
+                    try:
+                        validate_proposal(proposal, candidate, evidence)
+                    except (ValueError, SyntaxError) as error:
+                        status = {"status": "rejected", "kind": "unsafe-proposal", "reason": str(error)[:500]}
+                    else:
+                        proposal["candidate"] = candidate
+                        proposal["baseSha"] = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+                        Path("compatibility-fix-proposal.json").write_text(json.dumps(proposal, indent=2) + "\n")
+                        status = {"status": "proposed", "package": candidate["package"], "integration": candidate["integration"], "basis": candidate["basis"]}
                 else:
                     status = {"status": "no-safe-fix", "reason": textwrap.shorten(str(proposal.get("reason", "Gemini declined to propose a fix")), width=500, placeholder="…")}
             except Exception as error:
-                status = {"status": "rejected", "reason": str(error)[:500]}
+                status = {"status": "rejected", "kind": "request-failure", "reason": str(error)[:500]}
         status["selectedCandidate"] = {
             "package": candidate["package"],
             "integration": candidate["integration"],

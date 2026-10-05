@@ -59,7 +59,7 @@ class NotifySlackTests(unittest.TestCase):
         ]
         messages = self.webhook_posts(files, status="failure")
         self.assertEqual(len(messages), 1)
-        self.assertIn("No integration-specific SDK patch source for 1 pair(s) (groq/groq)", messages[0])
+        self.assertIn("No integration-specific SDK patch source for 1 pair(s) (e.g. groq/groq)", messages[0])
 
     def test_actionable_or_incomplete_reviews_still_send_slack(self):
         cases = {}
@@ -128,17 +128,16 @@ class NotifySlackTests(unittest.TestCase):
                 "url": "https://github.com/example/sdk/issues/2",
             },
         )
-        self.assertIn("1 upstream release", message)
+        self.assertIn("1 newer upstream release", message)
         self.assertIn("openai 1 → 2", message)
-        self.assertIn("high", message)
-        self.assertIn("multi-hop usage undercounts tokens", message)
+        self.assertNotIn("high potential risk", message)
+        self.assertIn("Upstream issue", message)
         self.assertIn("github.com/example/sdk/issues/2", message)
         self.assertIn("https://example.test/run", message)
-        self.assertIn("unverified", message)
-        self.assertIn("Latest-version smoke results unavailable", message)
+        self.assertIn("regression status unknown", message)
 
     def test_failure_message_does_not_require_report(self):
-        self.assertIn("workflow failed", slack_message("failure", None, None, None))
+        self.assertIn("compatibility automation failed", slack_message("failure", None, None, None))
 
     def test_failure_message_keeps_upstream_issue_context(self):
         message = slack_message(
@@ -151,7 +150,7 @@ class NotifySlackTests(unittest.TestCase):
                 "url": "https://github.com/example/sdk/issues/2",
             },
         )
-        self.assertIn("multi-hop usage undercounts tokens", message)
+        self.assertIn("Upstream issue", message)
         self.assertIn("github.com/example/sdk/issues/2", message)
 
     def test_gemini_failure_has_reason_and_review_issue(self):
@@ -160,7 +159,7 @@ class NotifySlackTests(unittest.TestCase):
             "https://github.com/neatlogs/neatlogs/actions/runs/123", None,
             "https://github.com/neatlogs/neatlogs/issues/42", "failure",
         )
-        self.assertIn("Gemini advisory failed", message)
+        self.assertIn("Gemini analysis failed", message)
         self.assertIn("HTTP 400", message)
         self.assertIn("issues/42", message)
         self.assertIn("actions/runs/123", message)
@@ -173,10 +172,37 @@ class NotifySlackTests(unittest.TestCase):
                 "smokeRegressions": 1,
             },
         )
-        self.assertIn("activation smoke regression detected", message)
-        self.assertIn("1 baseline-passing", message)
-        self.assertIn("Gemini advisory: low potential risk (unverified)", message)
-        self.assertIn("Checks cover install, dependencies, and instrumentation activation only", message)
+        self.assertIn("activation regression candidate", message)
+        self.assertIn("1 baseline-pass/latest-fail", message)
+        self.assertNotIn("Gemini advisory", message)
+        self.assertIn("tested activation scope", slack_message(
+            "success", None, None, None,
+            smoke_summary={"counts": {"pass": 1, "fail": 0, "blocked": 0, "not-tested": 0}, "smokeRegressions": 0},
+        ))
+
+    def test_inconclusive_failures_and_blocked_installs_name_the_assessed_candidate(self):
+        message = slack_message(
+            "success", {"changes": [{"package": "google-genai", "previouslyAnalyzed": "2.23.0",
+                                      "latest": "2.27.0"}]},
+            {"riskLevel": "high"}, "https://example.test/run",
+            smoke_summary={
+                "counts": {"pass": 0, "fail": 1, "blocked": 1, "not-tested": 0},
+                "smokeRegressions": 0,
+                "results": [
+                    {"latest": {"status": "fail"}, "baseline": {"status": "fail"}},
+                    {"latest": {"status": "blocked"}, "baseline": {"status": "pass"}},
+                ],
+            },
+            proposal_status={"status": "rejected", "reason": "Regression test has no test function",
+                             "selectedCandidate": {"package": "google-genai", "integration": "google-genai",
+                                                   "latestVersion": "2.27.0",
+                                                   "basis": "upstream-and-adapter-evidence-review"}},
+        )
+        self.assertIn("no confirmed regression — triage failed or blocked checks", message)
+        self.assertIn("1 fail (1 also failed at baseline) · 1 blocked", message)
+        self.assertIn("none found in the tested activation scope", message)
+        self.assertIn("proposal rejected: Regression test has no test function", message)
+        self.assertNotIn("high potential risk", message)
 
     def test_workflow_url_uses_actions_runs_path(self):
         with patch.dict("os.environ", {
@@ -189,20 +215,21 @@ class NotifySlackTests(unittest.TestCase):
                 "https://github.com/neatlogs/neatlogs/actions/runs/36571240360",
             )
 
-    def test_review_pr_is_linked_with_unverified_scope(self):
+    def test_review_pr_is_linked_with_reproduction_scope(self):
         message = slack_message(
             "success", {"changes": [{"package": "openai", "previouslyAnalyzed": "1", "latest": "2"}]},
             {"riskLevel": "high"}, "https://example.test/run",
             smoke_summary={"counts": {"pass": 1, "fail": 0, "blocked": 0, "not-tested": 0}, "smokeRegressions": 0},
             proposal_status={"status": "proposed", "deferredCandidates": [{"package": "other"}]},
-            validation_status={"status": "validated"},
+            validation_status={"status": "validated", "redGreen": "red-before-green-after",
+                               "reproduction": "focused-red-green"},
             publish_status={"status": "created", "prUrl": "https://github.com/neatlogs/neatlogs/pull/200"},
         )
-        self.assertIn("Fix PR for review", message)
+        self.assertIn("validated fix PR ready", message)
         self.assertIn("/pull/200", message)
-        self.assertIn("Gemini advisory: high potential risk (unverified)", message)
-        self.assertIn("behavior fix unverified", message)
-        self.assertIn("1 candidate(s) deferred", message)
+        self.assertNotIn("Gemini advisory", message)
+        self.assertIn("Focused red/green test passed", message)
+        self.assertNotIn("deferred", message)
 
     def test_validation_failure_explains_no_pr_and_keeps_links(self):
         message = slack_message(
@@ -212,9 +239,9 @@ class NotifySlackTests(unittest.TestCase):
             proposal_status={"status": "proposed"},
             validation_status={"status": "failed", "reason": "focused test failed"},
         )
-        self.assertIn("Gemini proposed a fix, but validation failed", message)
+        self.assertIn("proposed fix failed validation", message)
         self.assertIn("focused test failed", message)
-        self.assertIn("No PR opened", message)
+        self.assertIn("not opened", message)
         self.assertIn("issues/42", message)
         self.assertIn("actions/runs/123", message)
 
@@ -230,10 +257,10 @@ class NotifySlackTests(unittest.TestCase):
             validation_status={"status": "validated", "redGreen": "red-before-green-after"},
             publish_status={"status": "failed", "reason": "GitHub denied PR creation"},
         )
-        self.assertIn("activation smoke regression detected", message)
-        self.assertIn("openai/openai", message)
-        self.assertIn("Gemini advisory: low potential risk (unverified)", message)
-        self.assertIn("Fix PR could not be opened", message)
+        self.assertIn("activation regression candidate", message)
+        self.assertIn("baseline-pass/latest-fail", message)
+        self.assertNotIn("Gemini advisory", message)
+        self.assertIn("publication failed", message)
         self.assertIn("GitHub denied PR creation", message)
 
     def test_gemini_proposal_without_validation_does_not_claim_a_pr(self):
@@ -241,9 +268,8 @@ class NotifySlackTests(unittest.TestCase):
             "success", None, {"riskLevel": "high"}, "https://example.test/run",
             proposal_status={"status": "proposed"},
         )
-        self.assertIn("Gemini proposed a fix; validation result unavailable", message)
-        self.assertIn("No PR confirmed", message)
-        self.assertIn("Gemini advisory: high potential risk (unverified)", message)
+        self.assertIn("proposal exists, but publication was not confirmed", message)
+        self.assertNotIn("Gemini advisory", message)
 
     def test_reused_draft_or_closed_pr_is_described_accurately(self):
         draft_url = "https://github.com/neatlogs/neatlogs/pull/201"
@@ -252,15 +278,15 @@ class NotifySlackTests(unittest.TestCase):
             publish_status={"status": "already-covered", "prUrl": draft_url,
                             "state": "OPEN", "isDraft": True},
         )
-        self.assertIn("remains draft", draft)
-        self.assertIn("Existing draft fix PR", draft)
+        self.assertIn("open, draft", draft)
+        self.assertIn("existing PR", draft)
         self.assertIn(draft_url, draft)
         closed = slack_message(
             "success", None, None, "https://example.test/run",
             publish_status={"status": "already-covered", "prUrl": draft_url,
                             "state": "CLOSED", "isDraft": False},
         )
-        self.assertIn("Previous fix PR is closed; no new PR opened", closed)
+        self.assertIn("existing PR> (closed); no new PR opened", closed)
         self.assertNotIn("human code review required", closed)
 
     def test_covered_draft_is_visible_when_candidate_is_skipped(self):
@@ -272,7 +298,7 @@ class NotifySlackTests(unittest.TestCase):
                                  "state": "OPEN", "isDraft": True,
                              }]},
         )
-        self.assertIn("matching fix PR(s) remain draft", message)
+        self.assertIn("Existing draft fix PR> remains draft", message)
         self.assertIn("/pull/202", message)
 
     def test_matching_bot_draft_marked_ready_is_not_reported_as_still_draft(self):
@@ -285,8 +311,8 @@ class NotifySlackTests(unittest.TestCase):
             validation_status={"status": "validated"},
             publish_status={"status": "ready", "prUrl": url, "state": "OPEN", "isDraft": False},
         )
-        self.assertIn("marked ready for human review", message)
-        self.assertIn("Fix PR for review", message)
+        self.assertIn("validated fix PR ready", message)
+        self.assertIn("open for human review", message)
         self.assertNotIn("remain draft", message)
 
     def test_bot_draft_ready_failure_retains_link_and_reason(self):
@@ -297,8 +323,47 @@ class NotifySlackTests(unittest.TestCase):
         )
         self.assertIn("could not be marked ready", message)
         self.assertIn("GitHub denied readiness", message)
-        self.assertIn("Existing draft fix PR", message)
+        self.assertIn("existing draft", message)
         self.assertIn("/pull/204", message)
+
+    def test_october_3_alert_puts_outcome_and_no_pr_reason_first(self):
+        changes = [
+            {"package": "agno", "previouslyAnalyzed": "3.0.9", "latest": "3.1.1"},
+            {"package": "anthropic", "previouslyAnalyzed": "1.6.0", "latest": "1.11.0"},
+        ] + [
+            {"package": f"dependency-{index}", "previouslyAnalyzed": "1", "latest": "2"}
+            for index in range(49)
+        ]
+        results = [
+            {"baseline": {"status": "fail"}, "latest": {"status": "fail"}}
+            for _ in range(6)
+        ] + [
+            {"baseline": {"status": "blocked"}, "latest": {"status": "blocked"}}
+            for _ in range(5)
+        ]
+        message = slack_message(
+            "success", {"changes": changes}, {"riskLevel": "high"},
+            "https://github.com/neatlogs/neatlogs/actions/runs/37085105195",
+            review_issue_url="https://github.com/neatlogs/neatlogs/issues/125",
+            smoke_summary={
+                "counts": {"pass": 50, "fail": 6, "blocked": 5, "not-tested": 0},
+                "smokeRegressions": 0, "results": results,
+            },
+            proposal_status={"status": "no-safe-fix", "reason": "No actionable SDK patch",
+                             "deferredCandidates": [{"package": "other"}] * 37},
+        )
+        lines = message.splitlines()
+        self.assertEqual(len(lines), 4)
+        self.assertIn("no confirmed regression — triage failed or blocked checks", lines[0])
+        self.assertIn("50 pass · 6 fail (6 also failed at baseline) · 5 blocked", lines[1])
+        self.assertIn("none found in the tested activation scope", lines[1])
+        self.assertIn("51 newer upstream releases (e.g. agno 3.0.9 → 3.1.1, anthropic 1.6.0 → 1.11.0)", lines[1])
+        self.assertIn("not opened — no safe code-specific fix", lines[2])
+        self.assertIn("Triage preexisting failures", lines[3])
+        self.assertIn("issues/125", lines[3])
+        self.assertIn("actions/runs/37085105195", lines[3])
+        self.assertNotIn("high potential risk", message)
+        self.assertNotIn("37 candidate", message)
 
 
 if __name__ == "__main__":

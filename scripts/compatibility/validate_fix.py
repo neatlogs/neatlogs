@@ -58,6 +58,30 @@ def require_post_patch_smoke(smoke: dict[str, object]) -> None:
         )
 
 
+def require_reproduction(candidate: dict[str, object], red_green: str) -> str:
+    """Require a demonstrated failure before a patch can become a review PR."""
+    if red_green == "red-before-green-after":
+        return "focused-red-green"
+    smoke = candidate.get("smoke")
+    if (
+        candidate.get("basis") == "activation-smoke-regression"
+        and isinstance(smoke, dict)
+        and smoke.get("package") == candidate.get("package")
+        and smoke.get("integration") == candidate.get("integration")
+        and smoke.get("latestVersion") == candidate.get("latestVersion")
+        and smoke.get("comparison") == "smoke-regression"
+        and isinstance(smoke.get("baseline"), dict)
+        and smoke["baseline"].get("status") == "pass"
+        and isinstance(smoke.get("latest"), dict)
+        and smoke["latest"].get("status") == "fail"
+    ):
+        return "activation-smoke-baseline-pass-latest-fail-patched-pass"
+    raise RuntimeError(
+        "No reproducible regression: advisory-only fixes need a focused test "
+        "that fails before and passes after the patch"
+    )
+
+
 def check_affected_integrations(
     candidate: dict[str, object], evidence: dict[str, object],
     config: dict[str, object], wheel: Path,
@@ -148,6 +172,7 @@ def validate() -> dict[str, object]:
             raise RuntimeError(f"Patched SDK wheel build failed: {(built.stdout + built.stderr)[-2000:]}")
         wheel = next(Path(directory).glob("neatlogs-*.whl"))
         checked_integrations = check_affected_integrations(candidate, evidence, config, wheel)
+    reproduction = require_reproduction(candidate, red_green)
     if workspace_snapshot() != patched_snapshot:
         raise RuntimeError("Validation tests modified unexpected workspace files")
     changed.append(advance_version_lock(candidate, evidence, ROOT))
@@ -168,8 +193,8 @@ def validate() -> dict[str, object]:
     else:
         scope.append("no existing adapter test file matched")
     scope.append(f"patched latest-version activation passed for all {len(checked_integrations)} affected integration(s)")
-    if red_green != "red-before-green-after":
-        scope.append("behavior change remains unverified")
+    if reproduction == "activation-smoke-baseline-pass-latest-fail-patched-pass":
+        scope.append("baseline activation passed, latest failed, and patched latest passed")
     return {
         "status": "validated",
         "proposalSha256": hashlib.sha256(proposal_bytes).hexdigest(),
@@ -179,6 +204,7 @@ def validate() -> dict[str, object]:
         for path in changed
     },
         "redGreen": red_green,
+        "reproduction": reproduction,
         "postPatchSmoke": "pass",
         "postPatchIntegrationResults": checked_integrations,
         "focusedTests": [str(path.relative_to(ROOT)) for path in focused],

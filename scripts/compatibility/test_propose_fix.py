@@ -1,5 +1,6 @@
 import io
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -12,6 +13,7 @@ from scripts.compatibility.propose_fix import (
     candidate_options,
     choose_candidate,
     deferred_candidates,
+    generate,
     generated_test_path,
     no_sdk_patch_surface,
     proposal_branch,
@@ -49,6 +51,8 @@ class ProposeFixTests(unittest.TestCase):
         prompt = json.loads(request.data)["contents"][0]["parts"][0]["text"]
         self.assertIn("shared helper marker", prompt)
         self.assertIn("read-only context", prompt)
+        self.assertIn("a regressionTest is required", prompt)
+        self.assertIn("top-level test_* function", prompt)
         self.assertEqual(
             allowed_adapter_paths({"package": "alpha", "integration": "openai"}, package_evidence),
             {"neatlogs/alpha.py"},
@@ -120,6 +124,7 @@ class ProposeFixTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "neatlogs").mkdir()
+            (root / "tests/unit").mkdir(parents=True)
             target = root / "neatlogs/alpha.py"
             target.write_text("def run():\n    return 1\n")
             candidate = choose_candidate({}, {}, evidence(), rotation=0)
@@ -128,10 +133,58 @@ class ProposeFixTests(unittest.TestCase):
                 "rationale": "The upstream call changed its return value.",
                 "evidence": "The upstream API diff removed the old signature.",
                 "edits": [{"path": "neatlogs/alpha.py", "oldText": "return 1", "newText": "return 2"}],
+                "regressionTest": {
+                    "path": generated_test_path(candidate),
+                    "content": "def test_latest_behavior():\n    assert False\n",
+                },
             }
             validate_proposal(proposal, candidate, evidence(), root)
-            self.assertEqual(apply_proposal(proposal, candidate, evidence(), root), ["neatlogs/alpha.py"])
+            self.assertEqual(apply_proposal(proposal, candidate, evidence(), root), [
+                "neatlogs/alpha.py", generated_test_path(candidate),
+            ])
             self.assertIn("return 2", target.read_text())
+
+    def test_advisory_fix_requires_a_focused_test_but_smoke_regression_does_not(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "neatlogs").mkdir()
+            (root / "neatlogs/alpha.py").write_text("def run():\n    return 1\n")
+            candidate = choose_candidate({}, {}, evidence(), rotation=0)
+            proposal = {
+                "decision": "propose_fix", "package": "alpha", "integration": "openai",
+                "rationale": "The upstream call changed its return value.",
+                "evidence": "The upstream API diff removed the old signature.",
+                "edits": [{"path": "neatlogs/alpha.py", "oldText": "return 1", "newText": "return 2"}],
+            }
+            with self.assertRaisesRegex(ValueError, "requires a focused red/green"):
+                validate_proposal(proposal, candidate, evidence(), root)
+            candidate["basis"] = "activation-smoke-regression"
+            validate_proposal(proposal, candidate, evidence(), root)
+
+    def test_rejected_or_declined_proposal_reports_the_selected_candidate(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "compatibility-evidence.json").write_text(json.dumps({
+                "packages": [evidence()["packages"][0]],
+            }))
+            (root / "compatibility-smoke-summary.json").write_text(json.dumps({"results": []}))
+            previous = Path.cwd()
+            try:
+                os.chdir(root)
+                with patch.dict(os.environ, {"COMPAT_GEMINI_API_KEY": "test"}, clear=True):
+                    for decision, expected in (({"decision": "no_safe_fix", "reason": "No change"}, "no-safe-fix"),
+                                               ({"decision": "propose_fix"}, "rejected")):
+                        with self.subTest(expected=expected), \
+                                patch("scripts.compatibility.propose_fix.request_proposal", return_value=decision):
+                            self.assertEqual(generate(), 0)
+                            status = json.loads((root / "compatibility-fix-status.json").read_text())
+                            self.assertEqual(status["status"], expected)
+                            self.assertEqual(status["selectedCandidate"], {
+                                "package": "alpha", "integration": "openai", "latestVersion": "2",
+                                "basis": "upstream-and-adapter-evidence-review",
+                            })
+            finally:
+                os.chdir(previous)
 
     def test_workflow_or_unmatched_edits_are_rejected(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -145,6 +145,10 @@ def slack_message(
         if item.get("state") == "OPEN" and item.get("isDraft") and item.get("url")
         and not (published == "ready" and item["url"] == pr_url)
     ]
+    automation_incomplete = (
+        report is None or analysis is None or proposal_status is None
+        or bool((analysis or {}).get("failed") or (analysis or {}).get("skipped"))
+    )
     if published in {"created", "ready"}:
         headline = ":large_green_circle: *Python SDK: validated fix PR ready — review code and tests.*"
     elif regressions:
@@ -153,7 +157,7 @@ def slack_message(
         headline = ":red_circle: *Python SDK: fix PR publication failed — inspect the run.*"
     elif (validation_status or {}).get("status") == "failed" or (proposal_status or {}).get("status") == "rejected":
         headline = ":warning: *Python SDK: fix attempt rejected — review validation evidence.*"
-    elif status != "success" or gemini_status not in {None, "success"} or (analysis or {}).get("failed"):
+    elif status != "success" or gemini_status not in {None, "success"} or automation_incomplete:
         headline = ":red_circle: *Python SDK: compatibility automation failed — inspect the run.*"
     elif smoke_summary is None:
         headline = ":warning: *Python SDK: check evidence incomplete — inspect the run.*"
@@ -232,7 +236,7 @@ def slack_message(
         action = "Investigate the candidate regression and fix attempt."
     elif published == "failed" or (validation_status or {}).get("status") == "failed" or (proposal_status or {}).get("status") == "rejected":
         action = "Inspect the failed fix attempt in the run and issue."
-    elif status != "success" or gemini_status not in {None, "success"} or (analysis or {}).get("failed"):
+    elif status != "success" or gemini_status not in {None, "success"} or automation_incomplete:
         action = "Inspect the failed workflow step and retry after correction."
     elif counts.get("fail", 0) or counts.get("blocked", 0) or counts.get("not-tested", 0):
         work = []

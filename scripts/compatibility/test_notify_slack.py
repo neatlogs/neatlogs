@@ -165,6 +165,17 @@ class NotifySlackTests(unittest.TestCase):
     def test_failure_message_does_not_require_report(self):
         self.assertIn("compatibility automation failed", slack_message("failure", None, None, None))
 
+    def test_missing_analysis_does_not_look_like_a_release_review(self):
+        files = self.live_review_files()
+        message = slack_message(
+            "success", files["compatibility-release-report.json"], None,
+            "https://example.test/run", gemini_status="success",
+            smoke_summary=files["compatibility-smoke-summary.json"],
+            proposal_status=files["compatibility-fix-status.json"],
+        )
+        self.assertIn("compatibility automation failed", message)
+        self.assertIn("Inspect the failed workflow step", message)
+
     def test_failure_message_keeps_upstream_issue_context(self):
         message = slack_message(
             "failure",

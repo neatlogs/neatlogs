@@ -114,9 +114,15 @@ def choose_candidate(
     regressions = [
         item for item in options if item["basis"] == "activation-smoke-regression"
     ]
-    pool = regressions or options
     if rotation is None:
         rotation = int(datetime.now(timezone.utc).timestamp() // (12 * 3600))
+    reviews = [item for item in options if item["basis"] != "activation-smoke-regression"]
+    if regressions and reviews:
+        # One of every three runs reviews a different release even when an
+        # unresolved smoke regression stays in the backlog indefinitely.
+        pool = reviews if rotation % 3 == 2 else regressions
+        return pool[(rotation // 3) % len(pool)]
+    pool = regressions or reviews
     return pool[rotation % len(pool)]
 
 
@@ -265,22 +271,49 @@ def request_proposal(candidate: dict[str, Any], evidence: dict[str, Any], api_ke
         f"Package evidence: {json.dumps(compact_package(package), ensure_ascii=False)[:32000]}",
         f"Adapter source: {json.dumps(adapter, ensure_ascii=False)[:50000]}",
     ])
-    request = Request(
-        f"https://generativelanguage.googleapis.com/v1beta/models/{quote(model, safe='')}:generateContent",
-        data=json.dumps({"contents": [{"role": "user", "parts": [{"text": prompt}]}],
-                         "generationConfig": {"responseMimeType": "application/json", "temperature": 0.1,
-                                              "maxOutputTokens": 8192}}).encode(),
-        headers={"Content-Type": "application/json", "x-goog-api-key": api_key},
-        method="POST",
-    )
-    try:
-        with urlopen(request, timeout=180) as response:
-            payload = json.load(response)
-    except HTTPError as error:
-        detail = error.read(2048).decode(errors="replace").replace(api_key, "[redacted]")
-        raise RuntimeError(f"Gemini fix proposal HTTP {error.code}: {detail[:500]}") from error
-    text = "".join(part.get("text", "") for part in payload.get("candidates", [{}])[0].get("content", {}).get("parts", []))
-    return json.loads(text)
+    flash = model.startswith("gemini-2.5-flash")
+    for attempt in range(2 if flash else 1):
+        generation_config: dict[str, Any] = {
+            "responseMimeType": "application/json", "temperature": 0.1,
+            "maxOutputTokens": 8192,
+        }
+        if flash:
+            # Gemini 2.5 Flash counts thinking against maxOutputTokens.
+            generation_config["thinkingConfig"] = {"thinkingBudget": 1024 if attempt == 0 else 0}
+        request = Request(
+            f"https://generativelanguage.googleapis.com/v1beta/models/{quote(model, safe='')}:generateContent",
+            data=json.dumps({"contents": [{"role": "user", "parts": [{"text": prompt}]}],
+                             "generationConfig": generation_config}).encode(),
+            headers={"Content-Type": "application/json", "x-goog-api-key": api_key},
+            method="POST",
+        )
+        try:
+            with urlopen(request, timeout=180) as response:
+                payload = json.load(response)
+        except HTTPError as error:
+            detail = error.read(2048).decode(errors="replace").replace(api_key, "[redacted]")
+            raise RuntimeError(f"Gemini fix proposal HTTP {error.code}: {detail[:500]}") from error
+        candidates = payload.get("candidates", [])
+        if not candidates:
+            raise ValueError("Gemini fix proposal returned no candidates")
+        result = candidates[0]
+        text = "".join(part.get("text", "") for part in result.get("content", {}).get("parts", []))
+        if result.get("finishReason") == "MAX_TOKENS":
+            if flash and attempt == 0:
+                continue
+            raise ValueError("Gemini fix proposal exhausted its output token limit")
+        if result.get("finishReason") not in (None, "STOP"):
+            raise ValueError(f"Gemini fix proposal ended with {result['finishReason']}")
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError as error:
+            if flash and attempt == 0:
+                continue
+            raise ValueError("Gemini fix proposal returned malformed JSON") from error
+        if not isinstance(parsed, dict):
+            raise ValueError("Gemini fix proposal must be a JSON object")
+        return parsed
+    raise ValueError("Gemini fix proposal exhausted its output token limit")
 
 
 def generate() -> int:
@@ -325,15 +358,19 @@ def generate() -> int:
                 model = os.environ.get("COMPAT_GEMINI_MODEL", "gemini-2.5-flash")
                 proposal = request_proposal(candidate, evidence, api_key, model)
                 if proposal.get("decision") == "propose_fix":
-                    validate_proposal(proposal, candidate, evidence)
-                    proposal["candidate"] = candidate
-                    proposal["baseSha"] = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
-                    Path("compatibility-fix-proposal.json").write_text(json.dumps(proposal, indent=2) + "\n")
-                    status = {"status": "proposed", "package": candidate["package"], "integration": candidate["integration"], "basis": candidate["basis"]}
+                    try:
+                        validate_proposal(proposal, candidate, evidence)
+                    except (ValueError, SyntaxError) as error:
+                        status = {"status": "rejected", "kind": "unsafe-proposal", "reason": str(error)[:500]}
+                    else:
+                        proposal["candidate"] = candidate
+                        proposal["baseSha"] = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+                        Path("compatibility-fix-proposal.json").write_text(json.dumps(proposal, indent=2) + "\n")
+                        status = {"status": "proposed", "package": candidate["package"], "integration": candidate["integration"], "basis": candidate["basis"]}
                 else:
                     status = {"status": "no-safe-fix", "reason": textwrap.shorten(str(proposal.get("reason", "Gemini declined to propose a fix")), width=500, placeholder="…")}
             except Exception as error:
-                status = {"status": "rejected", "reason": str(error)[:500]}
+                status = {"status": "rejected", "kind": "request-failure", "reason": str(error)[:500]}
         status["selectedCandidate"] = {
             "package": candidate["package"],
             "integration": candidate["integration"],

@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       upstream_issue_url:
-        description: "Optional public GitHub issue to exercise the full issue-evidence alert path"
+        description: "Optional public GitHub issue to include as review evidence"
         required: false
         type: string
       upstream_issue_package:
@@ -79,7 +79,6 @@ jobs:
           retention-days: 14
       - name: Notify Slack if discovery fails
         if: failure()
-        continue-on-error: true
         env:
           COMPAT_SLACK_WEBHOOK_URL: ${{ secrets.COMPAT_SLACK_WEBHOOK_URL }}
           COMPAT_JOB_STATUS: failure
@@ -273,10 +272,8 @@ jobs:
             const issues = await github.rest.issues.listForRepo({ owner: context.repo.owner, repo: context.repo.repo, state: 'open', per_page: 100 });
             const existing = issues.data.find((issue) => issue.title === title && !issue.pull_request);
             if (existing) {
-              // Keep the last successfully posted Slack finding across issue refreshes.
-              const priorMarker = (existing.body || '').match(/<!-- compatibility-slack-fingerprint:v1:[0-9a-f]{64} -->/);
-              const updatedBody = priorMarker ? body + '\n\n' + priorMarker[0] : body;
-              await github.rest.issues.update({ owner: context.repo.owner, repo: context.repo.repo, issue_number: existing.number, body: updatedBody });
+              // A complete review replaces the prior finding, including any legacy Slack marker.
+              await github.rest.issues.update({ owner: context.repo.owner, repo: context.repo.repo, issue_number: existing.number, body });
               core.setOutput('url', existing.html_url);
             } else {
               const created = await github.rest.issues.create({ owner: context.repo.owner, repo: context.repo.repo, title, body });
@@ -334,6 +331,8 @@ jobs:
     timeout-minutes: 45
     permissions:
       contents: read
+    outputs:
+      validated: ${{ steps.check.outputs.validated }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -350,7 +349,14 @@ jobs:
       - name: Install deterministic validation tooling
         run: python -m pip install --disable-pip-version-check build -e . -r .github/requirements-test.txt
       - name: Apply patch and validate without secrets
-        run: python scripts/compatibility/validate_fix.py
+        id: check
+        run: |
+          python scripts/compatibility/validate_fix.py
+          if jq -e '.status == "validated"' compatibility-validation-status.json >/dev/null; then
+            echo "validated=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "validated=false" >> "$GITHUB_OUTPUT"
+          fi
       - name: Upload validation result
         if: always()
         uses: actions/upload-artifact@v4
@@ -362,7 +368,7 @@ jobs:
 
   publish_fix:
     needs: [report, propose, validate_fix]
-    if: needs.validate_fix.result == 'success'
+    if: needs.validate_fix.outputs.validated == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -429,8 +435,8 @@ jobs:
         with:
           name: python-compatibility-fix-published
       - name: Attach proposal outcome to review issue
+        id: attach_issue
         if: needs.report.outputs.issue_url != ''
-        continue-on-error: true
         uses: actions/github-script@v7
         env:
           COMPAT_REVIEW_ISSUE_URL: ${{ needs.report.outputs.issue_url }}
@@ -449,7 +455,7 @@ jobs:
             const details = [
               start,
               '### Automated fix proposal',
-              'One candidate is assessed per scheduled run. Baseline-passing activation failures take priority; remaining candidates are listed below.',
+              'One candidate is assessed per scheduled run. When both kinds are pending, baseline-passing activation failures get two of every three slots and other release reviews get one; remaining candidates are listed below.',
               'Proposal: ' + (proposal?.status || 'unavailable') + (proposal?.reason ? ' — ' + proposal.reason : ''),
               'Assessed candidate: ' + JSON.stringify(proposal?.selectedCandidate || null),
               'Validation: ' + (validation?.status || 'not run') + (validation?.reason ? ' — ' + validation.reason : ''),
@@ -469,68 +475,26 @@ jobs:
               ? (prior.slice(0, first) + prior.slice(last + end.length)).trimEnd()
               : prior.trimEnd();
             await github.rest.issues.update({owner: context.repo.owner, repo: context.repo.repo, issue_number: issueNumber, body: withoutOld + '\n\n' + details});
-      - name: Read last Slack finding from review issue
-        if: needs.report.outputs.issue_url != ''
-        continue-on-error: true
-        uses: actions/github-script@v7
-        env:
-          COMPAT_REVIEW_ISSUE_URL: ${{ needs.report.outputs.issue_url }}
-        with:
-          script: |
-            const fs = require('node:fs');
-            const issueNumber = Number(process.env.COMPAT_REVIEW_ISSUE_URL.split('/').pop());
-            const issue = await github.rest.issues.get({owner: context.repo.owner, repo: context.repo.repo, issue_number: issueNumber});
-            const marker = (issue.data.body || '').match(/<!-- compatibility-slack-fingerprint:v1:[0-9a-f]{64} -->/);
-            if (marker) fs.writeFileSync('compatibility-prior-slack-marker.txt', marker[0] + '\n');
       - name: Notify Slack
-        id: notify_slack
         if: always()
-        continue-on-error: true
         env:
           COMPAT_SLACK_WEBHOOK_URL: ${{ secrets.COMPAT_SLACK_WEBHOOK_URL }}
-          COMPAT_JOB_STATUS: ${{ (needs.report.result == 'success' && needs.analyze.result == 'success' && needs.smoke.result == 'success' && needs.propose.result == 'success' && needs.validate_fix.result != 'failure' && needs.publish_fix.result != 'failure') && 'success' || 'failure' }}
+          COMPAT_JOB_STATUS: ${{ (needs.report.result == 'success' && needs.analyze.result == 'success' && needs.smoke.result == 'success' && needs.propose.result == 'success' && needs.validate_fix.result != 'failure' && needs.publish_fix.result != 'failure' && steps.attach_issue.outcome == 'success') && 'success' || 'failure' }}
+          COMPAT_ISSUE_UPDATE_STATUS: ${{ steps.attach_issue.outcome }}
           COMPAT_CHANGES_FOUND: ${{ needs.discover.outputs.changes_found }}
           COMPAT_GEMINI_STEP_STATUS: ${{ needs.analyze.outputs.gemini_outcome }}
           COMPAT_REVIEW_ISSUE_URL: ${{ needs.report.outputs.issue_url }}
           COMPAT_UPSTREAM_ISSUE_FILE: compatibility-upstream-issue.json
         run: python scripts/compatibility/notify_slack.py
-      - name: Record successfully sent Slack finding
-        if: always() && steps.notify_slack.outcome == 'success' && needs.report.outputs.issue_url != ''
-        continue-on-error: true
-        uses: actions/github-script@v7
-        env:
-          COMPAT_REVIEW_ISSUE_URL: ${{ needs.report.outputs.issue_url }}
-        with:
-          script: |
-            const fs = require('node:fs');
-            const path = 'compatibility-sent-slack-marker.txt';
-            if (!fs.existsSync(path)) return;
-            const marker = fs.readFileSync(path, 'utf8').trim();
-            if (marker && !/^<!-- compatibility-slack-fingerprint:v1:[0-9a-f]{64} -->$/.test(marker)) throw new Error('Invalid Slack finding marker');
-            const issueNumber = Number(process.env.COMPAT_REVIEW_ISSUE_URL.split('/').pop());
-            const issue = await github.rest.issues.get({owner: context.repo.owner, repo: context.repo.repo, issue_number: issueNumber});
-            const oldMarker = /\n*<!-- compatibility-slack-fingerprint:v1:[0-9a-f]{64} -->/g;
-            const currentBody = (issue.data.body || '').replace(oldMarker, '').trimEnd();
-            const body = marker ? currentBody + '\n\n' + marker : currentBody;
-            await github.rest.issues.update({owner: context.repo.owner, repo: context.repo.repo, issue_number: issueNumber, body});
       - name: Fail after reporting deterministic regression or PR failure
         if: always()
         env:
+          COMPAT_DISCOVER_RESULT: ${{ needs.discover.result }}
+          COMPAT_ANALYZE_RESULT: ${{ needs.analyze.result }}
+          COMPAT_SMOKE_RESULT: ${{ needs.smoke.result }}
+          COMPAT_REPORT_RESULT: ${{ needs.report.result }}
           COMPAT_PROPOSE_RESULT: ${{ needs.propose.result }}
           COMPAT_VALIDATE_RESULT: ${{ needs.validate_fix.result }}
           COMPAT_PUBLISH_RESULT: ${{ needs.publish_fix.result }}
-        run: |
-          python - <<'PY'
-          import json
-          import os
-          from pathlib import Path
-          summary = json.loads(Path('compatibility-smoke-summary.json').read_text())
-          if summary['smokeRegressions']:
-              raise SystemExit(f"{summary['smokeRegressions']} baseline-passing activation smoke regression(s)")
-          if os.environ['COMPAT_PROPOSE_RESULT'] == 'failure':
-              raise SystemExit("Gemini fix proposal job failed")
-          if os.environ['COMPAT_VALIDATE_RESULT'] == 'failure':
-              raise SystemExit("Generated fix validation failed")
-          if os.environ['COMPAT_PUBLISH_RESULT'] == 'failure':
-              raise SystemExit("Fix PR creation failed")
-          PY
+          COMPAT_ISSUE_UPDATE_RESULT: ${{ steps.attach_issue.outcome }}
+        run: python scripts/compatibility/finalize_run.py

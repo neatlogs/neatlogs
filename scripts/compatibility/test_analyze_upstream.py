@@ -261,6 +261,47 @@ class AnalyzeUpstreamTests(unittest.TestCase):
                 _analyze_gemini_batch({"packages": [{"package": "openai"}]}, "secret-key", "gemini-2.5-flash")
         self.assertNotIn("secret-key", str(caught.exception))
 
+    def test_flash_analysis_retries_truncated_json_with_no_thinking(self):
+        truncated = {"candidates": [{"finishReason": "MAX_TOKENS", "content": {"parts": []}}]}
+        complete = {"candidates": [{"finishReason": "STOP", "content": {"parts": [{"text": json.dumps({
+            "summary": "No issue", "riskLevel": "low", "findings": [], "recommendedTests": [],
+        })}]}}]}
+        with patch("scripts.compatibility.analyze_upstream.urlopen", side_effect=[
+            io.BytesIO(json.dumps(truncated).encode()), io.BytesIO(json.dumps(complete).encode()),
+        ]) as send:
+            result = _analyze_gemini_batch(
+                {"packages": [{"package": "openai"}]}, "secret-key", "gemini-2.5-flash",
+            )
+        self.assertEqual(result["riskLevel"], "low")
+        configs = [json.loads(call.args[0].data)["generationConfig"] for call in send.call_args_list]
+        self.assertEqual([item["thinkingConfig"]["thinkingBudget"] for item in configs], [1024, 0])
+
+    def test_flash_analysis_repeated_truncation_is_operational_failure(self):
+        truncated = {"candidates": [{"finishReason": "MAX_TOKENS", "content": {"parts": []}}]}
+        with patch("scripts.compatibility.analyze_upstream.urlopen", side_effect=[
+            io.BytesIO(json.dumps(truncated).encode()), io.BytesIO(json.dumps(truncated).encode()),
+        ]) as send, self.assertRaisesRegex(ValueError, "exhausted its output token limit"):
+            _analyze_gemini_batch(
+                {"packages": [{"package": "openai"}]}, "secret-key", "gemini-2.5-flash",
+            )
+        self.assertEqual(send.call_count, 2)
+
+    def test_flash_analysis_retries_malformed_json_once(self):
+        malformed = {"candidates": [{"finishReason": "STOP", "content": {"parts": [
+            {"text": '{"summary":'},
+        ]}}]}
+        complete = {"candidates": [{"finishReason": "STOP", "content": {"parts": [{"text": json.dumps({
+            "summary": "No issue", "riskLevel": "low", "findings": [], "recommendedTests": [],
+        })}]}}]}
+        with patch("scripts.compatibility.analyze_upstream.urlopen", side_effect=[
+            io.BytesIO(json.dumps(malformed).encode()), io.BytesIO(json.dumps(complete).encode()),
+        ]) as send:
+            result = _analyze_gemini_batch(
+                {"packages": [{"package": "openai"}]}, "secret-key", "gemini-2.5-flash",
+            )
+        self.assertEqual(result["riskLevel"], "low")
+        self.assertEqual(send.call_count, 2)
+
     def test_batch_risks_are_aggregated(self):
         evidence = {"ecosystem": "pypi", "packages": [{"package": f"package-{index}"} for index in range(4)]}
         responses = [

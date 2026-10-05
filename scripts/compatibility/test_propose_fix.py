@@ -32,6 +32,52 @@ def evidence():
 
 
 class ProposeFixTests(unittest.TestCase):
+    def test_flash_proposal_retries_truncated_response_with_no_thinking(self):
+        truncated = {"candidates": [{"finishReason": "MAX_TOKENS", "content": {"parts": []}}]}
+        complete = {"candidates": [{"finishReason": "STOP", "content": {"parts": [
+            {"text": json.dumps({"decision": "no_safe_fix", "reason": "No SDK change needed"})},
+        ]}}]}
+        with patch("scripts.compatibility.propose_fix.urlopen", side_effect=[
+            io.BytesIO(json.dumps(truncated).encode()), io.BytesIO(json.dumps(complete).encode()),
+        ]) as send:
+            result = request_proposal(
+                {"package": "alpha", "integration": "openai", "latestVersion": "2"},
+                evidence(), "test-key", "gemini-2.5-flash",
+            )
+        self.assertEqual(result["decision"], "no_safe_fix")
+        self.assertEqual(send.call_count, 2)
+        configs = [json.loads(call.args[0].data)["generationConfig"] for call in send.call_args_list]
+        self.assertEqual([item["thinkingConfig"]["thinkingBudget"] for item in configs], [1024, 0])
+        self.assertTrue(all(item["maxOutputTokens"] == 8192 for item in configs))
+
+    def test_flash_proposal_repeated_truncation_reports_failure(self):
+        truncated = {"candidates": [{"finishReason": "MAX_TOKENS", "content": {"parts": []}}]}
+        with patch("scripts.compatibility.propose_fix.urlopen", side_effect=[
+            io.BytesIO(json.dumps(truncated).encode()), io.BytesIO(json.dumps(truncated).encode()),
+        ]) as send, self.assertRaisesRegex(ValueError, "exhausted its output token limit"):
+            request_proposal(
+                {"package": "alpha", "integration": "openai", "latestVersion": "2"},
+                evidence(), "test-key", "gemini-2.5-flash",
+            )
+        self.assertEqual(send.call_count, 2)
+
+    def test_flash_proposal_retries_malformed_json_once(self):
+        malformed = {"candidates": [{"finishReason": "STOP", "content": {"parts": [
+            {"text": '{"decision":'},
+        ]}}]}
+        complete = {"candidates": [{"finishReason": "STOP", "content": {"parts": [
+            {"text": json.dumps({"decision": "no_safe_fix", "reason": "No SDK change needed"})},
+        ]}}]}
+        with patch("scripts.compatibility.propose_fix.urlopen", side_effect=[
+            io.BytesIO(json.dumps(malformed).encode()), io.BytesIO(json.dumps(complete).encode()),
+        ]) as send:
+            result = request_proposal(
+                {"package": "alpha", "integration": "openai", "latestVersion": "2"},
+                evidence(), "test-key", "gemini-2.5-flash",
+            )
+        self.assertEqual(result["decision"], "no_safe_fix")
+        self.assertEqual(send.call_count, 2)
+
     def test_shared_helper_context_reaches_proposal_but_cannot_be_edited(self):
         package_evidence = evidence()
         package_evidence["packages"][0]["integrations"][0]["relatedSource"] = [
@@ -109,6 +155,14 @@ class ProposeFixTests(unittest.TestCase):
             "alpha",
         )
 
+    def test_persistent_regression_does_not_starve_other_release_reviews(self):
+        summary = {"results": [{
+            "package": "beta", "integration": "openai", "comparison": "smoke-regression",
+        }]}
+        selected = [choose_candidate(summary, {}, evidence(), rotation=slot)["package"]
+                    for slot in range(6)]
+        self.assertEqual(selected, ["beta", "beta", "alpha", "beta", "beta", "alpha"])
+
     def test_deferred_candidates_exclude_selected_candidate_by_branch(self):
         selected = choose_candidate({}, {}, evidence(), rotation=0)
         # Candidate selection builds a separate list from the reporting path.
@@ -179,6 +233,8 @@ class ProposeFixTests(unittest.TestCase):
                             self.assertEqual(generate(), 0)
                             status = json.loads((root / "compatibility-fix-status.json").read_text())
                             self.assertEqual(status["status"], expected)
+                            if expected == "rejected":
+                                self.assertEqual(status["kind"], "unsafe-proposal")
                             self.assertEqual(status["selectedCandidate"], {
                                 "package": "alpha", "integration": "openai", "latestVersion": "2",
                                 "basis": "upstream-and-adapter-evidence-review",

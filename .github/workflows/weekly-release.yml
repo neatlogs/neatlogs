@@ -1,8 +1,8 @@
-name: Weekly Python release
+name: Daily Python release
 
 on:
   schedule:
-    - cron: '11 8 * * 1'
+    - cron: '11 8 * * *'
   workflow_dispatch:
 
 permissions:

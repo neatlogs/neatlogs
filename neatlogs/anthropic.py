@@ -354,6 +354,7 @@ def _finalize_stream(
     ttft_ms: Optional[float],
     *,
     interrupted: bool = False,
+    error: Optional[BaseException] = None,
 ) -> None:
     """Finalize a streaming response span from accumulated Anthropic stream events."""
     text_parts: List[str] = []
@@ -454,8 +455,35 @@ def _finalize_stream(
                 round(duration_ms - ttft_ms, 3),
             )
 
-    span.set_status(StatusCode.UNSET if interrupted else StatusCode.OK)
+    if error is not None:
+        span.set_status(StatusCode.ERROR, str(error))
+        span.record_exception(error)
+    else:
+        span.set_status(StatusCode.UNSET if interrupted else StatusCode.OK)
     span.end()
+
+
+def _finalize_managed_stream(
+    span: Any,
+    stream: Any,
+    chunks: List[Any],
+    duration_ms: float,
+    ttft_ms: Optional[float],
+    exc: Optional[BaseException],
+) -> None:
+    """Finalize a messages.stream() span.
+
+    Events are only collected when the caller iterates the wrapper itself.
+    text_stream, get_final_message() and get_final_text() read the underlying
+    stream directly, so fall back to its accumulated message snapshot.
+    """
+    error = exc if isinstance(exc, Exception) else None
+    if error is None and not chunks:
+        snapshot = getattr(stream, "current_message_snapshot", None)
+        if snapshot is not None and getattr(snapshot, "content", None):
+            _finalize_response(span, snapshot, duration_ms)
+            return
+    _finalize_stream(span, chunks, duration_ms, ttft_ms, error=error)
 
 
 class _SyncStreamManagerWrapper:
@@ -477,9 +505,9 @@ class _SyncStreamManagerWrapper:
         try:
             self._stream_mgr.__exit__(*args)
         finally:
-            self._finalize()
+            self._finalize(args[1] if len(args) > 1 else None)
 
-    def _finalize(self):
+    def _finalize(self, exc=None):
         if self._finalized:
             return
         self._finalized = True
@@ -487,7 +515,9 @@ class _SyncStreamManagerWrapper:
         ttft_ms = None
         if self._first_chunk_time is not None:
             ttft_ms = (self._first_chunk_time - self._start_time) * 1000
-        _finalize_stream(self._span, self._chunks, elapsed_ms, ttft_ms)
+        _finalize_managed_stream(
+            self._span, getattr(self, "_stream", None), self._chunks, elapsed_ms, ttft_ms, exc
+        )
 
     def __getattr__(self, name):
         return getattr(self._stream_mgr, name)
@@ -529,9 +559,9 @@ class _AsyncStreamManagerWrapper:
         try:
             await self._stream_mgr.__aexit__(*args)
         finally:
-            self._finalize()
+            self._finalize(args[1] if len(args) > 1 else None)
 
-    def _finalize(self):
+    def _finalize(self, exc=None):
         if self._finalized:
             return
         self._finalized = True
@@ -539,7 +569,9 @@ class _AsyncStreamManagerWrapper:
         ttft_ms = None
         if self._first_chunk_time is not None:
             ttft_ms = (self._first_chunk_time - self._start_time) * 1000
-        _finalize_stream(self._span, self._chunks, elapsed_ms, ttft_ms)
+        _finalize_managed_stream(
+            self._span, getattr(self, "_stream", None), self._chunks, elapsed_ms, ttft_ms, exc
+        )
 
     def __getattr__(self, name):
         return getattr(self._stream_mgr, name)

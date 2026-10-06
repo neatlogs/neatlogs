@@ -121,7 +121,9 @@ jobs:
             pydantic-ai-version: "1.44.0"
             adapter-version: "0.1.25"
             otel-pin: ""
-          - python-version: "3.10"
+          # Pydantic AI 2.41.0 imports enum.StrEnum, which is only available
+          # on Python 3.11+. Keep the 3.10 lanes on earlier supported releases.
+          - python-version: "3.11"
             pydantic-ai-version: "2.41.0"
             adapter-version: "0.1.20"
             otel-pin: ""

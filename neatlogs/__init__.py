@@ -73,6 +73,14 @@ from .prompt.client import (
     update_prompt,
 )
 from .prompt.template import PromptTemplate, SystemPromptTemplate, UserPromptTemplate
+from .replay import (
+    InMemoryTraceStore,
+    ReplayOverrides,
+    ReplayResult,
+    TraceComparison,
+    compare_traces,
+    replay_trace,
+)
 from .schema_v2 import (
     TELEMETRY_CONTRACT_VERSION,
     TELEMETRY_SCHEMA_SHA256,
@@ -340,6 +348,12 @@ __all__ = [
     "langchain_handler",
     "openai_agents_processor",
     "strands_hooks",
+    "replay_trace",
+    "compare_traces",
+    "ReplayOverrides",
+    "ReplayResult",
+    "TraceComparison",
+    "InMemoryTraceStore",
     "OwnershipV2",
     "WrapperV2",
     "TypedValueV2",

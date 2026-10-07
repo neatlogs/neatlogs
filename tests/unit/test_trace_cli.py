@@ -35,7 +35,7 @@ def run(response, env=None, trace_id="t1"):
     code = run_trace_get(
         trace_id,
         True,
-        env={"NEATLOGS_API_KEY": "k"} if env is None else env,
+        env={"NEATLOGS_API_KEY": "secret-key"} if env is None else env,
         fetch=fetch,
         out=out.append,
         err=err.append,
@@ -47,7 +47,7 @@ def test_healthy_trace_passes_and_uses_existing_read_path():
     code, out, _, urls = run(GOOD)
     assert code == 0
     assert urls[0][0] == "https://ingest.neatlogs.com/api/traces/v3/t1"
-    assert urls[0][1] == {"x-api-key": "k"}
+    assert urls[0][1] == {"x-api-key": "secret-key"}
     assert json.loads(out[0])["result"] == "pass"
 
 
@@ -63,10 +63,9 @@ def test_missing_parent_and_unnamed_span_fail():
 
 def test_exit_codes_and_key_not_printed():
     assert run((404, b""))[0] == 2
-    code, _out, err, _ = run((401, b""))
-    assert code == 3 and "k" not in "".join(err).replace("key", "").replace(
-        "rejected", ""
-    )
+    code, _, err, _ = run((401, b""))
+    assert code == 3
+    assert "secret-key" not in "".join(err)
     assert run(GOOD, env={})[0] == 3
     assert run((500, b""))[0] == 5
     assert run((200, b"not json"))[0] == 5
@@ -75,7 +74,10 @@ def test_exit_codes_and_key_not_printed():
 def test_endpoint_override_and_id_encoding():
     _, _, _, urls = run(
         GOOD,
-        env={"NEATLOGS_API_KEY": "k", "NEATLOGS_ENDPOINT": "http://localhost:9"},
+        env={
+            "NEATLOGS_API_KEY": "secret-key",
+            "NEATLOGS_ENDPOINT": "http://localhost:9",
+        },
         trace_id="a/b",
     )
     assert urls[0][0] == "http://localhost:9/api/traces/v3/a%2Fb"

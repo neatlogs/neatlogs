@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import urllib.error
 import urllib.request
 from collections.abc import Callable
@@ -43,8 +44,6 @@ def _text(value: Any) -> str | None:
 
 
 def check_trace(trace: dict) -> list[dict]:
-    """Pure checks over a persisted trace."""
-
     raw = trace.get("spans")
     spans = [s for s in raw if isinstance(s, dict)] if isinstance(raw, list) else []
     checks: list[dict] = []
@@ -118,10 +117,7 @@ def run_trace_get(
     out: Callable[[str], None] = print,
     err: Callable[[str], None] | None = None,
 ) -> int:
-    """Exit codes: 0 pass, 1 check failed, 2 not ready/not found, 3 key, 4 usage, 5 error."""
-
-    import sys
-
+    # exit: 0 pass, 1 check failed, 2 not ready or not found, 3 key, 4 usage, 5 error
     env = os.environ if env is None else env
     fetch = fetch or _default_fetch
     err = err or (lambda line: print(line, file=sys.stderr))

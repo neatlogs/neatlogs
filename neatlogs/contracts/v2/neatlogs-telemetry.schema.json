@@ -1855,7 +1855,7 @@
     }
   },
   "x-neatlogs-policy": {
-    "contract_version": "2.0.0",
+    "contract_version": "2.1.0",
     "attribute_prefix": "neatlogs.v2",
     "conflict_precedence": [
       "native-v2",

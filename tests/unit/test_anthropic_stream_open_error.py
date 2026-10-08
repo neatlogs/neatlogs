@@ -81,3 +81,37 @@ def test_async_stream_open_failure_exports_error_span(exporter):
     spans = exporter.get_finished_spans()
     assert len(spans) == 1
     assert spans[0].status.status_code.name == "ERROR"
+
+
+def test_async_stream_open_cancellation_ends_span(exporter):
+    started = asyncio.Event()
+
+    async def hang(request):
+        started.set()
+        await asyncio.sleep(30)
+
+    client = wrap_async_anthropic_client(
+        anthropic.AsyncAnthropic(
+            api_key="x",
+            max_retries=0,
+            http_client=httpx.AsyncClient(transport=httpx.MockTransport(hang)),
+        )
+    )
+
+    async def run():
+        async def open_stream():
+            async with client.messages.stream(**KW) as stream:
+                async for _ in stream:
+                    pass
+
+        task = asyncio.ensure_future(open_stream())
+        await started.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(run())
+    spans = exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert spans[0].attributes.get("neatlogs.stream.cancelled") is True
+    assert spans[0].status.status_code.name != "OK"

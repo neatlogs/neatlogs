@@ -322,6 +322,7 @@
         "VECTOR_STORE",
         "MEMORY",
         "GUARDRAIL",
+        "EVALUATOR",
         "LOG",
         "HTTP",
         "UNKNOWN"
@@ -1750,6 +1751,7 @@
             "AGENT",
             "CHAIN",
             "TASK",
+            "EVALUATOR",
             "HTTP",
             "UNKNOWN"
           ]
@@ -1853,7 +1855,7 @@
     }
   },
   "x-neatlogs-policy": {
-    "contract_version": "2.0.0",
+    "contract_version": "2.1.0",
     "attribute_prefix": "neatlogs.v2",
     "conflict_precedence": [
       "native-v2",
@@ -1901,8 +1903,6 @@
         "dialect": "neatlogs-direct",
         "patterns": [
           "neatlogs.span.kind",
-          "neatlogs.doctor",
-          "neatlogs.doctor.*",
           "neatlogs.workflow.*",
           "neatlogs.agent.*",
           "neatlogs.llm.*",
@@ -1913,6 +1913,7 @@
           "neatlogs.vector_store.*",
           "neatlogs.memory.*",
           "neatlogs.guardrail.*",
+          "neatlogs.evaluator.*",
           "neatlogs.mcp.*",
           "neatlogs.code.*"
         ],

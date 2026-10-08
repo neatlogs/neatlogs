@@ -7,9 +7,9 @@ import json
 from importlib import resources
 from typing import Any
 
-TELEMETRY_CONTRACT_VERSION = "2.0.0"
+TELEMETRY_CONTRACT_VERSION = "2.1.0"
 TELEMETRY_SCHEMA_VERSION = 2
-TELEMETRY_SCHEMA_SHA256 = "50bbd9f1e6eaa6c83f08dcb84da3a98867c962fc8c4e1edd629da561fe5fe5a8"
+TELEMETRY_SCHEMA_SHA256 = "75bb25d2162be846927a2687787e01c5c09333ee0d75db1fc0e20056931c5fc5"
 
 
 def telemetry_schema_bytes() -> bytes:

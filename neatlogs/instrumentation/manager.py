@@ -1707,6 +1707,10 @@ class InstrumentationManager:
                 "llamaindex": "llama_index",
                 "azure_ai_inference": "azure.ai.inference",
                 "bedrock": "boto3",
+                # LangChain's instrumentor only needs langchain-core, which every
+                # langchain or langgraph install brings in. Checking `langchain`
+                # skipped it for langgraph-only installs.
+                "langchain": "langchain_core",
                 "milvus": "pymilvus",
                 "qdrant": "qdrant_client",
                 # The OpenAI Agents SDK (pip package "openai-agents") imports as `agents`,

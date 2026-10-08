@@ -71,6 +71,17 @@ def test_exit_codes_and_key_not_printed():
     assert run((200, b"not json"))[0] == 5
 
 
+def test_409_is_a_permanent_failure():
+    code, _, err, _ = run((409, b""))
+    assert code == 5
+    assert "retrying will not help" in "".join(err)
+
+
+def test_zero_reported_tokens_passes():
+    code, _, _, _ = run({**GOOD, "totalTokensUsed": 0})
+    assert code == 0
+
+
 def test_endpoint_override_and_id_encoding():
     _, _, _, urls = run(
         GOOD,

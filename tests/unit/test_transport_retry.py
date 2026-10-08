@@ -5,7 +5,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 import requests
-from opentelemetry.exporter.otlp.proto.http import Compression, trace_exporter
+from opentelemetry.exporter.otlp.proto.http import Compression
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor, SpanExportResult
@@ -46,7 +46,7 @@ def test_python_transport_retries_429_post_without_overlapping_otel_5xx_policy()
     assert requests_seen == 3
 
 
-def test_upstream_otel_retries_503_and_gzip_is_receiver_compatible(monkeypatch):
+def test_upstream_otel_retries_503_and_gzip_is_receiver_compatible():
     requests_seen = 0
     decoded = []
 
@@ -64,7 +64,6 @@ def test_upstream_otel_retries_503_and_gzip_is_receiver_compatible(monkeypatch):
         def log_message(self, *_args):
             pass
 
-    monkeypatch.setattr(trace_exporter.random, "uniform", lambda *_args: 0)
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:

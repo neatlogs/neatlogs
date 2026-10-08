@@ -49,9 +49,7 @@ def check_trace(trace: dict, spans: list[dict]) -> list[dict]:
     checks: list[dict] = []
 
     def add(name: str, ok: bool, message: str) -> None:
-        checks.append(
-            {"name": name, "status": "pass" if ok else "fail", "message": message}
-        )
+        checks.append({"name": name, "status": "pass" if ok else "fail", "message": message})
 
     add("has_spans", len(spans) > 0, f"{len(spans)} span(s) returned")
     count = trace.get("spansCount")
@@ -66,17 +64,17 @@ def check_trace(trace: dict, spans: list[dict]) -> list[dict]:
     add(
         "parents_resolve",
         not orphans,
-        "every parent span is present"
-        if not orphans
-        else f"{len(orphans)} span(s) point at a missing parent",
+        (
+            "every parent span is present"
+            if not orphans
+            else f"{len(orphans)} span(s) point at a missing parent"
+        ),
     )
     unnamed = [s for s in spans if not _text(s.get("spanName"))]
     add(
         "spans_named",
         not unnamed,
-        "every span has a name"
-        if not unnamed
-        else f"{len(unnamed)} span(s) have no name",
+        "every span has a name" if not unnamed else f"{len(unnamed)} span(s) have no name",
     )
     llm = [s for s in spans if "llm" in str(s.get("spanType") or "").lower()]
     total = trace.get("totalTokens")
@@ -152,14 +150,10 @@ def run_trace_get(
             )
             return EXIT_AUTH
         if status == 404 or (spans_call and status == 409):
-            err(
-                f"Trace not ready or not found (HTTP {status}); retry after the app flushes"
-            )
+            err(f"Trace not ready or not found (HTTP {status}); retry after the app flushes")
             return EXIT_NOT_READY
         if status in (429, 503):
-            err(
-                f"Trace read is rate limited or unavailable (HTTP {status}); retry later"
-            )
+            err(f"Trace read is rate limited or unavailable (HTTP {status}); retry later")
             return EXIT_ERROR
         if not 200 <= status < 300:
             err(f"Trace read failed (HTTP {status})")
@@ -177,12 +171,13 @@ def run_trace_get(
     trace = get(base, False)
     if isinstance(trace, int):
         return trace
+    if trace.get("finalizationStatus") == "dlq":
+        err("Trace ingestion failed for good (finalizationStatus=dlq); " "retrying will not help")
+        return EXIT_ERROR
     spans: list[dict] = []
     cursor = None
-    for _ in range(MAX_PAGES):
-        query = f"?limit={PAGE_LIMIT}" + (
-            f"&cursor={quote(cursor, safe='')}" if cursor else ""
-        )
+    for page_number in range(MAX_PAGES):
+        query = f"?limit={PAGE_LIMIT}" + (f"&cursor={quote(cursor, safe='')}" if cursor else "")
         data = get(f"{base}/spans{query}", True)
         if isinstance(data, int):
             return data
@@ -191,6 +186,12 @@ def run_trace_get(
         cursor = _text(page.get("nextCursor")) if isinstance(page, dict) else None
         if not cursor:
             break
+        if page_number == MAX_PAGES - 1:
+            err(
+                f"Span pagination incomplete: still more spans after {MAX_PAGES} pages, "
+                "so the trace was not checked"
+            )
+            return EXIT_ERROR
     checks = check_trace(trace, spans)
     failed = [c for c in checks if c["status"] == "fail"]
     summary = {
@@ -213,11 +214,7 @@ def run_trace_get(
     if as_json:
         out(json.dumps(summary, indent=2))
     else:
-        out(
-            f"trace {summary['trace_id']}: {summary['result']} ({summary['span_count']} spans)"
-        )
+        out(f"trace {summary['trace_id']}: {summary['result']} ({summary['span_count']} spans)")
         for c in checks:
-            out(
-                f"  {'ok  ' if c['status'] == 'pass' else 'FAIL'} {c['name']}: {c['message']}"
-            )
+            out(f"  {'ok  ' if c['status'] == 'pass' else 'FAIL'} {c['name']}: {c['message']}")
     return EXIT_OK if not failed else EXIT_CHECKS_FAILED

@@ -108,3 +108,47 @@ async def test_async_accepts_message_object_in_history(exporter):
     spans = [s for s in exporter.get_finished_spans() if s.name.startswith("openai")]
     assert len(spans) == 2
     assert spans[1].attributes["neatlogs.llm.input_messages.2.tool_call_id"] == "call_1"
+
+
+def test_azure_sync_accepts_message_object_in_history(exporter):
+    from neatlogs.azure_openai import wrap_azure_openai_client
+
+    calls = []
+    client = openai.AzureOpenAI(
+        api_key="k",
+        api_version="2024-06-01",
+        azure_endpoint="https://example.openai.azure.com",
+        http_client=httpx.Client(transport=httpx.MockTransport(_handler(calls))),
+    )
+    wrap_azure_openai_client(client)
+    first = client.chat.completions.create(model="m", messages=[{"role": "user", "content": "x"}])
+    client.chat.completions.create(model="m", messages=_history(first.choices[0].message))
+
+    assert len(calls) == 2 and len(calls[1]["messages"]) == 3
+    spans = [s for s in exporter.get_finished_spans() if s.name.startswith("azure_openai")]
+    assert len(spans) == 2
+    assert spans[1].attributes["neatlogs.llm.input_messages.1.role"] == "assistant"
+    assert spans[1].attributes["neatlogs.llm.input_messages.2.tool_call_id"] == "call_1"
+
+
+@pytest.mark.asyncio
+async def test_azure_async_accepts_message_object_in_history(exporter):
+    from neatlogs.azure_openai import wrap_async_azure_openai_client
+
+    calls = []
+    client = openai.AsyncAzureOpenAI(
+        api_key="k",
+        api_version="2024-06-01",
+        azure_endpoint="https://example.openai.azure.com",
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(_handler(calls))),
+    )
+    wrap_async_azure_openai_client(client)
+    first = await client.chat.completions.create(
+        model="m", messages=[{"role": "user", "content": "x"}]
+    )
+    await client.chat.completions.create(model="m", messages=_history(first.choices[0].message))
+
+    assert len(calls) == 2 and len(calls[1]["messages"]) == 3
+    spans = [s for s in exporter.get_finished_spans() if s.name.startswith("azure_openai")]
+    assert len(spans) == 2
+    assert spans[1].attributes["neatlogs.llm.input_messages.2.tool_call_id"] == "call_1"

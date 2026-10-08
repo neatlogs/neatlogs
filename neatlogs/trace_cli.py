@@ -91,8 +91,9 @@ def check_trace(trace: dict) -> list[dict]:
     if llm and isinstance(total, (int, float)) and not isinstance(total, bool):
         add(
             "llm_token_usage",
-            total > 0,
-            f"LLM span(s): {len(llm)}, totalTokensUsed={total}",
+            total >= 0,
+            f"LLM span(s): {len(llm)}, totalTokensUsed={total} "
+            "(0 can mean the provider sent no usage)",
         )
     if "finalizationStatus" in trace:
         status = trace["finalizationStatus"]
@@ -144,7 +145,13 @@ def run_trace_get(
     if status in (401, 403):
         err("Trace read rejected the API key")
         return EXIT_AUTH
-    if status in (202, 404, 409):
+    if status == 409:
+        err(
+            "Trace ingestion failed for good (HTTP 409, failed or dead-lettered); "
+            "retrying will not help"
+        )
+        return EXIT_ERROR
+    if status in (202, 404):
         err(
             f"Trace not ready or not found (HTTP {status}); retry after the app flushes"
         )

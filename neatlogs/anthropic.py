@@ -458,6 +458,16 @@ def _finalize_stream(
     span.end()
 
 
+def _end_open_failure(span: Any, error: BaseException) -> None:
+    """End a stream span whose open failed. Cancellation is not an error."""
+    if isinstance(error, Exception):
+        span.set_status(StatusCode.ERROR, str(error))
+        span.record_exception(error)
+    else:
+        span.set_attribute("neatlogs.stream.cancelled", True)
+    span.end()
+
+
 class _SyncStreamManagerWrapper:
     """Wraps Anthropic's MessageStreamManager context manager for messages.stream()."""
 
@@ -470,7 +480,12 @@ class _SyncStreamManagerWrapper:
         self._finalized = False
 
     def __enter__(self):
-        self._stream = self._stream_mgr.__enter__()
+        try:
+            self._stream = self._stream_mgr.__enter__()
+        except BaseException as e:
+            _end_open_failure(self._span, e)
+            self._finalized = True
+            raise
         return _SyncStreamIterator(self)
 
     def __exit__(self, *args):
@@ -522,7 +537,12 @@ class _AsyncStreamManagerWrapper:
         self._finalized = False
 
     async def __aenter__(self):
-        self._stream = await self._stream_mgr.__aenter__()
+        try:
+            self._stream = await self._stream_mgr.__aenter__()
+        except BaseException as e:
+            _end_open_failure(self._span, e)
+            self._finalized = True
+            raise
         return _AsyncStreamIterator(self)
 
     async def __aexit__(self, *args):

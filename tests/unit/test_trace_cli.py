@@ -56,9 +56,7 @@ def test_healthy_trace_uses_public_api_with_bearer_and_project_id():
     code, out, _, calls = run()
     assert code == 0
     assert calls[0][0] == "https://app.neatlogs.com/api/v1/public/traces/t1"
-    assert (
-        calls[1][0] == "https://app.neatlogs.com/api/v1/public/traces/t1/spans?limit=50"
-    )
+    assert calls[1][0] == "https://app.neatlogs.com/api/v1/public/traces/t1/spans?limit=50"
     assert calls[0][1] == {
         "Authorization": "Bearer tok-secret",
         "x-project-id": ENV["NEATLOGS_PROJECT_ID"],
@@ -98,11 +96,11 @@ def test_missing_parent_and_unnamed_span_fail():
     assert {"parents_resolve", "spans_named"} <= failed
 
 
-def test_dlq_fails_and_zero_tokens_passes():
+def test_pending_fails_finalized_and_zero_tokens_passes():
     def route(url):
         if "/spans" in url:
             return healthy(url)
-        return ok(dict(TRACE, finalizationStatus="dlq", totalTokens=0))
+        return ok(dict(TRACE, finalizationStatus="pending", totalTokens=0))
 
     code, out, _, _ = run(route)
     assert code == 1
@@ -128,15 +126,43 @@ def test_409_on_spans_page_is_not_ready():
     assert code == 2
 
 
+def test_dlq_is_a_terminal_failure_before_reading_spans():
+    code, _, err, calls = run(
+        lambda url: (409, b"") if "/spans" in url else ok(dict(TRACE, finalizationStatus="dlq"))
+    )
+    assert code == 5
+    assert len(calls) == 1
+    assert "dlq" in "".join(err)
+
+
+def test_pending_with_409_on_spans_is_not_ready():
+    code, _, err, _ = run(
+        lambda url: (409, b"") if "/spans" in url else ok(dict(TRACE, finalizationStatus="pending"))
+    )
+    assert code == 2
+    assert "not ready" in "".join(err)
+
+
+def test_pagination_cap_is_incomplete_not_a_failed_check():
+    def route(url):
+        if "/spans" not in url:
+            return ok(TRACE)
+        return ok({"spans": [SPAN_A], "page": {"hasMore": True, "limit": 50, "nextCursor": "more"}})
+
+    code, out, err, calls = run(route)
+    assert code == 5
+    assert out == []
+    assert "pagination incomplete" in "".join(err)
+    assert len(calls) == 201
+
+
 def test_needs_token_and_project_id():
     assert run(env={"NEATLOGS_PROJECT_ID": "p"})[0] == 3
     assert run(env={"NEATLOGS_TOKEN": "t"})[0] == 3
 
 
 def test_host_override_and_id_encoding():
-    _, _, _, calls = run(
-        env=dict(ENV, NEATLOGS_HOST="https://eu.app.neatlogs.com"), trace_id="a/b"
-    )
+    _, _, _, calls = run(env=dict(ENV, NEATLOGS_HOST="https://eu.app.neatlogs.com"), trace_id="a/b")
     assert calls[0][0] == "https://eu.app.neatlogs.com/api/v1/public/traces/a%2Fb"
 
 

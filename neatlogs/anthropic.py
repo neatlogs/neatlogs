@@ -478,6 +478,11 @@ def _finalize_managed_stream(
     stream directly, so fall back to its accumulated message snapshot.
     """
     error = exc if isinstance(exc, Exception) else None
+    if exc is not None and error is None:
+        # Cancelled or interrupted: never export this as a successful span.
+        span.set_attribute("neatlogs.stream.cancelled", True)
+        _finalize_stream(span, chunks, duration_ms, ttft_ms, interrupted=True)
+        return
     if error is None and not chunks:
         snapshot = getattr(stream, "current_message_snapshot", None)
         if snapshot is not None and getattr(snapshot, "content", None):

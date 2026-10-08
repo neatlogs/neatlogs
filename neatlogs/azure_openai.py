@@ -33,6 +33,7 @@ from ._wrap_utils import (
     SyncStreamWrapper,
     get_provider_tracer,
     is_suppressed,
+    message_as_dict,
     serialize,
 )
 from .core.choice_accumulator import ChoiceAccumulator, OpenAIStreamFinalizer
@@ -129,6 +130,7 @@ def _chat_start_span(model: Any, is_stream: bool) -> Any:
 def _set_chat_input(span: Any, kwargs: dict) -> None:
     messages = kwargs.get("messages", [])
     for i, msg in enumerate(messages):
+        msg = message_as_dict(msg)
         role = msg.get("role", "")
         content = msg.get("content", "")
         span.set_attribute(f"neatlogs.llm.input_messages.{i}.role", role)

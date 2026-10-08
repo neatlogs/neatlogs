@@ -197,3 +197,24 @@ def test_async_mid_stream_error_is_error_span(exporter, mode):
     with pytest.raises(Exception):
         asyncio.run(run())
     _assert_error(_span(exporter))
+
+
+@pytest.mark.parametrize("mode", ["iter", "text_stream", "final_message"])
+def test_async_cancelled_stream_is_not_ok(exporter, mode):
+    async def run():
+        async with _async_client(False).messages.stream(**KW) as stream:
+            if mode == "iter":
+                async for _ in stream:
+                    break
+            elif mode == "text_stream":
+                async for _ in stream.text_stream:
+                    break
+            else:
+                await stream.get_final_message()
+            raise asyncio.CancelledError()
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(run())
+    span = _span(exporter)
+    assert span.status.status_code.name != "OK"
+    assert span.attributes["neatlogs.stream.cancelled"] is True

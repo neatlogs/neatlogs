@@ -139,6 +139,63 @@ response bodies are not copied into SDK error messages.
 
 ---
 
+### Capture local agent runs into a dataset
+
+Dataset capture keeps your normal trace ingestion running. It registers a durable job **before**
+executing the block, flushes the existing exporter, and submits the exact locally recorded trace/span
+IDs for asynchronous dataset publication. It does not create expected answers.
+
+```python
+import os
+import neatlogs
+
+neatlogs.init(api_key=os.environ["NEATLOGS_API_KEY"], workflow_name="my-agent")
+
+with neatlogs.datasets.capture(
+    "Agent regression cases",
+    project_id=os.environ["NEATLOGS_PROJECT_ID"],
+    token=os.environ["NEATLOGS_PUBLIC_API_TOKEN"],
+    base_url=os.environ["NEATLOGS_BASE_URL"],  # API origin, not the ingestion endpoint
+    environment="local",
+    create_if_missing=True,
+) as job:
+    with neatlogs.trace("agent-run", kind="WORKFLOW"):
+        result = run_agent("Find the order status")
+
+published = job.wait(timeout=120)
+print(job.dataset_id, published["datasetVersionId"])
+```
+
+Use `dataset_id="..."` instead of the positional name to append to an existing dataset. Named
+destinations must already exist unless `create_if_missing=True`. The public API token must be an
+explicit user or service-account credential with dataset write access; it is separate from the
+ingestion API key. Configure ingestion for the same project. Never pass the token as trace metadata.
+
+The same context supports `async with`; await all agent calls inside it, then use
+`await job.await_completion()` or `await job.astatus()`. An active `with client.activate():` selects
+that client's pipeline; otherwise capture uses `neatlogs.init()`'s default pipeline.
+
+Only root traces **started inside the block** and their locally recorded spans belong to this
+capture. A block nested inside an already-running trace captures no new case unless it creates a
+new root. Detached tasks and distributed descendants are not claimed complete. Nested capture
+blocks, disabled export, and sampled-down pipelines are rejected. HTTP transport spans and internal
+completion markers are excluded. Empty blocks fail with "No instrumented executions were recorded"
+and publish no dataset version; inspect the job status rather than assuming a case was captured.
+
+Set the workload `environment` explicitly to `local`, `ci`, or `production`; this is independent of
+whether the Neatlogs backend runs in the cloud. Production additionally requires
+`allow_production=True`. HTTPS is required except for loopback API origins such as
+`http://localhost:4156`.
+
+Unfinished spans, exporter loss, masking drops, or an oversized membership manifest abort capture
+visibly. Export success requires this capture's business spans and completion markers to be
+acknowledged; failures of unrelated concurrent traces do not poison the capture. Membership is
+bounded to 1,000 roots / 3,000 recorded spans and a 64 KiB request; split larger
+runs across blocks. Existing agent exceptions remain the primary exception, with capture cleanup
+errors on `job.error`. On an ambiguous completion response, inspect `job.status()` or call
+`job.retry_completion()` to reuse the original manifest and idempotency key. Publication errors and
+review-required jobs cause `wait()` to raise; inspect `job.last_status` for counts and failures.
+
 ## Integrate into your codebase (recommended)
 
 The fastest way to add NeatLogs to an existing project is the official **Agent Skill** — it encodes import order, `@span` kinds, CrewAI prompt binding, and troubleshooting so your coding agent gets it right.

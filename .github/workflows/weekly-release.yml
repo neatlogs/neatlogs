@@ -158,11 +158,12 @@ jobs:
       - name: Post release notification
         shell: bash
         env:
-          SLACK_WEBHOOK_URL: ${{ secrets.COMPAT_SLACK_WEBHOOK_URL }}
+          # Incoming webhooks are channel-bound; configure this one for #released-artifacts (C0C6P2PU1UN).
+          SLACK_WEBHOOK_URL: ${{ secrets.RELEASE_SLACK_WEBHOOK_URL }}
           RELEASE_VERSION: ${{ needs.release.outputs.version }}
         run: |
           set -euo pipefail
-          test -n "$SLACK_WEBHOOK_URL" || { echo 'COMPAT_SLACK_WEBHOOK_URL is missing' >&2; exit 1; }
+          test -n "$SLACK_WEBHOOK_URL" || { echo 'RELEASE_SLACK_WEBHOOK_URL is missing' >&2; exit 1; }
           message=":white_check_mark: *Python SDK neatlogs ${RELEASE_VERSION} published to PyPI*"
           message+=$'\n'
           message+="<https://pypi.org/project/neatlogs/${RELEASE_VERSION}/|PyPI package> · <https://github.com/${GITHUB_REPOSITORY}/tree/v${RELEASE_VERSION}|Release tag> · <https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}|Workflow run>"

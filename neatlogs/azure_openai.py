@@ -472,6 +472,16 @@ def _finalize_responses_response(span: Any, response: Any, duration_ms: float) -
     if output_text:
         span.set_attribute("neatlogs.llm.output_messages.0.role", "assistant")
         span.set_attribute("neatlogs.llm.output_messages.0.content", output_text)
+    summaries = []
+    for item in getattr(response, "output", None) or []:
+        if getattr(item, "type", None) == "reasoning":
+            for part in getattr(item, "summary", None) or []:
+                text = getattr(part, "text", None)
+                if text:
+                    summaries.append(text)
+    if summaries:
+        span.set_attribute("neatlogs.llm.output_messages.0.role", "assistant")
+        span.set_attribute("neatlogs.llm.output_messages.0.thinking", "\n\n".join(summaries))
     model = getattr(response, "model", None)
     if model:
         span.set_attribute("neatlogs.llm.model_name", model)
@@ -497,6 +507,8 @@ def _finalize_responses_stream(
     interrupted: bool = False,
 ) -> None:
     text_parts: List[str] = []
+    thinking_parts: List[str] = []
+    last_summary = None
     set_media_attributes(span, "neatlogs.llm.output_messages.0", chunks, "output")
     model = None
     usage = None
@@ -506,15 +518,26 @@ def _finalize_responses_stream(
             d = getattr(ev, "delta", None)
             if d:
                 text_parts.append(d)
+        elif ev_type == "response.reasoning_summary_text.delta":
+            d = getattr(ev, "delta", None)
+            if d:
+                key = (getattr(ev, "item_id", None), getattr(ev, "summary_index", None))
+                if last_summary is not None and key != last_summary:
+                    thinking_parts.append("\n\n")
+                last_summary = key
+                thinking_parts.append(d)
         resp = getattr(ev, "response", None)
         if resp is not None:
             if getattr(resp, "model", None):
                 model = resp.model
             if getattr(resp, "usage", None):
                 usage = resp.usage
-    if text_parts:
+    if text_parts or thinking_parts:
         span.set_attribute("neatlogs.llm.output_messages.0.role", "assistant")
+    if text_parts:
         span.set_attribute("neatlogs.llm.output_messages.0.content", "".join(text_parts)[:10000])
+    if thinking_parts:
+        span.set_attribute("neatlogs.llm.output_messages.0.thinking", "".join(thinking_parts))
     if model:
         span.set_attribute("neatlogs.llm.model_name", model)
     if usage:

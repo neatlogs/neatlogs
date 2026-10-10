@@ -15,6 +15,7 @@ Two usage patterns:
      >>> client.models.generate_content(model="gemini-2.0-flash", contents="Hello")
 """
 
+import asyncio
 import time
 from typing import Any, List, Optional
 
@@ -527,6 +528,9 @@ def _patch_models_extra(models: Any, is_async: bool) -> None:
                 )
                 try:
                     resp = await orig(*args, **kwargs)
+                except asyncio.CancelledError:
+                    _cancel(span)
+                    raise
                 except Exception as e:
                     _err(span, e)
                     raise
@@ -581,6 +585,9 @@ def _patch_models_extra(models: Any, is_async: bool) -> None:
                 )
                 try:
                     resp = await orig_ct(*args, **kwargs)
+                except asyncio.CancelledError:
+                    _cancel(span)
+                    raise
                 except Exception as e:
                     _err(span, e)
                     raise
@@ -674,6 +681,9 @@ def _patch_chat_classes() -> None:
             start = time.perf_counter()
             try:
                 resp = await orig_asend(self, message, *args, **kwargs)
+            except asyncio.CancelledError:
+                _cancel(span)
+                raise
             except Exception as e:
                 _err(span, e)
                 raise
@@ -695,6 +705,9 @@ def _patch_chat_classes() -> None:
                 span = _start_chat_span(self, message, stream=True)
                 try:
                     stream = await orig_asend_stream(self, message, *args, **kwargs)
+                except asyncio.CancelledError:
+                    _cancel(span)
+                    raise
                 except Exception as e:
                     _err(span, e)
                     raise
@@ -729,6 +742,12 @@ def _start_chat_span(chat: Any, message: Any, stream: bool) -> Any:
 def _err(span: Any, e: Exception) -> None:
     span.set_status(StatusCode.ERROR, str(e))
     span.record_exception(e)
+    span.end()
+
+
+def _cancel(span: Any) -> None:
+    span.set_attribute("neatlogs.stream.cancelled", True)
+    span.set_status(StatusCode.UNSET)
     span.end()
 
 

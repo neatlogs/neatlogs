@@ -293,3 +293,30 @@ def test_runner_returns_none_when_mask_returns_none():
         assert runner.apply(lambda _snapshot: None, {"signal": "span", "attributes": {}}) is None
     finally:
         runner.shutdown()
+
+
+def test_concurrent_exporters_share_mask_pool_without_premature_drop():
+    """Regression test: concurrent SpanExporter and LogExporter batches sharing _mask_pool
+    must wait up to deadline for worker slots instead of failing immediately with blocking=False."""
+    runner = _MaskRunner(timeout_seconds=2.0, max_workers=4)
+
+    def fast_mask(snapshot):
+        time.sleep(0.003)
+        return snapshot
+
+    batches = []
+
+    def export_worker():
+        res = runner.apply_many([(fast_mask, {"signal": "span", "idx": i}) for i in range(4)])
+        batches.append(res)
+
+    t1 = threading.Thread(target=export_worker)
+    t2 = threading.Thread(target=export_worker)
+    t1.start()
+    t2.start()
+    t1.join()
+    t2.join()
+    runner.shutdown()
+
+    assert len(batches) == 2
+    assert all(all(item is not None for item in batch) for batch in batches)

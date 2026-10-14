@@ -232,6 +232,24 @@ def _message(
     }
 
 
+def _tool_definitions(attrs: Mapping[str, Any]) -> list[dict[str, Any]]:
+    tools = []
+    for _, record in sorted(_indexed(attrs, "neatlogs.llm.tools").items()):
+        name = str(record.get("name") or "").strip()
+        if not name:
+            continue
+        tools.append(
+            {
+                "type": str(record.get("type") or "function"),
+                "name": name,
+                "description": (str(record["description"]) if record.get("description") else None),
+                "schema": _decode(_first(record, "input_schema", "schema")),
+                "configuration": _decode(_first(record, "configuration", "definition")),
+            }
+        )
+    return tools
+
+
 def _llm_semantic(span: ReadableSpan, attrs: Mapping[str, Any]) -> dict[str, Any]:
     tool_calls_by_choice: dict[int, list[dict[str, Any]]] = {}
     for position, record in sorted(_indexed(attrs, "neatlogs.llm.tool_calls").items()):
@@ -336,7 +354,7 @@ def _llm_semantic(span: ReadableSpan, attrs: Mapping[str, Any]) -> dict[str, Any
             ),
             "operation": str(_first(attrs, "neatlogs.llm.operation", default="unknown")),
             "messages": input_messages,
-            "tools": [],
+            "tools": _tool_definitions(attrs),
             "parameters": parameters,
         },
         "response": {

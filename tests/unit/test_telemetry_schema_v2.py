@@ -148,6 +148,40 @@ def test_canonical_llm_messages_include_typed_media_parts():
     ]
 
 
+def test_canonical_llm_request_preserves_valid_tool_definitions():
+    provider = TracerProvider()
+    diagnostic = neatlogs.InMemoryDiagnosticSpanExporter(max_spans=1)
+    provider.add_span_processor(SimpleSpanProcessor(diagnostic))
+    span = provider.get_tracer("neatlogs.openai").start_span("chat")
+    span.set_attribute("neatlogs.span.kind", "llm")
+    span.set_attribute("neatlogs.llm.tools.0.type", "function")
+    span.set_attribute("neatlogs.llm.tools.0.name", "get_weather")
+    span.set_attribute("neatlogs.llm.tools.0.description", "Get the weather")
+    span.set_attribute(
+        "neatlogs.llm.tools.0.input_schema",
+        '{"type":"object","properties":{"city":{"type":"string"}}}',
+    )
+    span.set_attribute("neatlogs.llm.tools.0.configuration", '{"strict":true}')
+    span.set_attribute("neatlogs.llm.tools.1.description", "Missing a name")
+    span.end()
+    provider.shutdown()
+
+    payload = diagnostic.get_finished_envelopes()[0].to_dict()
+    Draft202012Validator(neatlogs.telemetry_schema()).validate(payload)
+    assert payload["semantic"]["request"]["tools"] == [
+        {
+            "type": "function",
+            "name": "get_weather",
+            "description": "Get the weather",
+            "schema": {
+                "type": "object",
+                "properties": {"city": {"type": "string"}},
+            },
+            "configuration": {"strict": True},
+        }
+    ]
+
+
 def test_diagnostic_exporter_is_bounded_and_reports_eviction():
     provider = TracerProvider()
     diagnostic = neatlogs.InMemoryDiagnosticSpanExporter(max_spans=2)

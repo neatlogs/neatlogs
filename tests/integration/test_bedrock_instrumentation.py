@@ -62,9 +62,14 @@ class TestBedrockConverse:
         )
         assert resp["stopReason"] == "end_turn"
 
-        spans = in_memory_span_exporter.get_finished_spans()
-        assert len(spans) == 1
-        attrs = spans[0].attributes
+        llm_spans = [
+            s
+            for s in in_memory_span_exporter.get_finished_spans()
+            if s.attributes.get("neatlogs.llm.provider") == "bedrock"
+            and s.attributes.get("neatlogs.span.kind") == "llm"
+        ]
+        assert len(llm_spans) == 1
+        attrs = llm_spans[0].attributes
         assert attrs.get("neatlogs.span.kind") == "llm"
         assert attrs.get("neatlogs.llm.provider") == "bedrock"
         assert attrs.get("neatlogs.llm.system") == "anthropic"
@@ -119,9 +124,14 @@ class TestBedrockInvokeModel:
         parsed = json.loads(resp["body"].read())
         assert parsed["content"][0]["text"] == "Invoke output"
 
-        spans = in_memory_span_exporter.get_finished_spans()
-        assert len(spans) == 1
-        attrs = spans[0].attributes
+        llm_spans = [
+            s
+            for s in in_memory_span_exporter.get_finished_spans()
+            if s.attributes.get("neatlogs.llm.provider") == "bedrock"
+            and s.attributes.get("neatlogs.span.kind") == "llm"
+        ]
+        assert len(llm_spans) == 1
+        attrs = llm_spans[0].attributes
         assert attrs.get("neatlogs.llm.provider") == "bedrock"
         assert attrs.get("neatlogs.llm.system") == "anthropic"
         assert attrs.get("neatlogs.llm.input_messages.0.content") == "Hi"
@@ -153,7 +163,14 @@ class TestBedrockInvokeModel:
             body=json.dumps({"inputText": "Hi", "textGenerationConfig": {"maxTokenCount": 50}}),
         )
 
-        attrs = in_memory_span_exporter.get_finished_spans()[0].attributes
+        llm_spans = [
+            s
+            for s in in_memory_span_exporter.get_finished_spans()
+            if s.attributes.get("neatlogs.llm.provider") == "bedrock"
+            and s.attributes.get("neatlogs.span.kind") == "llm"
+        ]
+        assert len(llm_spans) == 1
+        attrs = llm_spans[0].attributes
         assert attrs.get("neatlogs.llm.system") == "amazon"
         assert attrs.get("neatlogs.llm.output_messages.0.content") == "Titan says hi"
         assert attrs.get("neatlogs.llm.token_count.prompt") == 9

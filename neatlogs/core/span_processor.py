@@ -957,6 +957,9 @@ class CompletionMarkerSpanProcessor(SpanProcessor):
         self._span_processor.mark_downstream_complete(span)
 
     def accept_exported_root(self, span: ReadableSpan) -> None:
+        from ..datasets._recording import notify_export
+
+        notify_export(self._span_processor, span, accepted=True)
         if self._closed or span.name == "neatlogs.trace.complete" or span.parent:
             return
         if not self._span_processor.consume_completion_eligibility(span):
@@ -968,6 +971,9 @@ class CompletionMarkerSpanProcessor(SpanProcessor):
                 self._emit(span)
 
     def reject_exported_root(self, span: ReadableSpan) -> None:
+        from ..datasets._recording import notify_export
+
+        notify_export(self._span_processor, span, accepted=False)
         if span.name != "neatlogs.trace.complete" and not span.parent:
             self._span_processor.consume_completion_eligibility(span)
 

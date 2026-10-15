@@ -92,6 +92,15 @@ def _number(value: Any) -> Optional[float]:
     return result if result >= 0 else None
 
 
+def _stop_sequences(value: Any) -> list[str]:
+    decoded = _decode(value)
+    if decoded is None or decoded == "":
+        return []
+    if isinstance(decoded, list):
+        return [str(item) for item in decoded]
+    return [str(decoded)]
+
+
 def _bool(value: Any, default: bool = False) -> bool:
     if isinstance(value, bool):
         return value
@@ -293,7 +302,7 @@ def _llm_semantic(span: ReadableSpan, attrs: Mapping[str, Any]) -> dict[str, Any
                 "neatlogs.llm.invocation_parameters.max_tokens",
             )
         ),
-        "stop": [],
+        "stop": _stop_sequences(attrs.get("neatlogs.llm.stop_sequences")),
         "seed": _integer(attrs.get("neatlogs.llm.invocation_parameters.seed")),
         "frequency_penalty": _number(
             attrs.get("neatlogs.llm.invocation_parameters.frequency_penalty")
@@ -334,7 +343,15 @@ def _llm_semantic(span: ReadableSpan, attrs: Mapping[str, Any]) -> dict[str, Any
                 "neatlogs.llm.model_name",
                 default=None,
             ),
-            "operation": str(_first(attrs, "neatlogs.llm.operation", default="unknown")),
+            "operation": str(
+                _first(
+                    attrs,
+                    "neatlogs.llm.operation",
+                    "neatlogs.llm.operation.name",
+                    "neatlogs.llm.operation.type",
+                    default="unknown",
+                )
+            ),
             "messages": input_messages,
             "tools": [],
             "parameters": parameters,

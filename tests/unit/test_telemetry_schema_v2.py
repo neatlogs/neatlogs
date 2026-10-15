@@ -181,3 +181,34 @@ def test_canonical_telemetry_preserves_evaluator_kind():
         assert payload["semantic"]["kind"] == "EVALUATOR"
     finally:
         provider.shutdown()
+
+
+def _canonical(span_kind, attrs, status=None):
+    provider = TracerProvider()
+    diagnostic = neatlogs.InMemoryDiagnosticSpanExporter(max_spans=1)
+    provider.add_span_processor(SimpleSpanProcessor(diagnostic))
+    try:
+        span = provider.get_tracer("neatlogs.test").start_span("op")
+        span.set_attribute("neatlogs.span.kind", span_kind)
+        for key, value in attrs.items():
+            span.set_attribute(key, value)
+        if status is not None:
+            span.set_status(status)
+        span.end()
+        payload = diagnostic.get_finished_envelopes()[0].to_dict()
+        Draft202012Validator(neatlogs.telemetry_schema()).validate(payload)
+        return payload["semantic"]
+    finally:
+        provider.shutdown()
+
+
+def test_llm_operation_and_stop_sequences_are_preserved():
+    semantic = _canonical(
+        "llm",
+        {
+            "neatlogs.llm.operation.name": "chat",
+            "neatlogs.llm.stop_sequences": '["END", "STOP"]',
+        },
+    )
+    assert semantic["request"]["operation"] == "chat"
+    assert semantic["request"]["parameters"]["stop"] == ["END", "STOP"]

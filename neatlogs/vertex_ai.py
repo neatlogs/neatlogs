@@ -24,6 +24,7 @@ This module is intentionally self-contained (it does NOT import
 the non-Vertex Gemini path.
 """
 
+import asyncio
 import time
 from typing import Any, List, Optional
 
@@ -165,7 +166,12 @@ def _patch_async_models(models: Any) -> None:
         start = time.perf_counter()
         try:
             response = await orig_generate(*args, **kwargs)
-        except Exception as e:
+        except asyncio.CancelledError:
+            span.set_attribute("neatlogs.stream.cancelled", True)
+            span.set_status(StatusCode.UNSET)
+            span.end()
+            raise
+        except BaseException as e:
             _err(span, e)
             raise
 

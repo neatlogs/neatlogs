@@ -15,6 +15,7 @@ Two usage patterns:
      >>> client.models.generate_content(model="gemini-2.0-flash", contents="Hello")
 """
 
+import asyncio
 import time
 from typing import Any, List, Optional
 
@@ -172,7 +173,12 @@ def _patch_async_models(models: Any) -> None:
 
         try:
             response = await orig_generate(*args, **kwargs)
-        except Exception as e:
+        except asyncio.CancelledError:
+            span.set_attribute("neatlogs.stream.cancelled", True)
+            span.set_status(StatusCode.UNSET)
+            span.end()
+            raise
+        except BaseException as e:
             span.set_status(StatusCode.ERROR, str(e))
             span.record_exception(e)
             span.end()
@@ -215,7 +221,12 @@ def _patch_async_models(models: Any) -> None:
 
             try:
                 stream = await orig_stream(*args, **kwargs)
-            except Exception as e:
+            except asyncio.CancelledError:
+                span.set_attribute("neatlogs.stream.cancelled", True)
+                span.set_status(StatusCode.UNSET)
+                span.end()
+                raise
+            except BaseException as e:
                 span.set_status(StatusCode.ERROR, str(e))
                 span.record_exception(e)
                 span.end()

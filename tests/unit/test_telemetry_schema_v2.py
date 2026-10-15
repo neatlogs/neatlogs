@@ -181,3 +181,35 @@ def test_canonical_telemetry_preserves_evaluator_kind():
         assert payload["semantic"]["kind"] == "EVALUATOR"
     finally:
         provider.shutdown()
+
+
+def _canonical(span_kind, attrs, status=None):
+    provider = TracerProvider()
+    diagnostic = neatlogs.InMemoryDiagnosticSpanExporter(max_spans=1)
+    provider.add_span_processor(SimpleSpanProcessor(diagnostic))
+    try:
+        span = provider.get_tracer("neatlogs.test").start_span("op")
+        span.set_attribute("neatlogs.span.kind", span_kind)
+        for key, value in attrs.items():
+            span.set_attribute(key, value)
+        if status is not None:
+            span.set_status(status)
+        span.end()
+        payload = diagnostic.get_finished_envelopes()[0].to_dict()
+        Draft202012Validator(neatlogs.telemetry_schema()).validate(payload)
+        return payload["semantic"]
+    finally:
+        provider.shutdown()
+
+
+def test_failed_tool_span_is_canonical_error():
+    semantic = _canonical(
+        "tool",
+        {"neatlogs.tool.name": "run", "neatlogs.tool.is_error": True, "output.value": "exit 1"},
+    )
+    assert semantic["result"]["is_error"] is True
+
+
+def test_ok_tool_span_is_not_canonical_error():
+    semantic = _canonical("tool", {"neatlogs.tool.name": "run", "output.value": "ok"})
+    assert semantic["result"]["is_error"] is False

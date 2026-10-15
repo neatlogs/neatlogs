@@ -17,6 +17,7 @@ from typing import Any, Optional
 
 from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
+from opentelemetry.trace import StatusCode
 
 from ..schema_v2 import TELEMETRY_SCHEMA_VERSION
 
@@ -392,6 +393,9 @@ def _tool_semantic(span: ReadableSpan, attrs: Mapping[str, Any], kind: str) -> d
     arguments = _decode(_first(attrs, f"{prefix}.arguments", f"{prefix}.input"))
     call_id = str(_first(attrs, f"{prefix}.call_id", f"{prefix}.id", default="") or "")
     id_origin = "neatlogs-direct"
+    is_error = _bool(attrs.get(f"{prefix}.is_error")) or (
+        span.status.status_code == StatusCode.ERROR
+    )
     if not call_id:
         material = (
             f"{span.context.trace_id:032x}:{span.context.span_id:016x}:{name}:"
@@ -418,7 +422,7 @@ def _tool_semantic(span: ReadableSpan, attrs: Mapping[str, Any], kind: str) -> d
             "choice_index": _integer(attrs.get(f"{prefix}.choice_index")) or 0,
             "tool_index": _integer(attrs.get(f"{prefix}.tool_index")) or 0,
         },
-        "result": {"call_id": call_id, "value": output, "is_error": False, "media": []},
+        "result": {"call_id": call_id, "value": output, "is_error": is_error, "media": []},
         "requesting_span_id": f"{span.parent.span_id:016x}" if span.parent else None,
         "transport": (
             {"transport": "unknown", "server": None, "method": None, "request_id": None}

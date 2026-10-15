@@ -783,6 +783,11 @@ def _finalize_model_stream(span: Any, chunks: list) -> None:
                 if name and not any(x["name"] == name for x in tool_calls):
                     tool_calls.append({"name": name, "arguments": args})
 
+    reasoning = "".join(
+        r
+        for r in (getattr(ch, "reasoning_content", None) for ch in chunks or [])
+        if isinstance(r, str)
+    )
     out_text = "".join(text_parts)
     if not out_text and tool_calls:
         out_text = "\n".join(
@@ -792,6 +797,8 @@ def _finalize_model_stream(span: Any, chunks: list) -> None:
     if out_text or tool_calls:
         span.set_attribute("neatlogs.llm.output_messages.0.role", "assistant")
         span.set_attribute("neatlogs.llm.output_messages.0.content", out_text)
+        if reasoning:
+            span.set_attribute("neatlogs.llm.output_messages.0.thinking", reasoning)
         out_blob = {"role": "assistant", "content": out_text}
         if tool_calls:
             out_blob["tool_calls"] = tool_calls
@@ -853,6 +860,9 @@ def _finalize_model(span: Any, result: Any) -> None:
         if out_text or collected_calls:
             span.set_attribute("neatlogs.llm.output_messages.0.role", "assistant")
             span.set_attribute("neatlogs.llm.output_messages.0.content", out_text)
+            reasoning = getattr(result, "reasoning_content", None)
+            if isinstance(reasoning, str) and reasoning:
+                span.set_attribute("neatlogs.llm.output_messages.0.thinking", reasoning)
             out_blob = {"role": "assistant", "content": out_text}
             if collected_calls:
                 out_blob["tool_calls"] = collected_calls

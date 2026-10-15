@@ -92,6 +92,13 @@ def _number(value: Any) -> Optional[float]:
     return result if result >= 0 else None
 
 
+def _finish_reason(attrs: Mapping[str, Any], index: int) -> Optional[str]:
+    value = attrs.get(f"neatlogs.llm.choices.{index}.finish_reason")
+    if value is None and index == 0:
+        value = attrs.get("neatlogs.llm.finish_reason")
+    return str(value) if value is not None else None
+
+
 def _bool(value: Any, default: bool = False) -> bool:
     if isinstance(value, bool):
         return value
@@ -274,11 +281,7 @@ def _llm_semantic(span: ReadableSpan, attrs: Mapping[str, Any]) -> dict[str, Any
             {
                 "choice_index": index,
                 "message": _message(record, tool_calls_by_choice.get(index, []), "output"),
-                "finish_reason": (
-                    str(attrs[f"neatlogs.llm.choices.{index}.finish_reason"])
-                    if attrs.get(f"neatlogs.llm.choices.{index}.finish_reason") is not None
-                    else None
-                ),
+                "finish_reason": _finish_reason(attrs, index),
             }
         )
 

@@ -67,6 +67,7 @@ _owns_tracer_provider = False  # True only when neatlogs created the provider (s
 
 _log_provider = None
 _span_processor = None
+_quiet_run_hints: List[str] = []
 _transport_span_processors = []
 _completion_span_processor = None
 _instrumentation_manager = None
@@ -449,7 +450,13 @@ def init(
     else:
         resolved_key = (os.getenv("NEATLOGS_API_KEY") or "").strip()
 
+    _quiet_run_hints.clear()
     if not resolved_key:
+        if not disable_export_resolved:
+            _quiet_run_hints.append(
+                "no NEATLOGS_API_KEY was found, so nothing was sent (pass api_key= or export "
+                "NEATLOGS_API_KEY; a .env file is not loaded for you)"
+            )
         disable_export_resolved = True
         resolved_key = "disabled"
         if debug:
@@ -773,6 +780,11 @@ def init(
 
     manager.instrument_threading()
 
+    if not instrumentations:
+        _quiet_run_hints.append(
+            "init() got no instrumentations, so library calls are not traced on their own "
+            "(pass instrumentations=[...] or create spans yourself)"
+        )
     if instrumentations:
         manager.instrument(libraries=instrumentations)
         if debug:
@@ -793,6 +805,25 @@ def init(
         logger.info(f"Tags: {tags or []}")
         logger.info(f"Instrumentations: {manager.instrumented or '(none)'}")
         logger.info(f"Sample Rate: {sample_rate}")
+
+
+def _warn_if_run_was_quiet(processor: Any) -> None:
+    """Say once, at shutdown, why a run left nothing behind."""
+    hints = list(_quiet_run_hints)
+    _quiet_run_hints.clear()
+    stats = getattr(processor, "perf_stats", None) or {}
+    recorded = stats.get("spans_exported", 0)
+    missing_key = any("NEATLOGS_API_KEY" in hint for hint in hints)
+    if recorded and not missing_key:
+        return
+    if not recorded:
+        reasons = [hint for hint in hints if "instrumentations" in hint or "API_KEY" in hint]
+        logger.warning(
+            "Neatlogs recorded no spans in this run%s",
+            f": {'; '.join(reasons)}" if reasons else "",
+        )
+    elif missing_key:
+        logger.warning("Neatlogs spans were not sent: %s", hints[0])
 
 
 def flush(timeout_millis: int = 30000) -> bool:
@@ -1252,6 +1283,7 @@ def _perform_shutdown(
     except Exception:
         success = False
 
+    _warn_if_run_was_quiet(_span_processor)
     _initialized = False
     _init_signature = None
     _tracer_provider = None

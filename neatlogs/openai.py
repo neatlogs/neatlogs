@@ -24,6 +24,7 @@ from ._wrap_utils import (
     SyncStreamWrapper,
     get_provider_tracer,
     is_suppressed,
+    message_as_dict,
     serialize,
 )
 from .core.choice_accumulator import ChoiceAccumulator, OpenAIStreamFinalizer
@@ -138,6 +139,7 @@ def _patch_completions(completions: Any) -> None:
 
         # Input messages
         for i, msg in enumerate(messages):
+            msg = message_as_dict(msg)
             role = msg.get("role", "")
             content = msg.get("content", "")
             span.set_attribute(f"neatlogs.llm.input_messages.{i}.role", role)
@@ -234,6 +236,7 @@ def _patch_async_completions(completions: Any) -> None:
         )
 
         for i, msg in enumerate(messages):
+            msg = message_as_dict(msg)
             role = msg.get("role", "")
             content = msg.get("content", "")
             span.set_attribute(f"neatlogs.llm.input_messages.{i}.role", role)

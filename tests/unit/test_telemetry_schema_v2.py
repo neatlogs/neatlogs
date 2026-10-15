@@ -181,3 +181,30 @@ def test_canonical_telemetry_preserves_evaluator_kind():
         assert payload["semantic"]["kind"] == "EVALUATOR"
     finally:
         provider.shutdown()
+
+
+def _canonical(span_kind, attrs, status=None):
+    provider = TracerProvider()
+    diagnostic = neatlogs.InMemoryDiagnosticSpanExporter(max_spans=1)
+    provider.add_span_processor(SimpleSpanProcessor(diagnostic))
+    try:
+        span = provider.get_tracer("neatlogs.test").start_span("op")
+        span.set_attribute("neatlogs.span.kind", span_kind)
+        for key, value in attrs.items():
+            span.set_attribute(key, value)
+        if status is not None:
+            span.set_status(status)
+        span.end()
+        payload = diagnostic.get_finished_envelopes()[0].to_dict()
+        Draft202012Validator(neatlogs.telemetry_schema()).validate(payload)
+        return payload["semantic"]
+    finally:
+        provider.shutdown()
+
+
+def test_failed_guardrail_is_canonical_triggered():
+    base = {"neatlogs.guardrail.name": "pii"}
+    failed = _canonical("guardrail", {**base, "neatlogs.guardrail.passed": False})
+    passed = _canonical("guardrail", {**base, "neatlogs.guardrail.passed": True})
+    assert failed["triggered"] is True
+    assert passed["triggered"] is False

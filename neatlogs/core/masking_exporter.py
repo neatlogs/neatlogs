@@ -96,8 +96,13 @@ class _MaskWorkerPool:
             finally:
                 self._slots.release()
 
-    def submit(self, operation: Callable[[], None]) -> bool:
-        if not self._slots.acquire(blocking=False):
+    def submit(self, operation: Callable[[], None], timeout: float = 0.0) -> bool:
+        acquired = (
+            self._slots.acquire(blocking=True, timeout=max(0.0, timeout))
+            if timeout > 0.0
+            else self._slots.acquire(blocking=False)
+        )
+        if not acquired:
             return False
         self._tasks.put_nowait(operation)
         return True
@@ -167,19 +172,21 @@ class _MaskRunner:
                     with self._active_lock:
                         self._active_cancellations.discard(cancelled)
 
-            if not self._pool.submit(run):
+            slot_timeout = max(0.0, deadline - time.monotonic()) if len(active) <= 1 else 0.0
+            if not self._pool.submit(run, timeout=slot_timeout):
                 with self._active_lock:
                     self._active_cancellations.discard(cancelled)
                 active.pop(index, None)
                 return False
             return True
 
-        while pending and len(active) < self._max_workers:
-            if not launch(pending[0]):
+        while (active or pending) and time.monotonic() < deadline:
+            while pending and len(active) < self._max_workers:
+                if not launch(pending[0]):
+                    break
+                pending.pop(0)
+            if not active:
                 break
-            pending.pop(0)
-
-        while active and time.monotonic() < deadline:
             try:
                 index, succeeded, result, candidate = result_queue.get(
                     timeout=max(0.001, deadline - time.monotonic())

@@ -20,12 +20,8 @@ from opentelemetry import trace as otel_trace
 from opentelemetry.exporter.otlp.proto.http import Compression
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk._logs import LoggerProvider
-from opentelemetry.sdk.environment_variables import (
-    OTEL_ATTRIBUTE_COUNT_LIMIT,
-    OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT,
-)
 from opentelemetry.sdk.resources import SERVICE_NAME, Resource
-from opentelemetry.sdk.trace import SpanLimits, TracerProvider
+from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.sampling import ParentBased, TraceIdRatioBased
 
 from ._wrap_utils import _normalize_traces_endpoint
@@ -42,6 +38,7 @@ from .core.filtering_exporter import HttpFilteringSpanExporter
 from .core.logger import get_logger
 from .core.media import PendingMediaStore, set_default_media_store
 from .core.media_exporter import TypedMediaLogExporter, TypedMediaSpanExporter
+from .core.pipeline import default_span_limits
 from .core.span_processor import CompletionMarkerSpanProcessor, NeatlogsSpanProcessor
 from .core.transport import build_otlp_session
 from .core.upload_authority import (
@@ -191,9 +188,6 @@ def _register_shutdown_signal_handlers() -> None:
             logger.debug(f"Could not register shutdown handler for signal {signum}: {exc}")
 
 
-_DEFAULT_MAX_SPAN_ATTRIBUTES = 10_000
-
-
 def _resolve_workflow_name(workflow_name: Optional[str]) -> str:
     """Return non-empty workflow name; derive from script when omitted."""
     provided = (workflow_name or "").strip()
@@ -206,21 +200,6 @@ def _resolve_workflow_name(workflow_name: Optional[str]) -> str:
         return script_slug
 
     return "neatlogs-app"
-
-
-def _span_limits_for_capture_everything() -> SpanLimits:
-    """
-    OpenTelemetry defaults to 128 span attributes, which can silently drop semantic
-    attributes when instrumenting LLM apps (retrieval docs, tool IO, etc).
-
-    If the user explicitly sets OTel limits via env vars, respect that. Otherwise
-    default to a larger max-span-attributes value (matching OpenInference's approach).
-    """
-    span_limit = os.getenv(OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT, "")
-    general_limit = os.getenv(OTEL_ATTRIBUTE_COUNT_LIMIT, "")
-    if span_limit.strip() or general_limit.strip():
-        return SpanLimits()
-    return SpanLimits(max_span_attributes=_DEFAULT_MAX_SPAN_ATTRIBUTES)
 
 
 def _serialize_init(func):
@@ -576,7 +555,7 @@ def init(
         provider = TracerProvider(
             resource=resource,
             sampler=sampler,
-            span_limits=_span_limits_for_capture_everything(),
+            span_limits=default_span_limits(),
         )
         _owns_tracer_provider = True
         if debug:

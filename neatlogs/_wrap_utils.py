@@ -518,13 +518,13 @@ def _bootstrap_from_env(api_key: str) -> None:
     from opentelemetry.exporter.otlp.proto.http import Compression
     from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
     from opentelemetry.sdk.resources import SERVICE_NAME, Resource
-    from opentelemetry.sdk.trace import SpanLimits
 
     from .core.byte_limited_exporter import ByteLimitedSpanExporter
     from .core.delivery import DeliveryDiagnostics, ObservableBatchSpanProcessor
     from .core.masking_exporter import MaskingSpanExporter
     from .core.media import PendingMediaStore, set_default_media_store
     from .core.media_exporter import TypedMediaSpanExporter
+    from .core.pipeline import default_span_limits
     from .core.transport import build_otlp_session
     from .core.upload_authority import (
         AuthenticatedUploadAuthority,
@@ -550,7 +550,7 @@ def _bootstrap_from_env(api_key: str) -> None:
     resource = Resource.create(resource_attrs)
     provider = TracerProvider(
         resource=resource,
-        span_limits=SpanLimits(max_span_attributes=10_000),
+        span_limits=default_span_limits(),
     )
     exporter = OTLPSpanExporter(
         endpoint=endpoint,

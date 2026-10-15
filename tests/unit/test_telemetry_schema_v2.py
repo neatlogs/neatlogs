@@ -181,3 +181,31 @@ def test_canonical_telemetry_preserves_evaluator_kind():
         assert payload["semantic"]["kind"] == "EVALUATOR"
     finally:
         provider.shutdown()
+
+
+def _canonical(span_kind, attrs, status=None):
+    provider = TracerProvider()
+    diagnostic = neatlogs.InMemoryDiagnosticSpanExporter(max_spans=1)
+    provider.add_span_processor(SimpleSpanProcessor(diagnostic))
+    try:
+        span = provider.get_tracer("neatlogs.test").start_span("op")
+        span.set_attribute("neatlogs.span.kind", span_kind)
+        for key, value in attrs.items():
+            span.set_attribute(key, value)
+        if status is not None:
+            span.set_status(status)
+        span.end()
+        payload = diagnostic.get_finished_envelopes()[0].to_dict()
+        Draft202012Validator(neatlogs.telemetry_schema()).validate(payload)
+        return payload["semantic"]
+    finally:
+        provider.shutdown()
+
+
+def test_reranker_model_and_count_from_wrapper_keys_are_preserved():
+    semantic = _canonical(
+        "reranker",
+        {"neatlogs.reranker.model_name": "rerank-v3", "neatlogs.reranker.top_k": 5},
+    )
+    assert semantic["model"] == "rerank-v3"
+    assert semantic["top_n"] == 5

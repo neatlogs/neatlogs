@@ -446,11 +446,13 @@ def _semantic(span: ReadableSpan, attrs: Mapping[str, Any], kind: str) -> dict[s
     if kind == "RERANKER":
         return {
             "kind": kind,
-            "model": _first(attrs, "neatlogs.reranker.model", default=None),
+            "model": _first(
+                attrs, "neatlogs.reranker.model", "neatlogs.reranker.model_name", default=None
+            ),
             "query": _decode(attrs.get("neatlogs.reranker.query")),
             "input_documents": _documents(attrs.get("neatlogs.reranker.input_documents")),
             "output_documents": _documents(attrs.get("neatlogs.reranker.output_documents")),
-            "top_n": _integer(attrs.get("neatlogs.reranker.top_n")),
+            "top_n": _integer(_first(attrs, "neatlogs.reranker.top_n", "neatlogs.reranker.top_k")),
         }
     if kind == "EMBEDDING":
         inputs = _decode(_first(attrs, "neatlogs.embedding.input", default=[]))

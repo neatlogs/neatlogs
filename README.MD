@@ -326,7 +326,7 @@ Pass keys to `instrumentations` in `neatlogs.init()`. Install extras when noted.
 |---|---|---|
 | ChromaDB | `chromadb` | Auto-instrumented when installed |
 | Pinecone | `pinecone` | Auto-instrumented when installed |
-| Qdrant | `qdrant` | Auto-instrumented when installed |
+| Qdrant through LangChain | `langchain` | `pip install "neatlogs[qdrant]"` |
 | Weaviate | `weaviate` | Auto-instrumented when installed |
 | Milvus | `milvus` | `pip install "neatlogs[milvus]"` |
 | Redis | `redis` | Auto-instrumented when installed |

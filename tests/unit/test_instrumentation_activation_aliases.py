@@ -1,4 +1,5 @@
 import importlib
+from types import SimpleNamespace
 
 from opentelemetry.sdk.trace import TracerProvider
 
@@ -45,3 +46,27 @@ def test_application_import_aliases_report_missing_dependencies(monkeypatch):
 
     assert manager._is_library_installed("autogen") is False
     assert manager._is_library_installed("portkey") is False
+
+
+def test_qdrant_uses_configured_openllmetry_instrumentor(monkeypatch):
+    calls = []
+
+    class QdrantInstrumentor:
+        def instrument(self, **kwargs):
+            calls.append(("instrument", kwargs))
+
+        def uninstrument(self):
+            calls.append(("uninstrument", {}))
+
+    module = SimpleNamespace(QdrantInstrumentor=QdrantInstrumentor)
+    monkeypatch.setattr(importlib, "import_module", lambda name: module)
+
+    manager = InstrumentationManager(TracerProvider())
+    monkeypatch.setattr(manager, "_is_library_installed", lambda library: True)
+
+    manager.instrument(libraries=["qdrant"])
+    assert manager.instrumented == {"qdrant"}
+    assert calls == [("instrument", {"tracer_provider": manager.provider})]
+
+    manager.uninstrument_all()
+    assert calls[-1] == ("uninstrument", {})

@@ -423,8 +423,7 @@ version = "0.7.5"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "jsonref" },
-    { name = "opentelemetry-api", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-api", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "opentelemetry-api" },
     { name = "pillow" },
     { name = "protobuf" },
     { name = "pydantic", version = "2.12.5", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
@@ -946,108 +945,40 @@ wheels = [
 
 [[package]]
 name = "chromadb"
-version = "1.1.1"
-source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version >= '3.13' and sys_platform == 'win32'",
-    "python_full_version >= '3.13' and sys_platform == 'emscripten'",
-    "python_full_version >= '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.11.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version < '3.11'",
-]
-dependencies = [
-    { name = "bcrypt", marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "build", marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "grpcio", marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "httpx", marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "importlib-resources", marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "jsonschema", marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "kubernetes", marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "mmh3", marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and extra == 'extra-8-neatlogs-crewai') or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
-    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version == '3.11.*' and extra == 'extra-8-neatlogs-crewai') or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
-    { name = "numpy", version = "2.5.2", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.12' and extra == 'extra-8-neatlogs-crewai') or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
-    { name = "onnxruntime", version = "1.24.3", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and extra == 'extra-8-neatlogs-crewai') or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
-    { name = "onnxruntime", version = "1.28.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.11' and extra == 'extra-8-neatlogs-crewai') or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
-    { name = "opentelemetry-api", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-exporter-otlp-proto-grpc", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-sdk", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "orjson", marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "overrides", marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "posthog", version = "5.4.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "pybase64", marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "pydantic", version = "2.12.5", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "pypika", marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "pyyaml", marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "rich", marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "tenacity", marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "tokenizers", marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "tqdm", marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "typer", marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "typing-extensions", marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "uvicorn", extra = ["standard"], marker = "extra == 'extra-8-neatlogs-crewai'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/7f/48/11851dddeadad6abe36ee071fedc99b5bdd2c324df3afa8cb952ae02798b/chromadb-1.1.1.tar.gz", hash = "sha256:ebfce0122753e306a76f1e291d4ddaebe5f01b5979b97ae0bc80b1d4024ff223", size = 1338109, upload-time = "2025-10-05T02:49:14.834Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/39/59/0d881a9b7eb63d8d2446cf67fcbb53fb8ae34991759d2b6024a067e90a9a/chromadb-1.1.1-cp39-abi3-macosx_10_12_x86_64.whl", hash = "sha256:27fe0e25ef0f83fb09c30355ab084fe6f246808a7ea29e8c19e85cf45785b90d", size = 19175479, upload-time = "2025-10-05T02:49:12.525Z" },
-    { url = "https://files.pythonhosted.org/packages/94/4f/5a9fa317c84c98e70af48f74b00aa25589626c03a0428b4381b2095f3d73/chromadb-1.1.1-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:95aed58869683f12e7dcbf68b039fe5f576dbe9d1b86b8f4d014c9d077ccafd2", size = 18267188, upload-time = "2025-10-05T02:49:09.236Z" },
-    { url = "https://files.pythonhosted.org/packages/45/1a/02defe2f1c8d1daedb084bbe85f5b6083510a3ba192ed57797a3649a4310/chromadb-1.1.1-cp39-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:06776dad41389a00e7d63d936c3a15c179d502becaf99f75745ee11b062c9b6a", size = 18855754, upload-time = "2025-10-05T02:49:03.299Z" },
-    { url = "https://files.pythonhosted.org/packages/5a/0d/80be82717e5dc19839af24558494811b6f2af2b261a8f21c51b872193b09/chromadb-1.1.1-cp39-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:bba0096a7f5e975875ead23a91c0d41d977fbd3767f60d3305a011b0ace7afd3", size = 19893681, upload-time = "2025-10-05T02:49:06.481Z" },
-    { url = "https://files.pythonhosted.org/packages/2d/6e/956e62975305a4e31daf6114a73b3b0683a8f36f8d70b20aabd466770edb/chromadb-1.1.1-cp39-abi3-win_amd64.whl", hash = "sha256:a77aa026a73a18181fd89bbbdb86191c9a82fd42aa0b549ff18d8cae56394c8b", size = 19844042, upload-time = "2025-10-05T02:49:16.925Z" },
-]
-
-[[package]]
-name = "chromadb"
 version = "1.5.9"
 source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version >= '3.13' and sys_platform == 'win32'",
-    "python_full_version >= '3.13' and sys_platform == 'emscripten'",
-    "python_full_version >= '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.11.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version < '3.11'",
-]
 dependencies = [
-    { name = "bcrypt", marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "build", marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "grpcio", marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "httpx", marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "importlib-resources", marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "jsonschema", marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "kubernetes", marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "mmh3", marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and extra != 'extra-8-neatlogs-crewai') or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
-    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version == '3.11.*' and extra != 'extra-8-neatlogs-crewai') or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
-    { name = "numpy", version = "2.5.2", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.12' and extra != 'extra-8-neatlogs-crewai') or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
-    { name = "onnxruntime", version = "1.24.3", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and extra != 'extra-8-neatlogs-crewai') or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
-    { name = "onnxruntime", version = "1.28.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.11' and extra != 'extra-8-neatlogs-crewai') or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
-    { name = "opentelemetry-api", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-exporter-otlp-proto-grpc", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-sdk", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "orjson", marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "overrides", marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "pybase64", marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "bcrypt" },
+    { name = "build" },
+    { name = "grpcio" },
+    { name = "httpx" },
+    { name = "importlib-resources" },
+    { name = "jsonschema" },
+    { name = "kubernetes" },
+    { name = "mmh3" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "numpy", version = "2.5.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "onnxruntime", version = "1.24.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "onnxruntime", version = "1.28.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-exporter-otlp-proto-grpc" },
+    { name = "opentelemetry-sdk" },
+    { name = "orjson" },
+    { name = "overrides" },
+    { name = "pybase64" },
+    { name = "pydantic", version = "2.12.5", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
     { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "pydantic-settings", marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "pypika", marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "pyyaml", marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "rich", marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "tenacity", marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "tokenizers", marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "tqdm", marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "typer", marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "typing-extensions", marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "uvicorn", extra = ["standard"], marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "pydantic-settings" },
+    { name = "pypika" },
+    { name = "pyyaml" },
+    { name = "rich" },
+    { name = "tenacity" },
+    { name = "tokenizers" },
+    { name = "tqdm" },
+    { name = "typer" },
+    { name = "typing-extensions" },
+    { name = "uvicorn", extra = ["standard"] },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/92/d1/5e33b26985f0c7046a0be1cee2158ada1748ee700d2545057fde1468d74d/chromadb-1.5.9.tar.gz", hash = "sha256:5c20e62a455c28bacac927f26116a73fd8e1799e0d908be8e8a4f02197a54731", size = 2595635, upload-time = "2026-05-05T05:54:51.713Z" }
 wheels = [
@@ -1111,14 +1042,14 @@ wheels = [
 
 [[package]]
 name = "crewai"
-version = "1.15.16"
+version = "1.15.28"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiofiles" },
     { name = "aiosqlite", version = "0.21.0", source = { registry = "https://pypi.org/simple" } },
     { name = "appdirs" },
     { name = "cel-python" },
-    { name = "chromadb", version = "1.1.1", source = { registry = "https://pypi.org/simple" } },
+    { name = "chromadb" },
     { name = "click" },
     { name = "crewai-cli" },
     { name = "crewai-core" },
@@ -1129,16 +1060,17 @@ dependencies = [
     { name = "jsonref" },
     { name = "lancedb" },
     { name = "mcp", version = "1.28.1", source = { registry = "https://pypi.org/simple" } },
+    { name = "oauthlib", version = "4.0.0", source = { registry = "https://pypi.org/simple" } },
     { name = "openai", version = "2.54.0", source = { registry = "https://pypi.org/simple" } },
     { name = "openpyxl" },
-    { name = "opentelemetry-api", version = "1.42.1", source = { registry = "https://pypi.org/simple" } },
-    { name = "opentelemetry-exporter-otlp-proto-http", version = "1.42.1", source = { registry = "https://pypi.org/simple" } },
-    { name = "opentelemetry-sdk", version = "1.42.1", source = { registry = "https://pypi.org/simple" } },
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-exporter-otlp-proto-http" },
+    { name = "opentelemetry-sdk" },
     { name = "pdfplumber" },
     { name = "portalocker", version = "2.7.0", source = { registry = "https://pypi.org/simple" } },
     { name = "pydantic", version = "2.12.5", source = { registry = "https://pypi.org/simple" } },
     { name = "pydantic-settings" },
-    { name = "pyjwt", version = "2.13.0", source = { registry = "https://pypi.org/simple" } },
+    { name = "pyjwt", version = "2.15.1", source = { registry = "https://pypi.org/simple" } },
     { name = "python-dotenv" },
     { name = "pyyaml" },
     { name = "regex", version = "2026.1.15", source = { registry = "https://pypi.org/simple" } },
@@ -1146,9 +1078,9 @@ dependencies = [
     { name = "tomli", version = "2.0.2", source = { registry = "https://pypi.org/simple" } },
     { name = "tomli-w" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/a8/80/616fbc703f3e682dd7009c247d70b2e185a139f86e48c0b5a66be8f63adf/crewai-1.15.16.tar.gz", hash = "sha256:38f75f499a5e6a5dc78369a3f5384452b791bc4852a1ff38c342aca4e04e8264", size = 7885470, upload-time = "2026-08-14T00:08:52.217Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/f5/d1/3d5614ec64a9985cfcb2824388d95cd0551cebe426e50357ce3797623066/crewai-1.15.28.tar.gz", hash = "sha256:af906c5a49cb5488d0d3aea413f4e958dca1472f7cb458cce118c7a41d933c66", size = 8288833, upload-time = "2026-10-14T04:47:39.602Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/b2/55/29fc1a03ae190c0bc2f921dcf9226c0afa22483558a18bb8c6f0cbd1679d/crewai-1.15.16-py3-none-any.whl", hash = "sha256:a93ae2c78b42dacdb932c2e4bbba2efb108ac610c23cf5453d8d59000858665b", size = 1114637, upload-time = "2026-08-14T00:08:49.411Z" },
+    { url = "https://files.pythonhosted.org/packages/27/76/cfed4b5433cc05860b51067d31cb7c235063200826af4481e40a8ba56371/crewai-1.15.28-py3-none-any.whl", hash = "sha256:4341af8f7b0bfe0b47cad449e17dc0ad6d12b25caff2c7dd39e9ce6099004056", size = 1378815, upload-time = "2026-10-14T04:47:37.463Z" },
 ]
 
 [package.optional-dependencies]
@@ -1159,7 +1091,7 @@ azure-ai-inference = [
 
 [[package]]
 name = "crewai-cli"
-version = "1.15.16"
+version = "1.15.28"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "appdirs" },
@@ -1171,7 +1103,7 @@ dependencies = [
     { name = "packaging" },
     { name = "pydantic", version = "2.12.5", source = { registry = "https://pypi.org/simple" } },
     { name = "pydantic-settings" },
-    { name = "pyjwt", version = "2.13.0", source = { registry = "https://pypi.org/simple" } },
+    { name = "pyjwt", version = "2.15.1", source = { registry = "https://pypi.org/simple" } },
     { name = "python-dotenv" },
     { name = "rich" },
     { name = "textual" },
@@ -1179,32 +1111,32 @@ dependencies = [
     { name = "tomli-w" },
     { name = "uv" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/89/e4/eb56bf3c36485b6f6c51489d747d4f92750d3cadc19ecdb03c23dd026a74/crewai_cli-1.15.16.tar.gz", hash = "sha256:6d8f0c03bb05e88114b1a60e93aced09db2cc0a83f6811ec83f2e902fda14426", size = 227940, upload-time = "2026-08-14T00:08:56.056Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/2a/a5/6b512c57236471f347f732f73875ec124bf1a277aea0a643436944fbfb02/crewai_cli-1.15.28.tar.gz", hash = "sha256:29eab94c97bf43a5130d7866d4ef28def5793cf146462d28cfd049b115176690", size = 315077, upload-time = "2026-10-14T04:47:42.8Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/f7/b2/bbc5da7b20e15a5e67b92aed90a729a8e3175918adc626a763735d893d6a/crewai_cli-1.15.16-py3-none-any.whl", hash = "sha256:b98848f2cffe03fcefe69eeeb64e8dca8ec0fcc7f00437c419ad1972dd4a8c2c", size = 195493, upload-time = "2026-08-14T00:08:54.224Z" },
+    { url = "https://files.pythonhosted.org/packages/dd/16/7edc681f8c98c278901256d38a9b568641d4bb3366b6540c19c772932409/crewai_cli-1.15.28-py3-none-any.whl", hash = "sha256:b4007e9b60949a9963d0f1d05ddc4173a631785fecd0bcdc8a9fe0e5d8092a59", size = 238877, upload-time = "2026-10-14T04:47:41.458Z" },
 ]
 
 [[package]]
 name = "crewai-core"
-version = "1.15.16"
+version = "1.15.28"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "appdirs" },
     { name = "cryptography" },
     { name = "httpx" },
-    { name = "opentelemetry-api", version = "1.42.1", source = { registry = "https://pypi.org/simple" } },
-    { name = "opentelemetry-exporter-otlp-proto-http", version = "1.42.1", source = { registry = "https://pypi.org/simple" } },
-    { name = "opentelemetry-sdk", version = "1.42.1", source = { registry = "https://pypi.org/simple" } },
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-exporter-otlp-proto-http" },
+    { name = "opentelemetry-sdk" },
     { name = "packaging" },
     { name = "portalocker", version = "2.7.0", source = { registry = "https://pypi.org/simple" } },
     { name = "pydantic", version = "2.12.5", source = { registry = "https://pypi.org/simple" } },
-    { name = "pyjwt", version = "2.13.0", source = { registry = "https://pypi.org/simple" } },
+    { name = "pyjwt", version = "2.15.1", source = { registry = "https://pypi.org/simple" } },
     { name = "rich" },
     { name = "tomli", version = "2.0.2", source = { registry = "https://pypi.org/simple" } },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/52/86/4d8273b80f41d7c7637ae0ada4d8ba78b540acf94735bdd0bf624ccb776d/crewai_core-1.15.16.tar.gz", hash = "sha256:c8d5548e223f32262243e91ee83b6976002616a26fc10951b3d5f1c05f10697f", size = 35445, upload-time = "2026-08-14T00:08:58.569Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/8b/d4/1de4e8e7324ccbad3ef0ced0e80b1594e2a958eb36ea6f7fad518b477353/crewai_core-1.15.28.tar.gz", hash = "sha256:996edf242015e6dee8e6c4ab6d154950ac626cc5d95dfc0331b97ff41acbf6e1", size = 1268547, upload-time = "2026-10-14T04:47:45.665Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/0e/88/e954a1928421fd923b92c33cf22951d5e0dd2dc0c3fb129dd48dfeaa6b57/crewai_core-1.15.16-py3-none-any.whl", hash = "sha256:7a74e6ddbecd9df042dd459fd5e19a308b576958469bfa134ceb12dc6814106b", size = 40428, upload-time = "2026-08-14T00:08:57.231Z" },
+    { url = "https://files.pythonhosted.org/packages/11/ea/b6bbcab5bb0d2b3ec6819dcefbde26f3e28871c2fd3c240627b4500aee45/crewai_core-1.15.28-py3-none-any.whl", hash = "sha256:10db05ab186540b4b74ee5d4be631a05426ee61d506a1cc6bbf06afdd7871a00", size = 1278502, upload-time = "2026-10-14T04:47:44.081Z" },
 ]
 
 [[package]]
@@ -1736,8 +1668,7 @@ client = [
     { name = "httpx" },
     { name = "mcp", version = "1.28.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
     { name = "mcp", version = "1.29.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-api", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-api", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "opentelemetry-api" },
     { name = "py-key-value-aio", extra = ["filetree", "keyring", "memory"] },
     { name = "starlette" },
 ]
@@ -1753,8 +1684,7 @@ server = [
     { name = "mcp", version = "1.28.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
     { name = "mcp", version = "1.29.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
     { name = "openapi-pydantic" },
-    { name = "opentelemetry-api", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-api", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "opentelemetry-api" },
     { name = "packaging" },
     { name = "py-key-value-aio", extra = ["filetree", "keyring", "memory"] },
     { name = "pyperclip" },
@@ -2003,10 +1933,8 @@ dependencies = [
     { name = "graphviz" },
     { name = "httpx" },
     { name = "jsonschema" },
-    { name = "opentelemetry-api", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-api", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-sdk", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-sdk", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-sdk" },
     { name = "packaging" },
     { name = "pydantic", version = "2.12.5", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
     { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
@@ -2476,18 +2404,16 @@ dependencies = [
     { name = "lxml" },
     { name = "openai", version = "2.24.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.11' and extra == 'extra-8-neatlogs-hermes') or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
     { name = "openai", version = "2.54.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or extra == 'extra-8-neatlogs-crewai' or extra != 'extra-8-neatlogs-hermes'" },
-    { name = "opentelemetry-exporter-otlp-proto-grpc", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-exporter-otlp-proto-grpc", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-exporter-otlp-proto-http", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-exporter-otlp-proto-http", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-sdk", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-sdk", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "opentelemetry-exporter-otlp-proto-grpc" },
+    { name = "opentelemetry-exporter-otlp-proto-http" },
+    { name = "opentelemetry-sdk" },
     { name = "pip" },
     { name = "pydantic", version = "2.12.5", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
     { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
     { name = "pydash" },
     { name = "pyjwt", version = "2.12.1", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.11' and extra == 'extra-8-neatlogs-hermes') or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
-    { name = "pyjwt", version = "2.13.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or extra == 'extra-8-neatlogs-crewai' or extra != 'extra-8-neatlogs-hermes'" },
+    { name = "pyjwt", version = "2.13.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and extra == 'extra-8-neatlogs-hermes') or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "pyjwt", version = "2.15.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai' or extra != 'extra-8-neatlogs-hermes'" },
     { name = "python-dateutil" },
     { name = "requests" },
     { name = "rich" },
@@ -2567,8 +2493,7 @@ dependencies = [
     { name = "numpy", version = "2.5.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
     { name = "openai", version = "2.24.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.11' and extra == 'extra-8-neatlogs-hermes') or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
     { name = "openai", version = "2.54.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or extra == 'extra-8-neatlogs-crewai' or extra != 'extra-8-neatlogs-hermes'" },
-    { name = "posthog", version = "5.4.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "posthog", version = "7.39.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "posthog" },
     { name = "pydantic", version = "2.12.5", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
     { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
     { name = "python-dateutil" },
@@ -3396,6 +3321,21 @@ wheels = [
 ]
 
 [[package]]
+name = "langchain-qdrant"
+version = "1.1.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "langchain-core" },
+    { name = "pydantic", version = "2.12.5", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
+    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "qdrant-client" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/77/66/fb1c4e2801e55d92dea71d9a7f948574a322a1f5adc7913231023827f79f/langchain_qdrant-1.1.0.tar.gz", hash = "sha256:433236845736f973543ac6b7137f9d7fa511b7539373fbc6565c581d3ba59373", size = 195565, upload-time = "2025-10-22T17:27:15.157Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/62/7e/d951082cb13e923508ba1eee4f48e7d511efc991c6506af567334654a3f3/langchain_qdrant-1.1.0-py3-none-any.whl", hash = "sha256:546c5c9aa57f543dbcee07343f730c331e4ec2af2ec55b541010af08d872bf35", size = 24254, upload-time = "2025-10-22T17:27:14.065Z" },
+]
+
+[[package]]
 name = "langchain-text-splitters"
 version = "1.1.2"
 source = { registry = "https://pypi.org/simple" }
@@ -3677,12 +3617,9 @@ version = "5.0.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "executing" },
-    { name = "opentelemetry-exporter-otlp-proto-http", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-exporter-otlp-proto-http", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-sdk", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-sdk", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "opentelemetry-exporter-otlp-proto-http" },
+    { name = "opentelemetry-instrumentation" },
+    { name = "opentelemetry-sdk" },
     { name = "protobuf" },
     { name = "rich" },
     { name = "tomli", version = "2.0.2", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and extra == 'extra-8-neatlogs-crewai') or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
@@ -3696,8 +3633,7 @@ wheels = [
 
 [package.optional-dependencies]
 httpx = [
-    { name = "opentelemetry-instrumentation-httpx", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation-httpx", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "opentelemetry-instrumentation-httpx" },
 ]
 
 [[package]]
@@ -3915,7 +3851,7 @@ dependencies = [
     { name = "jsonschema", marker = "extra == 'extra-8-neatlogs-crewai'" },
     { name = "pydantic", version = "2.12.5", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
     { name = "pydantic-settings", marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "pyjwt", version = "2.13.0", source = { registry = "https://pypi.org/simple" }, extra = ["crypto"], marker = "extra == 'extra-8-neatlogs-crewai'" },
+    { name = "pyjwt", version = "2.15.1", source = { registry = "https://pypi.org/simple" }, extra = ["crypto"], marker = "extra == 'extra-8-neatlogs-crewai'" },
     { name = "python-multipart", marker = "extra == 'extra-8-neatlogs-crewai'" },
     { name = "pywin32", marker = "(sys_platform == 'win32' and extra == 'extra-8-neatlogs-crewai') or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
     { name = "sse-starlette", marker = "extra == 'extra-8-neatlogs-crewai'" },
@@ -3953,7 +3889,8 @@ dependencies = [
     { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
     { name = "pydantic-settings", marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
     { name = "pyjwt", version = "2.12.1", source = { registry = "https://pypi.org/simple" }, extra = ["crypto"], marker = "(python_full_version >= '3.11' and extra == 'extra-8-neatlogs-hermes') or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
-    { name = "pyjwt", version = "2.13.0", source = { registry = "https://pypi.org/simple" }, extra = ["crypto"], marker = "(python_full_version < '3.11' and extra != 'extra-8-neatlogs-crewai') or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes') or (extra != 'extra-8-neatlogs-crewai' and extra != 'extra-8-neatlogs-hermes')" },
+    { name = "pyjwt", version = "2.13.0", source = { registry = "https://pypi.org/simple" }, extra = ["crypto"], marker = "(python_full_version < '3.11' and extra == 'extra-8-neatlogs-hermes') or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "pyjwt", version = "2.15.1", source = { registry = "https://pypi.org/simple" }, extra = ["crypto"], marker = "(extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes') or (extra != 'extra-8-neatlogs-crewai' and extra != 'extra-8-neatlogs-hermes')" },
     { name = "python-multipart", marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
     { name = "pywin32", marker = "(sys_platform == 'win32' and extra != 'extra-8-neatlogs-crewai') or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
     { name = "sse-starlette", marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
@@ -4010,10 +3947,8 @@ dependencies = [
     { name = "eval-type-backport" },
     { name = "httpx" },
     { name = "jsonpath-python" },
-    { name = "opentelemetry-api", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-api", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-semantic-conventions", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-semantic-conventions", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-semantic-conventions" },
     { name = "pydantic", version = "2.12.5", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
     { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
     { name = "python-dateutil" },
@@ -4125,7 +4060,7 @@ version = "1.37.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cryptography" },
-    { name = "pyjwt", version = "2.13.0", source = { registry = "https://pypi.org/simple" }, extra = ["crypto"], marker = "extra == 'extra-8-neatlogs-crewai'" },
+    { name = "pyjwt", version = "2.15.1", source = { registry = "https://pypi.org/simple" }, extra = ["crypto"], marker = "extra == 'extra-8-neatlogs-crewai'" },
     { name = "requests" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/9a/99/d840198ecf6e8057bbc937f129ae940404485d736cda73253bbff9537f01/msal-1.37.0.tar.gz", hash = "sha256:1b1672a33ee467c1d70b341bb16cafd51bb3c817147a95b93263794b03971bec", size = 182444, upload-time = "2026-05-29T19:49:05.561Z" }
@@ -4290,18 +4225,12 @@ dependencies = [
     { name = "openinference-instrumentation-strands-agents" },
     { name = "openinference-instrumentation-vertexai" },
     { name = "openinference-semantic-conventions" },
-    { name = "opentelemetry-api", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-api", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-exporter-otlp-proto-http", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-exporter-otlp-proto-http", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation-logging", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation-logging", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation-threading", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation-threading", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-sdk", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-sdk", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-exporter-otlp-proto-http" },
+    { name = "opentelemetry-instrumentation" },
+    { name = "opentelemetry-instrumentation-logging" },
+    { name = "opentelemetry-instrumentation-threading" },
+    { name = "opentelemetry-sdk" },
     { name = "requests" },
     { name = "wrapt" },
 ]
@@ -4355,8 +4284,7 @@ instructor = [
     { name = "instructor" },
 ]
 langchain = [
-    { name = "chromadb", version = "1.1.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "chromadb", version = "1.5.9", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "chromadb" },
     { name = "langchain" },
     { name = "langchain-classic" },
     { name = "langchain-community" },
@@ -4402,6 +4330,10 @@ pydantic-ai = [
     { name = "openinference-instrumentation-pydantic-ai" },
     { name = "pydantic-ai" },
 ]
+qdrant = [
+    { name = "langchain" },
+    { name = "langchain-qdrant" },
+]
 smolagents = [
     { name = "smolagents" },
 ]
@@ -4422,10 +4354,8 @@ dev = [
     { name = "fastapi", extra = ["standard"] },
     { name = "isort" },
     { name = "jsonschema" },
-    { name = "opentelemetry-proto", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-proto", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-sdk", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-sdk", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "opentelemetry-proto" },
+    { name = "opentelemetry-sdk" },
     { name = "protobuf" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -4456,12 +4386,14 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.27.0" },
     { name = "instructor", marker = "extra == 'instructor'", specifier = ">=1.0.0" },
     { name = "langchain", marker = "extra == 'langchain'", specifier = ">=1.1.2" },
+    { name = "langchain", marker = "extra == 'qdrant'", specifier = ">=1.1.2" },
     { name = "langchain-classic", marker = "extra == 'langchain'", specifier = ">=1.0.0" },
     { name = "langchain-community", marker = "extra == 'langchain'", specifier = ">=0.4.1" },
     { name = "langchain-core", marker = "extra == 'langchain'", specifier = ">=0.3.0" },
     { name = "langchain-core", marker = "extra == 'langgraph'", specifier = ">=0.3.0" },
     { name = "langchain-openai", marker = "extra == 'langchain'", specifier = ">=1.1.3" },
     { name = "langchain-openai", marker = "extra == 'langgraph'", specifier = ">=1.1.3" },
+    { name = "langchain-qdrant", marker = "extra == 'qdrant'", specifier = ">=1.1.0" },
     { name = "langgraph", marker = "extra == 'langgraph'", specifier = ">=1.0.4" },
     { name = "litellm", marker = "extra == 'crewai'", specifier = ">=1.80.11" },
     { name = "litellm", marker = "extra == 'litellm'", specifier = ">=1.80.11" },
@@ -4516,7 +4448,7 @@ requires-dist = [
     { name = "strands-agents", marker = "extra == 'strands'", specifier = ">=1.19.0" },
     { name = "wrapt", specifier = ">=1.0.0" },
 ]
-provides-extras = ["azure-ai-inference", "openai", "azure-openai", "anthropic", "langchain", "langgraph", "crewai", "llama-index", "google-adk", "groq", "agno", "bedrock", "dspy", "litellm", "google-genai", "openai-agents", "guardrails", "haystack", "instructor", "mcp", "mistralai", "portkey", "pydantic-ai", "smolagents", "hermes", "vertexai", "vertex-ai", "autogen-agentchat", "strands", "milvus"]
+provides-extras = ["azure-ai-inference", "openai", "azure-openai", "anthropic", "langchain", "langgraph", "qdrant", "crewai", "llama-index", "google-adk", "groq", "agno", "bedrock", "dspy", "litellm", "google-genai", "openai-agents", "guardrails", "haystack", "instructor", "mcp", "mistralai", "portkey", "pydantic-ai", "smolagents", "hermes", "vertexai", "vertex-ai", "autogen-agentchat", "strands", "milvus"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -4540,10 +4472,8 @@ name = "neatlogs-instrumentations"
 version = "0.1.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "opentelemetry-api", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-api", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-instrumentation" },
     { name = "wrapt" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/9b/ba/1f8ca90397fdea6a2fb9c10911a7c6d9e944e106b60ace5c74f49d3101e5/neatlogs_instrumentations-0.1.1.tar.gz", hash = "sha256:5754df3874070eb9a398d95fdad54c83c50610592b2660bd62a0f4a9091564d1", size = 8761, upload-time = "2026-02-03T17:28:32.789Z" }
@@ -4796,9 +4726,42 @@ wheels = [
 name = "oauthlib"
 version = "3.3.1"
 source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "python_full_version >= '3.13' and sys_platform == 'win32'",
+    "python_full_version >= '3.13' and sys_platform == 'emscripten'",
+    "python_full_version >= '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version == '3.12.*' and sys_platform == 'win32'",
+    "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
+    "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version == '3.11.*' and sys_platform == 'win32'",
+    "python_full_version == '3.11.*' and sys_platform == 'emscripten'",
+    "python_full_version == '3.11.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version < '3.11'",
+]
 sdist = { url = "https://files.pythonhosted.org/packages/0b/5f/19930f824ffeb0ad4372da4812c50edbd1434f678c90c2733e1188edfc63/oauthlib-3.3.1.tar.gz", hash = "sha256:0f0f8aa759826a193cf66c12ea1af1637f87b9b4622d46e866952bb022e538c9", size = 185918, upload-time = "2025-06-19T22:48:08.269Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/be/9c/92789c596b8df838baa98fa71844d84283302f7604ed565dafe5a6b5041a/oauthlib-3.3.1-py3-none-any.whl", hash = "sha256:88119c938d2b8fb88561af5f6ee0eec8cc8d552b7bb1f712743136eb7523b7a1", size = 160065, upload-time = "2025-06-19T22:48:06.508Z" },
+]
+
+[[package]]
+name = "oauthlib"
+version = "4.0.0"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "python_full_version >= '3.13' and sys_platform == 'win32'",
+    "python_full_version >= '3.13' and sys_platform == 'emscripten'",
+    "python_full_version >= '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version == '3.12.*' and sys_platform == 'win32'",
+    "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
+    "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version == '3.11.*' and sys_platform == 'win32'",
+    "python_full_version == '3.11.*' and sys_platform == 'emscripten'",
+    "python_full_version == '3.11.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version < '3.11'",
+]
+sdist = { url = "https://files.pythonhosted.org/packages/7a/d8/a1bcc8ba112a627f8ffbdc212a78ce18d3ac07e91a5ca65d27918eee25a1/oauthlib-4.0.0.tar.gz", hash = "sha256:efb274799819440f95b4ab3b818869f1ce9ae26c5beacba0201d1a1b76b54f86", size = 187232, upload-time = "2026-09-28T06:01:18.77Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d9/f4/78229a1066068ca14fc60fb26cf7381cabe4382261392b90e5f9552722d4/oauthlib-4.0.0-py3-none-any.whl", hash = "sha256:624c28c13a0a59cabf9747dfa52af63be3e512a7f2714df16e91b5b3a145e6cd", size = 159715, upload-time = "2026-09-28T06:01:17.008Z" },
 ]
 
 [[package]]
@@ -4979,10 +4942,8 @@ version = "0.1.57"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "openinference-semantic-conventions" },
-    { name = "opentelemetry-api", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-api", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-sdk", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-sdk", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-sdk" },
     { name = "wrapt" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/d6/d1/08bbd17cb66c1d7749802a30a551c132fa0ecdb1169bd13cf47fb8427132/openinference_instrumentation-0.1.57.tar.gz", hash = "sha256:2bd00a1f95ebb8a47d11615c1039128101e4abc0e9722cc4331849afdeb248fc", size = 41183, upload-time = "2026-08-07T14:29:23.006Z" }
@@ -4997,12 +4958,9 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "openinference-instrumentation" },
     { name = "openinference-semantic-conventions" },
-    { name = "opentelemetry-api", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-api", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-semantic-conventions", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-semantic-conventions", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-instrumentation" },
+    { name = "opentelemetry-semantic-conventions" },
     { name = "typing-extensions" },
     { name = "wrapt" },
 ]
@@ -5018,12 +4976,9 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "openinference-instrumentation" },
     { name = "openinference-semantic-conventions" },
-    { name = "opentelemetry-api", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-api", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-semantic-conventions", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-semantic-conventions", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-instrumentation" },
+    { name = "opentelemetry-semantic-conventions" },
     { name = "typing-extensions" },
     { name = "wrapt" },
 ]
@@ -5041,12 +4996,9 @@ dependencies = [
     { name = "autogen-core" },
     { name = "openinference-instrumentation" },
     { name = "openinference-semantic-conventions" },
-    { name = "opentelemetry-api", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-api", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-semantic-conventions", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-semantic-conventions", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-instrumentation" },
+    { name = "opentelemetry-semantic-conventions" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/01/7d/c46e8a6fafbf7a14cdaa963255c50a2cfc004ee7d0dd3112f212ab1a39ad/openinference_instrumentation_autogen_agentchat-0.1.11.tar.gz", hash = "sha256:47aa09f5e82abcc5c23e21e3fe2f1a310305ac0ae06a1cb0b2255e7af069f9f2", size = 14559, upload-time = "2026-08-07T14:29:34.349Z" }
 wheels = [
@@ -5061,12 +5013,9 @@ dependencies = [
     { name = "dacite" },
     { name = "openinference-instrumentation" },
     { name = "openinference-semantic-conventions" },
-    { name = "opentelemetry-api", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-api", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-semantic-conventions", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-semantic-conventions", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-instrumentation" },
+    { name = "opentelemetry-semantic-conventions" },
     { name = "typing-extensions" },
     { name = "wrapt" },
 ]
@@ -5082,12 +5031,9 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "openinference-instrumentation" },
     { name = "openinference-semantic-conventions" },
-    { name = "opentelemetry-api", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-api", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-semantic-conventions", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-semantic-conventions", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-instrumentation" },
+    { name = "opentelemetry-semantic-conventions" },
     { name = "typing-extensions" },
     { name = "wrapt" },
 ]
@@ -5103,12 +5049,9 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "openinference-instrumentation" },
     { name = "openinference-semantic-conventions" },
-    { name = "opentelemetry-api", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-api", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-semantic-conventions", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-semantic-conventions", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-instrumentation" },
+    { name = "opentelemetry-semantic-conventions" },
     { name = "typing-extensions" },
     { name = "wrapt" },
 ]
@@ -5124,12 +5067,9 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "openinference-instrumentation" },
     { name = "openinference-semantic-conventions" },
-    { name = "opentelemetry-api", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-api", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-semantic-conventions", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-semantic-conventions", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-instrumentation" },
+    { name = "opentelemetry-semantic-conventions" },
     { name = "typing-extensions" },
     { name = "wrapt" },
 ]
@@ -5145,12 +5085,9 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "openinference-instrumentation" },
     { name = "openinference-semantic-conventions" },
-    { name = "opentelemetry-api", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-api", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-semantic-conventions", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-semantic-conventions", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-instrumentation" },
+    { name = "opentelemetry-semantic-conventions" },
     { name = "wrapt" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/f6/94/6b2eac4b49a5be0431c8b0bfa7d6be71407708399b19916ce90c7d32391c/openinference_instrumentation_google_genai-1.4.0.tar.gz", hash = "sha256:265935f09845c73a770c8a82c46e5a88277aaa054ad9cdd816ce845e6aa5378c", size = 154472, upload-time = "2026-08-07T14:29:20.119Z" }
@@ -5165,12 +5102,9 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "openinference-instrumentation" },
     { name = "openinference-semantic-conventions" },
-    { name = "opentelemetry-api", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-api", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-semantic-conventions", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-semantic-conventions", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-instrumentation" },
+    { name = "opentelemetry-semantic-conventions" },
     { name = "typing-extensions" },
     { name = "wrapt" },
 ]
@@ -5186,12 +5120,9 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "openinference-instrumentation" },
     { name = "openinference-semantic-conventions" },
-    { name = "opentelemetry-api", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-api", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-semantic-conventions", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-semantic-conventions", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-instrumentation" },
+    { name = "opentelemetry-semantic-conventions" },
     { name = "packaging" },
     { name = "typing-extensions" },
     { name = "wrapt" },
@@ -5208,12 +5139,9 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "openinference-instrumentation" },
     { name = "openinference-semantic-conventions" },
-    { name = "opentelemetry-api", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-api", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-semantic-conventions", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-semantic-conventions", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-instrumentation" },
+    { name = "opentelemetry-semantic-conventions" },
     { name = "typing-extensions" },
     { name = "wrapt" },
 ]
@@ -5229,12 +5157,9 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "openinference-instrumentation" },
     { name = "openinference-semantic-conventions" },
-    { name = "opentelemetry-api", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-api", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-semantic-conventions", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-semantic-conventions", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-instrumentation" },
+    { name = "opentelemetry-semantic-conventions" },
     { name = "typing-extensions" },
     { name = "wrapt" },
 ]
@@ -5250,12 +5175,9 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "openinference-instrumentation" },
     { name = "openinference-semantic-conventions" },
-    { name = "opentelemetry-api", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-api", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-semantic-conventions", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-semantic-conventions", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-instrumentation" },
+    { name = "opentelemetry-semantic-conventions" },
     { name = "wrapt" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/5c/53/7520690e7777ae08d9ce67fd433278013567bf3e9c4ae8b1b6fdf6b5ac9b/openinference_instrumentation_langchain-0.1.70.tar.gz", hash = "sha256:edcacf78af5010c69937a2c16089ec4d0f6a98baa3816f31e8049a41cf277005", size = 78715, upload-time = "2026-08-07T14:29:17.026Z" }
@@ -5270,12 +5192,9 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "openinference-instrumentation" },
     { name = "openinference-semantic-conventions" },
-    { name = "opentelemetry-api", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-api", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-sdk", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-sdk", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-instrumentation" },
+    { name = "opentelemetry-sdk" },
     { name = "setuptools" },
     { name = "wrapt" },
 ]
@@ -5291,12 +5210,9 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "openinference-instrumentation" },
     { name = "openinference-semantic-conventions" },
-    { name = "opentelemetry-api", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-api", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-semantic-conventions", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-semantic-conventions", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-instrumentation" },
+    { name = "opentelemetry-semantic-conventions" },
     { name = "typing-extensions" },
     { name = "wrapt" },
 ]
@@ -5311,10 +5227,8 @@ version = "2.0.5"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "openinference-instrumentation" },
-    { name = "opentelemetry-api", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-api", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-instrumentation" },
     { name = "wrapt" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/b1/5a/70fad4ab615017fdb2df6c0228e00130da1b788453cafd2fb6c2a6344c6b/openinference_instrumentation_mcp-2.0.5.tar.gz", hash = "sha256:946651a6454c56e6b829b807a64f281990a9b72a1b62570f0fda270dce715784", size = 7598, upload-time = "2026-08-01T16:13:15.553Z" }
@@ -5329,12 +5243,9 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "openinference-instrumentation" },
     { name = "openinference-semantic-conventions" },
-    { name = "opentelemetry-api", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-api", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-semantic-conventions", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-semantic-conventions", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-instrumentation" },
+    { name = "opentelemetry-semantic-conventions" },
     { name = "wrapt" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/28/1c/1b54427069cd07ee8db2eea16ff745ca8811759380d1d6c3e1417d098113/openinference_instrumentation_mistralai-2.0.6.tar.gz", hash = "sha256:352be13dda9ffc70e81fa94fe671e430f205bee07dc71d29e4fae9711267ba31", size = 22386, upload-time = "2026-08-07T14:29:25.478Z" }
@@ -5349,12 +5260,9 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "openinference-instrumentation" },
     { name = "openinference-semantic-conventions" },
-    { name = "opentelemetry-api", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-api", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-semantic-conventions", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-semantic-conventions", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-instrumentation" },
+    { name = "opentelemetry-semantic-conventions" },
     { name = "typing-extensions" },
     { name = "wrapt" },
 ]
@@ -5370,12 +5278,9 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "openinference-instrumentation" },
     { name = "openinference-semantic-conventions" },
-    { name = "opentelemetry-api", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-api", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-semantic-conventions", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-semantic-conventions", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-instrumentation" },
+    { name = "opentelemetry-semantic-conventions" },
     { name = "typing-extensions" },
     { name = "wrapt" },
 ]
@@ -5391,12 +5296,9 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "openinference-instrumentation" },
     { name = "openinference-semantic-conventions" },
-    { name = "opentelemetry-api", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-api", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-semantic-conventions", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-semantic-conventions", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-instrumentation" },
+    { name = "opentelemetry-semantic-conventions" },
     { name = "typing-extensions" },
     { name = "wrapt" },
 ]
@@ -5412,12 +5314,9 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "openinference-instrumentation" },
     { name = "openinference-semantic-conventions" },
-    { name = "opentelemetry-api", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-api", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-semantic-conventions", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-semantic-conventions", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-instrumentation" },
+    { name = "opentelemetry-semantic-conventions" },
     { name = "typing-extensions" },
     { name = "wrapt" },
 ]
@@ -5433,12 +5332,9 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "openinference-instrumentation" },
     { name = "openinference-semantic-conventions" },
-    { name = "opentelemetry-api", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-api", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-semantic-conventions", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-semantic-conventions", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-instrumentation" },
+    { name = "opentelemetry-semantic-conventions" },
     { name = "typing-extensions" },
     { name = "wrapt" },
 ]
@@ -5453,12 +5349,9 @@ version = "0.1.7"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "openinference-semantic-conventions" },
-    { name = "opentelemetry-api", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-api", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-sdk", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-sdk", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-semantic-conventions", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-semantic-conventions", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-sdk" },
+    { name = "opentelemetry-semantic-conventions" },
     { name = "typing-extensions" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/da/e5/5d04e5035afd547a1ef74bf7832ec5e8544c0555dc117dbda5cfadf6aa1c/openinference_instrumentation_strands_agents-0.1.7.tar.gz", hash = "sha256:c2fc10898bdf90ff662c18871ecf7577ccf19b42e81cc57f5507ba2db4525a26", size = 15556, upload-time = "2026-08-25T05:32:44.114Z" }
@@ -5473,12 +5366,9 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "openinference-instrumentation" },
     { name = "openinference-semantic-conventions" },
-    { name = "opentelemetry-api", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-api", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-semantic-conventions", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-semantic-conventions", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-instrumentation" },
+    { name = "opentelemetry-semantic-conventions" },
     { name = "wrapt" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/d8/b0/62743514cf41a5aa99f94d48a1fd35ce71ac3411ed7d523d31b0aecde38b/openinference_instrumentation_vertexai-0.1.18.tar.gz", hash = "sha256:da6d5f8b60a3d42a65252ecffd389efbc4c2be1186d46d6974da2a9d986b253c", size = 21177, upload-time = "2026-08-07T14:29:25.184Z" }
@@ -5509,46 +5399,10 @@ wheels = [
 
 [[package]]
 name = "opentelemetry-api"
-version = "1.42.1"
-source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version >= '3.13' and sys_platform == 'win32'",
-    "python_full_version >= '3.13' and sys_platform == 'emscripten'",
-    "python_full_version >= '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.11.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version < '3.11'",
-]
-dependencies = [
-    { name = "typing-extensions", marker = "extra == 'extra-8-neatlogs-crewai'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/b4/1c/125e1c936c0873796771b7f04f6c93b9f1bf5d424cea90fda94a99f61da8/opentelemetry_api-1.42.1.tar.gz", hash = "sha256:56c63bea9f77b62856be8c47600474acad853b2924b99b1687c4cb6297166716", size = 72296, upload-time = "2026-05-21T16:32:49.335Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/a3/ca/9520cc1f3dfbbd03ac5903bbf55833e257bc64b1cf30fa8b0d6df374d821/opentelemetry_api-1.42.1-py3-none-any.whl", hash = "sha256:51a69edacadbc03a8950ace1c4c21099cacc538820ac2c9e36277e78cebba714", size = 61311, upload-time = "2026-05-21T16:32:28.822Z" },
-]
-
-[[package]]
-name = "opentelemetry-api"
 version = "1.43.0"
 source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version >= '3.13' and sys_platform == 'win32'",
-    "python_full_version >= '3.13' and sys_platform == 'emscripten'",
-    "python_full_version >= '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.11.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version < '3.11'",
-]
 dependencies = [
-    { name = "typing-extensions", marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "typing-extensions" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/ae/cc/e4c9584181f86494df0f6bdec1a4f3280c50db44704dc2a407e994fc87bb/opentelemetry_api-1.43.0.tar.gz", hash = "sha256:107d0d03857ea8fc7c5fcbbbd83f800c281f0d560553d61c1d675fccfd1761c1", size = 73476, upload-time = "2026-06-24T15:19:55.323Z" }
 wheels = [
@@ -5557,46 +5411,10 @@ wheels = [
 
 [[package]]
 name = "opentelemetry-exporter-otlp-proto-common"
-version = "1.42.1"
-source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version >= '3.13' and sys_platform == 'win32'",
-    "python_full_version >= '3.13' and sys_platform == 'emscripten'",
-    "python_full_version >= '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.11.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version < '3.11'",
-]
-dependencies = [
-    { name = "opentelemetry-proto", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/0e/9c/216acfeaedadf2e1937f4373929b20f73197c5c4a2546d4f584b7fa63813/opentelemetry_exporter_otlp_proto_common-1.42.1.tar.gz", hash = "sha256:04f1f01fb597c4249dfcd7f8b861c902c2102369d376d9d346ff38de4469a2ee", size = 21433, upload-time = "2026-05-21T16:32:55.526Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/d6/43/2375e7612e1121a4518c17603b6e0b03ad94f565aafad53f464dc5be2bf6/opentelemetry_exporter_otlp_proto_common-1.42.1-py3-none-any.whl", hash = "sha256:f48d395ab815b444da118868977e9798ea354c25737d5cf39578ae894011c140", size = 17327, upload-time = "2026-05-21T16:32:33.387Z" },
-]
-
-[[package]]
-name = "opentelemetry-exporter-otlp-proto-common"
 version = "1.43.0"
 source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version >= '3.13' and sys_platform == 'win32'",
-    "python_full_version >= '3.13' and sys_platform == 'emscripten'",
-    "python_full_version >= '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.11.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version < '3.11'",
-]
 dependencies = [
-    { name = "opentelemetry-proto", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "opentelemetry-proto" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/55/c1/e8098490ab15abf116dcaf9fa89ededcb35547c7d08d4b5a62f573dc1e63/opentelemetry_exporter_otlp_proto_common-1.43.0.tar.gz", hash = "sha256:c4e32ba6d6b13bdb2b8f6764c4fd28d00192826561aa04f6d14eedfce7ac076f", size = 20197, upload-time = "2026-06-24T15:20:00.247Z" }
 wheels = [
@@ -5605,58 +5423,16 @@ wheels = [
 
 [[package]]
 name = "opentelemetry-exporter-otlp-proto-grpc"
-version = "1.42.1"
-source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version >= '3.13' and sys_platform == 'win32'",
-    "python_full_version >= '3.13' and sys_platform == 'emscripten'",
-    "python_full_version >= '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.11.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version < '3.11'",
-]
-dependencies = [
-    { name = "googleapis-common-protos", marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "grpcio", marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-api", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-exporter-otlp-proto-common", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-proto", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-sdk", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "typing-extensions", marker = "extra == 'extra-8-neatlogs-crewai'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/87/87/ca7fc790dfdbcf4f9e9aab14a39ef1b7508ead13707e283de0b3131478d2/opentelemetry_exporter_otlp_proto_grpc-1.42.1.tar.gz", hash = "sha256:975c4461f167dd8ed8857d68d3b6b25f3d272eab896f6a9470d0f5b90e2faf15", size = 27140, upload-time = "2026-05-21T16:32:56.162Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/89/2b/28ba5b128f47fe8c3bab541000d6feb4b5a9bd26623ca013406f01c0fb60/opentelemetry_exporter_otlp_proto_grpc-1.42.1-py3-none-any.whl", hash = "sha256:0ae1177e2038b18a929b3098215243631ef91136cba26b7e2b12790ceb7e87cc", size = 19617, upload-time = "2026-05-21T16:32:34.278Z" },
-]
-
-[[package]]
-name = "opentelemetry-exporter-otlp-proto-grpc"
 version = "1.43.0"
 source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version >= '3.13' and sys_platform == 'win32'",
-    "python_full_version >= '3.13' and sys_platform == 'emscripten'",
-    "python_full_version >= '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.11.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version < '3.11'",
-]
 dependencies = [
-    { name = "googleapis-common-protos", marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "grpcio", marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-api", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-exporter-otlp-proto-common", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-proto", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-sdk", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "typing-extensions", marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "googleapis-common-protos" },
+    { name = "grpcio" },
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-exporter-otlp-proto-common" },
+    { name = "opentelemetry-proto" },
+    { name = "opentelemetry-sdk" },
+    { name = "typing-extensions" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/e2/1d/6336453716ca0a240d4417d19e6d5b77a5e7163e5670ec4f7ec4d3ede7bf/opentelemetry_exporter_otlp_proto_grpc-1.43.0.tar.gz", hash = "sha256:1b3e0627daa9bc21884d4a13946807c255eb558bfe5bdd543dffb6f4c9faee0d", size = 27213, upload-time = "2026-06-24T15:20:00.907Z" }
 wheels = [
@@ -5665,58 +5441,16 @@ wheels = [
 
 [[package]]
 name = "opentelemetry-exporter-otlp-proto-http"
-version = "1.42.1"
-source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version >= '3.13' and sys_platform == 'win32'",
-    "python_full_version >= '3.13' and sys_platform == 'emscripten'",
-    "python_full_version >= '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.11.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version < '3.11'",
-]
-dependencies = [
-    { name = "googleapis-common-protos", marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-api", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-exporter-otlp-proto-common", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-proto", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-sdk", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "requests", marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "typing-extensions", marker = "extra == 'extra-8-neatlogs-crewai'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/77/32/826bfa1d80ecea24f47808de03cd4a0d13c17ecc07712f45123f0f61e4ac/opentelemetry_exporter_otlp_proto_http-1.42.1.tar.gz", hash = "sha256:bf142a21035d7571ac3a09cb2e5639f49886f243972883cfe777ed3bf02b734d", size = 25406, upload-time = "2026-05-21T16:32:56.807Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/d3/96/82cb223a1502f0787d4bbff12907f5f8d870a50731febcd5818d93ef9555/opentelemetry_exporter_otlp_proto_http-1.42.1-py3-none-any.whl", hash = "sha256:00a16da1b312a1d6c7233d600d557c91df71125af73020f3b9a7765bd699d59d", size = 21793, upload-time = "2026-05-21T16:32:35.277Z" },
-]
-
-[[package]]
-name = "opentelemetry-exporter-otlp-proto-http"
 version = "1.43.0"
 source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version >= '3.13' and sys_platform == 'win32'",
-    "python_full_version >= '3.13' and sys_platform == 'emscripten'",
-    "python_full_version >= '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.11.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version < '3.11'",
-]
 dependencies = [
-    { name = "googleapis-common-protos", marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-api", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-exporter-otlp-proto-common", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-proto", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-sdk", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "requests", marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "typing-extensions", marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "googleapis-common-protos" },
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-exporter-otlp-proto-common" },
+    { name = "opentelemetry-proto" },
+    { name = "opentelemetry-sdk" },
+    { name = "requests" },
+    { name = "typing-extensions" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/fc/92/0b9f56412483a8891d4843890294796c9df8ab42417bd9bad8035d840cb3/opentelemetry_exporter_otlp_proto_http-1.43.0.tar.gz", hash = "sha256:fa8a42bb7d00ee5391f4c0b04d8e6a46c03caa437903296ab73a81dc11ba118f", size = 25406, upload-time = "2026-06-24T15:20:01.515Z" }
 wheels = [
@@ -5725,52 +5459,13 @@ wheels = [
 
 [[package]]
 name = "opentelemetry-instrumentation"
-version = "0.63b1"
-source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version >= '3.13' and sys_platform == 'win32'",
-    "python_full_version >= '3.13' and sys_platform == 'emscripten'",
-    "python_full_version >= '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.11.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version < '3.11'",
-]
-dependencies = [
-    { name = "opentelemetry-api", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-semantic-conventions", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "packaging", marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "wrapt", marker = "extra == 'extra-8-neatlogs-crewai'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/da/6d/4de72d97ff54db1ed270c7a59c9b904b917c0ac7af429c086c388b824ddb/opentelemetry_instrumentation-0.63b1.tar.gz", hash = "sha256:32368d6ae52c8de20aa790a6ad86b10a76f09956092337ae37d675773990e541", size = 41081, upload-time = "2026-05-21T16:36:14.206Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/35/a1/9314e621c143e4d82a5bf7a43c2ff7a745d31023506336857607c8c543cc/opentelemetry_instrumentation-0.63b1-py3-none-any.whl", hash = "sha256:f1986716d52cc316ea5f60189098726a9071d8ecc0eee96c9ed110be08bade9c", size = 35577, upload-time = "2026-05-21T16:34:56.818Z" },
-]
-
-[[package]]
-name = "opentelemetry-instrumentation"
 version = "0.64b0"
 source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version >= '3.13' and sys_platform == 'win32'",
-    "python_full_version >= '3.13' and sys_platform == 'emscripten'",
-    "python_full_version >= '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.11.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version < '3.11'",
-]
 dependencies = [
-    { name = "opentelemetry-api", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-semantic-conventions", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "packaging", marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "wrapt", marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-semantic-conventions" },
+    { name = "packaging" },
+    { name = "wrapt" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/7e/97/02fe6e1c8b1ffac42d0b429c18080edb24e0e0d18c86612edf72b5752382/opentelemetry_instrumentation-0.64b0.tar.gz", hash = "sha256:b47d528dead6271d7743114417eb67fc915bd9258111c48dbf9a4951d2efa88d", size = 41935, upload-time = "2026-06-24T15:19:12.951Z" }
 wheels = [
@@ -5779,54 +5474,14 @@ wheels = [
 
 [[package]]
 name = "opentelemetry-instrumentation-httpx"
-version = "0.63b1"
-source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version >= '3.13' and sys_platform == 'win32'",
-    "python_full_version >= '3.13' and sys_platform == 'emscripten'",
-    "python_full_version >= '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.11.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version < '3.11'",
-]
-dependencies = [
-    { name = "opentelemetry-api", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-semantic-conventions", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-util-http", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "wrapt", marker = "extra == 'extra-8-neatlogs-crewai'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/02/27/c2b4335bca030e893acbe5ff2b4f434868773bf94508be7e6bf5af981b24/opentelemetry_instrumentation_httpx-0.63b1.tar.gz", hash = "sha256:f41ec82f25c3abcdada621052db3e5fd648e3b43d55eec4b9c0c5d3ecb7b4ff4", size = 23557, upload-time = "2026-05-21T16:36:34.583Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/ba/b8/f536780996195c3b9f2354998554671e05a7a262df8c043f63fe9e5a6f0b/opentelemetry_instrumentation_httpx-0.63b1-py3-none-any.whl", hash = "sha256:14df6e99d81be9a8cd238f6639b6fa52404c4d3ce219058fcb5dc8c0f2211f86", size = 16336, upload-time = "2026-05-21T16:35:32.221Z" },
-]
-
-[[package]]
-name = "opentelemetry-instrumentation-httpx"
 version = "0.64b0"
 source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version >= '3.13' and sys_platform == 'win32'",
-    "python_full_version >= '3.13' and sys_platform == 'emscripten'",
-    "python_full_version >= '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.11.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version < '3.11'",
-]
 dependencies = [
-    { name = "opentelemetry-api", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-semantic-conventions", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-util-http", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "wrapt", marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-instrumentation" },
+    { name = "opentelemetry-semantic-conventions" },
+    { name = "opentelemetry-util-http" },
+    { name = "wrapt" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/0d/2a/2893a8781b93894f1e8014904c0342da7e4302de6597c2d5c0cb6c1a552e/opentelemetry_instrumentation_httpx-0.64b0.tar.gz", hash = "sha256:c2cfcd03d3665762860ebd0c28038c6e47fbb48d7942dec31dd75fc634d25c92", size = 23555, upload-time = "2026-06-24T15:19:29.107Z" }
 wheels = [
@@ -5835,50 +5490,12 @@ wheels = [
 
 [[package]]
 name = "opentelemetry-instrumentation-logging"
-version = "0.63b1"
-source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version >= '3.13' and sys_platform == 'win32'",
-    "python_full_version >= '3.13' and sys_platform == 'emscripten'",
-    "python_full_version >= '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.11.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version < '3.11'",
-]
-dependencies = [
-    { name = "opentelemetry-api", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-semantic-conventions", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/d1/cf/119381b1ae446fb07921a452e3a8e1887aa87f9856225f9829958dc20063/opentelemetry_instrumentation_logging-0.63b1.tar.gz", hash = "sha256:aa57d1bcb8931186b5dde565e9c17c572cf02412572d962da5b1a17ee5637d2c", size = 19823, upload-time = "2026-05-21T16:36:37.276Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/b6/71/1ba447311adf33023be14a1a309852c4cf74219f095d0055a54c1824d9ff/opentelemetry_instrumentation_logging-0.63b1-py3-none-any.whl", hash = "sha256:6b3aac8d18bc897468814d5ce4ed00f9d43588c583b4ba2288267e191b96d944", size = 15993, upload-time = "2026-05-21T16:35:35.851Z" },
-]
-
-[[package]]
-name = "opentelemetry-instrumentation-logging"
 version = "0.64b0"
 source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version >= '3.13' and sys_platform == 'win32'",
-    "python_full_version >= '3.13' and sys_platform == 'emscripten'",
-    "python_full_version >= '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.11.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version < '3.11'",
-]
 dependencies = [
-    { name = "opentelemetry-api", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-semantic-conventions", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-instrumentation" },
+    { name = "opentelemetry-semantic-conventions" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/88/8e/3b7191ba5817f139867612e960fbe06a69fe0d522d3b2c5e9c8e89b3ef8c/opentelemetry_instrumentation_logging-0.64b0.tar.gz", hash = "sha256:6435b4d215bf8183e15f7e3416a10ebe1c411810d3411fbfc62667daae3abacb", size = 20000, upload-time = "2026-06-24T15:19:30.946Z" }
 wheels = [
@@ -5887,50 +5504,12 @@ wheels = [
 
 [[package]]
 name = "opentelemetry-instrumentation-threading"
-version = "0.63b1"
-source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version >= '3.13' and sys_platform == 'win32'",
-    "python_full_version >= '3.13' and sys_platform == 'emscripten'",
-    "python_full_version >= '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.11.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version < '3.11'",
-]
-dependencies = [
-    { name = "opentelemetry-api", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "wrapt", marker = "extra == 'extra-8-neatlogs-crewai'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/d9/90/7b0279192fab614d57af3d57584ef7ac9e38fa3df0b1d412224f6f55a85b/opentelemetry_instrumentation_threading-0.63b1.tar.gz", hash = "sha256:afa8c2cada8ed136f07b04dc8739bc861a15e9a5edea1a65e4c5e1919c62946c", size = 9080, upload-time = "2026-05-21T16:36:49.977Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/c9/3d/3a991a4fcdf5ac82c04215e38cea4e73ad63713707014f9a70d1ab257f5f/opentelemetry_instrumentation_threading-0.63b1-py3-none-any.whl", hash = "sha256:33059298e68c94b13c38b562ad28799ec16a2fd06182ebfc762bb4e956e55d94", size = 8486, upload-time = "2026-05-21T16:35:58.084Z" },
-]
-
-[[package]]
-name = "opentelemetry-instrumentation-threading"
 version = "0.64b0"
 source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version >= '3.13' and sys_platform == 'win32'",
-    "python_full_version >= '3.13' and sys_platform == 'emscripten'",
-    "python_full_version >= '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.11.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version < '3.11'",
-]
 dependencies = [
-    { name = "opentelemetry-api", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "wrapt", marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-instrumentation" },
+    { name = "wrapt" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/26/ef/d4a16eb4a0f0971e351ec2ff95846b501b66a619d07d90822942d70a3adc/opentelemetry_instrumentation_threading-0.64b0.tar.gz", hash = "sha256:0a07d7329f69dfae5036a7cb184f502c8b91cb0538012f5304bd32ffe9ade451", size = 9080, upload-time = "2026-06-24T15:19:43.22Z" }
 wheels = [
@@ -5939,46 +5518,10 @@ wheels = [
 
 [[package]]
 name = "opentelemetry-proto"
-version = "1.42.1"
-source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version >= '3.13' and sys_platform == 'win32'",
-    "python_full_version >= '3.13' and sys_platform == 'emscripten'",
-    "python_full_version >= '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.11.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version < '3.11'",
-]
-dependencies = [
-    { name = "protobuf", marker = "extra == 'extra-8-neatlogs-crewai'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/b4/55/63eac3e1089b768ba014091fdd2ae8a9a440c821ef5e2b786909c94c8836/opentelemetry_proto-1.42.1.tar.gz", hash = "sha256:c6a51e6b4f05ae63565f3a113217f3d2bfaec68f78c02d7a6c85f9010d1cfca6", size = 45839, upload-time = "2026-05-21T16:33:03.937Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/41/9d/171c02c84a76940b7e601805b3bb536985aded9168fbcc9ba52f0a730fa2/opentelemetry_proto-1.42.1-py3-none-any.whl", hash = "sha256:dedb74cba2886c59c7789b227a7a670613025a07489040050aedff6e5c0fb43c", size = 71782, upload-time = "2026-05-21T16:32:44.867Z" },
-]
-
-[[package]]
-name = "opentelemetry-proto"
 version = "1.43.0"
 source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version >= '3.13' and sys_platform == 'win32'",
-    "python_full_version >= '3.13' and sys_platform == 'emscripten'",
-    "python_full_version >= '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.11.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version < '3.11'",
-]
 dependencies = [
-    { name = "protobuf", marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "protobuf" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/e0/b9/d357faefb40bda1d4799913e6af611171ff22a2dedcb93576bc92242d056/opentelemetry_proto-1.43.0.tar.gz", hash = "sha256:224778df17e1f3fafeaaa21d874236ca5f6ffc2f86e0899298ec7351aac27924", size = 46481, upload-time = "2026-06-24T15:20:07.625Z" }
 wheels = [
@@ -5987,50 +5530,12 @@ wheels = [
 
 [[package]]
 name = "opentelemetry-sdk"
-version = "1.42.1"
-source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version >= '3.13' and sys_platform == 'win32'",
-    "python_full_version >= '3.13' and sys_platform == 'emscripten'",
-    "python_full_version >= '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.11.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version < '3.11'",
-]
-dependencies = [
-    { name = "opentelemetry-api", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-semantic-conventions", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "typing-extensions", marker = "extra == 'extra-8-neatlogs-crewai'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/40/f7/b390bd9bfd703bf98a68fea1f27786c6872331fd617164a54b8a59bdc008/opentelemetry_sdk-1.42.1.tar.gz", hash = "sha256:8c834e8f8c9ba4171d4ec843d0cb8a67e4c7394d3f9e9297e582cbd9456ddbf7", size = 239262, upload-time = "2026-05-21T16:33:04.641Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/8f/6b/4287766cfbde577ae2272e8884abac325aeaac0d64f41c61d5b8cc595105/opentelemetry_sdk-1.42.1-py3-none-any.whl", hash = "sha256:083cd4bbfaa5aa7b5a9e552430d9951219967cfb27aa61feb13a77aba1fc839d", size = 170907, upload-time = "2026-05-21T16:32:45.894Z" },
-]
-
-[[package]]
-name = "opentelemetry-sdk"
 version = "1.43.0"
 source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version >= '3.13' and sys_platform == 'win32'",
-    "python_full_version >= '3.13' and sys_platform == 'emscripten'",
-    "python_full_version >= '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.11.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version < '3.11'",
-]
 dependencies = [
-    { name = "opentelemetry-api", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-semantic-conventions", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "typing-extensions", marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-semantic-conventions" },
+    { name = "typing-extensions" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/3e/eb/5041074274ac0956b03637cc039d434569112468e875eddfcc9a0674ce06/opentelemetry_sdk-1.43.0.tar.gz", hash = "sha256:d8187c81c162df9913e4003dd6485f7390d9a24fc17026ec7387b8b8218b08e9", size = 254744, upload-time = "2026-06-24T15:20:08.467Z" }
 wheels = [
@@ -6039,48 +5544,11 @@ wheels = [
 
 [[package]]
 name = "opentelemetry-semantic-conventions"
-version = "0.63b1"
-source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version >= '3.13' and sys_platform == 'win32'",
-    "python_full_version >= '3.13' and sys_platform == 'emscripten'",
-    "python_full_version >= '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.11.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version < '3.11'",
-]
-dependencies = [
-    { name = "opentelemetry-api", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "typing-extensions", marker = "extra == 'extra-8-neatlogs-crewai'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/93/99/4d7dd6df64795951413ce6e815f8cf1eb191daf7196ae86574589643d5f3/opentelemetry_semantic_conventions-0.63b1.tar.gz", hash = "sha256:3daf963611334b365e98a57438183eb012d3bfb40b2d931a9af613476b8701a9", size = 148340, upload-time = "2026-05-21T16:33:05.455Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/cb/7a/7fe66f5f3682b1dd47d88cc4e11f1c6c0966b737de2d16671146e23c39a5/opentelemetry_semantic_conventions-0.63b1-py3-none-any.whl", hash = "sha256:dfe5ef4dee82586b746f522b818ceb298d00b3d59f660042bd79404bff8d0682", size = 203713, upload-time = "2026-05-21T16:32:47.016Z" },
-]
-
-[[package]]
-name = "opentelemetry-semantic-conventions"
 version = "0.64b0"
 source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version >= '3.13' and sys_platform == 'win32'",
-    "python_full_version >= '3.13' and sys_platform == 'emscripten'",
-    "python_full_version >= '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.11.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version < '3.11'",
-]
 dependencies = [
-    { name = "opentelemetry-api", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "typing-extensions", marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "opentelemetry-api" },
+    { name = "typing-extensions" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/5a/30/5f26df29509eccd86b99b481ac9ffa39da49ba9577cc69071c552ae30447/opentelemetry_semantic_conventions-0.64b0.tar.gz", hash = "sha256:72f76fb2d1582d9d033dd1fcd84532e961e6ff3d90d24ba6fabc72975a83864c", size = 148340, upload-time = "2026-06-24T15:20:09.267Z" }
 wheels = [
@@ -6089,41 +5557,8 @@ wheels = [
 
 [[package]]
 name = "opentelemetry-util-http"
-version = "0.63b1"
-source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version >= '3.13' and sys_platform == 'win32'",
-    "python_full_version >= '3.13' and sys_platform == 'emscripten'",
-    "python_full_version >= '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.11.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version < '3.11'",
-]
-sdist = { url = "https://files.pythonhosted.org/packages/6c/d8/7bf5e4cec0578ac3c28c18eb7b88f34279139cbc8c568d6aa02b9c5ae53e/opentelemetry_util_http-0.63b1.tar.gz", hash = "sha256:ba1268f00922ee522dba2ae38458060f99486e7385a8056985901ca9685adfff", size = 11102, upload-time = "2026-05-21T16:36:56.675Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/e5/f1/34e047e8f6a3c67e5220acf1af7b9f62868c25d77791bca74457bd2180a6/opentelemetry_util_http-0.63b1-py3-none-any.whl", hash = "sha256:6284194028c59cd439f8acfe388145069a6127f11dc077e1344a2094adacc3f8", size = 8205, upload-time = "2026-05-21T16:36:09.736Z" },
-]
-
-[[package]]
-name = "opentelemetry-util-http"
 version = "0.64b0"
 source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version >= '3.13' and sys_platform == 'win32'",
-    "python_full_version >= '3.13' and sys_platform == 'emscripten'",
-    "python_full_version >= '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.11.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version < '3.11'",
-]
 sdist = { url = "https://files.pythonhosted.org/packages/c3/1b/1029a805fd7242f7dfce91633b244c3b14a94d703232878f71e01ce862b1/opentelemetry_util_http-0.64b0.tar.gz", hash = "sha256:8a86a220dbfc56d736f47f1e5c4e7932a21fcf69052312e1bcf166444dc79322", size = 11102, upload-time = "2026-06-24T15:19:48.974Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/1c/c7/5f8ec5b30546f2dc22cd5fc5759bce2ab5be6e89a2e710a405ac9ef64ed3/opentelemetry_util_http-0.64b0-py3-none-any.whl", hash = "sha256:c1e5350d25507c1afcd6076cf9ac062485a0a4f79cd9971366996fd3056bacdb", size = 8204, upload-time = "2026-06-24T15:19:09.02Z" },
@@ -6596,53 +6031,13 @@ wheels = [
 
 [[package]]
 name = "posthog"
-version = "5.4.0"
-source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version >= '3.13' and sys_platform == 'win32'",
-    "python_full_version >= '3.13' and sys_platform == 'emscripten'",
-    "python_full_version >= '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.11.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version < '3.11'",
-]
-dependencies = [
-    { name = "backoff", marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "distro", marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "python-dateutil", marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "requests", marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "six", marker = "extra == 'extra-8-neatlogs-crewai'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/48/20/60ae67bb9d82f00427946218d49e2e7e80fb41c15dc5019482289ec9ce8d/posthog-5.4.0.tar.gz", hash = "sha256:701669261b8d07cdde0276e5bc096b87f9e200e3b9589c5ebff14df658c5893c", size = 88076, upload-time = "2025-06-20T23:19:23.485Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/4f/98/e480cab9a08d1c09b1c59a93dade92c1bb7544826684ff2acbfd10fcfbd4/posthog-5.4.0-py3-none-any.whl", hash = "sha256:284dfa302f64353484420b52d4ad81ff5c2c2d1d607c4e2db602ac72761831bd", size = 105364, upload-time = "2025-06-20T23:19:22.001Z" },
-]
-
-[[package]]
-name = "posthog"
 version = "7.39.1"
 source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version >= '3.13' and sys_platform == 'win32'",
-    "python_full_version >= '3.13' and sys_platform == 'emscripten'",
-    "python_full_version >= '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.11.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version < '3.11'",
-]
 dependencies = [
-    { name = "backoff", marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "distro", marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "requests", marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "typing-extensions", marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "backoff" },
+    { name = "distro" },
+    { name = "requests" },
+    { name = "typing-extensions" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/4f/77/3737f60571995ba07677b058bb1523b7c26f28570806b8ffaf83a66df18c/posthog-7.39.1.tar.gz", hash = "sha256:0d184596e35057457fc1094883646fd23de2d6338db8b9c3ea770643fb55d8a2", size = 428586, upload-time = "2026-08-14T13:50:24.688Z" }
 wheels = [
@@ -7096,8 +6491,7 @@ dependencies = [
     { name = "genai-prices" },
     { name = "griffe" },
     { name = "httpx" },
-    { name = "opentelemetry-api", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-api", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "opentelemetry-api" },
     { name = "pydantic", version = "2.12.5", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
     { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
     { name = "pydantic-graph" },
@@ -7486,6 +6880,26 @@ name = "pyjwt"
 version = "2.13.0"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
+    "python_full_version < '3.11'",
+]
+dependencies = [
+    { name = "typing-extensions", marker = "(python_full_version < '3.11' and extra == 'extra-8-neatlogs-hermes') or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/3b/81/58d0ac84e1ef3a3843791d6954d94c0b33d526c75eeb1efbce9d0a4c4077/pyjwt-2.13.0.tar.gz", hash = "sha256:41571c89ca91598c79e8ef18a2d07367d4810fbbd6f637794879baf1b7703423", size = 107515, upload-time = "2026-05-21T19:54:36.618Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a3/5e/ecf12fdb62546d64385c158514e9b2b671f7832108ef2ecd2020ce0af2d1/pyjwt-2.13.0-py3-none-any.whl", hash = "sha256:66adcc2aff09b3f1bbd95fc1e1577df8ac8723c978552fd43304c8a290ac5728", size = 31274, upload-time = "2026-05-21T19:54:35.362Z" },
+]
+
+[package.optional-dependencies]
+crypto = [
+    { name = "cryptography", marker = "(python_full_version < '3.11' and extra == 'extra-8-neatlogs-hermes') or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+]
+
+[[package]]
+name = "pyjwt"
+version = "2.15.1"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
     "python_full_version >= '3.13' and sys_platform == 'win32'",
     "python_full_version >= '3.13' and sys_platform == 'emscripten'",
     "python_full_version >= '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32'",
@@ -7498,16 +6912,16 @@ resolution-markers = [
     "python_full_version < '3.11'",
 ]
 dependencies = [
-    { name = "typing-extensions", marker = "python_full_version < '3.11' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "typing-extensions", marker = "(python_full_version < '3.11' and extra == 'extra-8-neatlogs-crewai') or (python_full_version < '3.11' and extra != 'extra-8-neatlogs-hermes') or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/3b/81/58d0ac84e1ef3a3843791d6954d94c0b33d526c75eeb1efbce9d0a4c4077/pyjwt-2.13.0.tar.gz", hash = "sha256:41571c89ca91598c79e8ef18a2d07367d4810fbbd6f637794879baf1b7703423", size = 107515, upload-time = "2026-05-21T19:54:36.618Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/43/ea/5194e52748b0da83d71e082d75496eaec6e58f419f5e184786ded517e6a9/pyjwt-2.15.1.tar.gz", hash = "sha256:4f259e80cdfb6b3fc18a7de51fd1ef9ec79652f25019bae68975ca2468a34df8", size = 121252, upload-time = "2026-09-28T18:40:42.598Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/a3/5e/ecf12fdb62546d64385c158514e9b2b671f7832108ef2ecd2020ce0af2d1/pyjwt-2.13.0-py3-none-any.whl", hash = "sha256:66adcc2aff09b3f1bbd95fc1e1577df8ac8723c978552fd43304c8a290ac5728", size = 31274, upload-time = "2026-05-21T19:54:35.362Z" },
+    { url = "https://files.pythonhosted.org/packages/50/ca/44de4e75f8aadc457f0634be3b542815078ded46dca30efb960edeecad6e/pyjwt-2.15.1-py3-none-any.whl", hash = "sha256:42d59d631f7768a1028a64c7ff581a9bf7519804daf91fc5b6c56e30eec5e193", size = 33860, upload-time = "2026-09-28T18:40:41.429Z" },
 ]
 
 [package.optional-dependencies]
 crypto = [
-    { name = "cryptography", marker = "python_full_version < '3.11' or extra == 'extra-8-neatlogs-crewai' or extra != 'extra-8-neatlogs-hermes'" },
+    { name = "cryptography", marker = "extra == 'extra-8-neatlogs-crewai' or extra != 'extra-8-neatlogs-hermes'" },
 ]
 
 [[package]]
@@ -8047,7 +7461,8 @@ name = "requests-oauthlib"
 version = "2.0.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "oauthlib" },
+    { name = "oauthlib", version = "3.3.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes'" },
+    { name = "oauthlib", version = "4.0.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai' or extra != 'extra-8-neatlogs-hermes'" },
     { name = "requests" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/42/f2/05f29bc3913aea15eb670be136045bf5c5bbf4b99ecb839da9b422bb2c85/requests-oauthlib-2.0.0.tar.gz", hash = "sha256:b3dffaebd884d8cd778494369603a9e7b58d29111bf6b41bdc2dcd87203af4e9", size = 55650, upload-time = "2024-03-22T20:32:29.939Z" }
@@ -8670,12 +8085,9 @@ dependencies = [
     { name = "jsonschema" },
     { name = "mcp", version = "1.28.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
     { name = "mcp", version = "1.29.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-api", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-api", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation-threading", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation-threading", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-sdk", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-sdk", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-instrumentation-threading" },
+    { name = "opentelemetry-sdk" },
     { name = "pydantic", version = "2.12.5", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
     { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
     { name = "pyyaml" },

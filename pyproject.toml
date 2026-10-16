@@ -101,6 +101,10 @@ langgraph = [
     "langchain-core>=0.3.0",
     "langchain-openai>=1.1.3",
 ]
+qdrant = [
+    "langchain>=1.1.2",
+    "langchain-qdrant>=1.1.0",
+]
 crewai = [
     "crewai[azure-ai-inference]>=1.9.3",
     "litellm>=1.80.11",

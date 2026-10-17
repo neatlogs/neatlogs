@@ -458,19 +458,15 @@ def init(
                 "Set NEATLOGS_API_KEY (or pass api_key=) to send spans to the backend."
             )
 
-    if debug:
-        import logging
-
-        logging.basicConfig(
-            level=logging.DEBUG,
-            format="%(name)s - %(levelname)s - %(message)s",
-        )
-
     global _debug_mode
     _debug_mode = debug
 
     if debug:
+        # Only the neatlogs logger: configuring the root logger would turn on
+        # DEBUG output for every library in the host app.
         try:
+            import logging
+
             from .core.logger import set_log_level
 
             set_log_level(logging.DEBUG)  # ensure our debug lines emit from here on

@@ -35,7 +35,9 @@ def get_logger() -> logging.Logger:
             fmt="%(asctime)s - %(name)s - %(levelname)s - %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
         )
 
-        console_handler = logging.StreamHandler(sys.stdout)
+        # stderr, not stdout: stdout is the data channel for MCP stdio servers,
+        # CLIs that print JSON and pipes, and SDK log lines there corrupt it.
+        console_handler = logging.StreamHandler(sys.stderr)
         console_handler.setLevel(log_level)
         console_handler.setFormatter(formatter)
         _logger.addHandler(console_handler)

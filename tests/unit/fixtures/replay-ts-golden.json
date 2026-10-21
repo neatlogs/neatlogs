@@ -1,0 +1,68 @@
+[
+  {
+    "label": "floats",
+    "input": [
+      1,
+      0,
+      1e-7,
+      0.000001,
+      100000000000000000000,
+      1e+21,
+      1e+23,
+      333333333.3333333,
+      4.5,
+      0.002,
+      1e-27
+    ],
+    "key": "tool:fixture:fea07f66e4f2df0e88bf686813d7bca4290196e2d0583001cb52ad0a2cbf1f01"
+  },
+  {
+    "label": "unicode-key-order",
+    "input": {
+      "𐀀": "astral",
+      "": "bmp",
+      "é": "é",
+      "a": {
+        "z": 1,
+        "a": 2
+      }
+    },
+    "key": "tool:fixture:8e1e33cd6dda833bf448d43df16ec3461d203d5635d02164e3cd52f2d33d7f2b"
+  },
+  {
+    "label": "bool-number",
+    "input": [
+      true,
+      false,
+      1,
+      0,
+      null,
+      "1",
+      "true"
+    ],
+    "key": "tool:fixture:b0f942d02183ee0f95d6afa75a799be3f28b92ad03c06fa64110623431646e12"
+  },
+  {
+    "label": "integer-keys",
+    "input": {
+      "2": 2,
+      "10": 10,
+      "a": {
+        "11": 11,
+        "100": 100
+      }
+    },
+    "key": "tool:fixture:8846f8cb6851bdd57745198bc5c8efcfaf93fa3d3a63a1630380b514c1d489de"
+  },
+  {
+    "label": "controls",
+    "input": [
+      "\b\t\n\f\r",
+      "/",
+      "\\",
+      "\"",
+      "😀"
+    ],
+    "key": "tool:fixture:ae869f7f7ad10bd1ead5d0d9559216ec0e35c09e3f82ddc8fdc13cc6a03d1ffa"
+  }
+]

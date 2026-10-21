@@ -136,6 +136,11 @@ def _standalone_local() -> dict:
 
 
 def main(argv: list[str] | None = None) -> int:
+    values = sys.argv[1:] if argv is None else argv
+    if values[:1] == ["simulate"]:
+        from .replay.cli import run_simulate_cli
+
+        return run_simulate_cli(values)
     parser = _DoctorParser(prog="neatlogs")
     commands = parser.add_subparsers(dest="command", required=True)
     doctor_parser = commands.add_parser(

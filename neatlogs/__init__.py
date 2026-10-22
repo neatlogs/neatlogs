@@ -34,7 +34,7 @@ from .core.identity import identify
 from .core.llm_binder import bind_templates
 from .core.log import log
 from .core.masking_exporter import MaskContext
-from .core.propagation import extract_trace_context, inject_trace_context
+from .core.propagation import current_trace_id, extract_trace_context, inject_trace_context
 from .core.telemetry_v2 import (
     InMemoryDiagnosticSpanExporter,
     OwnershipV2,

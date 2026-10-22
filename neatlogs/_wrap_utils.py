@@ -50,6 +50,9 @@ _active_client: ContextVar[Optional[Any]] = ContextVar("neatlogs.active_client",
 # True when Neatlogs has its required private provider. Neatlogs threads parents
 # through a private context key so co-tenant instrumentors never inherit them.
 _isolated: bool = False
+_active_owned_span: ContextVar[Optional[otel_trace.Span]] = ContextVar(
+    "neatlogs.active_owned_span", default=None
+)
 
 
 def set_neatlogs_provider(provider: Optional[TracerProvider]) -> None:
@@ -639,7 +642,7 @@ def attach_as_current(span: otel_trace.Span, *, force_owned: bool = False):
         try:
             ...
         finally:
-            context_api.detach(token)
+            detach(token)
     """
     is_nl = force_owned or _is_neatlogs_span(span)
     if _isolation_active():
@@ -659,7 +662,8 @@ def attach_as_current(span: otel_trace.Span, *, force_owned: bool = False):
     # detaching. Context is immutable+nested, so the flag scopes to the subtree.
     if is_nl:
         ctx = context_api.set_value(_NEATLOGS_ACTIVE_KEY, True, ctx)
-    return context_api.attach(ctx)
+    token = context_api.attach(ctx)
+    return (token, _active_owned_span.set(span)) if is_nl else token
 
 
 def _current_neatlogs_parent(
@@ -700,8 +704,7 @@ def active_neatlogs_context(
     (the global current-span is the host's), so we resolve it from there and
     rebuild a context with it as the current span — exactly what W3C
     ``inject(context=...)`` needs to write our ``traceparent``. In DEFAULT mode
-    the neatlogs span already IS the global current-span, so the ambient context
-    works and we return it unchanged.
+    the owned span is tracked separately so a foreign root cannot hide it.
 
     Returns None when no recording neatlogs span is active, so callers can no-op
     (the inject helper leaves the carrier untouched)."""
@@ -711,10 +714,14 @@ def active_neatlogs_context(
             return None
         base = context if context is not None else context_api.Context()
         return otel_trace.set_span_in_context(parent, base)
-    # DEFAULT mode: only report a context when a recording neatlogs span is the
-    # active ancestor — never let a purely foreign current-span be injected as ours.
-    current = otel_trace.get_current_span()
-    if current and current.is_recording() and _has_neatlogs_ancestor():
+    current = _active_owned_span.get()
+    if current is not None:
+        if not current.is_recording():
+            return None
+        base = context if context is not None else context_api.get_current()
+        return otel_trace.set_span_in_context(current, base)
+    current = otel_trace.get_current_span(context)
+    if current and current.is_recording() and _is_neatlogs_span(current):
         return context if context is not None else context_api.get_current()
     return None
 
@@ -722,6 +729,9 @@ def active_neatlogs_context(
 def detach(token: Any) -> None:
     """Detach a context token returned by :func:`attach_as_current`."""
     try:
+        if isinstance(token, tuple):
+            token, owned_token = token
+            _active_owned_span.reset(owned_token)
         context_api.detach(token)
     except Exception:
         pass

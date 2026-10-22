@@ -36,6 +36,9 @@ ENV/
 # OS
 .DS_Store
 Thumbs.db
+compatibility-release-report.json
+compatibility-evidence.json
+compatibility-llm-analysis.json
 
 # Project specific
 *.log

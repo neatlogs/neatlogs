@@ -14,6 +14,7 @@ Two usage patterns:
      >>> client.chat.completions.create(...)
 """
 
+import asyncio
 import time
 from typing import Any, List, Optional
 
@@ -24,6 +25,7 @@ from ._wrap_utils import (
     SyncStreamWrapper,
     get_provider_tracer,
     is_suppressed,
+    message_as_dict,
     serialize,
 )
 from .core.choice_accumulator import ChoiceAccumulator, OpenAIStreamFinalizer
@@ -138,6 +140,7 @@ def _patch_completions(completions: Any) -> None:
 
         # Input messages
         for i, msg in enumerate(messages):
+            msg = message_as_dict(msg)
             role = msg.get("role", "")
             content = msg.get("content", "")
             span.set_attribute(f"neatlogs.llm.input_messages.{i}.role", role)
@@ -174,7 +177,7 @@ def _patch_completions(completions: Any) -> None:
             "frequency_penalty",
             "presence_penalty",
         ):
-            if param in kwargs and kwargs[param] is not None:
+            if _is_set(kwargs.get(param)):
                 span.set_attribute(f"neatlogs.llm.{param}", kwargs[param])
 
         # User-supplied metadata (top-level `metadata=` or `extra_body={"metadata": ...}`).
@@ -234,6 +237,7 @@ def _patch_async_completions(completions: Any) -> None:
         )
 
         for i, msg in enumerate(messages):
+            msg = message_as_dict(msg)
             role = msg.get("role", "")
             content = msg.get("content", "")
             span.set_attribute(f"neatlogs.llm.input_messages.{i}.role", role)
@@ -242,6 +246,10 @@ def _patch_async_completions(completions: Any) -> None:
             else:
                 span.set_attribute(f"neatlogs.llm.input_messages.{i}.content", serialize(content))
             set_media_attributes(span, f"neatlogs.llm.input_messages.{i}", content, "input")
+            if msg.get("tool_call_id"):
+                span.set_attribute(
+                    f"neatlogs.llm.input_messages.{i}.tool_call_id", msg["tool_call_id"]
+                )
 
         tools = kwargs.get("tools")
         if tools:
@@ -264,7 +272,7 @@ def _patch_async_completions(completions: Any) -> None:
             "frequency_penalty",
             "presence_penalty",
         ):
-            if param in kwargs and kwargs[param] is not None:
+            if _is_set(kwargs.get(param)):
                 span.set_attribute(f"neatlogs.llm.{param}", kwargs[param])
 
         # User-supplied metadata (top-level `metadata=` or `extra_body={"metadata": ...}`).
@@ -274,6 +282,11 @@ def _patch_async_completions(completions: Any) -> None:
 
         try:
             response = await orig_create(*args, **kwargs)
+        except asyncio.CancelledError:
+            span.set_attribute("neatlogs.stream.cancelled", True)
+            span.set_status(StatusCode.UNSET)
+            span.end()
+            raise
         except Exception as e:
             span.set_status(StatusCode.ERROR, str(e))
             span.record_exception(e)
@@ -337,6 +350,16 @@ def _patch_responses(responses: Any) -> None:
     responses._neatlogs_patched = True
 
 
+def _is_set(value: Any) -> bool:
+    """
+    True when a request kwarg carries a real value. The OpenAI SDK fills unset
+    optional params with ``Omit`` / ``NotGiven`` sentinels (for example when
+    ``chat.completions.stream()`` forwards its defaults to ``create()``). They
+    are not valid span attribute values, so treat them like ``None``.
+    """
+    return value is not None and type(value).__name__ not in ("Omit", "NotGiven")
+
+
 def _set_request_metadata(span: Any, kwargs: dict) -> None:
     """
     Capture caller-supplied request metadata. OpenAI accepts a top-level
@@ -362,6 +385,31 @@ def _finalize_response(span: Any, response: Any, duration_ms: float) -> None:
     span.end()
 
 
+def _set_responses_usage(span: Any, usage: Any) -> None:
+    """Record Responses API token usage like the chat paths do: totals and details."""
+    if not usage:
+        return
+    input_tokens = getattr(usage, "input_tokens", None)
+    if input_tokens is not None:
+        span.set_attribute("neatlogs.llm.token_count.prompt", input_tokens)
+    output_tokens = getattr(usage, "output_tokens", None)
+    if output_tokens is not None:
+        span.set_attribute("neatlogs.llm.token_count.completion", output_tokens)
+    total_tokens = getattr(usage, "total_tokens", None)
+    if total_tokens is not None:
+        span.set_attribute("neatlogs.llm.token_count.total", total_tokens)
+    input_details = getattr(usage, "input_tokens_details", None)
+    cached = getattr(input_details, "cached_tokens", None) if input_details is not None else None
+    if cached is not None:
+        span.set_attribute("neatlogs.llm.token_count.cache_read", cached)
+    output_details = getattr(usage, "output_tokens_details", None)
+    reasoning = (
+        getattr(output_details, "reasoning_tokens", None) if output_details is not None else None
+    )
+    if reasoning is not None:
+        span.set_attribute("neatlogs.llm.token_count.reasoning", reasoning)
+
+
 def _finalize_responses_response(span: Any, response: Any, duration_ms: float) -> None:
     """Extract attributes from a Responses API response."""
     output_text = getattr(response, "output_text", None)
@@ -374,23 +422,88 @@ def _finalize_responses_response(span: Any, response: Any, duration_ms: float) -
     if output_text:
         span.set_attribute("neatlogs.llm.output_messages.0.role", "assistant")
         span.set_attribute("neatlogs.llm.output_messages.0.content", output_text)
+    summaries = []
+    for item in getattr(response, "output", None) or []:
+        if getattr(item, "type", None) == "reasoning":
+            for part in getattr(item, "summary", None) or []:
+                text = getattr(part, "text", None)
+                if text:
+                    summaries.append(text)
+    if summaries:
+        span.set_attribute("neatlogs.llm.output_messages.0.role", "assistant")
+        span.set_attribute("neatlogs.llm.output_messages.0.thinking", "\n\n".join(summaries))
+
+    tool_index = 0
+    for item in getattr(response, "output", None) or []:
+        if getattr(item, "type", None) != "function_call":
+            continue
+        prefix = f"neatlogs.llm.tool_calls.{tool_index}"
+        span.set_attribute(
+            f"{prefix}.id", getattr(item, "call_id", None) or getattr(item, "id", None) or ""
+        )
+        span.set_attribute(f"{prefix}.type", "function")
+        span.set_attribute(f"{prefix}.name", getattr(item, "name", None) or "")
+        span.set_attribute(f"{prefix}.arguments", getattr(item, "arguments", None) or "")
+        tool_index += 1
 
     model = getattr(response, "model", None)
     if model:
         span.set_attribute("neatlogs.llm.model_name", model)
 
-    usage = getattr(response, "usage", None)
-    if usage:
-        input_tokens = getattr(usage, "input_tokens", None)
-        output_tokens = getattr(usage, "output_tokens", None)
-        if input_tokens is not None:
-            span.set_attribute("neatlogs.llm.token_count.prompt", input_tokens)
-        if output_tokens is not None:
-            span.set_attribute("neatlogs.llm.token_count.completion", output_tokens)
+    _set_responses_usage(span, getattr(response, "usage", None))
 
+    _set_responses_tool_calls(span, getattr(response, "output", None) or [])
+    failure = _set_responses_outcome(span, response)
     span.set_attribute("neatlogs.llm.metrics.duration_ms", round(duration_ms, 3))
-    span.set_status(StatusCode.OK)
+    if failure:
+        _set_responses_failure(span, *failure)
+    else:
+        span.set_status(StatusCode.OK)
     span.end()
+
+
+def _field(value: Any, name: str) -> Any:
+    return value.get(name) if isinstance(value, dict) else getattr(value, name, None)
+
+
+def _set_responses_tool_calls(span: Any, items: Any) -> None:
+    """Record the function calls among a response's output items."""
+    index = 0
+    for item in items:
+        if _field(item, "type") != "function_call":
+            continue
+        prefix = f"neatlogs.llm.tool_calls.{index}"
+        span.set_attribute(f"{prefix}.id", str(_field(item, "call_id") or _field(item, "id") or ""))
+        span.set_attribute(f"{prefix}.type", "function")
+        span.set_attribute(f"{prefix}.name", str(_field(item, "name") or ""))
+        span.set_attribute(f"{prefix}.arguments", str(_field(item, "arguments") or ""))
+        index += 1
+    if index:
+        span.set_attribute("neatlogs.llm.output_messages.0.role", "assistant")
+
+
+def _set_responses_outcome(span: Any, response: Any) -> Optional[tuple]:
+    """Record how a response ended. Returns (kind, message) when it failed.
+
+    The Responses API reports a failed generation in the body, with HTTP 200
+    and no exception, so the status has to be read from the response itself.
+    """
+    status = _field(response, "status")
+    reason = _field(_field(response, "incomplete_details"), "reason")
+    if status:
+        span.set_attribute("neatlogs.llm.finish_reason", str(reason or status))
+    error = _field(response, "error")
+    if status == "failed" or error:
+        return (
+            str(_field(error, "code") or "response_failed"),
+            str(_field(error, "message") or "The response failed"),
+        )
+    return None
+
+
+def _set_responses_failure(span: Any, kind: str, message: str) -> None:
+    span.add_event("exception", {"exception.type": kind, "exception.message": message})
+    span.set_status(StatusCode.ERROR, message)
 
 
 # ---------------------------------------------------------------------------
@@ -495,6 +608,11 @@ def _patch_async_responses(responses: Any) -> None:
         start = time.perf_counter()
         try:
             response = await orig_create(*args, **kwargs)
+        except asyncio.CancelledError:
+            span.set_attribute("neatlogs.stream.cancelled", True)
+            span.set_status(StatusCode.UNSET)
+            span.end()
+            raise
         except Exception as e:
             span.set_status(StatusCode.ERROR, str(e))
             span.record_exception(e)
@@ -519,37 +637,67 @@ def _finalize_responses_stream(
 ) -> None:
     """Finalize a streaming Responses API span (events carry .type / .delta / .response)."""
     text_parts: List[str] = []
+    thinking_parts: List[str] = []
+    last_summary = None
     set_media_attributes(span, "neatlogs.llm.output_messages.0", chunks, "output")
     model = None
     usage = None
+    final_response = None
+    finished_items: List[Any] = []
+    failure: Optional[tuple] = None
     for ev in chunks:
         ev_type = getattr(ev, "type", "")
+        if ev_type == "response.reasoning_summary_text.delta":
+            d = getattr(ev, "delta", None)
+            if d:
+                key = (getattr(ev, "item_id", None), getattr(ev, "summary_index", None))
+                if last_summary is not None and key != last_summary:
+                    thinking_parts.append("\n\n")
+                last_summary = key
+                thinking_parts.append(d)
         if ev_type == "response.output_text.delta":
             d = getattr(ev, "delta", None)
             if d:
                 text_parts.append(d)
+        elif ev_type == "response.output_item.done":
+            finished_items.append(getattr(ev, "item", None))
+        elif ev_type == "error":
+            # The server reports the failure as an event; nothing is raised.
+            failure = (
+                str(getattr(ev, "code", None) or "error"),
+                str(getattr(ev, "message", None) or "The stream reported an error"),
+            )
         resp = getattr(ev, "response", None)
         if resp is not None:
             if getattr(resp, "model", None):
                 model = resp.model
             if getattr(resp, "usage", None):
                 usage = resp.usage
+            if ev_type in ("response.completed", "response.failed", "response.incomplete"):
+                final_response = resp
+    if final_response is not None:
+        _set_responses_tool_calls(span, getattr(final_response, "output", None) or [])
+        failure = _set_responses_outcome(span, final_response) or failure
+    else:
+        _set_responses_tool_calls(span, finished_items)
     if text_parts:
         span.set_attribute("neatlogs.llm.output_messages.0.role", "assistant")
         span.set_attribute("neatlogs.llm.output_messages.0.content", "".join(text_parts)[:10000])
+    if thinking_parts:
+        span.set_attribute("neatlogs.llm.output_messages.0.role", "assistant")
+        span.set_attribute("neatlogs.llm.output_messages.0.thinking", "".join(thinking_parts))
     if model:
         span.set_attribute("neatlogs.llm.model_name", model)
-    if usage:
-        it = getattr(usage, "input_tokens", None)
-        ot_ = getattr(usage, "output_tokens", None)
-        if it is not None:
-            span.set_attribute("neatlogs.llm.token_count.prompt", it)
-        if ot_ is not None:
-            span.set_attribute("neatlogs.llm.token_count.completion", ot_)
+    _set_responses_usage(span, usage)
     span.set_attribute("neatlogs.llm.metrics.duration_ms", round(duration_ms, 3))
     if ttft_ms is not None:
         span.set_attribute("neatlogs.llm.metrics.ttft_ms", round(ttft_ms, 3))
-    span.set_status(StatusCode.UNSET if interrupted else StatusCode.OK)
+    if failure:
+        # An app usually stops reading after an error event, which reaches here
+        # as an interrupted stream; the failure still decides the status.
+        _set_responses_failure(span, *failure)
+    else:
+        span.set_status(StatusCode.UNSET if interrupted else StatusCode.OK)
     span.end()
 
 

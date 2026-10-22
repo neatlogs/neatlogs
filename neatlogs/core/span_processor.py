@@ -968,6 +968,10 @@ class CompletionMarkerSpanProcessor(SpanProcessor):
                 self._emit(span)
 
     def reject_exported_root(self, span: ReadableSpan) -> None:
+        if is_http_span(span):
+            from ..datasets._recording import notify_export
+
+            notify_export(self._span_processor, span, accepted=False)
         if span.name != "neatlogs.trace.complete" and not span.parent:
             self._span_processor.consume_completion_eligibility(span)
 

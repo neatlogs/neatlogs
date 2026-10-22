@@ -7,6 +7,7 @@ values surfaced as null. Canonical keys stay authoritative; the flat wrapper
 keys are fallbacks.
 """
 
+import pytest
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.trace import SpanContext, SpanKind, TraceFlags, TraceState
@@ -91,3 +92,33 @@ def test_missing_invocation_parameters_stay_null() -> None:
     assert parameters["max_output_tokens"] is None
     assert parameters["frequency_penalty"] is None
     assert parameters["presence_penalty"] is None
+
+
+@pytest.mark.parametrize("key", ["frequency_penalty", "presence_penalty"])
+@pytest.mark.parametrize("value", [-2, -0.5, 0, 0.5, 2])
+def test_signed_penalty_boundaries(key, value):
+    parameters = _parameters(_llm_span({f"neatlogs.llm.{key}": value}))
+    assert parameters[key] == value
+
+
+@pytest.mark.parametrize("key", ["frequency_penalty", "presence_penalty"])
+def test_signed_canonical_penalty_takes_precedence(key):
+    parameters = _parameters(
+        _llm_span(
+            {
+                f"neatlogs.llm.{key}": 0.5,
+                f"neatlogs.llm.invocation_parameters.{key}": -1.0,
+            }
+        )
+    )
+    assert parameters[key] == -1.0
+
+
+@pytest.mark.parametrize("key", ["frequency_penalty", "presence_penalty"])
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), -float("inf"), True, "bad"])
+def test_invalid_penalties_stay_null(key, value):
+    assert _parameters(_llm_span({f"neatlogs.llm.{key}": value}))[key] is None
+
+
+def test_negative_token_count_stays_invalid():
+    assert _parameters(_llm_span({"neatlogs.llm.max_tokens": -1}))["max_output_tokens"] is None

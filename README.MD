@@ -171,6 +171,88 @@ API reference: [docs.neatlogs.com](https://docs.neatlogs.com)
 
 ---
 
+## Build datasets from instrumented executions
+
+Use a public API user or service-account token with project access for dataset operations.
+The ingestion API key remains in your existing `neatlogs.init()` or `Client` configuration.
+
+```python
+from neatlogs import datasets
+
+api = {
+	"project_id": "your-project-uuid",
+	"token": "your-public-api-token",
+	"base_url": "https://app.neatlogs.com",
+}
+
+created = datasets.create("Support regression", **api)
+```
+
+`create()` defaults to an empty dataset and needs no telemetry initialization.
+To import cases, pass `cases=[{"input": ..., "observedOutput": ...}]`.
+A case can include `expected={"value": ..., "status": "draft", "source": "human"}`.
+
+After normal telemetry initialization, wrap your existing instrumented agent calls:
+
+```python
+with datasets.capture(
+	dataset_id=created["datasetId"], environment="local", **api
+) as job:
+	result = instrumented_agent("Where is my order?")
+
+published = job.wait(timeout=120)
+version_id = published["datasetVersionId"]
+```
+
+To select a dataset by name, use `capture("Support regression", environment="local", **api)`.
+Pass `create_if_missing=True` to create a named dataset when no match exists.
+For a context-scoped client, enter `client.activate()` around the capture block.
+Capture preserves that client's endpoint, sampling, masking, and media export settings.
+
+Use `async with` for asynchronous calls:
+
+```python
+async with datasets.capture(
+	dataset_id=created["datasetId"], environment="ci", **api
+) as job:
+	result = await instrumented_async_agent("Where is my order?")
+
+published = await job.await_completion(timeout=120)
+```
+
+Await all work inside the capture block. Capture includes root traces started inside
+that block and their recorded spans. The selected pipeline must export normally and
+sample every trace. Production workloads require `environment="production"` and
+`allow_production=True`.
+
+Registration happens before the agent executes. After the block, the SDK verifies
+complete export receipts and queues publication. Empty captures publish no version.
+`job.status()` reads progress, and `job.wait()` raises for failed, cancelled, or partial jobs.
+Use `job.abort()` before completion to cancel a recording. Async equivalents are
+`job.astatus()` and `job.aabort()`.
+
+Truncated, dropped, or unacknowledged telemetry aborts capture. An agent exception
+keeps its original identity, with any capture failure available in `job.error`.
+If completion has an uncertain response, call `job.retry_completion()` or
+`await job.aretry_completion()` to resend the original manifest and idempotency key.
+
+To add or change an outcome for a reviewed case, pin its dataset version and revision:
+
+```python
+updated = datasets.update_outcomes(
+	created["datasetId"],
+	base_version_id=version_id,
+	changes=[{"caseId": case_id, "revisionId": revision_id, "outcome": "Give the tracking link"}],
+	**api,
+)
+```
+
+An `outcome` of `None` clears that case's outcome. Cases omitted from `changes` keep
+their existing outcomes. A stale version or revision raises `DatasetError` with HTTP 409.
+Dataset requests are limited to 64 KiB of serialized JSON.
+
+---
+
 ## Platform features
 
 - **[Traces](https://docs.neatlogs.com/features/traces)**: Full span trees — LLM calls, tools, retrievals, reranking, guardrails — with inputs, outputs, tokens, cost, and latency.

@@ -309,8 +309,9 @@ def _decorate_span(
                     stdout_ctx = _CaptureStdoutContext() if capture_stdout else None
                     if stdout_ctx:
                         stdout_ctx.__enter__()
+                    iterator = func(*args, **kwargs)
                     try:
-                        async for chunk in func(*args, **kwargs):
+                        async for chunk in iterator:
                             chunks.append(chunk)
                             _record_stream_chunk(span, len(chunks) - 1, chunk)
                             _set_stream_counts(span, len(chunks))
@@ -335,8 +336,11 @@ def _decorate_span(
                         span.set_status(Status(StatusCode.ERROR, str(exc)))
                         raise
                     finally:
-                        if stdout_ctx:
-                            stdout_ctx.__exit__(None, None, None)
+                        try:
+                            await iterator.aclose()
+                        finally:
+                            if stdout_ctx:
+                                stdout_ctx.__exit__(None, None, None)
 
             return async_generator_wrapper
 

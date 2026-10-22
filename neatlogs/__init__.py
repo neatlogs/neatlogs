@@ -26,6 +26,7 @@ Available span kinds:
     - "MCP_TOOL" - MCP protocol tool (auto Pydantic handling)
 """
 
+from . import datasets
 from .client import Client
 from .core.context import trace
 from .core.crewai_task_registry import register_crewai_task
@@ -301,6 +302,7 @@ def wrap(client, **workflow_attributes):
 
 
 __all__ = [
+    "datasets",
     "Client",
     "init",
     "flush",

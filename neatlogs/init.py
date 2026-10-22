@@ -796,24 +796,44 @@ def init(
 
 
 def flush(timeout_millis: int = 30000) -> bool:
-    """Flush the process-default Neatlogs pipeline only."""
-    global _tracer_provider
+    """Flush the process-default Neatlogs pipeline only.
+
+    Returns False if the flush did not finish within ``timeout_millis``. The
+    call itself never blocks longer than that, even when the collector is
+    unreachable and exporter retries are still running.
+    """
+    deadline = time.monotonic() + max(0, timeout_millis) / 1000
+    # Capture this generation's pipeline now: an abandoned worker must never
+    # reach into a pipeline created by a later shutdown()/init().
+    log_provider = _log_provider
+    processors = list(_transport_span_processors)
+    completed, result = bounded_call(
+        lambda: _flush_pipeline(log_provider, processors, timeout_millis, deadline), deadline
+    )
+    return bool(result) if completed else False
+
+
+def _flush_pipeline(
+    log_provider: Any, processors: List[Any], timeout_millis: int, deadline: float
+) -> bool:
     success = True
 
     # Log provider must flush BEFORE tracer provider: the tracer batch includes
     # the neatlogs.trace.complete marker which triggers server-side finalization.
     # Flushing logs first guarantees LOG records reach ClickHouse before the
     # completion marker fires the trace-finalizer query.
-    if _log_provider:
+    if log_provider:
         try:
             logger.debug("Flushing log provider...")
-            _log_provider.force_flush(timeout_millis=timeout_millis)
+            log_provider.force_flush(timeout_millis=timeout_millis)
             logger.debug("Log provider flushed successfully")
         except Exception as e:
             logger.error(f"Error flushing logs: {e}", exc_info=True)
             success = False
 
-    for processor in _transport_span_processors:
+    for processor in processors:
+        if time.monotonic() >= deadline:
+            return False
         try:
             logger.debug("Flushing Neatlogs trace processor...")
             ok = processor.force_flush(timeout_millis=timeout_millis)
@@ -825,9 +845,11 @@ def flush(timeout_millis: int = 30000) -> bool:
     # A root is accepted only at the final post-mask export boundary. That
     # acceptance queues its completion marker, so drain the trace batch once
     # more to include the newly queued marker in this flush contract.
-    if _transport_span_processors:
+    if processors and time.monotonic() >= deadline:
+        return False
+    if processors:
         try:
-            ok = _transport_span_processors[0].force_flush(timeout_millis=timeout_millis)
+            ok = processors[0].force_flush(timeout_millis=timeout_millis)
             success = (ok is None or bool(ok)) and success
         except Exception as e:
             logger.error(f"Error flushing completion markers: {e}", exc_info=True)

@@ -311,21 +311,38 @@ class Client:
             return neatlogs.wrap(target, **workflow_attributes)
 
     def flush(self, timeout_millis: int = 30000) -> bool:
+        from .core.deadline import bounded_call
+
+        deadline = time.monotonic() + max(0, timeout_millis) / 1000
+        log_provider = self.log_provider
+        processors = list(self._transport_processors)
+        completed, result = bounded_call(
+            lambda: self._flush_pipeline(log_provider, processors, timeout_millis, deadline),
+            deadline,
+        )
+        return bool(result) if completed else False
+
+    @staticmethod
+    def _flush_pipeline(log_provider, processors, timeout_millis: int, deadline: float) -> bool:
         success = True
-        if self.log_provider is not None:
+        if log_provider is not None:
             try:
-                self.log_provider.force_flush(timeout_millis=timeout_millis)
+                log_provider.force_flush(timeout_millis=timeout_millis)
             except Exception:
                 success = False
-        for processor in self._transport_processors:
+        for processor in processors:
+            if time.monotonic() >= deadline:
+                return False
             try:
                 result = processor.force_flush(timeout_millis=timeout_millis)
                 success = (result is None or bool(result)) and success
             except Exception:
                 success = False
-        if self._transport_processors:
+        if processors and time.monotonic() >= deadline:
+            return False
+        if processors:
             try:
-                result = self._transport_processors[0].force_flush(timeout_millis=timeout_millis)
+                result = processors[0].force_flush(timeout_millis=timeout_millis)
                 success = (result is None or bool(result)) and success
             except Exception:
                 success = False

@@ -167,3 +167,119 @@ def test_wrapper_skip_chunk_keeps_finalizer_informed():
     )
     assert list(wrapper) == ["a", "b"]
     assert seen == ["a", "usage-chunk", "b"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("azure", [False, True])
+@pytest.mark.parametrize("requested", [False, True])
+async def test_async_openai_and_azure_usage_matrix(exporter, azure, requested):
+    from neatlogs.azure_openai import wrap_azure_openai_client
+
+    requests = []
+
+    def handler(request):
+        requests.append(json.loads(request.content))
+        return _handler(request)
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    if azure:
+        client = openai.AsyncAzureOpenAI(
+            api_key="test",
+            azure_endpoint="https://azure.invalid",
+            api_version="2024-10-21",
+            http_client=http_client,
+        )
+        wrapped = wrap_azure_openai_client(client)
+    else:
+        client = openai.AsyncOpenAI(api_key="test", http_client=http_client)
+        wrapped = wrap_openai_client(client)
+    options = {"include_usage": requested}
+    try:
+        stream = await wrapped.chat.completions.create(
+            model="gpt-x",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            stream_options=options,
+        )
+        chunks = [chunk async for chunk in stream]
+        assert any(not c.choices and c.usage for c in chunks) is requested
+        assert "".join(c.choices[0].delta.content or "" for c in chunks if c.choices) == "hi there"
+        assert options == {"include_usage": requested}
+        assert requests[0]["stream_options"]["include_usage"] is True
+        llm = [
+            s
+            for s in exporter.get_finished_spans()
+            if s.attributes.get("neatlogs.span.kind") == "llm"
+        ][-1]
+        assert llm.attributes["neatlogs.llm.token_count.total"] == 7
+        assert llm.end_time is not None
+    finally:
+        await client.close()
+
+
+@pytest.mark.parametrize("requested", [False, True])
+def test_sync_azure_usage_matrix(exporter, requested):
+    from neatlogs.azure_openai import wrap_azure_openai_client
+
+    client = openai.AzureOpenAI(
+        api_key="test",
+        azure_endpoint="https://azure.invalid",
+        api_version="2024-10-21",
+        http_client=httpx.Client(transport=httpx.MockTransport(_handler)),
+    )
+    options = {"include_usage": requested}
+    try:
+        wrapped = wrap_azure_openai_client(client)
+        chunks = list(
+            wrapped.chat.completions.create(
+                model="gpt-x",
+                messages=[],
+                stream=True,
+                stream_options=options,
+            )
+        )
+        assert any(not c.choices and c.usage for c in chunks) is requested
+        assert options == {"include_usage": requested}
+        llm = [
+            s
+            for s in exporter.get_finished_spans()
+            if s.attributes.get("neatlogs.span.kind") == "llm"
+        ][-1]
+        assert llm.attributes["neatlogs.llm.token_count.total"] == 7
+    finally:
+        client.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancel", [False, True])
+async def test_async_hidden_chunk_error_and_cancellation_finalize(exporter, cancel):
+    import asyncio
+
+    from neatlogs._wrap_utils import AsyncStreamWrapper
+
+    seen = []
+    tp = TracerProvider()
+    span = tp.get_tracer("test").start_span("async-boundary")
+
+    class Finalizer:
+        def on_chunk(self, span, chunk):
+            seen.append(chunk)
+
+        def finish(self, span, duration_ms, ttft_ms, *, interrupted=False):
+            span.end()
+
+        def fail(self, span, error):
+            span.end()
+
+    async def source():
+        yield "usage"
+        if cancel:
+            raise asyncio.CancelledError()
+        raise RuntimeError("stream failed")
+
+    wrapper = AsyncStreamWrapper(source(), span, Finalizer(), skip_chunk=lambda c: c == "usage")
+    with pytest.raises(asyncio.CancelledError if cancel else RuntimeError):
+        await wrapper.__anext__()
+    assert seen == ["usage"]
+    assert not span.is_recording()
+    tp.shutdown()

@@ -279,6 +279,12 @@ def wrap(client, **workflow_attributes):
 
         return _finish(wrap_openrouter_client(client))
 
+    # Supermemory Python SDK — Supermemory / AsyncSupermemory client instances.
+    if cls_name in ("Supermemory", "AsyncSupermemory") or module.startswith("supermemory"):
+        from .supermemory import wrap_supermemory_client
+
+        return _finish(wrap_supermemory_client(client))
+
     # Claude Agent SDK (Anthropic): the agentic loop runs in a CLI SUBPROCESS and is consumed as an
     # async iterator of typed messages (query() / ClaudeSDKClient). There's no in-process LLM client
     # to wrap — we patch the streaming entry points and build spans from the message stream. Accept

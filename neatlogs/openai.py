@@ -106,6 +106,11 @@ def _safe(fn, resource, **kw):
         pass
 
 
+def _usage_only_chunk(chunk: Any) -> bool:
+    """The trailing usage chunk OpenAI adds for include_usage: no choices, usage set."""
+    return not getattr(chunk, "choices", None) and getattr(chunk, "usage", None) is not None
+
+
 def _patch_completions(completions: Any) -> None:
     if getattr(completions, "_neatlogs_patched", False):
         return
@@ -120,11 +125,13 @@ def _patch_completions(completions: Any) -> None:
         messages = kwargs.get("messages", [])
         is_stream = kwargs.get("stream", False)
 
+        forced_usage_chunk = False
         if is_stream:
-            opts = kwargs.get("stream_options") or {}
+            opts = dict(kwargs.get("stream_options") or {})
             if not opts.get("include_usage"):
                 opts["include_usage"] = True
                 kwargs["stream_options"] = opts
+                forced_usage_chunk = True
 
         tracer = get_provider_tracer()
         span = tracer.start_span(
@@ -194,7 +201,12 @@ def _patch_completions(completions: Any) -> None:
             raise
 
         if is_stream:
-            return SyncStreamWrapper(response, span, OpenAIStreamFinalizer())
+            return SyncStreamWrapper(
+                response,
+                span,
+                OpenAIStreamFinalizer(),
+                skip_chunk=_usage_only_chunk if forced_usage_chunk else None,
+            )
 
         duration_ms = (time.perf_counter() - start) * 1000
         _finalize_response(span, response, duration_ms)
@@ -218,11 +230,13 @@ def _patch_async_completions(completions: Any) -> None:
         messages = kwargs.get("messages", [])
         is_stream = kwargs.get("stream", False)
 
+        forced_usage_chunk = False
         if is_stream:
-            opts = kwargs.get("stream_options") or {}
+            opts = dict(kwargs.get("stream_options") or {})
             if not opts.get("include_usage"):
                 opts["include_usage"] = True
                 kwargs["stream_options"] = opts
+                forced_usage_chunk = True
 
         tracer = get_provider_tracer()
         span = tracer.start_span(
@@ -294,7 +308,12 @@ def _patch_async_completions(completions: Any) -> None:
             raise
 
         if is_stream:
-            return AsyncStreamWrapper(response, span, OpenAIStreamFinalizer())
+            return AsyncStreamWrapper(
+                response,
+                span,
+                OpenAIStreamFinalizer(),
+                skip_chunk=_usage_only_chunk if forced_usage_chunk else None,
+            )
 
         duration_ms = (time.perf_counter() - start) * 1000
         _finalize_response(span, response, duration_ms)

@@ -16,6 +16,7 @@ Usage (the client is patched in place and also returned):
   >>> client.search(namespace="user-1", query="what do they like?")
 """
 
+import asyncio
 import inspect
 import time
 from typing import Any, Callable
@@ -143,6 +144,11 @@ def _patch(client: Any, method: str, kind: str, attrs_fn: Callable, result_fn: C
             start = time.perf_counter()
             try:
                 response = await orig(*args, **kwargs)
+            except asyncio.CancelledError:
+                span.set_attribute("neatlogs.cancelled", True)
+                span.set_status(StatusCode.UNSET)
+                span.end()
+                raise
             except Exception as exc:
                 _fail(span, exc)
                 raise

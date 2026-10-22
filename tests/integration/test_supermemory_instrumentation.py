@@ -150,3 +150,61 @@ def test_real_sdk_client_with_mocked_transport(in_memory_span_exporter):
     assert attrs["neatlogs.retriever.query"] == "what do they like?"
     assert attrs["neatlogs.retriever.document_count"] == 1
     assert attrs["neatlogs.retriever.documents.0.content"] == "likes tea"
+
+
+@pytest.mark.parametrize("method", ["search", "profile", "add"])
+def test_async_cancellation_ends_span_and_propagates(method, in_memory_span_exporter):
+    from neatlogs._wrap_utils import set_neatlogs_provider
+    from neatlogs.supermemory import wrap_supermemory_client
+
+    provider = _setup_tracer(in_memory_span_exporter)
+    set_neatlogs_provider(provider)
+
+    async def run():
+        started = asyncio.Event()
+        cancellation = asyncio.CancelledError("cancel request")
+
+        async def pending(*args, **kwargs):
+            started.set()
+            await asyncio.Event().wait()
+
+        client = wrap_supermemory_client(SimpleNamespace(**{method: pending}))
+        task = asyncio.create_task(getattr(client, method)("user-1"))
+        await started.wait()
+        task.cancel(cancellation)
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    try:
+        asyncio.run(run())
+        span = _span(in_memory_span_exporter, f"supermemory.{method}")
+        assert span.status.status_code == trace.StatusCode.UNSET
+        assert span.attributes["neatlogs.cancelled"] is True
+    finally:
+        set_neatlogs_provider(None)
+        provider.shutdown()
+
+
+def test_async_provider_error_stays_error(in_memory_span_exporter):
+    from neatlogs._wrap_utils import set_neatlogs_provider
+    from neatlogs.supermemory import wrap_supermemory_client
+
+    provider = _setup_tracer(in_memory_span_exporter)
+    set_neatlogs_provider(provider)
+    error = RuntimeError("provider failed")
+
+    async def search(*args, **kwargs):
+        raise error
+
+    try:
+        client = wrap_supermemory_client(SimpleNamespace(search=search))
+        with pytest.raises(RuntimeError) as caught:
+            asyncio.run(client.search("user-1"))
+        assert caught.value is error
+        assert (
+            _span(in_memory_span_exporter, "supermemory.search").status.status_code
+            == trace.StatusCode.ERROR
+        )
+    finally:
+        set_neatlogs_provider(None)
+        provider.shutdown()

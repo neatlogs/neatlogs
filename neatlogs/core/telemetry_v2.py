@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import threading
 from collections import deque
 from collections.abc import Mapping, Sequence
@@ -91,6 +92,16 @@ def _number(value: Any) -> Optional[float]:
     except (TypeError, ValueError):
         return None
     return result if result >= 0 else None
+
+
+def _signed_number(value: Any) -> Optional[float]:
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        result = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return result if math.isfinite(result) else None
 
 
 def _guardrail_triggered(attrs: Mapping[str, Any]) -> bool:
@@ -325,23 +336,52 @@ def _llm_semantic(span: ReadableSpan, attrs: Mapping[str, Any]) -> dict[str, Any
         )
 
     parameters = {
-        "temperature": _number(attrs.get("neatlogs.llm.invocation_parameters.temperature")),
-        "top_p": _number(attrs.get("neatlogs.llm.invocation_parameters.top_p")),
-        "top_k": _number(attrs.get("neatlogs.llm.invocation_parameters.top_k")),
+        # Canonical invocation_parameters.* keys stay authoritative; fall back to
+        # the flat wrapper keys (bedrock, langchain, hermes) when they are absent.
+        "temperature": _number(
+            _first(
+                attrs,
+                "neatlogs.llm.invocation_parameters.temperature",
+                "neatlogs.llm.temperature",
+            )
+        ),
+        "top_p": _number(
+            _first(
+                attrs,
+                "neatlogs.llm.invocation_parameters.top_p",
+                "neatlogs.llm.top_p",
+            )
+        ),
+        "top_k": _number(
+            _first(
+                attrs,
+                "neatlogs.llm.invocation_parameters.top_k",
+                "neatlogs.llm.top_k",
+            )
+        ),
         "max_output_tokens": _integer(
             _first(
                 attrs,
                 "neatlogs.llm.invocation_parameters.max_output_tokens",
                 "neatlogs.llm.invocation_parameters.max_tokens",
+                "neatlogs.llm.max_tokens",
             )
         ),
         "stop": _stop_sequences(attrs.get("neatlogs.llm.stop_sequences")),
         "seed": _integer(attrs.get("neatlogs.llm.invocation_parameters.seed")),
-        "frequency_penalty": _number(
-            attrs.get("neatlogs.llm.invocation_parameters.frequency_penalty")
+        "frequency_penalty": _signed_number(
+            _first(
+                attrs,
+                "neatlogs.llm.invocation_parameters.frequency_penalty",
+                "neatlogs.llm.frequency_penalty",
+            )
         ),
-        "presence_penalty": _number(
-            attrs.get("neatlogs.llm.invocation_parameters.presence_penalty")
+        "presence_penalty": _signed_number(
+            _first(
+                attrs,
+                "neatlogs.llm.invocation_parameters.presence_penalty",
+                "neatlogs.llm.presence_penalty",
+            )
         ),
         "response_format": _decode(attrs.get("neatlogs.llm.invocation_parameters.response_format")),
         "reasoning": _decode(attrs.get("neatlogs.llm.invocation_parameters.reasoning")),

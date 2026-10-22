@@ -23,7 +23,7 @@ from opentelemetry.exporter.otlp.proto.http import Compression
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk.resources import SERVICE_NAME, Resource
-from opentelemetry.sdk.trace import SpanLimits, TracerProvider
+from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.sampling import ParentBased, TraceIdRatioBased
 
 from ._wrap_utils import (
@@ -47,6 +47,7 @@ from .core.log_exporter import NeatlogsLogFilter
 from .core.masking_exporter import MaskingLogExporter, MaskingSpanExporter
 from .core.media import PendingMediaStore
 from .core.media_exporter import TypedMediaLogExporter, TypedMediaSpanExporter
+from .core.pipeline import default_span_limits
 from .core.span_processor import CompletionMarkerSpanProcessor, NeatlogsSpanProcessor
 from .core.transport import build_otlp_session
 from .core.upload_authority import (
@@ -149,7 +150,7 @@ class Client:
         self.tracer_provider = tracer_provider or TracerProvider(
             resource=resource,
             sampler=ParentBased(root=TraceIdRatioBased(rate)),
-            span_limits=SpanLimits(max_span_attributes=10_000),
+            span_limits=default_span_limits(),
         )
         if tracer_provider is not None:
             try:

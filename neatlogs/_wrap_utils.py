@@ -518,13 +518,13 @@ def _bootstrap_from_env(api_key: str) -> None:
     from opentelemetry.exporter.otlp.proto.http import Compression
     from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
     from opentelemetry.sdk.resources import SERVICE_NAME, Resource
-    from opentelemetry.sdk.trace import SpanLimits
 
     from .core.byte_limited_exporter import ByteLimitedSpanExporter
     from .core.delivery import DeliveryDiagnostics, ObservableBatchSpanProcessor
     from .core.masking_exporter import MaskingSpanExporter
     from .core.media import PendingMediaStore, set_default_media_store
     from .core.media_exporter import TypedMediaSpanExporter
+    from .core.pipeline import default_span_limits
     from .core.transport import build_otlp_session
     from .core.upload_authority import (
         AuthenticatedUploadAuthority,
@@ -550,7 +550,7 @@ def _bootstrap_from_env(api_key: str) -> None:
     resource = Resource.create(resource_attrs)
     provider = TracerProvider(
         resource=resource,
-        span_limits=SpanLimits(max_span_attributes=10_000),
+        span_limits=default_span_limits(),
     )
     exporter = OTLPSpanExporter(
         endpoint=endpoint,
@@ -1003,6 +1003,32 @@ def get_provider_tracer() -> "_AutoRootTracer":
     ``neatlogs.wrap(client)`` renders a trace without a manual ``@span`` /
     ``trace()`` wrapper. Do NOT use for framework wrappers."""
     return _AutoRootTracer(get_tracer())
+
+
+def message_as_dict(msg: Any) -> dict:
+    """Return a chat message as a plain dict.
+
+    Chat APIs accept either dicts or SDK message objects (for example the
+    ``ChatCompletionMessage`` a caller appends straight from a previous
+    response). Telemetry code that reads ``msg.get(...)`` must not crash on
+    the objects.
+    """
+    if isinstance(msg, dict):
+        return msg
+    for name in ("model_dump", "dict"):
+        dump = getattr(msg, name, None)
+        if callable(dump):
+            try:
+                out = dump()
+                if isinstance(out, dict):
+                    return out
+            except Exception:
+                pass
+    return {
+        key: getattr(msg, key)
+        for key in ("role", "content", "tool_call_id")
+        if getattr(msg, key, None) is not None
+    }
 
 
 def serialize(obj: Any, max_length: Optional[int] = DEFAULT_MAX_CAPTURE_VALUE_BYTES) -> str:

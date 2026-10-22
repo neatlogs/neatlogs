@@ -242,6 +242,10 @@ def _patch_async_completions(completions: Any) -> None:
             else:
                 span.set_attribute(f"neatlogs.llm.input_messages.{i}.content", serialize(content))
             set_media_attributes(span, f"neatlogs.llm.input_messages.{i}", content, "input")
+            if msg.get("tool_call_id"):
+                span.set_attribute(
+                    f"neatlogs.llm.input_messages.{i}.tool_call_id", msg["tool_call_id"]
+                )
 
         tools = kwargs.get("tools")
         if tools:
@@ -388,9 +392,58 @@ def _finalize_responses_response(span: Any, response: Any, duration_ms: float) -
         if output_tokens is not None:
             span.set_attribute("neatlogs.llm.token_count.completion", output_tokens)
 
+    _set_responses_tool_calls(span, getattr(response, "output", None) or [])
+    failure = _set_responses_outcome(span, response)
     span.set_attribute("neatlogs.llm.metrics.duration_ms", round(duration_ms, 3))
-    span.set_status(StatusCode.OK)
+    if failure:
+        _set_responses_failure(span, *failure)
+    else:
+        span.set_status(StatusCode.OK)
     span.end()
+
+
+def _field(value: Any, name: str) -> Any:
+    return value.get(name) if isinstance(value, dict) else getattr(value, name, None)
+
+
+def _set_responses_tool_calls(span: Any, items: Any) -> None:
+    """Record the function calls among a response's output items."""
+    index = 0
+    for item in items:
+        if _field(item, "type") != "function_call":
+            continue
+        prefix = f"neatlogs.llm.tool_calls.{index}"
+        span.set_attribute(f"{prefix}.id", str(_field(item, "call_id") or _field(item, "id") or ""))
+        span.set_attribute(f"{prefix}.type", "function")
+        span.set_attribute(f"{prefix}.name", str(_field(item, "name") or ""))
+        span.set_attribute(f"{prefix}.arguments", str(_field(item, "arguments") or ""))
+        index += 1
+    if index:
+        span.set_attribute("neatlogs.llm.output_messages.0.role", "assistant")
+
+
+def _set_responses_outcome(span: Any, response: Any) -> Optional[tuple]:
+    """Record how a response ended. Returns (kind, message) when it failed.
+
+    The Responses API reports a failed generation in the body, with HTTP 200
+    and no exception, so the status has to be read from the response itself.
+    """
+    status = _field(response, "status")
+    reason = _field(_field(response, "incomplete_details"), "reason")
+    if status:
+        span.set_attribute("neatlogs.llm.finish_reason", str(reason or status))
+    error = _field(response, "error")
+    if status == "failed" or error:
+        return (
+            str(_field(error, "code") or "response_failed"),
+            str(_field(error, "message") or "The response failed"),
+        )
+    return None
+
+
+def _set_responses_failure(span: Any, kind: str, message: str) -> None:
+    span.add_event("exception", {"exception.type": kind, "exception.message": message})
+    span.set_status(StatusCode.ERROR, message)
 
 
 # ---------------------------------------------------------------------------
@@ -522,18 +575,36 @@ def _finalize_responses_stream(
     set_media_attributes(span, "neatlogs.llm.output_messages.0", chunks, "output")
     model = None
     usage = None
+    final_response = None
+    finished_items: List[Any] = []
+    failure: Optional[tuple] = None
     for ev in chunks:
         ev_type = getattr(ev, "type", "")
         if ev_type == "response.output_text.delta":
             d = getattr(ev, "delta", None)
             if d:
                 text_parts.append(d)
+        elif ev_type == "response.output_item.done":
+            finished_items.append(getattr(ev, "item", None))
+        elif ev_type == "error":
+            # The server reports the failure as an event; nothing is raised.
+            failure = (
+                str(getattr(ev, "code", None) or "error"),
+                str(getattr(ev, "message", None) or "The stream reported an error"),
+            )
         resp = getattr(ev, "response", None)
         if resp is not None:
             if getattr(resp, "model", None):
                 model = resp.model
             if getattr(resp, "usage", None):
                 usage = resp.usage
+            if ev_type in ("response.completed", "response.failed", "response.incomplete"):
+                final_response = resp
+    if final_response is not None:
+        _set_responses_tool_calls(span, getattr(final_response, "output", None) or [])
+        failure = _set_responses_outcome(span, final_response) or failure
+    else:
+        _set_responses_tool_calls(span, finished_items)
     if text_parts:
         span.set_attribute("neatlogs.llm.output_messages.0.role", "assistant")
         span.set_attribute("neatlogs.llm.output_messages.0.content", "".join(text_parts)[:10000])
@@ -549,7 +620,12 @@ def _finalize_responses_stream(
     span.set_attribute("neatlogs.llm.metrics.duration_ms", round(duration_ms, 3))
     if ttft_ms is not None:
         span.set_attribute("neatlogs.llm.metrics.ttft_ms", round(ttft_ms, 3))
-    span.set_status(StatusCode.UNSET if interrupted else StatusCode.OK)
+    if failure:
+        # An app usually stops reading after an error event, which reaches here
+        # as an interrupted stream; the failure still decides the status.
+        _set_responses_failure(span, *failure)
+    else:
+        span.set_status(StatusCode.UNSET if interrupted else StatusCode.OK)
     span.end()
 
 

@@ -122,6 +122,19 @@ def release_removed_media(store: PendingMediaStore | None, before: Any, after: A
         store.release(token, count)
 
 
+def release_span_media(store: PendingMediaStore | None, span: ReadableSpan) -> None:
+    """Release every staged media token owned by a rejected span snapshot."""
+
+    release_removed_media(
+        store,
+        {
+            "attributes": dict(span.attributes or {}),
+            "events": [dict(event.attributes or {}) for event in span.events],
+        },
+        None,
+    )
+
+
 def _has_unresolved_pending(value: Any, known_tokens: set[str]) -> bool:
     active: set[int] = set()
     visited = 0

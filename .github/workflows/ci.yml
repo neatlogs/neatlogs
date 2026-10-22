@@ -95,6 +95,107 @@ jobs:
       - name: Import and private-provider coexistence
         run: python -m pytest -p pytest_asyncio.plugin -q tests/compatibility
 
+  pydantic-ai-compatibility:
+    runs-on: ubuntu-latest
+    env:
+      PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # otel-pin caps OpenTelemetry below 1.44 on the 0.7.5 lanes:
+          # pydantic-ai 0.7.x imports opentelemetry._events, removed in 1.44.
+          - python-version: "3.10"
+            pydantic-ai-version: "0.7.5"
+            adapter-version: "0.1.20"
+            otel-pin: "opentelemetry-api==1.43.0 opentelemetry-sdk==1.43.0 opentelemetry-exporter-otlp-proto-http==1.43.0 opentelemetry-instrumentation==0.64b0 opentelemetry-instrumentation-threading==0.64b0 opentelemetry-instrumentation-logging==0.64b0"
+          - python-version: "3.13"
+            pydantic-ai-version: "0.7.5"
+            adapter-version: "0.1.25"
+            otel-pin: "opentelemetry-api==1.43.0 opentelemetry-sdk==1.43.0 opentelemetry-exporter-otlp-proto-http==1.43.0 opentelemetry-instrumentation==0.64b0 opentelemetry-instrumentation-threading==0.64b0 opentelemetry-instrumentation-logging==0.64b0"
+          - python-version: "3.10"
+            pydantic-ai-version: "1.44.0"
+            adapter-version: "0.1.20"
+            otel-pin: ""
+          - python-version: "3.13"
+            pydantic-ai-version: "1.44.0"
+            adapter-version: "0.1.25"
+            otel-pin: ""
+          # Pydantic AI 2.41.0 imports enum.StrEnum, which is only available
+          # on Python 3.11+. Keep the 3.10 lanes on earlier supported releases.
+          - python-version: "3.11"
+            pydantic-ai-version: "2.41.0"
+            adapter-version: "0.1.20"
+            otel-pin: ""
+          - python-version: "3.13"
+            pydantic-ai-version: "2.41.0"
+            adapter-version: "0.1.25"
+            otel-pin: ""
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Build and install NeatLogs with Pydantic AI
+        run: |
+          python -m pip install build uv
+          uv lock --check
+          python -m build --wheel
+          wheel="$(find dist -name '*.whl' -print -quit)"
+          python -m pip install "${wheel}[pydantic-ai]" -r .github/requirements-test-pydantic-ai.txt "pydantic-ai==${{ matrix.pydantic-ai-version }}" "openinference-instrumentation-pydantic-ai==${{ matrix.adapter-version }}" ${{ matrix.otel-pin }}
+          python -m pip check
+
+      - name: Pydantic AI semantic contract
+        run: |
+          cp tests/conftest.py "$RUNNER_TEMP/"
+          cp tests/unit/test_pydantic_ai_native_instrumentation.py "$RUNNER_TEMP/"
+          cd "$RUNNER_TEMP"
+          python -m pytest -p pytest_asyncio.plugin -q test_pydantic_ai_native_instrumentation.py
+
+  openai-agents-compatibility:
+    # The main unit job cannot install openai-agents: every release that
+    # reports a failed run on its spans needs a newer openai than that job pins.
+    # 0.20.0 is the first release that marks the agent span when a model call
+    # fails; older releases report nothing, so the workflow span stays OK there.
+    runs-on: ubuntu-latest
+    env:
+      PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - python-version: "3.10"
+            openai-agents-version: "0.20.0"
+          - python-version: "3.13"
+            openai-agents-version: "0.23.1"
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Build and install NeatLogs with the OpenAI Agents SDK
+        run: |
+          python -m pip install build
+          python -m build --wheel
+          wheel="$(find dist -name '*.whl' -print -quit)"
+          # Same runner pins as the Pydantic AI job: requirements-test.txt
+          # without its openai pin, which these releases cannot satisfy.
+          python -m pip install "${wheel}[openai-agents]" -r .github/requirements-test-pydantic-ai.txt "openai-agents==${{ matrix.openai-agents-version }}"
+          python -m pip check
+
+      - name: OpenAI Agents workflow status
+        run: |
+          cp tests/conftest.py "$RUNNER_TEMP/"
+          cp tests/unit/test_openai_agents_workflow_status.py "$RUNNER_TEMP/"
+          cd "$RUNNER_TEMP"
+          python -m pytest -p pytest_asyncio.plugin -q test_openai_agents_workflow_status.py
+
   wheel-smoke:
     runs-on: ubuntu-latest
     strategy:

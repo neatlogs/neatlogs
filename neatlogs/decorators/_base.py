@@ -211,6 +211,13 @@ def _decorate_span(
         code_attrs = _capture_code_attrs(func)
         merged_attrs = {**code_attrs, **(attributes or {})}
 
+        def _initialize_auto_root(root: Any) -> None:
+            from ..core.end_user import apply_end_user_attributes
+            from ..core.session import apply_session_attributes
+
+            apply_session_attributes(root, session_id, is_root=True)
+            apply_end_user_attributes(root, end_user_id, end_user_metadata, is_root=True)
+
         def _prepare_stream_span(span, args, kwargs, *, is_root: bool):
             from ..core.end_user import apply_end_user_attributes
             from ..core.mask import register_mask
@@ -284,14 +291,27 @@ def _decorate_span(
                 from ..core.log import _CaptureStdoutContext
 
                 is_root = _is_root_span()
-                with neatlogs_span(__name__, span_name, kind=otel_trace.SpanKind.INTERNAL) as span:
-                    bound_inputs = _prepare_stream_span(span, args, kwargs, is_root=is_root)
+                span_context = neatlogs_span(
+                    __name__,
+                    span_name,
+                    kind=otel_trace.SpanKind.INTERNAL,
+                    _auto_root_kind=openinference_kind,
+                    _auto_root_initializer=_initialize_auto_root,
+                )
+                with span_context as span:
+                    bound_inputs = _prepare_stream_span(
+                        span,
+                        args,
+                        kwargs,
+                        is_root=is_root and not span_context.has_auto_root,
+                    )
                     chunks: list[Any] = []
                     stdout_ctx = _CaptureStdoutContext() if capture_stdout else None
                     if stdout_ctx:
                         stdout_ctx.__enter__()
+                    iterator = func(*args, **kwargs)
                     try:
-                        async for chunk in func(*args, **kwargs):
+                        async for chunk in iterator:
                             chunks.append(chunk)
                             _record_stream_chunk(span, len(chunks) - 1, chunk)
                             _set_stream_counts(span, len(chunks))
@@ -316,8 +336,11 @@ def _decorate_span(
                         span.set_status(Status(StatusCode.ERROR, str(exc)))
                         raise
                     finally:
-                        if stdout_ctx:
-                            stdout_ctx.__exit__(None, None, None)
+                        try:
+                            await iterator.aclose()
+                        finally:
+                            if stdout_ctx:
+                                stdout_ctx.__exit__(None, None, None)
 
             return async_generator_wrapper
 
@@ -328,8 +351,20 @@ def _decorate_span(
                 from ..core.log import _CaptureStdoutContext
 
                 is_root = _is_root_span()
-                with neatlogs_span(__name__, span_name, kind=otel_trace.SpanKind.INTERNAL) as span:
-                    bound_inputs = _prepare_stream_span(span, args, kwargs, is_root=is_root)
+                span_context = neatlogs_span(
+                    __name__,
+                    span_name,
+                    kind=otel_trace.SpanKind.INTERNAL,
+                    _auto_root_kind=openinference_kind,
+                    _auto_root_initializer=_initialize_auto_root,
+                )
+                with span_context as span:
+                    bound_inputs = _prepare_stream_span(
+                        span,
+                        args,
+                        kwargs,
+                        is_root=is_root and not span_context.has_auto_root,
+                    )
                     chunks: list[Any] = []
                     stdout_ctx = _CaptureStdoutContext() if capture_stdout else None
                     if stdout_ctx:
@@ -375,7 +410,14 @@ def _decorate_span(
                 from ..core.session import apply_session_attributes
 
                 is_root = _is_root_span()
-                with neatlogs_span(__name__, span_name, kind=otel_trace.SpanKind.INTERNAL) as span:
+                span_context = neatlogs_span(
+                    __name__,
+                    span_name,
+                    kind=otel_trace.SpanKind.INTERNAL,
+                    _auto_root_kind=openinference_kind,
+                    _auto_root_initializer=_initialize_auto_root,
+                )
+                with span_context as span:
                     _set_common_span_attrs(
                         span,
                         openinference_kind=openinference_kind,
@@ -386,8 +428,14 @@ def _decorate_span(
                         attributes=merged_attrs,
                     )
                     # Session/end-user belong to the trace root only.
-                    apply_session_attributes(span, session_id, is_root=is_root)
-                    apply_end_user_attributes(span, end_user_id, end_user_metadata, is_root=is_root)
+                    span_is_root = is_root and not span_context.has_auto_root
+                    apply_session_attributes(span, session_id, is_root=span_is_root)
+                    apply_end_user_attributes(
+                        span,
+                        end_user_id,
+                        end_user_metadata,
+                        is_root=span_is_root,
+                    )
                     if mask is not None:
                         span.set_attribute("neatlogs.mask_id", register_mask(mask))
                     if description:
@@ -439,7 +487,14 @@ def _decorate_span(
             from ..core.session import apply_session_attributes
 
             is_root = _is_root_span()
-            with neatlogs_span(__name__, span_name, kind=otel_trace.SpanKind.INTERNAL) as span:
+            span_context = neatlogs_span(
+                __name__,
+                span_name,
+                kind=otel_trace.SpanKind.INTERNAL,
+                _auto_root_kind=openinference_kind,
+                _auto_root_initializer=_initialize_auto_root,
+            )
+            with span_context as span:
                 _set_common_span_attrs(
                     span,
                     openinference_kind=openinference_kind,
@@ -450,8 +505,14 @@ def _decorate_span(
                     attributes=merged_attrs,
                 )
                 # Session/end-user belong to the trace root only.
-                apply_session_attributes(span, session_id, is_root=is_root)
-                apply_end_user_attributes(span, end_user_id, end_user_metadata, is_root=is_root)
+                span_is_root = is_root and not span_context.has_auto_root
+                apply_session_attributes(span, session_id, is_root=span_is_root)
+                apply_end_user_attributes(
+                    span,
+                    end_user_id,
+                    end_user_metadata,
+                    is_root=span_is_root,
+                )
                 if mask is not None:
                     span.set_attribute("neatlogs.mask_id", register_mask(mask))
                 if description:

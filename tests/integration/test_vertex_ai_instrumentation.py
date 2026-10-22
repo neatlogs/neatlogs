@@ -11,6 +11,9 @@ import pytest
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+from neatlogs import vertex_ai
 
 
 def _setup_tracer(exporter):
@@ -101,3 +104,33 @@ class TestVertexAIInstrumentation:
         spans = in_memory_span_exporter.get_finished_spans()
         assert len(spans) == 1
         assert spans[0].status.status_code.name == "ERROR"
+
+
+def test_vertex_preserves_multiple_response_candidates():
+    response = SimpleNamespace(
+        candidates=[
+            SimpleNamespace(
+                index=0,
+                content=SimpleNamespace(role="model", parts=[SimpleNamespace(text="alpha")]),
+                finish_reason="STOP",
+            ),
+            SimpleNamespace(
+                index=1,
+                content=SimpleNamespace(role="model", parts=[SimpleNamespace(text="beta")]),
+                finish_reason="MAX_TOKENS",
+            ),
+        ],
+        usage_metadata=None,
+    )
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    span = provider.get_tracer("test").start_span("vertex")
+
+    vertex_ai._finalize_response(span, response, 1.0)
+
+    attributes = exporter.get_finished_spans()[0].attributes
+    assert attributes["neatlogs.llm.output_messages.0.content"] == "alpha"
+    assert attributes["neatlogs.llm.output_messages.1.content"] == "beta"
+    assert attributes["neatlogs.llm.choices.0.finish_reason"] == "STOP"
+    assert attributes["neatlogs.llm.choices.1.finish_reason"] == "MAX_TOKENS"

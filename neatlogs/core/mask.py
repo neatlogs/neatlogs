@@ -2,8 +2,9 @@
 PII masking support for Neatlogs spans.
 
 Users supply a callable that receives the full span dict and returns
-the (possibly modified) span dict. The callable is responsible for
-traversing and redacting any sensitive fields.
+the (possibly modified) span dict. Returning None drops the span
+entirely. The callable is responsible for traversing and redacting any
+sensitive fields.
 
 Example::
 
@@ -34,11 +35,12 @@ def register_mask(fn: Callable) -> str:
 def apply_mask(
     span_data: Dict[str, Any],
     global_mask: Optional[Callable],
-) -> Dict[str, Any]:
+) -> Optional[Dict[str, Any]]:
     """Apply the effective mask callable to *span_data*.
 
     Per-span mask (stored in ``attributes["neatlogs.mask_id"]``) takes
-    precedence over the global mask.  Returns the (possibly modified) dict.
+    precedence over the global mask.  Returns the (possibly modified) dict,
+    or None when the mask dropped the span.
     """
     mask_id = (span_data.get("attributes") or {}).get("neatlogs.mask_id")
     mask_fn: Optional[Callable] = None
@@ -53,7 +55,7 @@ def apply_mask(
         return span_data
 
     result = mask_fn(span_data)
-    return result if result is not None else span_data
+    return result
 
 
 def effective_mask(span_data: Dict[str, Any], global_mask: Optional[Callable]):

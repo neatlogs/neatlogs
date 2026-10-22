@@ -59,7 +59,6 @@ INSTRUMENTATION_REGISTRY = {
             "claude_agent_sdk",
         ],
         "tool": ["langchain", "llamaindex", "haystack", "mcp"],
-        "http": ["requests", "httpx", "urllib3", "aiohttp"],
         "framework": ["instructor", "guardrails", "promptflow", "google_adk"],
     },
     "libraries": {
@@ -205,26 +204,6 @@ INSTRUMENTATION_REGISTRY = {
             "openinference": "openinference.instrumentation.dspy",
             "default_span_kind": "CHAIN",
         },
-        "requests": {
-            "openllmetry": "opentelemetry.instrumentation.requests",
-            "openinference": None,
-            "default_span_kind": "TOOL",
-        },
-        "httpx": {
-            "openllmetry": "opentelemetry.instrumentation.httpx",
-            "openinference": None,
-            "default_span_kind": "TOOL",
-        },
-        "urllib3": {
-            "openllmetry": "opentelemetry.instrumentation.urllib3",
-            "openinference": None,
-            "default_span_kind": "TOOL",
-        },
-        "aiohttp": {
-            "openllmetry": "opentelemetry.instrumentation.aiohttp_client",
-            "openinference": None,
-            "default_span_kind": "TOOL",
-        },
         "chromadb": {
             "openllmetry": "opentelemetry.instrumentation.chromadb",
             "openinference": None,
@@ -318,7 +297,7 @@ INSTRUMENTATION_REGISTRY = {
         },
         "strands": {
             "openllmetry": None,
-            "openinference": "openinference.instrumentation.strands",
+            "openinference": "openinference.instrumentation.strands_agents",
             "default_span_kind": "AGENT",
         },
         "pipecat": {
@@ -373,7 +352,7 @@ def get_libraries_by_tag(tag: str) -> list:
     Get list of library names for a given semantic tag.
 
     Args:
-        tag: Semantic tag (e.g., "llm", "agent", "http")
+        tag: Semantic tag (e.g., "llm", "agent", "tool")
 
     Returns:
         List of library names matching the tag

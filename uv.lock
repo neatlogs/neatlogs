@@ -20,15 +20,15 @@ conflicts = [[
 
 [[package]]
 name = "ag-ui-protocol"
-version = "0.1.20"
+version = "0.1.22"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pydantic", version = "2.12.5", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
     { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/e4/7a/0db4c6233ccf39654e45af0e532efa87abc0eb7828b16f9e63014881e75f/ag_ui_protocol-0.1.20.tar.gz", hash = "sha256:fadc9600f492a9dde8b2b027171bb471a899430e53291a0b882a09d3f5416145", size = 11977, upload-time = "2026-08-14T22:34:36.694Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/e8/f7/9bf788e7d3608725d022a248a58427040f4f930ab87ddb54bd29ee4d9a51/ag_ui_protocol-0.1.22.tar.gz", hash = "sha256:d21f265284a50d9fc87ad7bcbd58f737b4b16eef7b5375f13a6e925117b52046", size = 18110, upload-time = "2026-08-31T18:20:04.334Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/06/57/55a4a74a5580ef74d2e326f455be45256d4f11260b493174ae0a81626be4/ag_ui_protocol-0.1.20-py3-none-any.whl", hash = "sha256:a15cced52603327b0ba32e95a8aca87e9067f3e69281addfc3fecdaa16a1d485", size = 15142, upload-time = "2026-08-14T22:34:35.607Z" },
+    { url = "https://files.pythonhosted.org/packages/be/6c/af3d577e68c9474c99600e65b2c6283772aae187edca6f0f2f5cbd9f565a/ag_ui_protocol-0.1.22-py3-none-any.whl", hash = "sha256:fca13ee7820f8f53e869c19e09ddd75826c1799b27c2adb6f2e567295433c704", size = 22068, upload-time = "2026-08-31T18:20:03.43Z" },
 ]
 
 [[package]]
@@ -112,7 +112,7 @@ resolution-markers = [
     "python_full_version == '3.11.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
 ]
 dependencies = [
-    { name = "caio", version = "0.12.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "caio", version = "0.12.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/14/31/edb06aabd8f8f0b56d659f30800795f40b93cba96be946ce179f6931e3a5/aiofile-3.12.3.tar.gz", hash = "sha256:caa6aa746b5e47e2165f7abd741b6415e49cf4d44fddc0f61844612cc3924d41", size = 21600, upload-time = "2026-08-04T22:59:27.171Z" }
 wheels = [
@@ -723,7 +723,7 @@ wheels = [
 
 [[package]]
 name = "caio"
-version = "0.12.2"
+version = "0.12.4"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
     "python_full_version >= '3.13' and sys_platform == 'win32'",
@@ -736,30 +736,30 @@ resolution-markers = [
     "python_full_version == '3.11.*' and sys_platform == 'emscripten'",
     "python_full_version == '3.11.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/75/c8/82b3c760141a1076408164b03e8789b51809add6aecd48aa9d7651cf6b59/caio-0.12.2.tar.gz", hash = "sha256:87a67c0dccc60e432888bd532ec504b66e124a5d8b391aab894583b55abd39ea", size = 80927, upload-time = "2026-08-04T14:43:33.726Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/d2/c9/ac301b7f86ccf6ad02ee78eb953ce8f75175754cc5e76d398e447af42e3e/caio-0.12.4.tar.gz", hash = "sha256:32d8e9f3e2099c8db29446679252766c9bcd806eb88b4fb60ad274f73df2a5e9", size = 81006, upload-time = "2026-09-07T06:52:39.18Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/4c/db/2b780a0c859a0bc873683beb60d94215af5c082c76e11e632b4f122905a3/caio-0.12.2-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:a294091062831970b702f10a7fb119c1b55a49db7b843deeb8939550531189ea", size = 77836, upload-time = "2026-08-04T14:42:49.581Z" },
-    { url = "https://files.pythonhosted.org/packages/72/cc/bc8c1f81dc00d4232a2f842eca38df6c86281f012026416873ebaea2f592/caio-0.12.2-cp310-cp310-manylinux_2_34_aarch64.whl", hash = "sha256:af0c75b43f0cde52c758c000b797188e6d62579c4914173ca7afca382a47993d", size = 193718, upload-time = "2026-08-04T14:42:51.158Z" },
-    { url = "https://files.pythonhosted.org/packages/9c/ce/a7429564d74c7ed1cd7ed8c490e8ae9211d38786ac113a8e8eecba97f7c6/caio-0.12.2-cp310-cp310-manylinux_2_34_x86_64.whl", hash = "sha256:c3922302878d17d6860ebe6b5e4dcc6821f7a9d162474a774b8534fedea80236", size = 190539, upload-time = "2026-08-04T14:42:52.521Z" },
-    { url = "https://files.pythonhosted.org/packages/e0/43/43dc1bd7c961679267c2ca2c73fd5b732528bf719ba16d39cc1be0346a3c/caio-0.12.2-cp310-cp310-musllinux_1_2_aarch64.whl", hash = "sha256:e97f960ab7c84aaa7520367bf597222db4229054bc7aae70344cb7da7b19b6f1", size = 191334, upload-time = "2026-08-04T14:42:54.067Z" },
-    { url = "https://files.pythonhosted.org/packages/64/b2/0ea4998968112f1211b1c057f1bd606f40f3efdab640f5e49529d2438707/caio-0.12.2-cp310-cp310-musllinux_1_2_x86_64.whl", hash = "sha256:a682783aef6eff8bc47cd5dd262081d7f746b8d3db1957c70a04017598a048d9", size = 190232, upload-time = "2026-08-04T14:42:55.551Z" },
-    { url = "https://files.pythonhosted.org/packages/ba/e9/c346d656b2f3626ef726aaac1c5ea58a981757cbed62087a9e81eaa4b09f/caio-0.12.2-cp311-cp311-macosx_10_9_universal2.whl", hash = "sha256:a2a7f0fa3b49f219f09705717c73a618eecbb3d697701e20abb4771d17e2bbcf", size = 84555, upload-time = "2026-08-04T14:42:56.84Z" },
-    { url = "https://files.pythonhosted.org/packages/84/60/0b99da0d1345c0c1f9bde58ae96527b54b4aae32c2b6e74dcef514f7fa9c/caio-0.12.2-cp311-cp311-manylinux_2_34_aarch64.whl", hash = "sha256:1b04358ef65bd03d9c34d7b028efb422593b07485da82d6c5439f8c5dea35668", size = 196508, upload-time = "2026-08-04T14:42:58.074Z" },
-    { url = "https://files.pythonhosted.org/packages/92/7e/7eb5a9ab97cfa5500a2cff8444e16e183aab6473912ac37d8bf9de283337/caio-0.12.2-cp311-cp311-manylinux_2_34_x86_64.whl", hash = "sha256:e1253743841b0864bfd6827e496fea4591bb3999ec1c003e57de65370e2d9031", size = 192985, upload-time = "2026-08-04T14:42:59.404Z" },
-    { url = "https://files.pythonhosted.org/packages/92/13/308773ae27f33bc141720ded63216c9a115f5838c1e341d2d37c2b051281/caio-0.12.2-cp311-cp311-musllinux_1_2_aarch64.whl", hash = "sha256:bd94522714af3fd806093bdd10f3175f1c42c5ee72dda975b8b35b55c3400147", size = 194087, upload-time = "2026-08-04T14:43:00.645Z" },
-    { url = "https://files.pythonhosted.org/packages/d5/8b/08814adc89f2c7612da9c2f17d962626bf59eb3b4dd715ea8198ccecb66c/caio-0.12.2-cp311-cp311-musllinux_1_2_x86_64.whl", hash = "sha256:a857d06308dc4428b760f9430350b3847f4c62ad0e79e635215f7cc97f7adcc9", size = 192586, upload-time = "2026-08-04T14:43:02.388Z" },
-    { url = "https://files.pythonhosted.org/packages/60/bc/b62bf048a6e11870291a24319ed027bdf658df9ba77d1ad762aa138e066b/caio-0.12.2-cp312-cp312-macosx_10_13_universal2.whl", hash = "sha256:2097cc0d19fa95e8d55aad770597bb0f76e4f70ed48278c965aa7c5b0b8c3bf5", size = 84702, upload-time = "2026-08-04T14:43:03.946Z" },
-    { url = "https://files.pythonhosted.org/packages/f7/be/b40d55d793afcfa5bcdb32ade9289d9588e14e3026c2c87522e303cc6e8c/caio-0.12.2-cp312-cp312-manylinux_2_34_aarch64.whl", hash = "sha256:2122dccbd1959b922543fc9f8a9d2af47bd5b59190d1ece2445d3d1b4d1be45f", size = 198292, upload-time = "2026-08-04T14:43:05.238Z" },
-    { url = "https://files.pythonhosted.org/packages/f8/02/9bd2bca72bfa478337618eae88942c43c891ae225e11baeae275e5e5c6ab/caio-0.12.2-cp312-cp312-manylinux_2_34_x86_64.whl", hash = "sha256:107e56554c179749de9440e1b5e5a19813572eebf3166e9dc3e5228b16966beb", size = 196207, upload-time = "2026-08-04T14:43:06.494Z" },
-    { url = "https://files.pythonhosted.org/packages/48/9b/65f95efdd68b50b7a9f2555c93d9edc7da7aa5ae5e153163c41cf6fd5cd9/caio-0.12.2-cp312-cp312-musllinux_1_2_aarch64.whl", hash = "sha256:adc7785e61ff7cf372318f67ec65617eaa06975e20da177522665dca8be6ea5d", size = 195748, upload-time = "2026-08-04T14:43:07.893Z" },
-    { url = "https://files.pythonhosted.org/packages/3c/16/6a5c010ca435a5184d11ca350874694ac19db249560126dc8df0f25791ce/caio-0.12.2-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:07942d3b5999127ecb96256c38d5dbf49ed2864c087ed2a80b783901d0aa3ba1", size = 195835, upload-time = "2026-08-04T14:43:09.19Z" },
-    { url = "https://files.pythonhosted.org/packages/4f/9b/31f0b49a2542ffa2f9d6140267e2b568e722a1feeb05cfbffea97666c62b/caio-0.12.2-cp313-cp313-macosx_10_13_universal2.whl", hash = "sha256:40ebea9ebe3a3a66ae85fa00d4112d163654a33c82dcf9b26a99f7d30de13317", size = 84656, upload-time = "2026-08-04T14:43:10.513Z" },
-    { url = "https://files.pythonhosted.org/packages/99/bc/62568d688af9712a34fe3f958d7a98c53bb2017e263260cd5deae67a90e9/caio-0.12.2-cp313-cp313-manylinux_2_34_aarch64.whl", hash = "sha256:6003ec389a68d5ec8f089df82b2dc8915293dd630a4d11322d7e3455045981fd", size = 198443, upload-time = "2026-08-04T14:43:11.767Z" },
-    { url = "https://files.pythonhosted.org/packages/a3/e4/5ed627860285612e5307f06c109913c5918c947fbc223b55599e484c64b0/caio-0.12.2-cp313-cp313-manylinux_2_34_x86_64.whl", hash = "sha256:eee9376d0e2af25b6defc5bce39f6efa90521c803aaf12eba931bd898a397cfc", size = 196356, upload-time = "2026-08-04T14:43:13.206Z" },
-    { url = "https://files.pythonhosted.org/packages/81/e2/2a8cfc6ba3ef3f19e7c778e9fb6f98600f0971cca78bbdfc23a413a66349/caio-0.12.2-cp313-cp313-musllinux_1_2_aarch64.whl", hash = "sha256:78e3ccafc98e009fcb00a97ad441585551e52c0ae7ecc50427a3ccd9b11502fd", size = 195893, upload-time = "2026-08-04T14:43:14.649Z" },
-    { url = "https://files.pythonhosted.org/packages/d1/87/77c40fb2301d0b5bb27c2e79ae42fce718ed75396d5fe3e1c09d8e1400b1/caio-0.12.2-cp313-cp313-musllinux_1_2_x86_64.whl", hash = "sha256:f2355db8917f5a0f3638bf332fe0d87549c80e978fca01db84a8a14b9df56a05", size = 195969, upload-time = "2026-08-04T14:43:15.946Z" },
-    { url = "https://files.pythonhosted.org/packages/5e/b5/0ceca97eb546fe6bbace3399c8b11dfc503efcc7509d708a7a3f09ab50e9/caio-0.12.2-cp313-cp313t-macosx_11_0_arm64.whl", hash = "sha256:8054cba5e7ee623bea34946e2b59eb7c7c2be8872d0a5d12215d6ff564938d5f", size = 78621, upload-time = "2026-08-04T14:43:17.316Z" },
-    { url = "https://files.pythonhosted.org/packages/61/8a/71b0144f783468ba9f1bbf8a2f8e45c7d85ae31ec192f10650aa46f31702/caio-0.12.2-py3-none-any.whl", hash = "sha256:5233e797c9fe2b541914b1bc2e2df82677e2206b537e44e252188f3c2cbb0ea9", size = 62548, upload-time = "2026-08-04T14:43:32.394Z" },
+    { url = "https://files.pythonhosted.org/packages/29/7a/c056466f49dde257502c7ff36c5dbb751a3479ac71968c80abcec52e2e2f/caio-0.12.4-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:8e9eda6a88f309a0a53bcba844471638da01a92758015e2df099fa361891dc72", size = 41095, upload-time = "2026-09-07T06:52:01.972Z" },
+    { url = "https://files.pythonhosted.org/packages/e8/56/e82ae6505d959357e4156da0380d207898f3348f67cf6c265e0eb2fe94c4/caio-0.12.4-cp310-cp310-manylinux_2_34_aarch64.whl", hash = "sha256:51b8600eadc8756751dfc152514852040c6c28deb6bdcd6bfbdddb2a38e424e1", size = 156820, upload-time = "2026-09-07T06:52:03.292Z" },
+    { url = "https://files.pythonhosted.org/packages/aa/75/d759aa402a062f4ef36cc7c4fb6515cca7ee04294802e72461ef3fbd7de4/caio-0.12.4-cp310-cp310-manylinux_2_34_x86_64.whl", hash = "sha256:97bff8f7da696321552b42629d1869983a8ced2f010bac9731b2719c1195a20c", size = 153618, upload-time = "2026-09-07T06:52:04.345Z" },
+    { url = "https://files.pythonhosted.org/packages/f0/b5/a5985255f2083d9a69e78a6ef69da1a2242e4e6378ac2273e826c6196745/caio-0.12.4-cp310-cp310-musllinux_1_2_aarch64.whl", hash = "sha256:759b952df48a5bbdb16e90631c748c877fb0ec7ca9d64eef1066569925ccdd30", size = 154468, upload-time = "2026-09-07T06:52:05.601Z" },
+    { url = "https://files.pythonhosted.org/packages/1d/61/efc29a9697b574eb7528cc718e58fd872cf4c46f267d4df0fe15e4798dbb/caio-0.12.4-cp310-cp310-musllinux_1_2_x86_64.whl", hash = "sha256:20f1d3fe05be285d82413b00bd8061eeb62d3027d3f565adaf7db10bebc594dc", size = 153360, upload-time = "2026-09-07T06:52:06.737Z" },
+    { url = "https://files.pythonhosted.org/packages/e7/c6/168bc0eef2c77681e186957d5a1145208802bb0ecdcfd4d7f67b38b629c7/caio-0.12.4-cp311-cp311-macosx_10_9_universal2.whl", hash = "sha256:b0444d20067642bb272e423de3cc8ef05bf134d335d57fa5bddcfcc98e04313e", size = 47768, upload-time = "2026-09-07T06:52:07.809Z" },
+    { url = "https://files.pythonhosted.org/packages/9c/81/ae41a0473525229e56d7ffbb420b7fc7f72e04e468160a3519596ce094ba/caio-0.12.4-cp311-cp311-manylinux_2_34_aarch64.whl", hash = "sha256:780465251a0680039b29c990bca73b40b843e39d06505c62e353ed56490e4576", size = 159620, upload-time = "2026-09-07T06:52:08.881Z" },
+    { url = "https://files.pythonhosted.org/packages/86/c5/53838d8ece904637dadc3177e5b5b5b6e4f7af9ce17a1f42c6f6214edc1d/caio-0.12.4-cp311-cp311-manylinux_2_34_x86_64.whl", hash = "sha256:67f1bddc997bef281db36600e3e58d6b16d6486b3540eb62c9e54c6584f137fd", size = 156089, upload-time = "2026-09-07T06:52:09.99Z" },
+    { url = "https://files.pythonhosted.org/packages/83/39/34e416ee20493c96d5beda9e4196bec236117b012f6f4d0efdb96b91932c/caio-0.12.4-cp311-cp311-musllinux_1_2_aarch64.whl", hash = "sha256:20acd9a8df90d25b63bc0b7dc264e2a09b99082a420b5d640c76056027ee6b52", size = 157195, upload-time = "2026-09-07T06:52:11.196Z" },
+    { url = "https://files.pythonhosted.org/packages/26/c9/f7b78203beaee0e984b219c48c810e547b27353f899ef82d49133f3c4817/caio-0.12.4-cp311-cp311-musllinux_1_2_x86_64.whl", hash = "sha256:0d8d2826bf622644fc374a9f53ac00918b489d03599783953fcbe79af19123f5", size = 155700, upload-time = "2026-09-07T06:52:12.379Z" },
+    { url = "https://files.pythonhosted.org/packages/68/35/7ddc8de48cd0142797db186c07e901005b966dc6e8a7852f0273d33e4840/caio-0.12.4-cp312-cp312-macosx_10_13_universal2.whl", hash = "sha256:67b725641fea682a2e9b1d3b2a150d21f1a25383e3ec8351bd7677ff857fa982", size = 47927, upload-time = "2026-09-07T06:52:13.58Z" },
+    { url = "https://files.pythonhosted.org/packages/8c/b4/37556bde83253cf1ed071a754c8405d02b955febd021c400f0ffa6258d5f/caio-0.12.4-cp312-cp312-manylinux_2_34_aarch64.whl", hash = "sha256:4854a029e359e5ddfb5589ab66157a34af6a0dda0acdaa43f5e640d60182c1ea", size = 161402, upload-time = "2026-09-07T06:52:14.581Z" },
+    { url = "https://files.pythonhosted.org/packages/7a/11/519e40a1da4d18515ab5ddb54e75cdd896532339010f2dcee7e798e4edab/caio-0.12.4-cp312-cp312-manylinux_2_34_x86_64.whl", hash = "sha256:f063624a98a64bab387430c5eaea61ef3825a98399104a297b8da4741c15139f", size = 159311, upload-time = "2026-09-07T06:52:15.853Z" },
+    { url = "https://files.pythonhosted.org/packages/45/2a/0db30de6c2561e41721d94ac627aa65db61a403545e67914814d8c2b5305/caio-0.12.4-cp312-cp312-musllinux_1_2_aarch64.whl", hash = "sha256:8a926d562f8c06767774a91239770ebaa93c10a24074e21ea741db208df9cc1d", size = 158910, upload-time = "2026-09-07T06:52:17.27Z" },
+    { url = "https://files.pythonhosted.org/packages/1e/e0/5eb43a89aecdf9d6f929b0080e49d92ccdf3f88bbc637353f52843b483af/caio-0.12.4-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:53605636e3b1eaeca368b475f1471ad9774736c6502a4b58b8b6b8d74b531770", size = 158973, upload-time = "2026-09-07T06:52:18.527Z" },
+    { url = "https://files.pythonhosted.org/packages/11/ab/12e4896a1e74ff9a65c84894acdfc3b70b8b49e63874a37e0dffcc31f396/caio-0.12.4-cp313-cp313-macosx_10_13_universal2.whl", hash = "sha256:134d9d145d75f454de5ece9e87595bad433639b51061b693bafc369f689f8742", size = 47934, upload-time = "2026-09-07T06:52:19.644Z" },
+    { url = "https://files.pythonhosted.org/packages/4f/d4/3a96f5537e3fa4e3256f93244fe883a5a4879f2b9e2d59d50151bb417f37/caio-0.12.4-cp313-cp313-manylinux_2_34_aarch64.whl", hash = "sha256:27ec5671ac05650abc7ac1fb12e95ad09417ae495ce9be565927786688edd6c5", size = 161559, upload-time = "2026-09-07T06:52:20.637Z" },
+    { url = "https://files.pythonhosted.org/packages/05/64/f33b9aaf7bc9bad988211d8e42b4b85c25a1d5dcc0906798aebe49bd421b/caio-0.12.4-cp313-cp313-manylinux_2_34_x86_64.whl", hash = "sha256:1e1d5570fd0ec75b1b2c2877c5545ed9f0738b5d23b000e2b6a8fc830dc8b310", size = 159453, upload-time = "2026-09-07T06:52:22.011Z" },
+    { url = "https://files.pythonhosted.org/packages/a2/9e/3fc5e143728d99f8af11453789d755937fbe795a6c5c9c9ea529c91df519/caio-0.12.4-cp313-cp313-musllinux_1_2_aarch64.whl", hash = "sha256:e22ce2e69d94e4c80e0c11c871e547b3c2d147f977632894cb2527ddb6e87a8d", size = 159028, upload-time = "2026-09-07T06:52:23.225Z" },
+    { url = "https://files.pythonhosted.org/packages/ca/8d/e7a165aa44bb2876bec96f7fb1995346d14e43d46237421382f8af4f37da/caio-0.12.4-cp313-cp313-musllinux_1_2_x86_64.whl", hash = "sha256:9dc0fd6f09ef72d18d3f43ca3d1140295222d925c583114ab9b1e8843a109a6e", size = 159088, upload-time = "2026-09-07T06:52:24.362Z" },
+    { url = "https://files.pythonhosted.org/packages/6f/31/d31ed073a7f8e02d352b390ff556757ba82afbd747c68238b1bda638ce6f/caio-0.12.4-cp313-cp313t-macosx_11_0_arm64.whl", hash = "sha256:413565d77dfdf2dd841ac100571ef1cc710f9c56137312f3ec51356350b4f3a5", size = 41919, upload-time = "2026-09-07T06:52:25.5Z" },
+    { url = "https://files.pythonhosted.org/packages/e8/e6/07100a694613344d22958fb6d803fdf914ee9395278fe58ad1b1b9c59e52/caio-0.12.4-py3-none-any.whl", hash = "sha256:7a5e231bbf81eaed269f99afa9ef46457f51f9407952a1795c0795b3a62c23c0", size = 25628, upload-time = "2026-09-07T06:52:38.147Z" },
 ]
 
 [[package]]
@@ -1081,7 +1081,7 @@ wheels = [
 
 [[package]]
 name = "cohere"
-version = "7.0.8"
+version = "7.1.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "fastavro", marker = "python_full_version < '3.11' or sys_platform != 'emscripten' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
@@ -1095,9 +1095,9 @@ dependencies = [
     { name = "types-requests", marker = "python_full_version < '3.11' or sys_platform != 'emscripten' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
     { name = "typing-extensions", marker = "python_full_version < '3.11' or sys_platform != 'emscripten' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/4b/16/62ba386903ea854a2fce2cc2f959b9e0c8fa1d3e5699a3a523a6c691ffc9/cohere-7.0.8.tar.gz", hash = "sha256:5d9986b9b13cfe5590021474540648ff3c9e9ce4bfddc3d7f8e31acf1898c4d7", size = 213501, upload-time = "2026-07-23T19:31:41.066Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/92/18/75ffca8adbe4c3ee2da833d361e1c0add516caa7cd727cbf9338ed933265/cohere-7.1.1.tar.gz", hash = "sha256:3b0fe2e4ab255db4939783c085d935d1f694f09fd625d60ce14c94fd92792889", size = 218834, upload-time = "2026-08-31T21:23:17.735Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/37/52/255cefc27e058853b8750fcb22c549fd52684214d4fc1e4169ab23320644/cohere-7.0.8-py3-none-any.whl", hash = "sha256:a4fe9b9e148cb277ee152009d3566434b055db9d41fc7433abda78add22632ab", size = 357010, upload-time = "2026-07-23T19:31:39.432Z" },
+    { url = "https://files.pythonhosted.org/packages/4a/c3/064a44c498bf6ae8621caa14307d3ef5471157f149e33cfd64417c8e9ad3/cohere-7.1.1-py3-none-any.whl", hash = "sha256:5b5dd9034f8eb5a32c988edad7d0aea120bc3076dffbec9e84858d7b0f0361a0", size = 370514, upload-time = "2026-08-31T21:23:16.429Z" },
 ]
 
 [[package]]
@@ -1266,7 +1266,7 @@ wheels = [
 
 [[package]]
 name = "cyclopts"
-version = "4.22.5"
+version = "4.25.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "attrs" },
@@ -1277,9 +1277,9 @@ dependencies = [
     { name = "tomli", version = "2.4.1", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and extra != 'extra-8-neatlogs-crewai') or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
     { name = "typing-extensions", marker = "python_full_version < '3.11' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/be/05/689617b7e86503417c172f577d791524cb13b9697303d5d44409a971ba10/cyclopts-4.22.5.tar.gz", hash = "sha256:94044506317462cad90fb01a917dadce1f48a0915ba3605dc8d178dea1229e24", size = 195144, upload-time = "2026-08-04T13:53:00.303Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/16/8f/6caec9cf291ba294a0d0669b0388e5676d8887d8b75a8c3ad0a2dc2eeed9/cyclopts-4.25.2.tar.gz", hash = "sha256:0776bc1fa796cd351646c345b7420279e58d6c2c4a8f5d5dd54dea85bdb2de8f", size = 202467, upload-time = "2026-09-08T16:58:04.426Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/83/58/bcab9c33fb7a25a1f5970f357c5b19729bc81d50615d2f737b20c4255909/cyclopts-4.22.5-py3-none-any.whl", hash = "sha256:cf9ce285836053d156730ea4ea0ad0c75cf63beb3f3d8edf222a795bc57666ab", size = 234557, upload-time = "2026-08-04T13:52:58.509Z" },
+    { url = "https://files.pythonhosted.org/packages/2c/0e/eadf712ca776fd96982c09348dd8f141ae6f96746a4eabc3e3fb54dea738/cyclopts-4.25.2-py3-none-any.whl", hash = "sha256:51b42513eea5e4ba6a08b68acf187b81f1191032cf77b9631086cfa2c88fa7a4", size = 242400, upload-time = "2026-09-08T16:58:02.696Z" },
 ]
 
 [[package]]
@@ -2362,11 +2362,11 @@ wheels = [
 
 [[package]]
 name = "griffelib"
-version = "2.2.0"
+version = "2.3.0"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/f0/b4/a767e91c606deefc447a96eaf59edd77397960b1d677dffd833ee8449831/griffelib-2.2.0.tar.gz", hash = "sha256:e1bc36fe9cd21d4b6b659b456346755e4cfdc5676c0a5214083126ee12612b3c", size = 227048, upload-time = "2026-08-16T14:04:58.383Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/27/af/018c10bc9edd42b6ef6db2e96b09542050d5253f9b195e74bc910b2d13ab/griffelib-2.3.0.tar.gz", hash = "sha256:7b0952caf5bca6afa4bb5ee8c6a2d183fe3f21b62efc5f6c7243cb2b26d2d115", size = 234534, upload-time = "2026-09-04T15:08:17.472Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/f6/b6/f65ac785d4ac90dcf7c831ac6256f5dd4a19780f4e1575b2c0d6eeebe319/griffelib-2.2.0-py3-none-any.whl", hash = "sha256:d71c3bc2bbed9f958488634fe788b843a9f705d6d2838ca32cd6c25eeb64dfc4", size = 166779, upload-time = "2026-08-16T14:04:54.365Z" },
+    { url = "https://files.pythonhosted.org/packages/41/63/e876e789525063c840ccfa8857febdabd6523bcef9ce7eb979b9305ea895/griffelib-2.3.0-py3-none-any.whl", hash = "sha256:1b8f9cd525681c26b1d6d574faa1371651e8459ca51d209684f50b8096ae06e0", size = 169423, upload-time = "2026-09-04T15:08:12.956Z" },
 ]
 
 [[package]]
@@ -3673,7 +3673,7 @@ wheels = [
 
 [[package]]
 name = "logfire"
-version = "4.40.0"
+version = "5.0.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "executing" },
@@ -3689,9 +3689,9 @@ dependencies = [
     { name = "tomli", version = "2.4.1", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and extra != 'extra-8-neatlogs-crewai') or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/f9/71/1ed06d124bd7905f60004d60cbe14c79bda00f0604bf0cb76214f8c96348/logfire-4.40.0.tar.gz", hash = "sha256:f50f9637f9b5cc3eb5f8526e473effa1992d45056c89adc7c821ee7ab2520c75", size = 1260846, upload-time = "2026-08-05T11:26:59.605Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/18/92/a45577fe3291aa85685330bb349108d7ce679d4dc094b8f8722d46b7fe11/logfire-5.0.0.tar.gz", hash = "sha256:579246cb37d767d88d0c33a14735b10b1c58347fd6a8def5a757f9ce740768db", size = 1346561, upload-time = "2026-09-04T18:44:52.329Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/e6/65/2ed148a656362ff3b5cce0bfae619cf57ca1df33d0c942b4c1461e57f57c/logfire-4.40.0-py3-none-any.whl", hash = "sha256:0ac2c950968812f27ee68ccec4a362230acffaffb28f04945ee07729d5866fa0", size = 409440, upload-time = "2026-08-05T11:26:56.745Z" },
+    { url = "https://files.pythonhosted.org/packages/da/a0/f3a6a31587b85283cbb878446b2e55c9152624586d8d7322adab124fbc96/logfire-5.0.0-py3-none-any.whl", hash = "sha256:6b0179c641b210eefa971f9bf082faed5f722d003f6c7e744c6362dabb8dbe18", size = 467846, upload-time = "2026-09-04T18:44:48.63Z" },
 ]
 
 [package.optional-dependencies]
@@ -4258,7 +4258,7 @@ wheels = [
 
 [[package]]
 name = "neatlogs"
-version = "1.4.21"
+version = "1.4.27"
 source = { editable = "." }
 dependencies = [
     { name = "agnost" },
@@ -4287,6 +4287,7 @@ dependencies = [
     { name = "openinference-instrumentation-portkey" },
     { name = "openinference-instrumentation-pydantic-ai" },
     { name = "openinference-instrumentation-smolagents" },
+    { name = "openinference-instrumentation-strands-agents" },
     { name = "openinference-instrumentation-vertexai" },
     { name = "openinference-semantic-conventions" },
     { name = "opentelemetry-api", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
@@ -4295,18 +4296,10 @@ dependencies = [
     { name = "opentelemetry-exporter-otlp-proto-http", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
     { name = "opentelemetry-instrumentation", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
     { name = "opentelemetry-instrumentation", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation-aiohttp-client", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation-aiohttp-client", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation-httpx", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation-httpx", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
     { name = "opentelemetry-instrumentation-logging", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
     { name = "opentelemetry-instrumentation-logging", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation-requests", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation-requests", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
     { name = "opentelemetry-instrumentation-threading", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
     { name = "opentelemetry-instrumentation-threading", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation-urllib3", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation-urllib3", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
     { name = "opentelemetry-sdk", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
     { name = "opentelemetry-sdk", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
     { name = "requests" },
@@ -4406,10 +4399,14 @@ portkey = [
     { name = "portkey-ai" },
 ]
 pydantic-ai = [
+    { name = "openinference-instrumentation-pydantic-ai" },
     { name = "pydantic-ai" },
 ]
 smolagents = [
     { name = "smolagents" },
+]
+strands = [
+    { name = "strands-agents" },
 ]
 vertex-ai = [
     { name = "google-genai" },
@@ -4498,29 +4495,28 @@ requires-dist = [
     { name = "openinference-instrumentation-openai", specifier = ">=0.1.32" },
     { name = "openinference-instrumentation-openai-agents", specifier = ">=1.4.0" },
     { name = "openinference-instrumentation-portkey", specifier = ">=0.1.7" },
-    { name = "openinference-instrumentation-pydantic-ai", specifier = ">=0.1.9" },
+    { name = "openinference-instrumentation-pydantic-ai", specifier = ">=0.1.20" },
+    { name = "openinference-instrumentation-pydantic-ai", marker = "extra == 'pydantic-ai'", specifier = ">=0.1.20" },
     { name = "openinference-instrumentation-smolagents", specifier = ">=0.1.21" },
+    { name = "openinference-instrumentation-strands-agents", specifier = ">=0.1.7" },
     { name = "openinference-instrumentation-vertexai", specifier = ">=0.1.11" },
     { name = "openinference-semantic-conventions", specifier = ">=0.1.13" },
     { name = "opentelemetry-api", specifier = ">=1.35.0" },
     { name = "opentelemetry-exporter-otlp-proto-http", specifier = ">=1.35.0" },
     { name = "opentelemetry-instrumentation", specifier = ">=0.56b0" },
-    { name = "opentelemetry-instrumentation-aiohttp-client", specifier = ">=0.56b0" },
-    { name = "opentelemetry-instrumentation-httpx", specifier = ">=0.56b0" },
     { name = "opentelemetry-instrumentation-logging", specifier = ">=0.56b0" },
-    { name = "opentelemetry-instrumentation-requests", specifier = ">=0.56b0" },
     { name = "opentelemetry-instrumentation-threading", specifier = ">=0.56b0" },
-    { name = "opentelemetry-instrumentation-urllib3", specifier = ">=0.56b0" },
     { name = "opentelemetry-sdk", specifier = ">=1.35.0" },
     { name = "portkey-ai", marker = "extra == 'portkey'", specifier = ">=1.0.0" },
-    { name = "pydantic-ai", marker = "extra == 'pydantic-ai'", specifier = ">=0.0.9" },
+    { name = "pydantic-ai", marker = "extra == 'pydantic-ai'", specifier = ">=0.7.5" },
     { name = "pymilvus", marker = "extra == 'milvus'", specifier = ">=2.4.0,<2.5.0" },
     { name = "qdrant-client", marker = "extra == 'langchain'", specifier = "<1.16" },
     { name = "requests", specifier = ">=2.31.0" },
     { name = "smolagents", marker = "extra == 'smolagents'", specifier = ">=1.0.0" },
+    { name = "strands-agents", marker = "extra == 'strands'", specifier = ">=1.19.0" },
     { name = "wrapt", specifier = ">=1.0.0" },
 ]
-provides-extras = ["azure-ai-inference", "openai", "azure-openai", "anthropic", "langchain", "langgraph", "crewai", "llama-index", "google-adk", "groq", "agno", "bedrock", "dspy", "litellm", "google-genai", "openai-agents", "guardrails", "haystack", "instructor", "mcp", "mistralai", "portkey", "pydantic-ai", "smolagents", "hermes", "vertexai", "vertex-ai", "autogen-agentchat", "milvus"]
+provides-extras = ["azure-ai-inference", "openai", "azure-openai", "anthropic", "langchain", "langgraph", "crewai", "llama-index", "google-adk", "groq", "agno", "bedrock", "dspy", "litellm", "google-genai", "openai-agents", "guardrails", "haystack", "instructor", "mcp", "mistralai", "portkey", "pydantic-ai", "smolagents", "hermes", "vertexai", "vertex-ai", "autogen-agentchat", "strands", "milvus"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -5452,6 +5448,25 @@ wheels = [
 ]
 
 [[package]]
+name = "openinference-instrumentation-strands-agents"
+version = "0.1.7"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "openinference-semantic-conventions" },
+    { name = "opentelemetry-api", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
+    { name = "opentelemetry-api", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "opentelemetry-sdk", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
+    { name = "opentelemetry-sdk", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "opentelemetry-semantic-conventions", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
+    { name = "opentelemetry-semantic-conventions", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/da/e5/5d04e5035afd547a1ef74bf7832ec5e8544c0555dc117dbda5cfadf6aa1c/openinference_instrumentation_strands_agents-0.1.7.tar.gz", hash = "sha256:c2fc10898bdf90ff662c18871ecf7577ccf19b42e81cc57f5507ba2db4525a26", size = 15556, upload-time = "2026-08-25T05:32:44.114Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e8/ae/54e2886fd21d8849dfdf684999a02317676b3c3c674fe2e89a690c5f2352/openinference_instrumentation_strands_agents-0.1.7-py3-none-any.whl", hash = "sha256:b2c8df548147105802caa17d5227f696d75098c1e7abc63aa56b2b000c184136", size = 17586, upload-time = "2026-08-25T05:32:42.386Z" },
+]
+
+[[package]]
 name = "openinference-instrumentation-vertexai"
 version = "0.1.18"
 source = { registry = "https://pypi.org/simple" }
@@ -5473,11 +5488,11 @@ wheels = [
 
 [[package]]
 name = "openinference-semantic-conventions"
-version = "0.1.32"
+version = "0.1.35"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/05/5e/13ffdb2ba436312cda9ed842ce3416fa5961e36a205df9a18a67eef7f9b3/openinference_semantic_conventions-0.1.32.tar.gz", hash = "sha256:2a3e6723ddce37abc5c43d38c6c7ac05b0f2efcfbe75cc0f135ab14ceb0730f7", size = 13980, upload-time = "2026-08-07T14:29:21.035Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/e0/cd/1c26841447249b9fc402e342b9b3c042f8916b5abb485b8eb4e63ea6397c/openinference_semantic_conventions-0.1.35.tar.gz", hash = "sha256:b64864a5961fee7bf37d2e11491499baab223fac18efe671065dede55ccd5a3a", size = 14262, upload-time = "2026-09-04T20:16:04.645Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/9d/19/2d096333313d45e5f87d08f903cedc3f7298c5690d2e6c4ef236dc22870e/openinference_semantic_conventions-0.1.32-py3-none-any.whl", hash = "sha256:d06c4716faf7537fbabbb6d34e758ec6b3650a18c037661782fc8c3e9fa90f81", size = 11252, upload-time = "2026-08-07T14:29:19.78Z" },
+    { url = "https://files.pythonhosted.org/packages/4d/34/434cedb6f39b14e6eb8f203c33e97cee3907fc7f994d7c3cfcfbd4575787/openinference_semantic_conventions-0.1.35-py3-none-any.whl", hash = "sha256:a418df584fb3ec41d4214ac44562908f596df042c382d1445fafb26df2834cb2", size = 11484, upload-time = "2026-09-04T20:16:03.668Z" },
 ]
 
 [[package]]
@@ -5763,62 +5778,6 @@ wheels = [
 ]
 
 [[package]]
-name = "opentelemetry-instrumentation-aiohttp-client"
-version = "0.63b1"
-source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version >= '3.13' and sys_platform == 'win32'",
-    "python_full_version >= '3.13' and sys_platform == 'emscripten'",
-    "python_full_version >= '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.11.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version < '3.11'",
-]
-dependencies = [
-    { name = "opentelemetry-api", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-semantic-conventions", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-util-http", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "wrapt", marker = "extra == 'extra-8-neatlogs-crewai'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/47/6f/e7105760ec528b465238a06a05f8e6c358063e00ad53fed76fd625c6230c/opentelemetry_instrumentation_aiohttp_client-0.63b1.tar.gz", hash = "sha256:ec97399c02a7e278359efffdf16e93d59a7103b16f66790cda9b9496b171b136", size = 19041, upload-time = "2026-05-21T16:36:15.62Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/41/f8/f18666128e4b602601316ee73f35986c0a42ce44a615fd6b0f566c15e282/opentelemetry_instrumentation_aiohttp_client-0.63b1-py3-none-any.whl", hash = "sha256:5259c2c5103a5919941e0c45f2c95b055a50eb2ab39dc252f4b1e41ce6d984bb", size = 13675, upload-time = "2026-05-21T16:34:59.263Z" },
-]
-
-[[package]]
-name = "opentelemetry-instrumentation-aiohttp-client"
-version = "0.64b0"
-source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version >= '3.13' and sys_platform == 'win32'",
-    "python_full_version >= '3.13' and sys_platform == 'emscripten'",
-    "python_full_version >= '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.11.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version < '3.11'",
-]
-dependencies = [
-    { name = "opentelemetry-api", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-semantic-conventions", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-util-http", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "wrapt", marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/6a/7c/1124a723ea77d866fae5cb1df78bea6133a06d93c132a8bd6d6bf08424cc/opentelemetry_instrumentation_aiohttp_client-0.64b0.tar.gz", hash = "sha256:ff03428052766c604e59ab802279d265841dd0d59eb78662da0a2878c48ac840", size = 19041, upload-time = "2026-06-24T15:19:14.386Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/44/55/87e9d0a3b9fc9fbecf044a67547b42d5423a7a3bb502113495b9a95a5e71/opentelemetry_instrumentation_aiohttp_client-0.64b0-py3-none-any.whl", hash = "sha256:661b1420b0012e43a92dca042f43bb8abafb80a952184ef256128fd9c12bb7ee", size = 13675, upload-time = "2026-06-24T15:18:19.296Z" },
-]
-
-[[package]]
 name = "opentelemetry-instrumentation-httpx"
 version = "0.63b1"
 source = { registry = "https://pypi.org/simple" }
@@ -5927,60 +5886,6 @@ wheels = [
 ]
 
 [[package]]
-name = "opentelemetry-instrumentation-requests"
-version = "0.63b1"
-source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version >= '3.13' and sys_platform == 'win32'",
-    "python_full_version >= '3.13' and sys_platform == 'emscripten'",
-    "python_full_version >= '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.11.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version < '3.11'",
-]
-dependencies = [
-    { name = "opentelemetry-api", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-semantic-conventions", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-util-http", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/7b/39/7b14ef15c7c74b0da7d32b449732795a5cf7495897b72fc0b48280b96f50/opentelemetry_instrumentation_requests-0.63b1.tar.gz", hash = "sha256:513fcaa3d93debbdb359c00ce1a137a34a89ee908c51ac43beb7e8c18ac2b3cd", size = 18098, upload-time = "2026-05-21T16:36:46.02Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/f8/18/a5e35fe8c9ad8041b71dd712658589de5d692aaa17d7cbce7f87a5cb0d0f/opentelemetry_instrumentation_requests-0.63b1-py3-none-any.whl", hash = "sha256:935c980a11e33bfd7ed969c741e4bd7c84077045651469f10e163534368d87f7", size = 13378, upload-time = "2026-05-21T16:35:52.166Z" },
-]
-
-[[package]]
-name = "opentelemetry-instrumentation-requests"
-version = "0.64b0"
-source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version >= '3.13' and sys_platform == 'win32'",
-    "python_full_version >= '3.13' and sys_platform == 'emscripten'",
-    "python_full_version >= '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.11.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version < '3.11'",
-]
-dependencies = [
-    { name = "opentelemetry-api", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-semantic-conventions", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-util-http", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/a1/97/d5fb7b3f329c24ff2f6478f1a0c0c516ba942d3df2acbb197d276af31816/opentelemetry_instrumentation_requests-0.64b0.tar.gz", hash = "sha256:8213a20b6578c41aa05cc5b48419aea75e1584924a4904dfcf36524597e7cc96", size = 18106, upload-time = "2026-06-24T15:19:39.522Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/a3/b2/f0f32ec327bdd76d245d28975dfb446d62eea2d267c06b6cb6c1a9b7e7d4/opentelemetry_instrumentation_requests-0.64b0-py3-none-any.whl", hash = "sha256:dcad4324ad97d785a5a3b9500acf3af3965b4c1d1b95776fa5e275b173d9541c", size = 13385, upload-time = "2026-06-24T15:18:56.163Z" },
-]
-
-[[package]]
 name = "opentelemetry-instrumentation-threading"
 version = "0.63b1"
 source = { registry = "https://pypi.org/simple" }
@@ -6030,62 +5935,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/26/ef/d4a16eb4a0f0971e351ec2ff95846b501b66a619d07d90822942d70a3adc/opentelemetry_instrumentation_threading-0.64b0.tar.gz", hash = "sha256:0a07d7329f69dfae5036a7cb184f502c8b91cb0538012f5304bd32ffe9ade451", size = 9080, upload-time = "2026-06-24T15:19:43.22Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/ab/b3/8838d5f3db35b3854516ccfbf8ec26138d40388d828407182c890c3aa9d0/opentelemetry_instrumentation_threading-0.64b0-py3-none-any.whl", hash = "sha256:a285ffa750a958f7d368e947f5679a0214d588242cbffba0f5934cb02e9a17f4", size = 8487, upload-time = "2026-06-24T15:19:00.813Z" },
-]
-
-[[package]]
-name = "opentelemetry-instrumentation-urllib3"
-version = "0.63b1"
-source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version >= '3.13' and sys_platform == 'win32'",
-    "python_full_version >= '3.13' and sys_platform == 'emscripten'",
-    "python_full_version >= '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.11.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version < '3.11'",
-]
-dependencies = [
-    { name = "opentelemetry-api", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-semantic-conventions", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-util-http", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "wrapt", marker = "extra == 'extra-8-neatlogs-crewai'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/c9/b9/acc5bd0add608cad1abebe9d65c0916bf48c8957c2a6b0b3985ead79830e/opentelemetry_instrumentation_urllib3-0.63b1.tar.gz", hash = "sha256:c4358358f49b7dc42550cd6efbcfbfce3d178b8bf09acf46b62993f5f3ba4a9c", size = 18945, upload-time = "2026-05-21T16:36:53.177Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/23/92/a9fac2daa2e4d843d6330263d56b18f32a5de43573e6c869da439e84ddf2/opentelemetry_instrumentation_urllib3-0.63b1-py3-none-any.whl", hash = "sha256:241d0a819e614e479ba89d32470dddd94191deb0cb49fa525fa5585022caddbe", size = 13512, upload-time = "2026-05-21T16:36:02.849Z" },
-]
-
-[[package]]
-name = "opentelemetry-instrumentation-urllib3"
-version = "0.64b0"
-source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version >= '3.13' and sys_platform == 'win32'",
-    "python_full_version >= '3.13' and sys_platform == 'emscripten'",
-    "python_full_version >= '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'win32'",
-    "python_full_version == '3.11.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.11.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version < '3.11'",
-]
-dependencies = [
-    { name = "opentelemetry-api", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-instrumentation", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-semantic-conventions", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "opentelemetry-util-http", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-    { name = "wrapt", marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/30/e2/9e6f747018f639b9ffed97f715f1eb16c95dd87ba572c880ce451a65a18f/opentelemetry_instrumentation_urllib3-0.64b0.tar.gz", hash = "sha256:647c6d1b012e14168323b18d4e60fca9a5d280764821b99ea0a5639450fbd74e", size = 18945, upload-time = "2026-06-24T15:19:45.738Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/a3/74/01536fcafb60dbb2d1fec925e849663e66596e072f4badea5e4ec9879774/opentelemetry_instrumentation_urllib3-0.64b0-py3-none-any.whl", hash = "sha256:d2bd0de75a4c3e60da3ba375139cfbc6f9f95c26f8d6ef3a54d52437d43c2f87", size = 13513, upload-time = "2026-06-24T15:19:04.491Z" },
 ]
 
 [[package]]
@@ -8810,6 +8659,35 @@ wheels = [
 ]
 
 [[package]]
+name = "strands-agents"
+version = "1.54.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "boto3" },
+    { name = "botocore" },
+    { name = "docstring-parser" },
+    { name = "httpx" },
+    { name = "jsonschema" },
+    { name = "mcp", version = "1.28.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
+    { name = "mcp", version = "1.29.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "opentelemetry-api", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
+    { name = "opentelemetry-api", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "opentelemetry-instrumentation-threading", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
+    { name = "opentelemetry-instrumentation-threading", version = "0.64b0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "opentelemetry-sdk", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
+    { name = "opentelemetry-sdk", version = "1.43.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "pydantic", version = "2.12.5", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
+    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "pyyaml" },
+    { name = "typing-extensions" },
+    { name = "watchdog" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/74/3d/1e38d7644293bc31405562807933a68bd734e75a269bf24ad94869f51915/strands_agents-1.54.0.tar.gz", hash = "sha256:8351ae5962a0cf51c0c8d6ae928752ab5331671603393aef9d267d1c435aa3c3", size = 1457826, upload-time = "2026-08-27T20:47:16.92Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a3/a2/8bdc61000650649ae10e364698d88f3a4279155f834aefd1fb9ded7cf81b/strands_agents-1.54.0-py3-none-any.whl", hash = "sha256:ca37b9001531596a634e9249f97fb03ce70997e216f6a71d4e8f8182818cbf5c", size = 728301, upload-time = "2026-08-27T20:47:14.764Z" },
+]
+
+[[package]]
 name = "sympy"
 version = "1.14.0"
 source = { registry = "https://pypi.org/simple" }
@@ -9067,11 +8945,11 @@ wheels = [
 
 [[package]]
 name = "types-protobuf"
-version = "7.34.1.20260816"
+version = "7.35.1.20260906"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/e0/86/f592845ff8410583687e6dbf985a028e6ec6d378d0bdf548817aa39937b9/types_protobuf-7.34.1.20260816.tar.gz", hash = "sha256:6f43846e7a3cc2621abfa79e2bb03461e6769a74cdae7462efaddf84580fd5c1", size = 69170, upload-time = "2026-08-16T02:50:00.998Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/e1/6c/e3e5b3e10bc328126a39637c138f9ebfd734bf14342b9f3540039b4ab995/types_protobuf-7.35.1.20260906.tar.gz", hash = "sha256:efd1a3862d4c967dad5512ef8d56b1530ac84f182c41735b94004756518c4998", size = 69895, upload-time = "2026-09-06T06:35:28.308Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/14/cc/909e791f11de77c2073007dbcce8b502865ef12c7881bdf36b0ccb206ab4/types_protobuf-7.34.1.20260816-py3-none-any.whl", hash = "sha256:2e3a225b3c21f0022daa34cec155f03858bb9aff9792947b8e71f0e9f1791fdb", size = 86036, upload-time = "2026-08-16T02:49:59.807Z" },
+    { url = "https://files.pythonhosted.org/packages/44/4e/f63e826c68f77ef875506d72f225918800346545ee99847bc28f3394f18d/types_protobuf-7.35.1.20260906-py3-none-any.whl", hash = "sha256:5155e48569e0dabff303fdf578db96cd31ea9a4a63b18018a4ceac6b0ae17462", size = 86419, upload-time = "2026-09-06T06:35:27.247Z" },
 ]
 
 [[package]]

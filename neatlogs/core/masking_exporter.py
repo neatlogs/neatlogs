@@ -188,7 +188,9 @@ class _MaskRunner:
                 break
             active.pop(index, None)
             if succeeded and result is None:
-                results[index] = candidate
+                # A mask returning None drops the item entirely, matching the
+                # documented contract in the TypeScript and Go SDKs.
+                results[index] = None
             elif succeeded and isinstance(result, Mapping):
                 results[index] = dict(result)
             elif succeeded:
@@ -316,6 +318,7 @@ class MaskingSpanExporter(SpanExporter):
         diagnostics: DeliveryDiagnostics | None = None,
         media_store: Any | None = None,
         doctor_capture: bool = False,
+        on_dropped: Callable[[ReadableSpan], None] | None = None,
     ) -> None:
         self._inner = inner
         self._global_mask = mask
@@ -323,6 +326,7 @@ class MaskingSpanExporter(SpanExporter):
         self._diagnostics = diagnostics
         self._media_store = media_store
         self._doctor_capture = doctor_capture
+        self._on_dropped = on_dropped
 
     def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
         prepared: list[ReadableSpan | None] = [None] * len(spans)
@@ -348,8 +352,11 @@ class MaskingSpanExporter(SpanExporter):
             )
             if masked is not None:
                 prepared[index] = _masked_span(spans[index], masked)
-            elif self._diagnostics is not None:
-                self._diagnostics.record_masked_drop("span")
+            else:
+                if self._on_dropped is not None:
+                    self._on_dropped(spans[index])
+                if self._diagnostics is not None:
+                    self._diagnostics.record_masked_drop("span")
         kept = [span for span in prepared if span is not None]
         if not kept:
             return SpanExportResult.SUCCESS

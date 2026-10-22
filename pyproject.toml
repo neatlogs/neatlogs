@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "neatlogs"
-version = "1.4.21"
+version = "1.4.27"
 description = "A Python package for extracting and managing LLM logs to build a collaborative workspace"
 readme = "README.MD"
 license = {text = "MIT"}
@@ -37,10 +37,6 @@ dependencies = [
     "requests>=2.31.0",
     "agnost>=0.1.8,<0.2.0",
     "opentelemetry-instrumentation>=0.56b0",
-    "opentelemetry-instrumentation-requests>=0.56b0",
-    "opentelemetry-instrumentation-httpx>=0.56b0",
-    "opentelemetry-instrumentation-urllib3>=0.56b0",
-    "opentelemetry-instrumentation-aiohttp-client>=0.56b0",
     "opentelemetry-instrumentation-threading>=0.56b0",
     "opentelemetry-instrumentation-logging>=0.56b0",
     "wrapt>=1.0.0",
@@ -61,7 +57,7 @@ dependencies = [
     "openinference-instrumentation-dspy>=0.1.32",
     "openinference-instrumentation-agno>=0.1.25",
     "openinference-instrumentation-openai-agents>=1.4.0",
-    "openinference-instrumentation-pydantic-ai>=0.1.9",
+    "openinference-instrumentation-pydantic-ai>=0.1.20",
     "openinference-instrumentation-smolagents>=0.1.21",
     "openinference-instrumentation-guardrails>=0.1.10",
     "openinference-instrumentation-haystack>=0.1.29",
@@ -71,6 +67,7 @@ dependencies = [
     "openinference-instrumentation-google-adk>=0.1.8",
     "openinference-instrumentation-autogen-agentchat>=0.1.6",
     "openinference-instrumentation-llama-index>=4.3.9",
+    "openinference-instrumentation-strands-agents>=0.1.7",
 ]
 
 [project.optional-dependencies]
@@ -155,7 +152,8 @@ portkey = [
     "portkey-ai>=1.0.0",
 ]
 pydantic-ai = [
-    "pydantic-ai>=0.0.9",
+    "pydantic-ai>=0.7.5",
+    "openinference-instrumentation-pydantic-ai>=0.1.20",
 ]
 smolagents = [
     "smolagents>=1.0.0",
@@ -173,6 +171,9 @@ vertex-ai = [
 ]
 autogen-agentchat = [
     "autogen-agentchat>=0.4.0",
+]
+strands = [
+    "strands-agents>=1.19.0",
 ]
 milvus = [
     # pymilvus and milvus-lite must be the same minor version to avoid a gRPC hang

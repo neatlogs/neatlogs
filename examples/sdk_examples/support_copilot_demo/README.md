@@ -24,7 +24,7 @@ RUN=A python support_copilot.py
 SENDGRID_FAKE_SUCCESS=1 RUN=B python support_copilot.py
 ```
 
-`SENDGRID_FAKE_SUCCESS=1` stubs delivery via httpbin so you don't need a real SendGrid key; the `requests` span still appears.
+`SENDGRID_FAKE_SUCCESS=1` stubs delivery via httpbin so you don't need a real SendGrid key; the surrounding semantic tool span still appears.
 
 **3. Fixed path (same ticket, v4 prompt + full KB)**
 
@@ -49,7 +49,7 @@ SENDGRID_FAKE_SUCCESS=1 RUN=B_FIXED python support_copilot.py
 | WORKFLOW, AGENT, RETRIEVER, TOOL | `@neatlogs.span(kind=...)` |
 | Azure OpenAI | `instrumentations=["openai"]` |
 | Chroma query | `instrumentations=["chromadb"]` |
-| SendGrid / httpbin POST | `instrumentations=["requests"]` |
+| SendGrid / httpbin POST | Surrounding `TOOL` span |
 | Step logs | `capture_logs=True` + `neatlogs.log()` |
 | Prompt templates | `SystemPromptTemplate` / `UserPromptTemplate` in `neatlogs.trace()` |
 | PII redaction | `pii_enabled=True` (server-side) |

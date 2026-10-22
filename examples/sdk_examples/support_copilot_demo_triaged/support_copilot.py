@@ -22,7 +22,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# --- 1. Init MUST happen before any LLM/Chroma/requests imports
+# --- 1. Init MUST happen before instrumented LLM/Chroma imports
 import neatlogs
 
 neatlogs.init(
@@ -30,13 +30,13 @@ neatlogs.init(
     endpoint=os.environ.get("NEATLOGS_ENDPOINT"),
     workflow_name="support-copilot-triaged",
     tags=["sdk-examples", "support-copilot", "triaged", "azure-openai", "chroma"],
-    instrumentations=["openai", "chromadb", "requests"],
+    instrumentations=["openai", "chromadb"],
     capture_logs=True,
     pii_enabled=True,
     pii_span_types=["LLM"],
 )
 
-# --- 2. NOW import LLM/Chroma/requests-using modules
+# --- 2. NOW import LLM/Chroma modules and application tools
 from openai import AzureOpenAI
 
 from customer_messages import TRACE_A_BILLING_DISPUTE, TRACE_B_REFUND_INQUIRY

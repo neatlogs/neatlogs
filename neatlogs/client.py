@@ -11,6 +11,7 @@ import atexit
 import contextlib
 import math
 import os
+import sys
 import threading
 import time
 from collections.abc import Iterator
@@ -41,6 +42,7 @@ from .core.delivery import (
     ObservableBatchLogRecordProcessor,
     ObservableBatchSpanProcessor,
 )
+from .core.filtering_exporter import HttpFilteringSpanExporter
 from .core.log_exporter import NeatlogsLogFilter
 from .core.masking_exporter import MaskingLogExporter, MaskingSpanExporter
 from .core.media import PendingMediaStore
@@ -53,6 +55,7 @@ from .core.upload_authority import (
 )
 from .core.upload_authority import uploads_enabled as resolve_uploads_enabled
 from .errors import NeatlogsConfigurationError
+from .instrumentation.preprocessing import ensure_provider_preprocessor
 from .version import __version__
 
 
@@ -154,6 +157,8 @@ class Client:
             except Exception:
                 pass
 
+        ensure_provider_preprocessor(self.tracer_provider)
+
         self._span_processor = NeatlogsSpanProcessor(
             mask=mask,
             emit_completion_markers=False,
@@ -182,6 +187,7 @@ class Client:
                 exporter,
                 diagnostics=self._delivery_diagnostics,
                 upload_authority=self._upload_authority,
+                capture_owner=self._span_processor,
             )
             limited_span_exporter = TypedMediaSpanExporter(
                 limited_span_exporter,
@@ -189,21 +195,32 @@ class Client:
                 self._media_store,
                 diagnostics=self._delivery_diagnostics,
             )
+            completion_processor = CompletionMarkerSpanProcessor(
+                self._span_processor,
+                self.tracer_provider.get_tracer("neatlogs.internal"),
+            )
+            filtered_span_exporter = HttpFilteringSpanExporter(
+                limited_span_exporter,
+                media_store=self._media_store,
+                on_accepted=completion_processor.accept_exported_root,
+                on_rejected=completion_processor.reject_exported_root,
+            )
             batch_processor = ObservableBatchSpanProcessor(
-                MaskingSpanExporter(
-                    limited_span_exporter,
-                    mask,
-                    diagnostics=self._delivery_diagnostics,
+                HttpFilteringSpanExporter(
+                    MaskingSpanExporter(
+                        filtered_span_exporter,
+                        mask,
+                        diagnostics=self._delivery_diagnostics,
+                        media_store=self._media_store,
+                        on_dropped=completion_processor.reject_exported_root,
+                    ),
                     media_store=self._media_store,
+                    on_rejected=completion_processor.reject_exported_root,
                 ),
                 max_export_batch_size=batch_size,
                 max_queue_size=export_queue_capacity(batch_size),
                 schedule_delay_millis=int(flush_interval * 1000),
                 diagnostics=self._delivery_diagnostics,
-            )
-            completion_processor = CompletionMarkerSpanProcessor(
-                self._span_processor,
-                self.tracer_provider.get_tracer("neatlogs.internal"),
             )
             self.tracer_provider.add_span_processor(batch_processor)
             self.tracer_provider.add_span_processor(completion_processor)
@@ -306,6 +323,12 @@ class Client:
                 success = (result is None or bool(result)) and success
             except Exception:
                 success = False
+        if self._transport_processors:
+            try:
+                result = self._transport_processors[0].force_flush(timeout_millis=timeout_millis)
+                success = (result is None or bool(result)) and success
+            except Exception:
+                success = False
         return success
 
     def shutdown(
@@ -370,7 +393,7 @@ class Client:
     ) -> bool:
         success = True
         deadline = time.monotonic() + max(0, timeout_millis) / 1000
-        # Drain logs before ending roots: root end creates the completion marker.
+        # Drain logs before roots can be accepted and create completion markers.
         if self.log_provider is not None:
             completed, _ = bounded_call(
                 self.log_provider.shutdown,
@@ -391,6 +414,16 @@ class Client:
         if not self._span_processor.wait_for_downstream(remaining_millis):
             success = False
         if self._completion_processor is not None:
+            if self._transport_processors:
+                completed, result = bounded_call(
+                    lambda: self._transport_processors[0].force_flush(
+                        timeout_millis=max(0, int((deadline - time.monotonic()) * 1000))
+                    ),
+                    deadline,
+                    synchronous=synchronous,
+                    worker=self._shutdown_worker,
+                )
+                success = completed and (result is None or bool(result)) and success
             completed, _ = bounded_call(
                 self._completion_processor.emit_deferred,
                 deadline,
@@ -399,6 +432,23 @@ class Client:
             )
             if not completed:
                 success = False
+            if self._transport_processors:
+                completed, result = bounded_call(
+                    lambda: self._transport_processors[0].force_flush(
+                        timeout_millis=max(0, int((deadline - time.monotonic()) * 1000))
+                    ),
+                    deadline,
+                    synchronous=synchronous,
+                    worker=self._shutdown_worker,
+                )
+                success = completed and (result is None or bool(result)) and success
+        if "neatlogs.strands" in sys.modules:
+            try:
+                from .strands import release_strands
+
+                release_strands(self.tracer_provider, self)
+            except Exception:
+                pass
         if self._owns_provider:
             completed, _ = bounded_call(
                 self.tracer_provider.shutdown,

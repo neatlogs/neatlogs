@@ -64,6 +64,11 @@ _REMEDIATION = {
     "CREDENTIAL_MISSING": "SET_CREDENTIAL",
     "AUTH_FAILED": "CHECK_INGEST_CREDENTIAL",
     "BACKEND_PROBE_UNAVAILABLE": "CHECK_TRACE_ENDPOINT",
+    "TRACE_READBACK_TIMEOUT": "WAIT_FOR_TRACE",
+    "INGESTION_PIPELINE_FAILED": "CONTACT_SUPPORT",
+    "BACKEND_HTTP_ERROR": "CHECK_TRACE_ENDPOINT",
+    "BACKEND_CONNECTION_FAILED": "CHECK_TRACE_ENDPOINT",
+    "TRACE_READBACK_INVALID": "CONTACT_SUPPORT",
     "ENDPOINT_INVALID": "SET_ENDPOINT",
     "PROVIDER_OWNERSHIP_AMBIGUOUS": "USE_PRIVATE_PROVIDER",
     "TRACE_ID_INVALID": "RECREATE_TRACE",
@@ -842,6 +847,18 @@ _SAFE_FAILURE_CODE = re.compile(r"^[A-Z0-9_]{1,64}$")
 _MAX_READBACK_BYTES = 1 << 20
 
 
+class _ProbeReadbackError(RuntimeError):
+    def __init__(
+        self,
+        reason_code: str,
+        message: str,
+        details: Mapping[str, str | bool] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.reason_code = reason_code
+        self.details = dict(details) if details else None
+
+
 def _ingestion_diagnostic_details(value: Any) -> dict[str, str | bool] | None:
     diagnostics = _record(_record(value).get("ingestionDiagnostics"))
     current_stage = diagnostics.get("currentStage")
@@ -1204,45 +1221,138 @@ def doctor_probe_v2(
         deadline = time.monotonic() + timeout_seconds
         trace_data: dict[str, Any] | None = None
         while time.monotonic() < deadline:
-            response = requests.get(
-                readback_url,
-                headers={"x-api-key": key, "x-neatlogs-doctor": "v1"},
-                timeout=min(5.0, max(0.1, deadline - time.monotonic())),
-                allow_redirects=False,
-                stream=True,
-            )
+            remaining = deadline - time.monotonic()
+            try:
+                response = requests.get(
+                    readback_url,
+                    headers={"x-api-key": key, "x-neatlogs-doctor": "v1"},
+                    timeout=min(5.0, max(0.001, remaining)),
+                    allow_redirects=False,
+                    stream=True,
+                )
+            except requests.Timeout as exc:
+                reason_code = (
+                    "TRACE_READBACK_TIMEOUT"
+                    if time.monotonic() >= deadline
+                    else "BACKEND_CONNECTION_FAILED"
+                )
+                raise _ProbeReadbackError(
+                    reason_code,
+                    (
+                        "Timed out waiting for the exact Doctor trace"
+                        if reason_code == "TRACE_READBACK_TIMEOUT"
+                        else "Could not connect to the existing trace read path"
+                    ),
+                    last_diagnostics,
+                ) from exc
+            except requests.RequestException as exc:
+                raise _ProbeReadbackError(
+                    "BACKEND_CONNECTION_FAILED",
+                    "Could not connect to the existing trace read path",
+                    last_diagnostics,
+                ) from exc
             if response.status_code in {401, 403}:
                 _close_response(response)
-                response.raise_for_status()
+                raise _ProbeReadbackError(
+                    "AUTH_FAILED",
+                    "The project key was rejected by the existing trace API",
+                )
             if 200 <= response.status_code < 300 and response.status_code != 202:
-                value = _bounded_response_json(response)
+                try:
+                    value = _bounded_response_json(response)
+                except (ValueError, TypeError, json.JSONDecodeError) as exc:
+                    raise _ProbeReadbackError(
+                        "TRACE_READBACK_INVALID",
+                        "Trace read-back returned an invalid response",
+                    ) from exc
                 if not isinstance(value, dict):
-                    raise ValueError("invalid trace read-back")
+                    raise _ProbeReadbackError(
+                        "TRACE_READBACK_INVALID",
+                        "Trace read-back returned an invalid response",
+                    )
                 trace_data = value
                 last_diagnostics = _ingestion_diagnostic_details(value)
                 break
             if response.status_code in {202, 404, 409}:
                 try:
                     value = _bounded_response_json(response)
-                except (ValueError, TypeError, json.JSONDecodeError):
+                except (ValueError, TypeError, json.JSONDecodeError) as exc:
+                    if response.status_code == 409:
+                        raise _ProbeReadbackError(
+                            "TRACE_READBACK_INVALID",
+                            "Trace read-back returned an invalid terminal receipt",
+                        ) from exc
                     value = None
                 current_diagnostics = _ingestion_diagnostic_details(value)
                 if response.status_code == 409:
-                    last_diagnostics = current_diagnostics
-                    response.raise_for_status()
+                    terminal_value = value if isinstance(value, dict) else {}
+                    if terminal_value.get("finalizationStatus") == "dlq":
+                        diagnostics_present = "ingestionDiagnostics" in terminal_value
+                        valid_terminal = (
+                            isinstance(terminal_value.get("error"), str)
+                            and (
+                                "message" not in terminal_value
+                                or isinstance(terminal_value["message"], str)
+                            )
+                            and (not diagnostics_present or current_diagnostics is not None)
+                        )
+                    else:
+                        valid_terminal = (
+                            current_diagnostics is not None
+                            and current_diagnostics["ingestion_state"] == "failed"
+                        )
+                    if not valid_terminal:
+                        raise _ProbeReadbackError(
+                            "TRACE_READBACK_INVALID",
+                            "Trace read-back returned an invalid terminal receipt",
+                        )
+                    raise _ProbeReadbackError(
+                        "INGESTION_PIPELINE_FAILED",
+                        "Trace ingestion reported a terminal pipeline failure",
+                        current_diagnostics,
+                    )
                 if current_diagnostics:
                     last_diagnostics = current_diagnostics
             else:
                 _close_response(response)
-                if 300 <= response.status_code < 400:
-                    raise requests.HTTPError(
-                        "trace read-back redirects are disabled", response=response
-                    )
-                response.raise_for_status()
+                raise _ProbeReadbackError(
+                    "BACKEND_HTTP_ERROR",
+                    "The existing trace read path returned an unexpected HTTP status",
+                    last_diagnostics if response.status_code >= 500 else None,
+                )
             time.sleep(min(1.0, max(0, deadline - time.monotonic())))
         if trace_data is None:
-            raise requests.Timeout("timed out waiting for exact Doctor trace")
+            raise _ProbeReadbackError(
+                "TRACE_READBACK_TIMEOUT",
+                "Timed out waiting for the exact Doctor trace",
+                last_diagnostics,
+            )
         return _persisted_probe_result(local, trace_data, last_diagnostics)
+    except _ProbeReadbackError as exc:
+        failure = {
+            "format_version": DOCTOR_V2_FORMAT_VERSION,
+            "mode": "probe",
+            "status": "fail",
+            "first_failure": exc.reason_code,
+            "runtime": {
+                "language": "python",
+                "sdk_version": __version__,
+                "schema_version": str(TELEMETRY_SCHEMA_VERSION),
+                "transport": "otlp_http_protobuf",
+            },
+            "checks": [
+                _check(
+                    "probe",
+                    "fail",
+                    exc.reason_code,
+                    str(exc),
+                    exc.details,
+                )
+            ],
+        }
+        if capture is not None:
+            failure["capture"] = capture
+        return failure
     except (
         requests.RequestException,
         RuntimeError,
@@ -1250,16 +1360,7 @@ def doctor_probe_v2(
         TypeError,
         json.JSONDecodeError,
     ) as exc:
-        error_response = getattr(exc, "response", None)
-        response_status = getattr(error_response, "status_code", None)
-        reason_code = (
-            "AUTH_FAILED" if response_status in {401, 403} else "BACKEND_PROBE_UNAVAILABLE"
-        )
-        retain_diagnostics = bool(
-            response_status == 409
-            or (isinstance(response_status, int) and response_status >= 500)
-            or (isinstance(exc, requests.RequestException) and response_status is None)
-        )
+        reason_code = "BACKEND_PROBE_UNAVAILABLE"
         failure = {
             "format_version": DOCTOR_V2_FORMAT_VERSION,
             "mode": "probe",
@@ -1276,12 +1377,7 @@ def doctor_probe_v2(
                     "probe",
                     "fail",
                     reason_code,
-                    (
-                        "The project key was rejected by the existing trace API"
-                        if reason_code == "AUTH_FAILED"
-                        else "The existing trace ingestion or read path is unavailable"
-                    ),
-                    last_diagnostics if retain_diagnostics else None,
+                    "The Doctor probe could not complete before trace read-back",
                 )
             ],
         }

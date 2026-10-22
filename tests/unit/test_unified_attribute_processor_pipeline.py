@@ -58,6 +58,144 @@ def test_process_marks_http_client_span_as_http_kind() -> None:
     assert out["neatlogs.span.kind"] == "http"
 
 
+@pytest.mark.parametrize(
+    "attributes",
+    [
+        {
+            "http.method": "POST",
+            "http.url": "https://user:pass@example.com/pay?token=secret#frag",
+            "http.status_code": 201,
+        },
+        {
+            "http.request.method": "POST",
+            "url.full": "https://user:pass@example.com/pay?token=secret#frag",
+            "http.response.status_code": 201,
+        },
+    ],
+)
+def test_process_synthesizes_safe_http_canonical_io(attributes: dict) -> None:
+    proc = UnifiedAttributeProcessor(mapping_config=_load_mapping(), debug=False)
+    span = _mk_span(kind=SpanKind.CLIENT, attributes=attributes)
+
+    out = proc.process(span)
+
+    assert out["neatlogs.span.kind"] == "http"
+    assert json.loads(out["neatlogs.http.input"]) == {
+        "method": "POST",
+        "url": "https://example.com/pay",
+    }
+    assert json.loads(out["neatlogs.http.output"]) == {"status": 201}
+    serialized = json.dumps(out, default=str)
+    assert "user:pass" not in serialized
+    assert "token=secret" not in serialized
+    assert "frag" not in serialized
+
+
+def test_process_synthesizes_http_input_without_status_or_secret_payloads() -> None:
+    proc = UnifiedAttributeProcessor(mapping_config=_load_mapping(), debug=False)
+    span = _mk_span(
+        kind=SpanKind.CLIENT,
+        attributes={
+            "http.request.method": "GET",
+            "url.scheme": "https",
+            "server.address": "api.example.com",
+            "server.port": 443,
+            "url.path": "/health",
+            "url.query": "api_key=secret",
+            "url.fragment": "private",
+            "input.value": '{"password":"secret-input"}',
+            "output.value": '{"token":"secret-output"}',
+            "http.request.header.authorization": "Bearer secret",
+            "http.response.header.x-internal-token": "secret-response",
+            "http.request.header.cookie": "sid=secret",
+            "http.request.body": '{"password":"secret"}',
+        },
+    )
+
+    out = proc.process(span)
+
+    assert json.loads(out["neatlogs.http.input"]) == {
+        "method": "GET",
+        "url": "https://api.example.com:443/health",
+    }
+    assert json.loads(out["input.value"]) == {
+        "method": "GET",
+        "url": "https://api.example.com:443/health",
+    }
+    assert "neatlogs.http.output" not in out
+    assert "output.value" not in out
+    serialized = json.dumps(out, default=str)
+    assert "Bearer secret" not in serialized
+    assert "sid=secret" not in serialized
+    assert "password" not in serialized
+    assert "secret-response" not in serialized
+    assert "secret-input" not in serialized
+    assert "secret-output" not in serialized
+
+
+def test_http_url_sanitization_handles_ipv6_and_malformed_ports() -> None:
+    proc = UnifiedAttributeProcessor(mapping_config=_load_mapping(), debug=False)
+    ipv6 = _mk_span(
+        kind=SpanKind.CLIENT,
+        attributes={
+            "http.request.method": "GET",
+            "url.scheme": "http",
+            "server.address": "2001:db8::1",
+            "server.port": 8080,
+            "url.path": "/health",
+        },
+    )
+    malformed = _mk_span(
+        kind=SpanKind.CLIENT,
+        attributes={
+            "http.request.method": "GET",
+            "url.full": "https://example.com:not-a-port/path?token=secret",
+        },
+    )
+
+    ipv6_out = proc.process(ipv6)
+    malformed_out = proc.process(malformed)
+
+    assert json.loads(ipv6_out["neatlogs.http.input"])["url"] == (
+        "http://[2001:db8::1]:8080/health"
+    )
+    assert json.loads(malformed_out["neatlogs.http.input"])["url"] == ("https://example.com/path")
+
+
+@pytest.mark.parametrize(
+    "path_key,path_value",
+    [
+        ("url.path", "/health?api_key=secret#fragment"),
+        ("http.target", "https://user:pass@evil.example/health?api_key=secret#fragment"),
+        ("http.route", "/users/{id}?token=secret#fragment"),
+    ],
+)
+def test_http_path_attributes_cannot_preserve_url_credentials(
+    path_key: str, path_value: str
+) -> None:
+    proc = UnifiedAttributeProcessor(mapping_config=_load_mapping(), debug=False)
+    attributes = {
+        "http.request.method": "GET",
+        "server.address": "api.example.com",
+        path_key: path_value,
+    }
+    span = _mk_span(kind=SpanKind.CLIENT, attributes=attributes)
+
+    out = proc.process(span)
+
+    assert json.loads(out["neatlogs.http.input"]) == {
+        "method": "GET",
+        "url": (
+            "http://api.example.com/health"
+            if path_key != "http.route"
+            else "http://api.example.com/users/{id}"
+        ),
+    }
+    serialized = json.dumps(out, default=str)
+    for secret in ("user:pass", "evil.example", "api_key=secret", "token=secret", "fragment"):
+        assert secret not in serialized
+
+
 @pytest.mark.parametrize("kind", ["GUARDRAIL", "EVALUATOR", "MEMORY"])
 def test_process_maps_generic_io_to_semantic_kind_namespace(kind: str) -> None:
     proc = UnifiedAttributeProcessor(mapping_config=_load_mapping(), debug=False)

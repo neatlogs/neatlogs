@@ -5,7 +5,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 import requests
-from opentelemetry.exporter.otlp.proto.http import Compression, trace_exporter
+from opentelemetry.exporter.otlp.proto.http import Compression
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor, SpanExportResult
@@ -46,7 +46,7 @@ def test_python_transport_retries_429_post_without_overlapping_otel_5xx_policy()
     assert requests_seen == 3
 
 
-def test_upstream_otel_retries_503_and_gzip_is_receiver_compatible(monkeypatch):
+def test_upstream_otel_retries_503_and_gzip_is_receiver_compatible():
     requests_seen = 0
     decoded = []
 
@@ -64,7 +64,6 @@ def test_upstream_otel_retries_503_and_gzip_is_receiver_compatible(monkeypatch):
         def log_message(self, *_args):
             pass
 
-    monkeypatch.setattr(trace_exporter.random, "uniform", lambda *_args: 0)
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
@@ -168,3 +167,33 @@ def test_upstream_exporter_rejects_work_after_shutdown():
     )
     exporter.shutdown()
     assert exporter.export(()) is SpanExportResult.FAILURE
+
+
+@pytest.mark.parametrize("receipt", ["rejected", "warning", "malformed"])
+def test_upstream_exporter_requires_complete_trace_receipt(monkeypatch, receipt):
+    from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceResponse
+
+    body = ExportTraceServiceResponse()
+    body.partial_success.rejected_spans = 1 if receipt == "rejected" else 0
+    body.partial_success.error_message = "private receiver details"
+    calls = []
+
+    def request(self, method, url, **kwargs):
+        calls.append(url)
+        response = requests.Response()
+        response.status_code = 200
+        response._content = (
+            b"invalid-protobuf" if receipt == "malformed" else body.SerializeToString()
+        )
+        return response
+
+    monkeypatch.setattr(requests.Session, "request", request)
+    exporter = OTLPSpanExporter(
+        endpoint="https://ingest.example.com/v1/traces", session=build_otlp_session()
+    )
+    try:
+        expected = SpanExportResult.SUCCESS if receipt == "warning" else SpanExportResult.FAILURE
+        assert exporter.export(()) is expected
+        assert len(calls) == 1
+    finally:
+        exporter.shutdown()

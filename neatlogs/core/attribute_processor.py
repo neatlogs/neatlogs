@@ -3,6 +3,7 @@ import json
 import logging
 import re
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlsplit, urlunsplit
 
 from opentelemetry import metrics
 from opentelemetry.sdk.trace import ReadableSpan
@@ -10,6 +11,7 @@ from opentelemetry.trace import SpanKind
 
 from .instrumentation_scope_parser import enrich_with_scope_detection
 from .logger import get_logger
+from .span_kind import normalize_explicit_span_kind, resolve_explicit_span_kind
 
 # Matches Python object repr strings like:
 #   <function BaseTool.<lambda> at 0x110107be0>
@@ -140,6 +142,10 @@ class UnifiedAttributeProcessor:
             self.logger.warning(f"Failed to enrich invocation parameters: {e}")
 
         unified = self._apply_namespace_mapping(attrs)
+        if unified.get("neatlogs.span.kind") == "http":
+            for key in ("input.value", "input.mime_type", "output.value", "output.mime_type"):
+                if key in attrs:
+                    unified[key] = attrs[key]
         self._add_intermediate_steps(unified)
 
         # 🔥 CRITICAL: Filter out massive embedding vectors before export
@@ -156,6 +162,7 @@ class UnifiedAttributeProcessor:
     def _normalize_conventions(self, span: ReadableSpan, attrs: Dict[str, Any]) -> Dict[str, Any]:
         if span.kind == SpanKind.CLIENT and self._looks_like_http(attrs):
             attrs["openinference.span.kind"] = "HTTP"
+            self._add_http_canonical_io(attrs)
 
         if "openinference.span.kind" not in attrs and any(
             k.startswith("crewai.crew.") for k in attrs.keys()
@@ -809,10 +816,108 @@ class UnifiedAttributeProcessor:
         return all_steps
 
     def _looks_like_http(self, attrs: Dict[str, Any]) -> bool:
-        for k in ("http.method", "http.url", "http.status_code", "http.route"):
+        for k in (
+            "http.method",
+            "http.request.method",
+            "http.url",
+            "url.full",
+            "http.status_code",
+            "http.response.status_code",
+            "http.route",
+        ):
             if k in attrs:
                 return True
         return any(key.startswith("http.") for key in attrs.keys())
+
+    def _add_http_canonical_io(self, attrs: Dict[str, Any]) -> None:
+        self.sanitize_http_attributes(attrs)
+        method = attrs.get("http.request.method") or attrs.get("http.method")
+        sanitized_url = self._sanitized_http_url(attrs)
+        if method and sanitized_url:
+            attrs["input.value"] = json.dumps(
+                {"method": str(method).upper(), "url": sanitized_url},
+                separators=(",", ":"),
+            )
+            attrs["input.mime_type"] = "application/json"
+        else:
+            attrs.pop("input.value", None)
+            attrs.pop("input.mime_type", None)
+
+        status = attrs.get("http.response.status_code")
+        if status is None:
+            status = attrs.get("http.status_code")
+        if status is not None:
+            attrs["output.value"] = json.dumps({"status": status}, separators=(",", ":"))
+            attrs["output.mime_type"] = "application/json"
+        else:
+            attrs.pop("output.value", None)
+            attrs.pop("output.mime_type", None)
+
+    def _sanitized_http_url(self, attrs: Dict[str, Any]) -> Optional[str]:
+        raw_url = attrs.get("url.full") or attrs.get("http.url")
+        if raw_url:
+            return self._sanitize_url(str(raw_url))
+
+        scheme = attrs.get("url.scheme") or attrs.get("http.scheme") or "http"
+        host = attrs.get("server.address") or attrs.get("net.peer.name") or attrs.get("http.host")
+        if not host:
+            return None
+        host = str(host).split("@")[-1]
+        if host.startswith("[") and "]" in host:
+            host = host[1 : host.index("]")]
+        elif host.count(":") == 1:
+            candidate, candidate_port = host.rsplit(":", 1)
+            if candidate_port.isdigit():
+                host = candidate
+        port = attrs.get("server.port") or attrs.get("net.peer.port")
+        netloc = f"[{host}]" if ":" in host else host
+        if port:
+            netloc = f"{netloc}:{port}"
+        path = attrs.get("url.path") or attrs.get("http.target") or attrs.get("http.route") or ""
+        path = self._sanitize_path(str(path))
+        return self._sanitize_url(urlunsplit((str(scheme), netloc, path or "/", "", "")))
+
+    def _sanitize_url(self, raw_url: str) -> str:
+        try:
+            parts = urlsplit(raw_url)
+        except ValueError:
+            return "/"
+        host = parts.hostname or ""
+        netloc = host
+        if ":" in host and not host.startswith("["):
+            netloc = f"[{host}]"
+        try:
+            port = parts.port
+        except ValueError:
+            port = None
+        if port is not None:
+            netloc = f"{netloc}:{port}"
+        return urlunsplit((parts.scheme, netloc, parts.path or "/", "", ""))
+
+    def _sanitize_path(self, raw_path: str) -> str:
+        try:
+            parsed = urlsplit(raw_path)
+        except ValueError:
+            return "/"
+        if parsed.scheme or parsed.netloc:
+            return parsed.path or "/"
+        return raw_path.split("?", 1)[0].split("#", 1)[0] or "/"
+
+    def sanitize_http_attributes(self, attrs: Dict[str, Any]) -> None:
+        for key in ("http.url", "url.full"):
+            if attrs.get(key):
+                attrs[key] = self._sanitize_url(str(attrs[key]))
+        for key in ("http.target", "url.path", "http.route"):
+            if attrs.get(key):
+                attrs[key] = self._sanitize_path(str(attrs[key]))
+
+        for key in list(attrs):
+            lowered = key.lower()
+            is_header = "header" in lowered
+            is_body_payload = "body" in lowered and not lowered.endswith(".body.size")
+            is_url_component = lowered in {"url.query", "url.fragment"}
+            if is_header or is_body_payload or is_url_component:
+                attrs.pop(key, None)
 
     def _extract_operational_metrics(
         self, span: ReadableSpan, attrs: Dict[str, Any]
@@ -920,6 +1025,14 @@ class UnifiedAttributeProcessor:
         consumed: set[str] = set()
         self._map_recursive(mappings, attrs, unified, consumed)
 
+        span_kind_config = mappings.get("span_kind", {})
+        explicit_kind = normalize_explicit_span_kind(
+            attrs,
+            span_kind_config.get("values", {}) if isinstance(span_kind_config, dict) else {},
+        )
+        if explicit_kind:
+            unified["neatlogs.span.kind"] = explicit_kind
+
         keep_as_is = self.mapping.get("keep_as_is", {}).get("attributes", [])
         for key in keep_as_is:
             if key in attrs:
@@ -969,7 +1082,7 @@ class UnifiedAttributeProcessor:
         llm_request_type = attrs.get("llm.request.type", "").lower()
         gen_ai_operation = attrs.get("gen_ai.operation.name", "").lower()
         span_name_lower = attrs.get("_span_name", "").lower()
-        explicit_kind = attrs.get("openinference.span.kind") or attrs.get("neatlogs.span.kind")
+        explicit_kind = resolve_explicit_span_kind(attrs)
 
         if llm_request_type == "rerank" or gen_ai_operation == "rerank":
             unified["neatlogs.span.kind"] = "reranker"

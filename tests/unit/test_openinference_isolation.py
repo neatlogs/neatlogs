@@ -1,3 +1,6 @@
+import sys
+from types import ModuleType
+
 from openinference.instrumentation import OITracer, TraceConfig
 from opentelemetry import context as context_api
 from opentelemetry import trace as trace_api
@@ -130,3 +133,33 @@ def test_unmarked_openinference_tracer_keeps_standard_otel_behavior():
             )
     finally:
         provider.shutdown()
+
+
+def test_openinference_modules_importing_get_current_span_see_the_private_span():
+    private_provider, _ = _provider_with_exporter()
+    foreign_provider, _ = _provider_with_exporter()
+    set_neatlogs_provider(private_provider)
+    module_name = "openinference.instrumentation._neatlogs_test_getter"
+    adapter = ModuleType(module_name)
+    adapter.get_current_span = trace_api.get_current_span
+    sys.modules[module_name] = adapter
+
+    try:
+        oi_provider = provider_for_openinference(private_provider)
+        oi_tracer = OITracer(
+            oi_provider.get_tracer("openinference.instrumentation.imported-getter"),
+            TraceConfig(),
+        )
+        foreign_tracer = foreign_provider.get_tracer("foreign.imported-getter")
+
+        with foreign_tracer.start_as_current_span("foreign-root") as foreign_root:
+            with oi_tracer.start_as_current_span("private-root") as private_root:
+                assert trace_api.get_current_span() is foreign_root
+                assert adapter.get_current_span().get_span_context().span_id == (
+                    private_root.get_span_context().span_id
+                )
+    finally:
+        sys.modules.pop(module_name, None)
+        set_neatlogs_provider(None)
+        private_provider.shutdown()
+        foreign_provider.shutdown()

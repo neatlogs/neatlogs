@@ -1,0 +1,52 @@
+name: Compatibility configuration
+
+on:
+  pull_request:
+    paths:
+      - ".compatibility/**"
+      - "scripts/compatibility/**"
+      - "neatlogs/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/compatibility-*.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - name: Validate compatibility inventory
+        run: python scripts/compatibility/discover_releases.py --validate-only
+      - name: Test compatibility automation
+        run: python -m unittest discover -s scripts/compatibility -p "test_*.py"
+  consumer-matrix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+        manager: [pip, uv, poetry]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install build and resolver tooling
+        run: |
+          python -m pip install --disable-pip-version-check build
+          if [ "${{ matrix.manager }}" = "uv" ]; then python -m pip install uv; fi
+          if [ "${{ matrix.manager }}" = "poetry" ]; then python -m pip install poetry; fi
+      - name: Build the real wheel
+        run: python -m build --wheel
+      - name: Verify installed package consumer
+        run: python scripts/compatibility/verify_package_manager.py --manager=${{ matrix.manager }}

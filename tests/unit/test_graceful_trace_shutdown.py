@@ -372,16 +372,20 @@ def test_batch_processor_receives_root_before_completion_marker():
             schedule_delay_millis=60_000,
         )
     )
-    provider.add_span_processor(
-        CompletionMarkerSpanProcessor(
-            lifecycle,
-            provider.get_tracer("neatlogs.internal"),
-        )
+    completion = CompletionMarkerSpanProcessor(
+        lifecycle,
+        provider.get_tracer("neatlogs.internal"),
     )
+    provider.add_span_processor(completion)
 
     try:
         root = provider.get_tracer("neatlogs.test").start_span("workflow")
         root.end()
+        provider.force_flush()
+        exported_root = next(
+            span for span in exporter.get_finished_spans() if span.name == "workflow"
+        )
+        completion.accept_exported_root(exported_root)
         provider.force_flush()
         names = [span.name for span in exporter.get_finished_spans()]
         assert names.index("workflow") < names.index("neatlogs.trace.complete")
@@ -507,6 +511,7 @@ def test_completion_marker_is_deferred_until_requested():
         completion.begin_shutdown()
         provider.get_tracer("custom.application").start_span("workflow").end()
         assert [span.name for span in exporter.get_finished_spans()] == ["workflow"]
+        completion.accept_exported_root(exporter.get_finished_spans()[0])
         completion.emit_deferred()
         assert [span.name for span in exporter.get_finished_spans()] == [
             "workflow",
@@ -547,8 +552,13 @@ def test_deferred_boundary_does_not_strand_late_roots():
     try:
         completion.begin_shutdown()
         provider.get_tracer("custom").start_span("before-boundary").end()
+        completion.accept_exported_root(exporter.get_finished_spans()[0])
         completion.emit_deferred()
         provider.get_tracer("custom").start_span("after-boundary").end()
+        after = next(
+            span for span in exporter.get_finished_spans() if span.name == "after-boundary"
+        )
+        completion.accept_exported_root(after)
         names = [span.name for span in exporter.get_finished_spans()]
         assert names.count("neatlogs.trace.complete") == 2
     finally:

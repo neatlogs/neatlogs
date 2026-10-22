@@ -14,6 +14,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 
 from neatlogs._wrap_utils import serialize
 from neatlogs.core.delivery import DeliveryDiagnostics
+from neatlogs.core.filtering_exporter import HttpFilteringSpanExporter
 from neatlogs.core.masking_exporter import MaskingLogExporter, MaskingSpanExporter
 from neatlogs.core.media import PendingMediaStore, set_default_media_store, set_media_attributes
 from neatlogs.core.media_exporter import (
@@ -156,6 +157,46 @@ def test_mask_can_remove_media_before_any_upload_occurs():
     assert authority.payloads == []
     assert sink.get_finished_spans()[0].attributes == {}
     assert retained_after_export == {"items": 0, "bytes": 0}
+
+
+def test_http_reclassification_releases_staged_media_without_uploading():
+    _, value = _large_image()
+    store = PendingMediaStore(max_bytes=25 * 1024 * 1024)
+    authority = Authority()
+    sink = InMemorySpanExporter()
+    provider = TracerProvider()
+
+    def reclassify_as_http(snapshot):
+        snapshot["attributes"]["neatlogs.span.kind"] = "HTTP"
+        return snapshot
+
+    provider.add_span_processor(
+        SimpleSpanProcessor(
+            MaskingSpanExporter(
+                HttpFilteringSpanExporter(
+                    TypedMediaSpanExporter(sink, authority, store),
+                    media_store=store,
+                ),
+                reclassify_as_http,
+                media_store=store,
+            )
+        )
+    )
+    set_default_media_store(store)
+    try:
+        span = provider.get_tracer("media-test").start_span("suppressed-media")
+        span.set_attribute("neatlogs.span.kind", "LLM")
+        set_media_attributes(span, "neatlogs.llm.input_messages.0", value, "input")
+        assert store.snapshot()["items"] == 1
+        span.end()
+        provider.force_flush()
+    finally:
+        set_default_media_store(None)
+        provider.shutdown()
+
+    assert sink.get_finished_spans() == ()
+    assert authority.payloads == []
+    assert store.snapshot() == {"items": 0, "bytes": 0}
 
 
 def test_masked_upload_token_fails_closed_without_uploading_or_exporting_token():

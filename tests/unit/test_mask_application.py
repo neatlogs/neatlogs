@@ -258,3 +258,38 @@ def test_masking_log_exporter_force_flush_supports_legacy_exporters():
     assert exporter.force_flush() is True
 
     exporter.shutdown()
+
+
+def test_mask_returning_none_drops_the_span():
+    def mask(_snapshot):
+        return None
+
+    provider, inner = _pipeline(mask)
+    span = provider.get_tracer("neatlogs.test").start_span("child")
+    span.set_attribute("openinference.span.kind", "CHAIN")
+    span.set_attribute("input.value", "SECRET")
+    span.end()
+    provider.shutdown()
+
+    assert inner.get_finished_spans() == ()
+
+
+def test_mask_returning_none_drops_the_log():
+    def mask(_snapshot):
+        return None
+
+    provider = LoggerProvider()
+    inner = InMemoryLogRecordExporter()
+    provider.add_log_record_processor(SimpleLogRecordProcessor(MaskingLogExporter(inner, mask)))
+    provider.get_logger("test").emit(body="must-not-export")
+    provider.shutdown()
+
+    assert inner.get_finished_logs() == ()
+
+
+def test_runner_returns_none_when_mask_returns_none():
+    runner = _MaskRunner()
+    try:
+        assert runner.apply(lambda _snapshot: None, {"signal": "span", "attributes": {}}) is None
+    finally:
+        runner.shutdown()

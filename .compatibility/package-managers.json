@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "runtime": "python",
+  "required": ["pip", "uv", "poetry"],
+  "advisory": ["pdm", "pipenv"],
+  "unsupportedUnlessDeclared": ["conda"],
+  "runtimeTargets": ["3.10", "3.11", "3.12", "3.13"],
+  "forwardChecks": ["3.14"]
+}

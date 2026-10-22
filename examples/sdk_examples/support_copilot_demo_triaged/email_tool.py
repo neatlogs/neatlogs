@@ -31,8 +31,8 @@ def send_email(*, to_addr: str, from_addr: str, subject: str, body: str) -> dict
     }
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
 
-    # Stub path for happy-path runs when there is no real SendGrid key. The HTTP
-    # auto-instrumentation child span still fires (real httpbin call). RUN=A
+    # Stub path for happy-path runs when there is no real SendGrid key. Keep the
+    # external delivery call inside the surrounding semantic TOOL span. RUN=A
     # always uses the SendGrid URL so the 401 reveal is genuine.
     use_stub = os.environ.get("SENDGRID_FAKE_SUCCESS") == "1" and api_key != os.environ.get("SENDGRID_API_KEY_BROKEN", "")
     target_url = "https://httpbin.org/status/202" if use_stub else SENDGRID_URL

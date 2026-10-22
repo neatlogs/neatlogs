@@ -1,23 +1,20 @@
 """
-Manual reproduction for investigating 0-span dashboard rows caused by non-AI HTTP traffic.
+Manual regression check that non-AI HTTP traffic produces no Neatlogs spans.
 
 This script creates two traces in one process:
 
 1. non_ai_outgoing_http_only
-   - neatlogs.init() always instruments outgoing HTTP client libraries (requests/httpx/etc.).
-   - This performs only an outgoing requests.get() without any NeatLogs @span or trace()
-     wrapper. It validates whether NeatLogs' always-on HTTP client instrumentation alone
-     can create a non-AI trace row.
+   - This performs only an outgoing requests.get() without a NeatLogs semantic span.
+   - It must not create a trace row.
 
 2. ai_workflow_with_http_child
    - A real NeatLogs WORKFLOW span wraps the operation.
-   - The outgoing HTTP call is a child of that workflow span.
-   - This should appear as an AI/application trace, not as a confusing standalone 0-span row.
+   - The outgoing HTTP call is not captured; only the workflow is exported.
 
 Important: the current SDK does NOT auto-instrument inbound FastAPI/ASGI server spans.
 If a customer sees root FastAPI request spans, they likely enabled FastAPI/ASGI
-OpenTelemetry instrumentation separately. This script focuses on the behavior NeatLogs
-itself enables by default: outgoing HTTP client instrumentation.
+OpenTelemetry instrumentation separately. NeatLogs itself does not instrument
+outgoing HTTP transports.
 
 Run:
     NEATLOGS_API_KEY=<your-key> python tests/manual/test_http_zero_span_repro.py
@@ -26,10 +23,8 @@ Optional:
     NEATLOGS_ENDPOINT=https://ingest.neatlogs.com python tests/manual/test_http_zero_span_repro.py
 
 Dashboard checks:
-    - If a row appears for the standalone outgoing HTTP request, the backend/UI is
-      creating a trace row for HTTP-only traffic with no NeatLogs semantic application span.
-    - The workflow span "ai_workflow_with_http_child" should appear as a normal
-      application trace.
+    - No row appears for the standalone outgoing HTTP request.
+    - The workflow span "ai_workflow_with_http_child" appears without an HTTP child.
 """
 
 import os

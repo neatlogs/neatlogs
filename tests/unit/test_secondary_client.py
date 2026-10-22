@@ -8,6 +8,7 @@ from opentelemetry.sdk._logs.export import (
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from opentelemetry.trace import SpanKind
 
 import neatlogs
 from neatlogs._wrap_utils import get_neatlogs_provider, get_tracer
@@ -286,3 +287,24 @@ def test_client_upload_opt_in_uses_context_scoped_store_and_closes_authority(mon
     finally:
         client.shutdown()
     assert authority.closed is True
+
+
+def test_client_pipeline_drops_http_transport_spans(monkeypatch):
+    import neatlogs.client as client_module
+
+    exporter = InMemorySpanExporter()
+    monkeypatch.setattr(client_module, "OTLPSpanExporter", lambda **_: exporter)
+    client = neatlogs.Client(api_key="secondary-key", workflow_name="secondary-http")
+    try:
+        client.get_tracer("opentelemetry.instrumentation.httpx").start_span(
+            "GET",
+            kind=SpanKind.CLIENT,
+            attributes={
+                "http.request.method": "GET",
+                "url.full": "https://example.com/private?token=secret",
+            },
+        ).end()
+        assert client.flush()
+        assert exporter.get_finished_spans() == ()
+    finally:
+        client.shutdown()

@@ -131,7 +131,7 @@ def test_identify_context_stamps_root(tracer_provider, in_memory_span_exporter):
     assert root.attributes.get(END_USER_ID_KEY) == "ctx_user"
 
 
-def test_wrap_context_stamps_workflow_metadata_on_auto_root(
+def test_wrap_context_stamps_workflow_metadata_on_llm_root(
     tracer_provider, in_memory_span_exporter
 ):
     _install(tracer_provider)
@@ -167,9 +167,10 @@ def test_wrap_context_stamps_workflow_metadata_on_auto_root(
         )
 
     spans = in_memory_span_exporter.get_finished_spans()
-    root = next(s for s in spans if s.attributes.get("neatlogs.auto_root") is True)
+    root = next(s for s in spans if s.parent is None)
 
-    assert root.name == "workflow"
+    assert root.attributes.get("neatlogs.span.kind") == "llm"
+    assert "neatlogs.auto_root" not in root.attributes
     assert "neatlogs.workflow_name" not in root.attributes
     assert root.attributes.get("neatlogs.workflow.workflow_name") == "Copilot chat"
     assert root.attributes.get("neatlogs.workflow.project_id") == "project_123"

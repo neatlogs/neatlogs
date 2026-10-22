@@ -14,9 +14,11 @@ from urllib.parse import unquote
 from opentelemetry import context as context_api
 from opentelemetry.context import Context
 from opentelemetry.sdk.trace import ReadableSpan, Span, SpanProcessor
+from opentelemetry.trace import SpanKind
 
 from .attribute_processor import UnifiedAttributeProcessor
 from .logger import get_logger
+from .span_kind import SEMANTIC_SPAN_KINDS, resolve_explicit_span_kind
 
 logger = get_logger()
 
@@ -53,14 +55,9 @@ def _is_neatlogs_scope_span(span: Any) -> bool:
         return False
 
 
-# Instrumentation scopes that produce HTTP-client auto-spans for context
-# propagation. An HTTP span fired INSIDE a workflow nests under it (has a parent);
-# an HTTP call at boot / in infra plumbing (health pings, dependency warmups,
-# outbound fetches outside any traced request) has NO parent → it would become a
-# rootless single-span trace. Those are pure noise: they carry no agentic content
-# and the backend can't build a simplified view from them, so it requeues them
-# forever. We treat HTTP auto-instrumentation as propagation-only and DROP a span
-# that is BOTH rootless AND an HTTP-scope span (keeping nested HTTP spans intact).
+# Instrumentation scopes that produce HTTP transport spans. Neatlogs does not
+# export transport spans; provider wrappers and manual semantic spans capture the
+# meaningful LLM/tool/retrieval operation instead.
 _HTTP_INSTRUMENTATION_SCOPES = (
     "opentelemetry.instrumentation.urllib",  # covers urllib and urllib3
     "opentelemetry.instrumentation.requests",
@@ -69,68 +66,31 @@ _HTTP_INSTRUMENTATION_SCOPES = (
     "opentelemetry.instrumentation.aiohttp_server",
 )
 
-_AGENTIC_KINDS = {
-    "WORKFLOW",
-    "AGENT",
-    "CHAIN",
-    "TOOL",
-    "RETRIEVER",
-    "EMBEDDING",
-    "GUARDRAIL",
-    "LLM",
-    "MCP_TOOL",
-}
-
-# Hosts for third-party framework telemetry that our HTTP auto-instrumentation
-# would otherwise capture as junk spans (often on their own rootless trace). We
-# suppress CrewAI's telemetry at the source (env vars), but a framework may fire
-# such calls before our env takes effect or via a path we don't gate — drop the
-# resulting HTTP spans here as defense-in-depth so they never pollute a trace.
-_TELEMETRY_HTTP_HOSTS = (
-    "telemetry.crewai.com",
-    "app.crewai.com",
+_HTTP_ATTRIBUTE_KEYS = (
+    "http.method",
+    "http.request.method",
+    "http.url",
+    "http.route",
+    "url.full",
 )
 
 
-def _http_span_host(span) -> str:
-    """Best-effort host/URL string for an HTTP-client span, across OTel attr names."""
-    attrs = span.attributes or {}
-    for key in ("server.address", "net.peer.name", "http.host", "url.full", "http.url"):
-        val = attrs.get(key)
-        if val:
-            return str(val)
-    return ""
-
-
-def is_telemetry_http(span) -> bool:
-    """True if `span` is an HTTP-client span calling a known framework-telemetry host."""
+def is_http_span(span) -> bool:
+    """Return whether a span represents HTTP transport rather than AI semantics."""
     try:
-        scope = getattr(span, "instrumentation_scope", None)
-        scope_name = getattr(scope, "name", "") or ""
-        if not scope_name.startswith(_HTTP_INSTRUMENTATION_SCOPES):
-            return False
-        target = _http_span_host(span)
-        return any(host in target for host in _TELEMETRY_HTTP_HOSTS)
-    except Exception:
-        return False
-
-
-def is_rootless_infra_http(span) -> bool:
-    """True if `span` is a root (no parent) HTTP-client auto-span with no agentic
-    kind — i.e. a boot/infra HTTP ping that would otherwise create a junk rootless
-    trace. Nested HTTP spans (parent set) and any agentic span are NEVER dropped."""
-    try:
-        if span.parent is not None:
-            return False  # nested under something — keep (propagation child)
-        scope = getattr(span, "instrumentation_scope", None)
-        scope_name = getattr(scope, "name", "") or ""
-        if not scope_name.startswith(_HTTP_INSTRUMENTATION_SCOPES):
-            return False
         attrs = span.attributes or {}
-        kind = attrs.get("openinference.span.kind") or attrs.get("neatlogs.span.kind") or ""
-        if str(kind).upper() in _AGENTIC_KINDS:
-            return False  # explicitly an agentic root — keep
-        return True
+        resolved_kind = resolve_explicit_span_kind(attrs).upper()
+        if resolved_kind == "HTTP":
+            return True
+        if resolved_kind in SEMANTIC_SPAN_KINDS:
+            return False
+        scope = getattr(span, "instrumentation_scope", None)
+        scope_name = getattr(scope, "name", "") or ""
+        if scope_name.startswith(_HTTP_INSTRUMENTATION_SCOPES):
+            return True
+        return getattr(span, "kind", None) == SpanKind.CLIENT and any(
+            key in attrs for key in _HTTP_ATTRIBUTE_KEYS
+        )
     except Exception:
         return False
 
@@ -308,6 +268,7 @@ class NeatlogsSpanProcessor(SpanProcessor):
             ctx = get_current()
             variables_json = get_value("neatlogs.system_prompt_variables", context=ctx)
             template = get_value("neatlogs.system_prompt_template", context=ctx)
+            prompt_key = get_value("neatlogs.system_prompt_key", context=ctx)
             version_val = get_value("neatlogs.prompt_version", context=ctx)
 
             if not variables_json:
@@ -345,6 +306,11 @@ class NeatlogsSpanProcessor(SpanProcessor):
                 span.set_attribute("llm.prompt_template_variables", variables_json)
             if template:
                 span.set_attribute("llm.prompt_template", template)
+                existing_prompt_key = (span.attributes or {}).get("neatlogs.llm.prompt_key") or (
+                    span.attributes or {}
+                ).get("traceloop.prompt.key")
+                if prompt_key and not existing_prompt_key:
+                    span.set_attribute("neatlogs.llm.prompt_key", prompt_key)
             if version_val:
                 span.set_attribute("llm.prompt_template.version", version_val)
             if user_template:
@@ -367,28 +333,12 @@ class NeatlogsSpanProcessor(SpanProcessor):
         if span.name == "neatlogs.trace.complete":
             return
 
-        # Drop rootless infra-HTTP auto-spans (boot pings, dependency warmups,
-        # outbound fetches outside any traced request). They have no parent and no
-        # agentic content, so on their own they're a junk rootless trace the backend
-        # can't simplify (and would requeue forever). Nested HTTP spans keep their
-        # parent and are untouched. We do NOT emit a completion marker for these, so
-        # the backend never tries to finalize a root-less HTTP-only trace.
-        if is_rootless_infra_http(span):
+        # Never normalize, backfill from, log, or export HTTP transport spans.
+        if is_http_span(span):
             if self.debug:
                 logger.debug(
-                    f"[SpanProcessor] Dropping rootless infra-HTTP span '{span.name}' "
+                    f"[SpanProcessor] Dropping HTTP transport span '{span.name}' "
                     f"(scope={getattr(getattr(span, 'instrumentation_scope', None), 'name', '')})"
-                )
-            return
-
-        # Drop HTTP spans that are calls to third-party framework telemetry
-        # endpoints (e.g. CrewAI's app.crewai.com batch tracing). These are noise
-        # and can spawn a stray second trace; suppress regardless of nesting.
-        if is_telemetry_http(span):
-            if self.debug:
-                logger.debug(
-                    f"[SpanProcessor] Dropping framework-telemetry HTTP span '{span.name}' "
-                    f"(host={_http_span_host(span)})"
                 )
             return
 
@@ -408,7 +358,7 @@ class NeatlogsSpanProcessor(SpanProcessor):
                 and not self._raw_log_file_handle.closed
             ):
                 try:
-                    self._raw_log_file_handle.write(span.to_json() + "\n")
+                    self._raw_log_file_handle.write(self._safe_raw_span_json(span) + "\n")
                     self._raw_log_file_handle.flush()
                 except Exception as e:
                     logger.warning(f"Failed to write span to raw log file: {e}")
@@ -465,6 +415,7 @@ class NeatlogsSpanProcessor(SpanProcessor):
                     "neatlogs.llm.prompt_template",
                     "neatlogs.llm.prompt_template_variables",
                     "neatlogs.llm.prompt_template.version",
+                    "neatlogs.llm.prompt_key",
                 ):
                     unified_attrs.pop(k, None)
 
@@ -555,6 +506,20 @@ class NeatlogsSpanProcessor(SpanProcessor):
                                 isinstance(_i, (str, int, float, bool)) for _i in _v
                             ):
                                 span_attrs[_k] = list(_v)
+                        if final_attrs.get("neatlogs.span.kind") == "http":
+                            self.unified_processor.sanitize_http_attributes(span_attrs)
+                            for key in (
+                                "input.value",
+                                "input.mime_type",
+                                "output.value",
+                                "output.mime_type",
+                                "neatlogs.http.input",
+                                "neatlogs.http.input_mime_type",
+                                "neatlogs.http.output",
+                                "neatlogs.http.output_mime_type",
+                            ):
+                                if key not in final_attrs:
+                                    span_attrs.pop(key, None)
                     finally:
                         if was_immutable:
                             span_attrs._immutable = True
@@ -604,7 +569,8 @@ class NeatlogsSpanProcessor(SpanProcessor):
                 if self.emit_completion_markers:
                     self._emit_completion_marker(span, trace_id, resource_attrs)
                 elif self._completion_coordination_enabled:
-                    self._completion_eligible_roots.add(span.context.span_id)
+                    with self._active_spans_lock:
+                        self._completion_eligible_roots.add(span.context.span_id)
 
         finally:
             if not self._completion_coordination_enabled:
@@ -723,13 +689,12 @@ class NeatlogsSpanProcessor(SpanProcessor):
         return self.own_all_spans or context_owned or _is_neatlogs_scope_span(span)
 
     def consume_completion_eligibility(self, span: ReadableSpan) -> bool:
-        if self._closed:
-            return False
         span_id = span.context.span_id
-        if span_id not in self._completion_eligible_roots:
-            return False
-        self._completion_eligible_roots.discard(span_id)
-        return True
+        with self._active_spans_lock:
+            if self._closed or span_id not in self._completion_eligible_roots:
+                return False
+            self._completion_eligible_roots.discard(span_id)
+            return True
 
     def _accumulate_or_backfill_root_io(self, span: ReadableSpan) -> None:
         """Client-side root I/O backfill for I/O-less roots.
@@ -748,7 +713,9 @@ class NeatlogsSpanProcessor(SpanProcessor):
         normalization, so it reads the raw input.value/output.value keys.
         """
         try:
-            attrs = span.attributes or {}
+            attrs = dict(span.attributes or {})
+            if span.kind == SpanKind.CLIENT and self.unified_processor._looks_like_http(attrs):
+                self.unified_processor._add_http_canonical_io(attrs)
 
             def _nonempty(key):
                 v = attrs.get(key)
@@ -820,6 +787,17 @@ class NeatlogsSpanProcessor(SpanProcessor):
         except Exception as exc:
             if self.debug:
                 logger.debug(f"[SpanProcessor] Root I/O backfill skipped: {exc}")
+
+    def _safe_raw_span_json(self, span: ReadableSpan) -> str:
+        payload = json.loads(span.to_json())
+        attrs = payload.get("attributes") or {}
+        if span.kind == SpanKind.CLIENT and self.unified_processor._looks_like_http(attrs):
+            self.unified_processor._add_http_canonical_io(attrs)
+            for event in payload.get("events") or ():
+                event_attrs = event.get("attributes") if isinstance(event, dict) else None
+                if isinstance(event_attrs, dict):
+                    self.unified_processor.sanitize_http_attributes(event_attrs)
+        return json.dumps(payload)
 
     @staticmethod
     def _serialize_span_events(span: ReadableSpan) -> List[Dict[str, Any]]:
@@ -961,12 +939,7 @@ class NeatlogsSpanProcessor(SpanProcessor):
 
 
 class CompletionMarkerSpanProcessor(SpanProcessor):
-    """Emit completion only after earlier processors have accepted the root.
-
-    OpenTelemetry invokes processors in registration order. Register this after
-    the transport ``BatchSpanProcessor`` so the root enters the export queue
-    before its ``neatlogs.trace.complete`` marker.
-    """
+    """Emit completion only after the final post-mask exporter accepts a root."""
 
     def __init__(self, span_processor: NeatlogsSpanProcessor, tracer=None):
         self._span_processor = span_processor
@@ -981,22 +954,26 @@ class CompletionMarkerSpanProcessor(SpanProcessor):
         return None
 
     def on_end(self, span: ReadableSpan) -> None:
-        try:
-            if self._closed or span.name == "neatlogs.trace.complete":
-                return
-            if span.parent or not self._span_processor.owns_span(span):
-                return
-            if not self._span_processor.consume_completion_eligibility(span):
-                return
-            with self._lock:
-                if self._defer_markers:
-                    self._deferred_roots.append(span)
-                    return
-                # Emit while holding the same lock used by begin_shutdown(), so
-                # defer choice and marker creation are one ordered operation.
+        self._span_processor.mark_downstream_complete(span)
+
+    def accept_exported_root(self, span: ReadableSpan) -> None:
+        if self._closed or span.name == "neatlogs.trace.complete" or span.parent:
+            return
+        if not self._span_processor.consume_completion_eligibility(span):
+            return
+        with self._lock:
+            if self._defer_markers:
+                self._deferred_roots.append(span)
+            else:
                 self._emit(span)
-        finally:
-            self._span_processor.mark_downstream_complete(span)
+
+    def reject_exported_root(self, span: ReadableSpan) -> None:
+        if is_http_span(span):
+            from ..datasets._recording import notify_export
+
+            notify_export(self._span_processor, span, accepted=False)
+        if span.name != "neatlogs.trace.complete" and not span.parent:
+            self._span_processor.consume_completion_eligibility(span)
 
     def begin_shutdown(self) -> None:
         with self._lock:

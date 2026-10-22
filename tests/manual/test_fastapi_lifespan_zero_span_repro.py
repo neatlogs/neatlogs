@@ -10,10 +10,8 @@ This mirrors the customer setup:
 
 Important behavior being tested:
 - NeatLogs does NOT auto-instrument inbound FastAPI/ASGI server request spans.
-- NeatLogs DOES always instrument outgoing HTTP clients (requests/httpx/urllib3/aiohttp)
-  after init.
-- If the dashboard shows 0-span rows for startup/non-AI HTTP calls, the row is created
-  from HTTP-only/non-AI traces, not because init is inside lifespan.
+- NeatLogs does not instrument outgoing HTTP clients after init.
+- Startup and non-AI HTTP calls must not create trace rows.
 
 Run server:
     NEATLOGS_API_KEY=<dev-key> uvicorn tests.manual.test_fastapi_lifespan_zero_span_repro:app --reload --port 8088
@@ -26,8 +24,7 @@ In another terminal:
 Then stop uvicorn with Ctrl+C so lifespan shutdown flushes spans.
 
 Expected dashboard check:
-- If rows appear for workflow "fastapi-lifespan-zero-span-repro" with 0 spans after
-  startup or /non-ai, backend/UI is creating rows for outgoing HTTP-only traffic.
+- No rows appear for startup or /non-ai.
 - /chat should create a meaningful trace with WORKFLOW/AGENT/LLM-like spans because it
   uses NeatLogs decorators/trace around the AI workflow.
 """

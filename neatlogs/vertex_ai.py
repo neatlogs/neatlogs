@@ -36,6 +36,7 @@ from ._wrap_utils import (
     is_suppressed,
     serialize,
 )
+from .core.choice_accumulator import ChoiceAccumulator
 from .core.media import set_media_attributes
 
 _PROVIDER = "vertex_ai"
@@ -200,6 +201,67 @@ def _patch_async_models(models: Any) -> None:
     models._neatlogs_vertex_patched = True
 
 
+def _text_from_parts(parts: Any) -> str:
+    """Join the human-readable text of a list of parts (str / dict / typed Part).
+
+    Typed genai Parts carry `.text`, or a `.function_call` / `.function_response`
+    for tool turns — surface those as compact JSON so a tool turn isn't blank.
+    """
+    text_parts: List[str] = []
+    for part in parts or []:
+        if isinstance(part, str):
+            text_parts.append(part)
+        elif isinstance(part, dict):
+            if part.get("text"):
+                text_parts.append(part["text"])
+            elif part.get("function_call"):
+                text_parts.append(serialize(part["function_call"]))
+            elif part.get("function_response"):
+                text_parts.append(serialize(part["function_response"]))
+        else:
+            # Typed Part object.
+            text = getattr(part, "text", None)
+            fc = getattr(part, "function_call", None)
+            fr = getattr(part, "function_response", None)
+            if text:
+                text_parts.append(text)
+            elif fc is not None:
+                name = getattr(fc, "name", "") or ""
+                args = getattr(fc, "args", None)
+                text_parts.append(serialize({"function_call": {"name": name, "args": args}}))
+            elif fr is not None:
+                name = getattr(fr, "name", "") or ""
+                resp = getattr(fr, "response", None)
+                text_parts.append(
+                    serialize({"function_response": {"name": name, "response": resp}})
+                )
+    return "\n".join(text_parts)
+
+
+def _normalize_content_item(item: Any) -> tuple:
+    """Normalize one `contents` entry to (role, text).
+
+    Handles a plain string, a dict ({role, parts}), and — crucially for real
+    multi-turn conversations — a typed ``types.Content`` object, whose ``.role``
+    ("user"/"model") and ``.parts`` were previously dropped (every turn was
+    mislabeled "user" and the content became a Python repr).
+    """
+    if isinstance(item, str):
+        return "user", item
+    if isinstance(item, dict):
+        role = item.get("role") or "user"
+        parts = item.get("parts", [])
+        text = _text_from_parts(parts) if parts else ""
+        return role, (text if text else serialize(parts))
+    # Typed Content object.
+    role = getattr(item, "role", None)
+    parts = getattr(item, "parts", None)
+    if role is not None or parts is not None:
+        text = _text_from_parts(parts)
+        return (role or "user"), (text if text else serialize(item))
+    return "user", serialize(item)
+
+
 def _set_input_attributes(span: Any, contents: Any, kwargs: dict) -> None:
     """Set input attributes from contents and config."""
     config = kwargs.get("config")
@@ -224,43 +286,13 @@ def _set_input_attributes(span: Any, contents: Any, kwargs: dict) -> None:
                 )
             idx += 1
 
-    if isinstance(contents, str):
-        span.set_attribute(f"neatlogs.llm.input_messages.{idx}.role", "user")
-        span.set_attribute(f"neatlogs.llm.input_messages.{idx}.content", contents)
-    elif isinstance(contents, list):
-        for item in contents:
-            if isinstance(item, str):
-                span.set_attribute(f"neatlogs.llm.input_messages.{idx}.role", "user")
-                span.set_attribute(f"neatlogs.llm.input_messages.{idx}.content", item)
-                idx += 1
-            elif isinstance(item, dict):
-                role = item.get("role", "user")
-                parts = item.get("parts", [])
-                span.set_attribute(f"neatlogs.llm.input_messages.{idx}.role", role)
-                text_parts = []
-                for part in parts:
-                    if isinstance(part, str):
-                        text_parts.append(part)
-                    elif isinstance(part, dict) and part.get("text"):
-                        text_parts.append(part["text"])
-                if text_parts:
-                    span.set_attribute(
-                        f"neatlogs.llm.input_messages.{idx}.content", "\n".join(text_parts)
-                    )
-                else:
-                    span.set_attribute(
-                        f"neatlogs.llm.input_messages.{idx}.content", serialize(parts)
-                    )
-                set_media_attributes(span, f"neatlogs.llm.input_messages.{idx}", item, "input")
-                idx += 1
-            else:
-                span.set_attribute(f"neatlogs.llm.input_messages.{idx}.role", "user")
-                span.set_attribute(f"neatlogs.llm.input_messages.{idx}.content", serialize(item))
-                idx += 1
-    else:
-        span.set_attribute(f"neatlogs.llm.input_messages.{idx}.role", "user")
-        span.set_attribute(f"neatlogs.llm.input_messages.{idx}.content", serialize(contents))
-        set_media_attributes(span, f"neatlogs.llm.input_messages.{idx}", contents, "input")
+    items = contents if isinstance(contents, list) else [contents]
+    for item in items:
+        role, text = _normalize_content_item(item)
+        span.set_attribute(f"neatlogs.llm.input_messages.{idx}.role", role)
+        span.set_attribute(f"neatlogs.llm.input_messages.{idx}.content", text)
+        set_media_attributes(span, f"neatlogs.llm.input_messages.{idx}", item, "input")
+        idx += 1
 
     tools = None
     if config:
@@ -311,44 +343,9 @@ def _set_input_attributes(span: Any, contents: Any, kwargs: dict) -> None:
 
 def _finalize_response(span: Any, response: Any, duration_ms: float) -> None:
     """Extract attributes from a non-streaming GenerateContentResponse."""
-    candidates = getattr(response, "candidates", None) or []
-    text_parts: List[str] = []
-    tool_call_idx = 0
-
-    for candidate in candidates:
-        content = getattr(candidate, "content", None)
-        if not content:
-            continue
-        parts = getattr(content, "parts", None) or []
-        for part in parts:
-            if getattr(part, "text", None) and not getattr(part, "thought", False):
-                text_parts.append(part.text)
-            elif getattr(part, "thought", False) and getattr(part, "text", None):
-                span.set_attribute("neatlogs.llm.output_messages.0.thinking", part.text)
-            elif getattr(part, "function_call", None):
-                fc = part.function_call
-                span.set_attribute(
-                    f"neatlogs.llm.tool_calls.{tool_call_idx}.name", getattr(fc, "name", "")
-                )
-                args = getattr(fc, "args", None)
-                span.set_attribute(
-                    f"neatlogs.llm.tool_calls.{tool_call_idx}.arguments",
-                    serialize(args) if args else "{}",
-                )
-                tool_call_idx += 1
-
-        finish_reason = getattr(candidate, "finish_reason", None)
-        if finish_reason:
-            span.set_attribute("neatlogs.llm.finish_reason", str(finish_reason))
-
-    if text_parts:
-        span.set_attribute("neatlogs.llm.output_messages.0.role", "assistant")
-        span.set_attribute("neatlogs.llm.output_messages.0.content", "".join(text_parts))
-    set_media_attributes(span, "neatlogs.llm.output_messages.0", candidates, "output")
-
-    usage = getattr(response, "usage_metadata", None)
-    if usage:
-        _set_usage_attributes(span, usage)
+    accumulator = ChoiceAccumulator()
+    accumulator.add_google_response(response)
+    accumulator.apply(span)
 
     span.set_attribute("neatlogs.llm.metrics.duration_ms", round(duration_ms, 3))
     span.set_status(StatusCode.OK)

@@ -2,12 +2,17 @@ name: CI
 
 on:
   push:
-    branches: ["**"]
+    branches: [main]
   pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   lint:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
 
@@ -27,6 +32,7 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     env:
       PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
     strategy:
@@ -53,6 +59,7 @@ jobs:
 
   compatibility:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     env:
       PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
       NEATLOGS_COMPAT_MODULE: ${{ matrix.module }}
@@ -97,6 +104,7 @@ jobs:
 
   pydantic-ai-compatibility:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     env:
       PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
     strategy:
@@ -121,7 +129,9 @@ jobs:
             pydantic-ai-version: "1.44.0"
             adapter-version: "0.1.25"
             otel-pin: ""
-          - python-version: "3.10"
+          # Pydantic AI 2.41.0 imports enum.StrEnum, which is only available
+          # on Python 3.11+. Keep the 3.10 lanes on earlier supported releases.
+          - python-version: "3.11"
             pydantic-ai-version: "2.41.0"
             adapter-version: "0.1.20"
             otel-pin: ""
@@ -153,8 +163,50 @@ jobs:
           cd "$RUNNER_TEMP"
           python -m pytest -p pytest_asyncio.plugin -q test_pydantic_ai_native_instrumentation.py
 
+  openai-agents-compatibility:
+    # The main unit job cannot install openai-agents: every release that
+    # reports a failed run on its spans needs a newer openai than that job pins.
+    # 0.20.0 is the first release that marks the agent span when a model call
+    # fails; older releases report nothing, so the workflow span stays OK there.
+    runs-on: ubuntu-latest
+    env:
+      PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - python-version: "3.10"
+            openai-agents-version: "0.20.0"
+          - python-version: "3.13"
+            openai-agents-version: "0.23.1"
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Build and install NeatLogs with the OpenAI Agents SDK
+        run: |
+          python -m pip install build
+          python -m build --wheel
+          wheel="$(find dist -name '*.whl' -print -quit)"
+          # Same runner pins as the Pydantic AI job: requirements-test.txt
+          # without its openai pin, which these releases cannot satisfy.
+          python -m pip install "${wheel}[openai-agents]" -r .github/requirements-test-pydantic-ai.txt "openai-agents==${{ matrix.openai-agents-version }}"
+          python -m pip check
+
+      - name: OpenAI Agents workflow status
+        run: |
+          cp tests/conftest.py "$RUNNER_TEMP/"
+          cp tests/unit/test_openai_agents_workflow_status.py "$RUNNER_TEMP/"
+          cd "$RUNNER_TEMP"
+          python -m pytest -p pytest_asyncio.plugin -q test_openai_agents_workflow_status.py
+
   wheel-smoke:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:

@@ -146,12 +146,23 @@ def main(argv: list[str] | None = None) -> int:
     modes.add_argument("--probe", action="store_true")
     doctor_parser.add_argument("--endpoint")
     doctor_parser.add_argument("--json", action="store_true")
+    trace_parser = commands.add_parser("trace", help="read a trace back and check it")
+    trace_commands = trace_parser.add_subparsers(dest="trace_command", required=True)
+    trace_get = trace_commands.add_parser("get", help="fetch a trace and verify it")
+    trace_get.add_argument("trace_id")
+    trace_get.add_argument("--json", action="store_true")
     try:
         args = parser.parse_args(argv)
     except _UsageError as exc:
         print(f"neatlogs: {exc}", file=sys.stderr)
         print("Usage: neatlogs doctor (--local | --probe) [--json]", file=sys.stderr)
+        print("       neatlogs trace get <trace_id> [--json]", file=sys.stderr)
         return 4
+
+    if args.command == "trace":
+        from .trace_cli import run_trace_get
+
+        return run_trace_get(args.trace_id, args.json)
 
     result = doctor_probe_v2(endpoint=args.endpoint) if args.probe else _standalone_local()
     _print_v2(result, args.json)

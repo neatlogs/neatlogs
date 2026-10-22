@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
+from urllib.parse import urlsplit
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -26,6 +27,31 @@ def _retry_after_seconds(value: str | None, fallback: float) -> float:
             return max(0.0, (when - datetime.now(timezone.utc)).total_seconds())
         except (TypeError, ValueError, OverflowError):
             return fallback
+
+
+def _trace_receipt(response, url):
+    if (
+        not 200 <= response.status_code < 300
+        or not urlsplit(str(url)).path.endswith("/v1/traces")
+        or not response.content
+    ):
+        return response
+    from google.protobuf.message import DecodeError
+    from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceResponse
+
+    try:
+        complete = (
+            ExportTraceServiceResponse.FromString(response.content).partial_success.rejected_spans
+            == 0
+        )
+    except DecodeError:
+        complete = False
+    if not complete:
+        # Upstream OTel treats every HTTP 200 as success, including partial rejection.
+        response.status_code = 422
+        response.reason = "OTLP trace export was not fully accepted"
+        response._content = b""
+    return response
 
 
 class _OtlpSession(requests.Session):
@@ -51,7 +77,7 @@ class _OtlpSession(requests.Session):
             kwargs["timeout"] = remaining
             response = super().request(method, url, **kwargs)
             if response.status_code != 429 or attempt + 1 == _MAX_RATE_LIMIT_ATTEMPTS:
-                return response
+                return _trace_receipt(response, url)
 
             delay = min(
                 _MAX_RETRY_AFTER_SECONDS,

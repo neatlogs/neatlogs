@@ -232,6 +232,28 @@ def _patch_async_messages(messages: Any) -> None:
     messages._neatlogs_patched = True
 
 
+def _system_blocks_text(system: Any) -> Optional[str]:
+    """Flatten Anthropic system content blocks to plain text.
+
+    ``system`` may be a list of content blocks (for example with
+    ``cache_control`` for prompt caching). Capturing the raw JSON left the
+    system prompt unreadable downstream, so join the text of ``text`` blocks
+    instead. Returns None when the shape carries no text blocks, so the caller
+    falls back to the serialized form.
+    """
+    if not isinstance(system, (list, tuple)):
+        return None
+    texts: list = []
+    for block in system:
+        if isinstance(block, dict) and block.get("type") == "text":
+            text = block.get("text")
+            if isinstance(text, str) and text:
+                texts.append(text)
+    if not texts:
+        return None
+    return "\n".join(texts)
+
+
 def _set_input_attributes(span: Any, messages: list, system: Any, kwargs: dict) -> None:
     """Set input message and tool attributes on the span."""
     idx = 0
@@ -241,7 +263,11 @@ def _set_input_attributes(span: Any, messages: list, system: Any, kwargs: dict) 
         if isinstance(system, str):
             span.set_attribute(f"neatlogs.llm.input_messages.{idx}.content", system)
         else:
-            span.set_attribute(f"neatlogs.llm.input_messages.{idx}.content", serialize(system))
+            system_text = _system_blocks_text(system)
+            if system_text is not None:
+                span.set_attribute(f"neatlogs.llm.input_messages.{idx}.content", system_text)
+            else:
+                span.set_attribute(f"neatlogs.llm.input_messages.{idx}.content", serialize(system))
             set_media_attributes(span, f"neatlogs.llm.input_messages.{idx}", system, "input")
         idx += 1
 

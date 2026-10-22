@@ -132,6 +132,28 @@ def test_shutdown_of_active_sync_generator_exports_partial_output_without_fake_s
     assert len(in_memory_span_exporter.get_finished_spans()) == 1
 
 
+def test_shutdown_after_two_chunks_exports_exact_partial_json(
+    tracer_provider, in_memory_span_exporter
+):
+    lifecycle = NeatlogsSpanProcessor(emit_completion_markers=False)
+    tracer_provider.add_span_processor(lifecycle)
+    set_neatlogs_provider(tracer_provider)
+
+    @neatlogs.span(kind="CHAIN")
+    def stream():
+        yield "first"
+        yield "second"
+        yield "never-consumed"
+
+    result = stream()
+    assert next(result) == "first"
+    assert next(result) == "second"
+    assert lifecycle.end_active_spans("shutdown") == 1
+    finished = in_memory_span_exporter.get_finished_spans()[0]
+    assert finished.attributes["output.value"] == '["first","second"]'
+    result.close()
+
+
 @pytest.mark.asyncio
 async def test_shutdown_of_active_async_generator_exports_partial_output_without_fake_status(
     tracer_provider, in_memory_span_exporter
@@ -154,3 +176,51 @@ async def test_shutdown_of_active_async_generator_exports_partial_output_without
     assert finished.status.status_code.name == "UNSET"
     await result.aclose()
     assert len(in_memory_span_exporter.get_finished_spans()) == 1
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("chunk_size", [8, 8192])
+def test_stream_serialization_work_is_linear(
+    monkeypatch, tracer_provider, in_memory_span_exporter, asynchronous, chunk_size
+):
+    from neatlogs.decorators import _base
+
+    set_neatlogs_provider(tracer_provider)
+    original = _base._serialize_obj
+    visits = 0
+
+    def counted(value):
+        nonlocal visits
+        visits += 1
+        return original(value)
+
+    monkeypatch.setattr(_base, "_serialize_obj", counted)
+    count = 256
+    value = "x" * chunk_size
+
+    if asynchronous:
+
+        @neatlogs.span(kind="CHAIN")
+        async def stream():
+            for _ in range(count):
+                yield value
+
+        async def consume():
+            return len([chunk async for chunk in stream()])
+
+        assert asyncio.run(consume()) == count
+    else:
+
+        @neatlogs.span(kind="CHAIN")
+        def stream():
+            for _ in range(count):
+                yield value
+
+        assert len(list(stream())) == count
+
+    assert visits < count * 5
+    span = in_memory_span_exporter.get_finished_spans()[0]
+    assert span.attributes["neatlogs.stream.chunk_count"] == count
+    assert span.attributes["output.value"]
+    if chunk_size == 8192:
+        assert visits < count * 5

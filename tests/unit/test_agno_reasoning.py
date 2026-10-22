@@ -45,3 +45,25 @@ def test_stream_joins_reasoning_chunks():
     _finalize_model_stream(span, chunks)
     assert span.attrs[THINKING] == "think more"
     assert span.attrs["neatlogs.llm.output_messages.0.content"] == "Paris"
+
+
+def test_reasoning_only_model_response_keeps_assistant_message():
+    span = FakeSpan()
+    _finalize_model(
+        span, SimpleNamespace(content=None, tool_calls=None, reasoning_content="checking evidence")
+    )
+    assert span.attrs[THINKING] == "checking evidence"
+    assert span.attrs["neatlogs.llm.output_messages.0.role"] == "assistant"
+
+
+def test_reasoning_only_stream_keeps_partial_thinking():
+    span = FakeSpan()
+    _finalize_model_stream(
+        span,
+        [
+            SimpleNamespace(content=None, reasoning_content="checking "),
+            SimpleNamespace(content=None, reasoning_content="evidence"),
+        ],
+    )
+    assert span.attrs[THINKING] == "checking evidence"
+    assert span.attrs["neatlogs.llm.output_messages.0.role"] == "assistant"

@@ -808,7 +808,7 @@ def _finalize_model_stream(span: Any, chunks: list) -> None:
             f"{c['name']}({c['arguments'] if isinstance(c['arguments'], str) else serialize(c['arguments'])})"
             for c in tool_calls
         )
-    if out_text or tool_calls:
+    if out_text or tool_calls or reasoning:
         span.set_attribute("neatlogs.llm.output_messages.0.role", "assistant")
         span.set_attribute("neatlogs.llm.output_messages.0.content", out_text)
         if reasoning:
@@ -871,11 +871,12 @@ def _finalize_model(span: Any, result: Any) -> None:
             )
         else:
             out_text = ""
-        if out_text or collected_calls:
+        reasoning = getattr(result, "reasoning_content", None)
+        reasoning = reasoning if isinstance(reasoning, str) else ""
+        if out_text or collected_calls or reasoning:
             span.set_attribute("neatlogs.llm.output_messages.0.role", "assistant")
             span.set_attribute("neatlogs.llm.output_messages.0.content", out_text)
-            reasoning = getattr(result, "reasoning_content", None)
-            if isinstance(reasoning, str) and reasoning:
+            if reasoning:
                 span.set_attribute("neatlogs.llm.output_messages.0.thinking", reasoning)
             out_blob = {"role": "assistant", "content": out_text}
             if collected_calls:

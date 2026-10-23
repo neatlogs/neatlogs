@@ -28,11 +28,13 @@ from typing import Any, Dict
 
 from opentelemetry.trace import StatusCode
 
+from ._agents_run_status import active_exception, link_streamed_results, run_failure
 from ._wrap_utils import attach_as_current, detach, get_tracer, serialize
 
 
 def openai_agents_processor():
     """Return a trace processor for the OpenAI Agents SDK."""
+    link_streamed_results()
     return _NeatlogsTraceProcessor()
 
 
@@ -52,11 +54,8 @@ class _NeatlogsTraceProcessor:
         self._tokens: Dict[str, Any] = {}
         self._start_times: Dict[str, float] = {}
         self._root_input_done: set = set()
-        # First error per trace from a span whose failure ends the run.
-        self._trace_errors: Dict[str, str] = {}
-        # Function spans and everything nested under them. An error there is a tool error, which
-        # the SDK hands back to the model by default, so it does not mean the run failed.
-        self._tool_scoped: set = set()
+        # Exception already active when each trace started (the caller's, not the run's).
+        self._start_exceptions: Dict[str, Any] = {}
 
     # -- trace lifecycle -------------------------------------------------------
 
@@ -76,6 +75,7 @@ class _NeatlogsTraceProcessor:
         self._spans[key] = span
         self._tokens[key] = token
         self._start_times[key] = time.perf_counter()
+        self._start_exceptions[key] = active_exception()
 
     def on_trace_end(self, trace: Any) -> None:
         key = str(getattr(trace, "trace_id", id(trace)))
@@ -91,7 +91,7 @@ class _NeatlogsTraceProcessor:
                 "neatlogs.llm.metrics.duration_ms", round((time.perf_counter() - start) * 1000, 3)
             )
         self._root_input_done.discard(key)
-        error = self._trace_errors.pop(key, None)
+        error = run_failure(trace, self._start_exceptions.pop(key, None))
         if error is not None:
             span.set_status(StatusCode.ERROR, error)
         else:
@@ -120,9 +120,6 @@ class _NeatlogsTraceProcessor:
             )
         else:
             otel_span = tracer.start_span(name=name, attributes=attrs)
-
-        if span_type == "function" or parent_key in self._tool_scoped:
-            self._tool_scoped.add(span_id)
 
         token = attach_as_current(otel_span)
         self._spans[span_id] = otel_span
@@ -169,18 +166,8 @@ class _NeatlogsTraceProcessor:
             otel_span.set_status(StatusCode.ERROR, str(msg))
             if isinstance(error, BaseException):
                 otel_span.record_exception(error)
-            # A handoff error ("Multiple handoffs requested") does not end the run: the SDK takes the
-            # first handoff and carries on. Tool-scoped errors go back to the model.
-            trace_key = str(getattr(span, "trace_id", "") or "")
-            if (
-                span_id not in self._tool_scoped
-                and span_type != "handoff"
-                and trace_key in self._spans
-            ):
-                self._trace_errors.setdefault(trace_key, str(msg))
         else:
             otel_span.set_status(StatusCode.OK)
-        self._tool_scoped.discard(span_id)
 
         if start:
             otel_span.set_attribute(

@@ -349,6 +349,7 @@ class InstrumentationManager:
                 elif library == "openai_agents":
                     self._patch_openai_agents_guardrail_input()
                     self._patch_openinference_openai_agents_guardrail_output()
+                    self._patch_openinference_openai_agents_run_status()
 
         except Exception as e:
             raise Exception(f"Failed to instrument {library} with {convention}: {e}")
@@ -734,6 +735,65 @@ class InstrumentationManager:
         OpenInferenceTracingProcessor._NEATLOGS_PATCHED_GUARDRAIL_OUTPUT = True
         if self.debug:
             logger.debug("Patched OI OpenAI-Agents processor to surface guardrail spans")
+
+    def _patch_openinference_openai_agents_run_status(self) -> None:
+        """
+        Patch the OI OpenAI-Agents processor so a failed run's root span is ERROR.
+
+        OI's `on_trace_end` always sets the root ("Agent workflow") span OK, so a run that
+        raised (500 from the provider, MaxTurnsExceeded, an unknown tool, a stream that failed)
+        shows as OK. neatlogs' own processor has the same rule applied; see
+        `neatlogs._agents_run_status` for how a failed run is told apart from one that recovered.
+
+        OTel ignores ERROR once a span is OK, and OI sets OK and ends the span in one call, so for
+        a failed run we end the root span here instead of delegating. That reads OI's
+        `_root_spans`; if it isn't there, OI's own behaviour is left as is.
+        """
+        try:
+            from openinference.instrumentation.openai_agents._processor import (
+                OpenInferenceTracingProcessor,
+            )
+            from opentelemetry.trace import Status, StatusCode
+
+            from neatlogs._agents_run_status import (
+                active_exception,
+                link_streamed_results,
+                run_failure,
+            )
+        except Exception:
+            return
+
+        if getattr(OpenInferenceTracingProcessor, "_NEATLOGS_PATCHED_RUN_STATUS", False):
+            return
+        link_streamed_results()
+
+        start_exceptions: dict = {}
+        orig_trace_start = OpenInferenceTracingProcessor.on_trace_start
+        orig_trace_end = OpenInferenceTracingProcessor.on_trace_end
+
+        def _patched_trace_start(self_proc, trace):
+            start_exceptions[str(trace.trace_id)] = active_exception()
+            orig_trace_start(self_proc, trace)
+
+        def _patched_trace_end(self_proc, trace):
+            try:
+                error = run_failure(trace, start_exceptions.pop(str(trace.trace_id), None))
+                roots = getattr(self_proc, "_root_spans", None)
+                if error is not None and isinstance(roots, dict):
+                    root_span = roots.pop(trace.trace_id, None)
+                    if root_span is not None:
+                        root_span.set_status(Status(StatusCode.ERROR, error))
+                        root_span.end()
+                        return
+            except Exception:
+                pass
+            orig_trace_end(self_proc, trace)
+
+        OpenInferenceTracingProcessor.on_trace_start = _patched_trace_start
+        OpenInferenceTracingProcessor.on_trace_end = _patched_trace_end
+        OpenInferenceTracingProcessor._NEATLOGS_PATCHED_RUN_STATUS = True
+        if self.debug:
+            logger.debug("Patched OI OpenAI-Agents processor to mark failed runs ERROR")
 
     # ---------------------------------------------------------------------------
     # OpenInference — Anthropic patches

@@ -19,6 +19,7 @@ from .._wrap_utils import active_neatlogs_context
 from ..core.logger import get_logger
 from .protocol import (
     AbAssignment,
+    AbDecision,
     ArmKey,
     Config,
     Params,
@@ -111,6 +112,16 @@ class AbTestClient:
             self._refresh_lock.release()
 
     def assign(self, key: str, *, unit: str, fallback: Params | None = None) -> AbAssignment:
+        decision = self.choose(key, unit=unit, fallback=fallback)
+        if decision.reason == "assigned":
+            self.record_run(decision)
+        return AbAssignment(
+            decision.key, decision.arm, decision.params, decision.reason,
+            decision.revision, decision.allocation_version,
+        )
+
+    def choose(self, key: str, *, unit: str, fallback: Params | None = None) -> AbDecision:
+        """Select from the local cache without recording unserved traffic."""
         with self._lock:
             config = None if self._stop.is_set() else self._configs.get(key)
         if (
@@ -119,7 +130,7 @@ class AbTestClient:
             or not isinstance(unit, str)
             or not 1 <= len(unit) <= 1024
         ):
-            return AbAssignment(key, "a", params(fallback or {}), "unavailable", None)
+            return AbDecision(key, unit, "a", params(fallback or {}), "unavailable", None)
         enabled = config.enabled and config.ends_at > time.time()
         index = (
             (0 if assignment_bucket(config.salt, unit) < config.arms[0].weight else 1)
@@ -127,21 +138,32 @@ class AbTestClient:
             else (0 if config.default_arm == "a" else 1)
         )
         arm = config.arms[index]
-        if enabled:
-            self._queue_exposure(
-                key,
-                unit_id=unit,
-                arm=arm.key,
-                source="sdk",
-                allocation_version=config.allocation_version,
-            )
-        return AbAssignment(
+        return AbDecision(
             key,
+            unit,
             arm.key,
             dict(arm.params),
             "assigned" if enabled else "default",
             config.revision,
             config.allocation_version,
+        )
+
+    def record_run(self, decision: AbDecision) -> bool:
+        """Record inside the trace, immediately before invoking the selected agent."""
+        if decision.reason != "assigned" or decision.allocation_version is None:
+            return False
+        return self._queue_exposure(
+            decision.key, unit_id=decision.unit_id, arm=decision.arm,
+            source="sdk", allocation_version=decision.allocation_version,
+        )
+
+    def complete_decision(self, decision: AbDecision, trace_id: str) -> bool:
+        """Close the unit after its final trace has been exported."""
+        if decision.reason != "assigned" or decision.allocation_version is None:
+            return False
+        return self.complete_unit(
+            decision.key, unit_id=decision.unit_id, arm=decision.arm,
+            trace_id=trace_id, allocation_version=decision.allocation_version,
         )
 
     def log_exposure(

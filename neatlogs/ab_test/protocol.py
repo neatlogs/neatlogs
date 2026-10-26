@@ -190,3 +190,16 @@ class AbAssignment:
     reason: Literal["assigned", "default", "unavailable"]
     revision: int | None
     allocation_version: int | None = None
+
+
+@dataclass(frozen=True)
+class AbDecision:
+    """Cached version choice before its agent run has been recorded."""
+
+    key: str
+    unit_id: str
+    arm: ArmKey
+    params: Params
+    reason: Literal["assigned", "default", "unavailable"]
+    revision: int | None
+    allocation_version: int | None = None

@@ -1,5 +1,5 @@
 from .client import AbTestClient
-from .protocol import AbAssignment, ArmKey, Params
+from .protocol import AbAssignment, AbDecision, ArmKey, Params
 
 _shared: AbTestClient | None = None
 
@@ -27,6 +27,20 @@ def ab_test(key: str, *, unit: str, fallback: Params | None = None) -> AbAssignm
     if _shared:
         return _shared.assign(key, unit=unit, fallback=fallback)
     return AbAssignment(key, "a", dict(fallback or {}), "unavailable", None)
+
+
+def choose_ab_test(key: str, *, unit: str, fallback: Params | None = None) -> AbDecision:
+    if _shared:
+        return _shared.choose(key, unit=unit, fallback=fallback)
+    return AbDecision(key, unit, "a", dict(fallback or {}), "unavailable", None)
+
+
+def record_ab_test_run(decision: AbDecision) -> bool:
+    return bool(_shared and _shared.record_run(decision))
+
+
+def complete_ab_test_decision(decision: AbDecision, trace_id: str) -> bool:
+    return bool(_shared and _shared.complete_decision(decision, trace_id))
 
 
 def log_exposure(

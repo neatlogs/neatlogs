@@ -182,6 +182,32 @@ def test_auto_stamp_dedup_and_explicit_closure_wait_for_trace_finalization(serve
     provider.shutdown()
 
 
+def test_choose_does_not_count_abandoned_traffic_but_records_started_failure(server, monkeypatch):
+    provider = TracerProvider()
+    span = provider.get_tracer("test").start_span("failed-agent")
+    monkeypatch.setattr(
+        client_module, "active_neatlogs_context", lambda: trace.set_span_in_context(span)
+    )
+    trace_id = format(span.get_span_context().trace_id, "032x")
+    with connected(server) as client:
+        abandoned = client.choose("example", unit="abandoned")
+        assert abandoned.reason == "assigned"
+        assert client.get_diagnostics()["pending"] == 0
+        decision = client.choose("example", unit="session:42")
+        assert decision.arm == "b"
+        assert client.record_run(decision)
+        assert client.get_diagnostics()["pending"] == 1
+        assert client.flush()
+        assert client.complete_decision(decision, trace_id)
+        assert client.flush()
+        receipts = [row[3] for row in server["requests"] if row[0] == "POST"]
+        assert len(receipts) == 2
+        assert all(row["unitId"] == "session:42" for row in receipts)
+        assert [row["unitComplete"] for row in receipts] == [False, True]
+    span.end()
+    provider.shutdown()
+
+
 def test_external_exposure_conflict_is_observable_and_bounded(server):
     with connected(server) as client:
         event = str(uuid4())

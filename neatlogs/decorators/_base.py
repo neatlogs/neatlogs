@@ -66,6 +66,10 @@ def _serialize_obj(obj: Any) -> Any:
     if obj is None or isinstance(obj, (str, int, float, bool)):
         return obj
 
+    # A class is described by name: its __dict__ holds class-level config and methods, not data.
+    if isinstance(obj, type):
+        return f"<class {obj.__name__}>"
+
     # Handle lists and tuples
     if isinstance(obj, (list, tuple)):
         return [_serialize_obj(item) for item in obj]
@@ -114,6 +118,25 @@ def _safe_json_dumps(value: Any) -> str:
         return json.dumps(str(value))
 
 
+def _is_bound_owner(func: Callable[..., Any], param: str, value: Any) -> bool:
+    """True when ``value`` is the instance (``self``) or class (``cls``) a method is bound to.
+
+    ``func`` must be defined directly in a class body (``Agent.answer``, not ``answer`` or
+    ``outer.<locals>.answer``), and ``value`` must be that class or an instance of it. A
+    static method's first argument, or a plain function's argument that happens to be named
+    ``self``, is something the caller passed and is captured as usual.
+    """
+    parts = getattr(func, "__qualname__", "").split(".")
+    if len(parts) < 2 or parts[-2] == "<locals>":
+        return False
+    owner = value if param == "cls" and isinstance(value, type) else type(value)
+    if not any(klass.__name__ == parts[-2] for klass in getattr(owner, "__mro__", ())):
+        return False
+    # A static method is never bound, even when it is passed an instance of its own class.
+    stored = inspect.getattr_static(owner, getattr(func, "__name__", ""), None)
+    return not isinstance(stored, staticmethod)
+
+
 def _bind_call_args(
     func: Callable[..., Any], args: Tuple[Any, ...], kwargs: Dict[str, Any]
 ) -> Dict[str, Any]:
@@ -121,9 +144,23 @@ def _bind_call_args(
         sig = inspect.signature(func)
         bound = sig.bind_partial(*args, **kwargs)
         bound.apply_defaults()
-        return dict(bound.arguments)
+        arguments = dict(bound.arguments)
     except Exception:
         return {"args": list(args), "kwargs": kwargs}
+    # The bound instance or class of a method is never something the caller passed, and its
+    # attributes routinely hold credentials (self.api_key, Client.API_KEY): record only its type.
+    # Only a method's own instance or class is replaced; an argument the caller passes that merely
+    # happens to be named self (static method, plain function) is captured like any other.
+    first = next(iter(sig.parameters), None)
+    if (
+        first in ("self", "cls")
+        and first in arguments
+        and _is_bound_owner(func, first, arguments[first])
+    ):
+        owner = arguments[first]
+        owner_type = owner if isinstance(owner, type) else type(owner)
+        arguments[first] = f"<{owner_type.__name__}>"
+    return arguments
 
 
 def _set_common_span_attrs(

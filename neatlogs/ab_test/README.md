@@ -28,8 +28,8 @@ For new integrations, separate choosing a version from recording the run. This p
 version = neatlogs.choose_ab_test("support-model", unit=conversation_id, fallback={"model": "your-control-model"})
 final_trace_id = None
 try:
-    with neatlogs.trace("answer", session_id=conversation_id):
-        final_trace_id = format(otel_trace.get_current_span().get_span_context().trace_id, "032x")
+    with neatlogs.trace("answer", session_id=conversation_id) as span:
+        final_trace_id = format(span.get_span_context().trace_id, "032x")
         if version.reason == "assigned" and not neatlogs.record_ab_test_run(version):
             raise RuntimeError("A/B run could not be recorded")
         answer = run_your_agent(request, version.params)
@@ -40,11 +40,11 @@ finally:
         neatlogs.flush()
 ```
 
-Import `trace as otel_trace` from `opentelemetry` for this example. The older `ab_test` API still records immediately inside a trace for existing integrations.
+The older `ab_test` API still records immediately inside a trace for existing integrations.
 
-Assignment uses cached settings and performs no HTTP request. Initialization fetches settings and a background thread refreshes them every 60 seconds. Missing, invalid, expired, or failed settings return control arm `a` with the supplied fallback parameters. Keep fallback parameters equal to your control configuration. A legacy shipped test returns its configured default version while fresh settings remain available. Staged rollouts use explicit 50% and 100% allocation epochs; paused, invalid, expired, or ended rollout settings return control.
+Assignment uses cached settings and performs no HTTP request. Initialization fetches settings and a background thread refreshes them every 60 seconds. Missing, invalid or expired settings return control arm `a` with the supplied fallback parameters. Temporary network failures, HTTP 408/429 and server errors retain validated settings only until their original expiry; a failure never extends it. Revoked access and other invalid responses discard the cached settings immediately. Keep fallback parameters equal to your control configuration. A legacy shipped test returns its configured default version while fresh settings remain available. Staged rollouts use explicit 50% and 100% allocation epochs; paused, invalid, expired, or ended rollout settings return control.
 
-The unit must match the trace's `session_id` for session allocation, or `end_user_id` for user allocation. Assignment inside a Neatlogs trace stamps `neatlogs.ab.<key>` and queues an exposure. It does not close the unit. After every trace for a session or user has been exported, explicitly close that unit with its final trace ID:
+The unit must match the trace's `session_id` for session allocation, or `end_user_id` for user allocation. Assignment inside a Neatlogs trace stamps its root with `neatlogs.ab.<key>` and queues an exposure. It does not close the unit. After every trace for a session or user has been exported, explicitly close that unit with its final trace ID:
 
 ```python
 neatlogs.complete_ab_test_unit(

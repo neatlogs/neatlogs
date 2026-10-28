@@ -118,7 +118,7 @@ def test_assignment_is_cached_stable_and_does_no_network(server):
         assert server["requests"][0][2]["Authorization"] == "Bearer project-test-key"
 
 
-def test_refresh_304_and_fail_closed_on_expiry_failure_or_invalid_settings(server, monkeypatch):
+def test_refresh_304_preserves_valid_cache_on_transient_failure(server, monkeypatch):
     with connected(server) as client:
         server["status"] = 304
         client.refresh()
@@ -132,11 +132,76 @@ def test_refresh_304_and_fail_closed_on_expiry_failure_or_invalid_settings(serve
             ).params == {"model": "safe"}
         server["status"] = 503
         client.refresh()
-        assert client.assign("example", unit="session:42").reason == "unavailable"
+        assert client.assign("example", unit="session:42").reason == "assigned"
         server["status"] = 200
         server["config"]["revision"] = 0
         client.refresh()
         assert client.assign("example", unit="session:42").arm == "a"
+
+
+@pytest.mark.parametrize("failure", [408, 429, 500, 503, "disconnect", "interrupted"])
+def test_transient_refresh_never_extends_server_expiry(server, monkeypatch, failure):
+    import requests
+
+    server["config"]["expiresAt"] = iso(20)
+    expires_at = client_module.timestamp(server["config"]["expiresAt"])
+    with connected(server) as client:
+        if failure in {"disconnect", "interrupted"}:
+            def disconnected(*args, **kwargs):
+                if failure == "interrupted":
+                    raise requests.exceptions.ChunkedEncodingError("interrupted")
+                raise requests.ConnectionError("disconnected")
+            monkeypatch.setattr(client, "_request", disconnected)
+        else:
+            server["status"] = failure
+        monkeypatch.setattr(client_module.time, "time", lambda: expires_at - 0.001)
+        client.refresh()
+        assert client.choose("example", unit="session:42").reason == "assigned"
+        monkeypatch.setattr(client_module.time, "time", lambda: expires_at)
+        client.refresh()
+        assert client.choose("example", unit="session:42", fallback={"model": "safe"}).params == {"model": "safe"}
+
+
+@pytest.mark.parametrize("failure", [401, 403, 404, 302, "invalid"])
+def test_revoked_or_invalid_refresh_discards_unexpired_cache(server, failure):
+    with connected(server) as client:
+        if failure == "invalid":
+            server["config"]["revision"] = 0
+        else:
+            server["status"] = failure
+        client.refresh()
+        assert client.choose("example", unit="session:42").reason == "unavailable"
+
+
+@pytest.mark.parametrize("kind", ["WORKFLOW", "CHAIN"])
+def test_nested_assignment_tags_neatlogs_root_without_tagging_host(server, kind):
+    from neatlogs._wrap_utils import get_neatlogs_provider, set_neatlogs_provider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    provider = TracerProvider()
+    exporter = InMemorySpanExporter()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    previous = get_neatlogs_provider()
+    host_provider = TracerProvider()
+    set_neatlogs_provider(provider)
+    try:
+        with host_provider.get_tracer("host").start_as_current_span("host") as host:
+            with neatlogs.trace("outer", kind=kind):
+                with neatlogs.trace("nested", kind="TOOL"):
+                    with connected(server) as client:
+                        decision = client.assign("example", unit="session:42")
+                        assert decision.reason == "assigned"
+                assert "neatlogs.ab.example" not in host.attributes
+        spans = exporter.get_finished_spans()
+        roots = [span for span in spans if span.parent is None]
+        assert len(roots) == 1
+        assert roots[0].attributes["neatlogs.ab.example"] == "b"
+        assert all("neatlogs.ab.example" not in span.attributes for span in spans if span is not roots[0])
+    finally:
+        set_neatlogs_provider(previous)
+        provider.shutdown()
+        host_provider.shutdown()
 
 
 def test_disabled_lifecycle_serves_explicit_default_without_exposure(server):

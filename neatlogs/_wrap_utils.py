@@ -610,6 +610,13 @@ def set_neatlogs_span_in_context(
     """
     ctx = context if context is not None else context_api.get_current()
     if force_owned or _is_neatlogs_span(span):
+        root = context_api.get_value(_NEATLOGS_ROOT_KEY, ctx)
+        if (
+            root is None
+            or not root.is_recording()
+            or root.get_span_context().trace_id != span.get_span_context().trace_id
+        ):
+            ctx = context_api.set_value(_NEATLOGS_ROOT_KEY, span, ctx)
         ctx = context_api.set_value(_NEATLOGS_PARENT_KEY, span, ctx)
         ctx = context_api.set_value(_NEATLOGS_ACTIVE_KEY, True, ctx)
     return ctx
@@ -658,7 +665,7 @@ def attach_as_current(span: otel_trace.Span, *, force_owned: bool = False):
     # exists somewhere up the active chain, so the root-guard nests instead of
     # detaching. Context is immutable+nested, so the flag scopes to the subtree.
     if is_nl:
-        ctx = context_api.set_value(_NEATLOGS_ACTIVE_KEY, True, ctx)
+        ctx = set_neatlogs_span_in_context(span, ctx, force_owned=force_owned)
     return context_api.attach(ctx)
 
 
@@ -716,6 +723,21 @@ def active_neatlogs_context(
     current = otel_trace.get_current_span()
     if current and current.is_recording() and _has_neatlogs_ancestor():
         return context if context is not None else context_api.get_current()
+    return None
+
+
+def get_neatlogs_root_span() -> Optional[otel_trace.Span]:
+    """Return the recording root of the active local Neatlogs trace."""
+    active = active_neatlogs_context()
+    root = context_api.get_value(_NEATLOGS_ROOT_KEY)
+    if (
+        active is not None
+        and root is not None
+        and root.is_recording()
+        and root.get_span_context().trace_id
+        == otel_trace.get_current_span(active).get_span_context().trace_id
+    ):
+        return root
     return None
 
 
@@ -803,6 +825,7 @@ _NEATLOGS_ACTIVE_KEY = "neatlogs.active_span_present"
 # same mechanism as any other OTel context value — so CrewAI's threaded task/tool
 # execution keeps the neatlogs hierarchy intact.
 _NEATLOGS_PARENT_KEY = "neatlogs.parent_span"
+_NEATLOGS_ROOT_KEY = "neatlogs.root_span"
 
 
 def _has_neatlogs_ancestor() -> bool:

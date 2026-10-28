@@ -15,7 +15,7 @@ import requests
 from opentelemetry import trace
 from opentelemetry.instrumentation.utils import suppress_instrumentation
 
-from .._wrap_utils import active_neatlogs_context
+from .._wrap_utils import active_neatlogs_context, get_neatlogs_root_span
 from ..core.logger import get_logger
 from .protocol import (
     AbAssignment,
@@ -30,6 +30,10 @@ from .protocol import (
     valid_keys,
     validate_origin,
 )
+
+
+class _TransientConfigError(Exception):
+    pass
 
 
 class AbTestClient:
@@ -84,6 +88,8 @@ class AbTestClient:
                             previous, expires_at=timestamp(headers.get("X-AB-Config-Expires-At"))
                         )
                     else:
+                        if status in {408, 429} or status >= 500:
+                            raise _TransientConfigError("A/B settings temporarily unavailable")
                         if status != 200:
                             raise ValueError("A/B settings unavailable")
                         config = parse_config(body)
@@ -105,6 +111,16 @@ class AbTestClient:
                             self._configs[key] = replace(
                                 config, expires_at=min(config.expires_at, now + 60)
                             )
+                except (
+                    _TransientConfigError,
+                    requests.ConnectionError,
+                    requests.Timeout,
+                    requests.exceptions.ChunkedEncodingError,
+                    TimeoutError,
+                ):
+                    with self._lock:
+                        if previous is None or previous.expires_at <= time.time():
+                            self._configs.pop(key, None)
                 except Exception:
                     with self._lock:
                         self._configs.pop(key, None)
@@ -226,7 +242,9 @@ class AbTestClient:
         if current_replay() is not None:
             return False
         active = active_neatlogs_context()
-        span = trace.get_current_span(active) if active is not None else None
+        span = get_neatlogs_root_span() or (
+            trace.get_current_span(active) if active is not None else None
+        )
         active_id = format(span.get_span_context().trace_id, "032x") if span else None
         trace_id = trace_id or active_id
         event_id = event_id or str(uuid4())
@@ -375,8 +393,10 @@ class AbTestClient:
                 stream=True,
             ) as response,
         ):
-            if response.status_code == 304:
-                return 304, response.headers, None
+            if response.status_code == 304 or (
+                operation == "config" and response.status_code != 200
+            ):
+                return response.status_code, response.headers, None
             content = bytearray()
             for chunk in response.iter_content(8192):
                 if time.monotonic() >= deadline:

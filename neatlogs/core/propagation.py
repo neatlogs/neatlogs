@@ -32,6 +32,34 @@ def _has_traceparent(carrier: Any) -> bool:
     return False
 
 
+def current_trace_id() -> Optional[str]:
+    """Return the active Neatlogs trace id as a 32-char lowercase hex string,
+    or ``None`` when no Neatlogs span is active.
+
+    Works inside ``trace()`` blocks, ``@span``-decorated functions and wrapped
+    provider calls, in both provider modes. In ISOLATED mode
+    (``init(tracer_provider=...)``) the Neatlogs span is deliberately NOT the
+    OpenTelemetry current span, so a raw ``trace.get_current_span()`` reads
+    the host's span (or an invalid context) instead — this helper resolves the
+    Neatlogs span through the same private context key the SDK parents from.
+    """
+    try:
+        from .._wrap_utils import active_neatlogs_context
+
+        ctx = active_neatlogs_context()
+        if ctx is None:
+            return None
+        span = otel_trace.get_current_span(ctx)
+        if span is None:
+            return None
+        span_context = span.get_span_context()
+        if span_context is None or not span_context.is_valid:
+            return None
+        return format(span_context.trace_id, "032x")
+    except Exception:
+        return None
+
+
 def inject_trace_context(carrier: MutableMapping[str, str]) -> bool:
     """Inject the active private Neatlogs span into ``carrier`` as W3C
     ``traceparent``/``tracestate`` headers.

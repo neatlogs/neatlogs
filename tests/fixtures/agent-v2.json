@@ -177,5 +177,610 @@
         "conversationComplete": true
       }
     ]
+  },
+  "canonicalVectors": {
+    "version": 1,
+    "agentKey": "canonical-agent",
+    "nodeUnicode": "17.0",
+    "vectors": [
+      {
+        "label": "unicode-keys-raw-utf16-order",
+        "params": {
+          "2": "two",
+          "10": "ten",
+          "\u00e9": "composed-key",
+          "e\u0301": "decomposed-key",
+          "\ud800\udc00": "astral",
+          "\ue000": "bmp",
+          "\ud83d\ude00": "face"
+        },
+        "wireParamsJson": "{\"2\":\"two\",\"10\":\"ten\",\"\u00e9\":\"composed-key\",\"e\u0301\":\"decomposed-key\",\"\ud800\udc00\":\"astral\",\"\ue000\":\"bmp\",\"\ud83d\ude00\":\"face\"}",
+        "canonical": "{\"agentKey\":\"canonical-agent\",\"params\":{\"10\":\"ten\",\"2\":\"two\",\"e\u0301\":\"decomposed-key\",\"\u00e9\":\"composed-key\",\"\ud800\udc00\":\"astral\",\"\ud83d\ude00\":\"face\",\"\ue000\":\"bmp\"},\"version\":1}",
+        "fingerprint": "1679c25e434b816614b6d48bb2023576e92c3c89e2ad1945839210bc4e245a55",
+        "tsHelperMatches": true
+      },
+      {
+        "label": "nfc-value-decomposed",
+        "params": {
+          "prompt": "e\u0301"
+        },
+        "wireParamsJson": "{\"prompt\":\"e\u0301\"}",
+        "canonical": "{\"agentKey\":\"canonical-agent\",\"params\":{\"prompt\":\"\u00e9\"},\"version\":1}",
+        "fingerprint": "19f00d487c192c08135de5a8320b802802becaddccb2ffe6e39c49eead2b374a",
+        "tsHelperMatches": true
+      },
+      {
+        "label": "nfc-value-composed",
+        "params": {
+          "prompt": "\u00e9"
+        },
+        "wireParamsJson": "{\"prompt\":\"\u00e9\"}",
+        "canonical": "{\"agentKey\":\"canonical-agent\",\"params\":{\"prompt\":\"\u00e9\"},\"version\":1}",
+        "fingerprint": "19f00d487c192c08135de5a8320b802802becaddccb2ffe6e39c49eead2b374a",
+        "tsHelperMatches": true
+      },
+      {
+        "label": "controls-html-line-separators-literal-backslash",
+        "params": {
+          "prompt": "<>&/\u2028\u2029\\u2028\u0000\b\t\n\f\r\"\\\ud83d\ude00"
+        },
+        "wireParamsJson": "{\"prompt\":\"<>&/\u2028\u2029\\\\u2028\\u0000\\b\\t\\n\\f\\r\\\"\\\\\ud83d\ude00\"}",
+        "canonical": "{\"agentKey\":\"canonical-agent\",\"params\":{\"prompt\":\"<>&/\u2028\u2029\\\\u2028\\u0000\\b\\t\\n\\f\\r\\\"\\\\\ud83d\ude00\"},\"version\":1}",
+        "fingerprint": "6219f8b4c8fe580fda1d7d65bba8d5c140551259be742bbe144fbed75ba80878",
+        "tsHelperMatches": true
+      },
+      {
+        "label": "valid-surrogate-pair",
+        "params": {
+          "prompt": "\ud800\udc00"
+        },
+        "wireParamsJson": "{\"prompt\":\"\ud800\udc00\"}",
+        "canonical": "{\"agentKey\":\"canonical-agent\",\"params\":{\"prompt\":\"\ud800\udc00\"},\"version\":1}",
+        "fingerprint": "d3a21acc9847e5af322b77f99f56a4c1640dc5a5868899bcda703001b2edbf28",
+        "tsHelperMatches": true
+      },
+      {
+        "label": "invalid-high-surrogate-key",
+        "params": {
+          "\ud800": "x"
+        },
+        "profileUnicodeValid": false,
+        "wireParamsJson": "{\"\\ud800\":\"x\"}",
+        "canonical": "{\"agentKey\":\"canonical-agent\",\"params\":{\"\\ud800\":\"x\"},\"version\":1}",
+        "fingerprint": "51936cd0496f73ff37cfe8b74e4ead148ad35f22e1784036fbf13493e1165604",
+        "tsHelperMatches": true
+      },
+      {
+        "label": "invalid-low-surrogate-value",
+        "params": {
+          "prompt": "\udc00"
+        },
+        "profileUnicodeValid": false,
+        "wireParamsJson": "{\"prompt\":\"\\udc00\"}",
+        "canonical": "{\"agentKey\":\"canonical-agent\",\"params\":{\"prompt\":\"\\udc00\"},\"version\":1}",
+        "fingerprint": "dcffb80153221a012c8a9b560c5631b831a9942ebae8b11458b0d98402f7a2cf",
+        "tsHelperMatches": true
+      },
+      {
+        "label": "unicode16-nfc-runtime-gap",
+        "params": {
+          "prompt": "\ud801\uddd2\u0307"
+        },
+        "pythonNfcSupported": false,
+        "goNfcSupported": false,
+        "wireParamsJson": "{\"prompt\":\"\ud801\uddd2\u0307\"}",
+        "canonical": "{\"agentKey\":\"canonical-agent\",\"params\":{\"prompt\":\"\ud801\uddc9\"},\"version\":1}",
+        "fingerprint": "582623823cea977729dc9a5f476584c141811b7445f7b0e633ff57e4caa63cfc",
+        "tsHelperMatches": true
+      },
+      {
+        "label": "booleans-null-empty",
+        "params": {
+          "enabled": false,
+          "other": true,
+          "empty": "",
+          "none": null
+        },
+        "wireParamsJson": "{\"enabled\":false,\"other\":true,\"empty\":\"\",\"none\":null}",
+        "canonical": "{\"agentKey\":\"canonical-agent\",\"params\":{\"empty\":\"\",\"enabled\":false,\"none\":null,\"other\":true},\"version\":1}",
+        "fingerprint": "f9ae2797d91f571e214cc46ad26c35d1ad8f2e2117c15b08e3d914d31ed241a9",
+        "tsHelperMatches": true
+      },
+      {
+        "label": "number-0000000000000000",
+        "params": {
+          "n": 0
+        },
+        "numberBits": "0000000000000000",
+        "wireParamsJson": "{\"n\":0}",
+        "canonical": "{\"agentKey\":\"canonical-agent\",\"params\":{\"n\":0},\"version\":1}",
+        "fingerprint": "3317d34c79f80706b079392ac6203b567b9c99d07a12ad585ec8038ecce27d9b",
+        "tsHelperMatches": true
+      },
+      {
+        "label": "number-8000000000000000",
+        "params": {
+          "n": 0
+        },
+        "numberBits": "8000000000000000",
+        "wireParamsJson": "{\"n\":0}",
+        "canonical": "{\"agentKey\":\"canonical-agent\",\"params\":{\"n\":0},\"version\":1}",
+        "fingerprint": "3317d34c79f80706b079392ac6203b567b9c99d07a12ad585ec8038ecce27d9b",
+        "tsHelperMatches": true
+      },
+      {
+        "label": "number-0000000000000001",
+        "params": {
+          "n": 5e-324
+        },
+        "numberBits": "0000000000000001",
+        "wireParamsJson": "{\"n\":5e-324}",
+        "canonical": "{\"agentKey\":\"canonical-agent\",\"params\":{\"n\":5e-324},\"version\":1}",
+        "fingerprint": "ea03d1d6ebc5890b4476d829d28c602c30b95929a22191117c96129808839810",
+        "tsHelperMatches": true
+      },
+      {
+        "label": "number-8000000000000001",
+        "params": {
+          "n": -5e-324
+        },
+        "numberBits": "8000000000000001",
+        "wireParamsJson": "{\"n\":-5e-324}",
+        "canonical": "{\"agentKey\":\"canonical-agent\",\"params\":{\"n\":-5e-324},\"version\":1}",
+        "fingerprint": "986ffbf9a6b6023d5f38474198973cc3359326b747ccd59c3adc254843e7e5cd",
+        "tsHelperMatches": true
+      },
+      {
+        "label": "number-7fefffffffffffff",
+        "params": {
+          "n": 1.7976931348623157e+308
+        },
+        "numberBits": "7fefffffffffffff",
+        "wireParamsJson": "{\"n\":1.7976931348623157e+308}",
+        "canonical": "{\"agentKey\":\"canonical-agent\",\"params\":{\"n\":1.7976931348623157e+308},\"version\":1}",
+        "fingerprint": "644e62f04a1fb3c883c261e1006e3f2482ba6d4c11b58bdf6f3d5c8b6c7d5c3f",
+        "tsHelperMatches": true
+      },
+      {
+        "label": "number-ffefffffffffffff",
+        "params": {
+          "n": -1.7976931348623157e+308
+        },
+        "numberBits": "ffefffffffffffff",
+        "wireParamsJson": "{\"n\":-1.7976931348623157e+308}",
+        "canonical": "{\"agentKey\":\"canonical-agent\",\"params\":{\"n\":-1.7976931348623157e+308},\"version\":1}",
+        "fingerprint": "5fa0d4f4cfc91988cb00592b470ff5b88744d3cd9cdbc6d52a38c5037d16289d",
+        "tsHelperMatches": true
+      },
+      {
+        "label": "number-4340000000000000",
+        "params": {
+          "n": 9007199254740992
+        },
+        "numberBits": "4340000000000000",
+        "wireParamsJson": "{\"n\":9007199254740992}",
+        "canonical": "{\"agentKey\":\"canonical-agent\",\"params\":{\"n\":9007199254740992},\"version\":1}",
+        "fingerprint": "6dca8cda1c27750663674bd50da0aa6850dea07d7bf5011329264cee5be084f8",
+        "tsHelperMatches": true
+      },
+      {
+        "label": "number-c340000000000000",
+        "params": {
+          "n": -9007199254740992
+        },
+        "numberBits": "c340000000000000",
+        "wireParamsJson": "{\"n\":-9007199254740992}",
+        "canonical": "{\"agentKey\":\"canonical-agent\",\"params\":{\"n\":-9007199254740992},\"version\":1}",
+        "fingerprint": "0c523713fa58f763f48a536521a1e1f32e956ce490e99c47407f40e3506045cd",
+        "tsHelperMatches": true
+      },
+      {
+        "label": "number-4430000000000000",
+        "params": {
+          "n": 295147905179352830000
+        },
+        "numberBits": "4430000000000000",
+        "wireParamsJson": "{\"n\":295147905179352830000}",
+        "canonical": "{\"agentKey\":\"canonical-agent\",\"params\":{\"n\":295147905179352830000},\"version\":1}",
+        "fingerprint": "a8469f809fb38579578ef7a313c7d9d10b96b6a82523f52f8957dc2e44044256",
+        "tsHelperMatches": true
+      },
+      {
+        "label": "number-44b52d02c7e14af5",
+        "params": {
+          "n": 9.999999999999997e+22
+        },
+        "numberBits": "44b52d02c7e14af5",
+        "wireParamsJson": "{\"n\":9.999999999999997e+22}",
+        "canonical": "{\"agentKey\":\"canonical-agent\",\"params\":{\"n\":9.999999999999997e+22},\"version\":1}",
+        "fingerprint": "ec2cf972077771aac6dc10931974a26c975b5688489c6499a9797dd2f8ea1d42",
+        "tsHelperMatches": true
+      },
+      {
+        "label": "number-44b52d02c7e14af6",
+        "params": {
+          "n": 1e+23
+        },
+        "numberBits": "44b52d02c7e14af6",
+        "wireParamsJson": "{\"n\":1e+23}",
+        "canonical": "{\"agentKey\":\"canonical-agent\",\"params\":{\"n\":1e+23},\"version\":1}",
+        "fingerprint": "b0c10299153e784a6f4df36bebf4fb49599be61a37c2b78d0740b6c9a576d691",
+        "tsHelperMatches": true
+      },
+      {
+        "label": "number-44b52d02c7e14af7",
+        "params": {
+          "n": 1.0000000000000001e+23
+        },
+        "numberBits": "44b52d02c7e14af7",
+        "wireParamsJson": "{\"n\":1.0000000000000001e+23}",
+        "canonical": "{\"agentKey\":\"canonical-agent\",\"params\":{\"n\":1.0000000000000001e+23},\"version\":1}",
+        "fingerprint": "4ac15d4f7c732f9fb4e7340f74e0d0d7a34102d48c80fa508aaaec18fb54116e",
+        "tsHelperMatches": true
+      },
+      {
+        "label": "number-444b1ae4d6e2ef4e",
+        "params": {
+          "n": 999999999999999700000
+        },
+        "numberBits": "444b1ae4d6e2ef4e",
+        "wireParamsJson": "{\"n\":999999999999999700000}",
+        "canonical": "{\"agentKey\":\"canonical-agent\",\"params\":{\"n\":999999999999999700000},\"version\":1}",
+        "fingerprint": "06b60227a49e447c6a678d61bf41b3320f565ba1003355b4970e066b538ac421",
+        "tsHelperMatches": true
+      },
+      {
+        "label": "number-444b1ae4d6e2ef4f",
+        "params": {
+          "n": 999999999999999900000
+        },
+        "numberBits": "444b1ae4d6e2ef4f",
+        "wireParamsJson": "{\"n\":999999999999999900000}",
+        "canonical": "{\"agentKey\":\"canonical-agent\",\"params\":{\"n\":999999999999999900000},\"version\":1}",
+        "fingerprint": "527d837509d5d30f1d267b90cb5bd838bc6a0b2213968398dbd5d75cd6abb4de",
+        "tsHelperMatches": true
+      },
+      {
+        "label": "number-444b1ae4d6e2ef50",
+        "params": {
+          "n": 1e+21
+        },
+        "numberBits": "444b1ae4d6e2ef50",
+        "wireParamsJson": "{\"n\":1e+21}",
+        "canonical": "{\"agentKey\":\"canonical-agent\",\"params\":{\"n\":1e+21},\"version\":1}",
+        "fingerprint": "95894697f16a5f6ddf58d07a4484e8de875e588270ec0b2ee8eaf6d5d17c4930",
+        "tsHelperMatches": true
+      },
+      {
+        "label": "number-3eb0c6f7a0b5ed8c",
+        "params": {
+          "n": 9.999999999999997e-07
+        },
+        "numberBits": "3eb0c6f7a0b5ed8c",
+        "wireParamsJson": "{\"n\":9.999999999999997e-7}",
+        "canonical": "{\"agentKey\":\"canonical-agent\",\"params\":{\"n\":9.999999999999997e-7},\"version\":1}",
+        "fingerprint": "92697eec4af9f0309c786952102197767d7b039b7c14bb13215f894a583e1402",
+        "tsHelperMatches": true
+      },
+      {
+        "label": "number-3eb0c6f7a0b5ed8d",
+        "params": {
+          "n": 1e-06
+        },
+        "numberBits": "3eb0c6f7a0b5ed8d",
+        "wireParamsJson": "{\"n\":0.000001}",
+        "canonical": "{\"agentKey\":\"canonical-agent\",\"params\":{\"n\":0.000001},\"version\":1}",
+        "fingerprint": "01cd7ec3dc11a998a72d337283e352d8fd5d508661aac8e2eda64e967b21db25",
+        "tsHelperMatches": true
+      },
+      {
+        "label": "number-3e7ad7f29abcaf48",
+        "params": {
+          "n": 1e-07
+        },
+        "numberBits": "3e7ad7f29abcaf48",
+        "wireParamsJson": "{\"n\":1e-7}",
+        "canonical": "{\"agentKey\":\"canonical-agent\",\"params\":{\"n\":1e-7},\"version\":1}",
+        "fingerprint": "47d9d435fef70949c1984241e2c7b18185479d7526ab9552a17796a25e7bef5d",
+        "tsHelperMatches": true
+      },
+      {
+        "label": "number-41b3de4355555553",
+        "params": {
+          "n": 333333333.3333332
+        },
+        "numberBits": "41b3de4355555553",
+        "wireParamsJson": "{\"n\":333333333.3333332}",
+        "canonical": "{\"agentKey\":\"canonical-agent\",\"params\":{\"n\":333333333.3333332},\"version\":1}",
+        "fingerprint": "5922135b6c5ecad84bcea7363875baeeb1e7f18a855c9eb9e0c3f8433e112966",
+        "tsHelperMatches": true
+      },
+      {
+        "label": "number-41b3de4355555554",
+        "params": {
+          "n": 333333333.33333325
+        },
+        "numberBits": "41b3de4355555554",
+        "wireParamsJson": "{\"n\":333333333.33333325}",
+        "canonical": "{\"agentKey\":\"canonical-agent\",\"params\":{\"n\":333333333.33333325},\"version\":1}",
+        "fingerprint": "33e76ce2e9c84894f3b51fd7e63bc2d5719ff852725699605e0271185ca09b32",
+        "tsHelperMatches": true
+      },
+      {
+        "label": "number-41b3de4355555555",
+        "params": {
+          "n": 333333333.3333333
+        },
+        "numberBits": "41b3de4355555555",
+        "wireParamsJson": "{\"n\":333333333.3333333}",
+        "canonical": "{\"agentKey\":\"canonical-agent\",\"params\":{\"n\":333333333.3333333},\"version\":1}",
+        "fingerprint": "87e7493ba6f1dc7a1004ae6a4ad999dd746044c3be2ceca40b43134109d62b2c",
+        "tsHelperMatches": true
+      },
+      {
+        "label": "number-41b3de4355555556",
+        "params": {
+          "n": 333333333.3333334
+        },
+        "numberBits": "41b3de4355555556",
+        "wireParamsJson": "{\"n\":333333333.3333334}",
+        "canonical": "{\"agentKey\":\"canonical-agent\",\"params\":{\"n\":333333333.3333334},\"version\":1}",
+        "fingerprint": "eb994df6ab0472d47386f5891f75278841af0fdb4423c8173315ae14e9305ce7",
+        "tsHelperMatches": true
+      },
+      {
+        "label": "number-41b3de4355555557",
+        "params": {
+          "n": 333333333.33333343
+        },
+        "numberBits": "41b3de4355555557",
+        "wireParamsJson": "{\"n\":333333333.33333343}",
+        "canonical": "{\"agentKey\":\"canonical-agent\",\"params\":{\"n\":333333333.33333343},\"version\":1}",
+        "fingerprint": "0ff7b1b264ff43650f79b9ab1a326881414e4227131ce910002674ddd79c9d6e",
+        "tsHelperMatches": true
+      },
+      {
+        "label": "number-becbf647612f3696",
+        "params": {
+          "n": -3.3333333333333333e-06
+        },
+        "numberBits": "becbf647612f3696",
+        "wireParamsJson": "{\"n\":-0.0000033333333333333333}",
+        "canonical": "{\"agentKey\":\"canonical-agent\",\"params\":{\"n\":-0.0000033333333333333333},\"version\":1}",
+        "fingerprint": "8c6a9544a927131b248a51b99c4afdf23106e97b584cc7ce5174c2b20909e053",
+        "tsHelperMatches": true
+      },
+      {
+        "label": "number-43abc16d674ec801",
+        "params": {
+          "n": 1000000000000000100
+        },
+        "numberBits": "43abc16d674ec801",
+        "wireParamsJson": "{\"n\":1000000000000000100}",
+        "canonical": "{\"agentKey\":\"canonical-agent\",\"params\":{\"n\":1000000000000000100},\"version\":1}",
+        "fingerprint": "c4ab9a1c299f4e9734d94f891db273a456cd46e851056312087584045a1a8c10",
+        "tsHelperMatches": true
+      }
+    ],
+    "attributes": [
+      {
+        "label": "audience-composed",
+        "attributes": {
+          "tier": "\u00e9",
+          "flag": false
+        },
+        "canonical": "{\"attributes\":{\"flag\":false,\"tier\":\"\u00e9\"},\"version\":1}",
+        "digest": "d59adf87341171841146634f7234a100067197c9d8d1b4a877fe064380efac78"
+      },
+      {
+        "label": "audience-decomposed",
+        "attributes": {
+          "tier": "e\u0301",
+          "flag": false
+        },
+        "canonical": "{\"attributes\":{\"flag\":false,\"tier\":\"e\u0301\"},\"version\":1}",
+        "digest": "7fdb2fe3af429b098b3e17e5aca07f280809b8dc10c52fd20fcc7b5625153a78"
+      },
+      {
+        "label": "missing-attribute",
+        "attributes": {},
+        "canonical": "{\"attributes\":{},\"version\":1}",
+        "digest": "26e3400c2142eefeee9de978f3f0be58476bc97ee8ad582bff5d9cd03e697a0d"
+      },
+      {
+        "label": "empty-attribute",
+        "attributes": {
+          "tier": ""
+        },
+        "canonical": "{\"attributes\":{\"tier\":\"\"},\"version\":1}",
+        "digest": "ede213e185d47ea5fd11919d0c5f53626d20664ca13663cf6779ad5022a814c9"
+      }
+    ]
+  },
+  "enhanced": {
+    "config": {
+      "protocolVersion": 2,
+      "agentKey": "support",
+      "revision": 1,
+      "expiresAt": "2030-01-01T00:01:00.000Z",
+      "current": {
+        "params": {
+          "model": "base"
+        },
+        "fingerprint": "08dc73ebfdf8fd82eaa81ec9a2dfdd1fa076106f44193b8da2f644b033a382a1"
+      },
+      "live": {
+        "testId": "00000000-0000-4000-8000-000000000001",
+        "experimentId": "00000000-0000-4000-8000-000000000002",
+        "candidateRevision": 1,
+        "allocationVersion": 1,
+        "unit": "session",
+        "candidateFingerprint": "50f85fbd2961de7d5e3949a95bdbc48caf847c3b861c3f066bf1d2ed7f822312",
+        "policyDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "status": "running",
+        "effectiveTrafficBps": 500,
+        "targetTrafficBps": 2000,
+        "split": {
+          "a": 5000,
+          "b": 5000
+        },
+        "completionPolicy": "explicit",
+        "agentProfile": "serving-trace-v1",
+        "current": {
+          "params": {
+            "model": "current"
+          },
+          "fingerprint": "2294aaeec78de3fd244d4c459e1d1dc7de7905075ed9f6c6db3c8077b3b99900"
+        },
+        "baselineServing": {
+          "revisionId": "d737b67d-7174-4078-83ed-04ad69d55b38",
+          "revision": 1,
+          "digest": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+        }
+      },
+      "profile": "serving-trace-v1",
+      "serving": {
+        "revisionId": "d737b67d-7174-4078-83ed-04ad69d55b38",
+        "revision": 1,
+        "digest": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "unit": "session",
+        "requiredAttributeKeys": [
+          "premium"
+        ],
+        "allowedIdentities": [
+          {
+            "publicationId": "3e1bd732-fca7-457f-a994-d3c4cae4e2e7",
+            "fingerprint": "2294aaeec78de3fd244d4c459e1d1dc7de7905075ed9f6c6db3c8077b3b99900"
+          },
+          {
+            "publicationId": "8599ef6e-b4b1-4833-a3f5-bd405b6b5d9a",
+            "fingerprint": "a4402447dbf92d2f67fd15b1054a774bfccb2e1e42d7cc2d6a0208b3d90ac2a9"
+          }
+        ]
+      }
+    },
+    "assignment": {
+      "protocolVersion": 2,
+      "agentKey": "support",
+      "revision": 1,
+      "expiresAt": "2030-01-01T00:01:00.000Z",
+      "params": {
+        "model": "candidate"
+      },
+      "fingerprint": "50f85fbd2961de7d5e3949a95bdbc48caf847c3b861c3f066bf1d2ed7f822312",
+      "reason": "assigned",
+      "arm": "b",
+      "experimentId": "00000000-0000-4000-8000-000000000002",
+      "candidateRevision": 1,
+      "testId": "00000000-0000-4000-8000-000000000001",
+      "allocationVersion": 1,
+      "enrollmentId": "00000000-0000-4000-8000-000000000003",
+      "assignmentId": "00000000-0000-4000-8000-000000000004",
+      "unit": "session",
+      "completionPolicy": "explicit",
+      "profile": "serving-trace-v1"
+    },
+    "published": {
+      "protocolVersion": 2,
+      "profile": "serving-trace-v1",
+      "agentKey": "support",
+      "revision": 1,
+      "expiresAt": "2030-01-01T00:01:00.000Z",
+      "params": {
+        "model": "current"
+      },
+      "fingerprint": "2294aaeec78de3fd244d4c459e1d1dc7de7905075ed9f6c6db3c8077b3b99900",
+      "reason": "published",
+      "unit": "session",
+      "unitId": "session:42",
+      "attributesDigest": "08f1e585ec7c4b4b2fae372112fa4159d72e29e7d80a1f6cffc3b561793492bf",
+      "serving": {
+        "revisionId": "d737b67d-7174-4078-83ed-04ad69d55b38",
+        "revision": 1,
+        "digest": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "publicationId": "3e1bd732-fca7-457f-a994-d3c4cae4e2e7"
+      }
+    },
+    "publishedOther": {
+      "protocolVersion": 2,
+      "profile": "serving-trace-v1",
+      "agentKey": "support",
+      "revision": 1,
+      "expiresAt": "2030-01-01T00:01:00.000Z",
+      "params": {
+        "model": "other"
+      },
+      "fingerprint": "a4402447dbf92d2f67fd15b1054a774bfccb2e1e42d7cc2d6a0208b3d90ac2a9",
+      "reason": "published",
+      "unit": "session",
+      "unitId": "session:42",
+      "attributesDigest": "971b3d8fc3c6c9ec8c7d72d5c5e2a63d12aef7994800825c58002c538b4d3ed0",
+      "serving": {
+        "revisionId": "d737b67d-7174-4078-83ed-04ad69d55b38",
+        "revision": 1,
+        "digest": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "publicationId": "8599ef6e-b4b1-4833-a3f5-bd405b6b5d9a"
+      }
+    },
+    "legacyConfig": {
+      "protocolVersion": 2,
+      "agentKey": "support",
+      "revision": 1,
+      "expiresAt": "2030-01-01T00:01:00.000Z",
+      "current": {
+        "fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "params": {
+          "model": "current"
+        }
+      },
+      "live": {
+        "testId": "00000000-0000-4000-8000-000000000001",
+        "experimentId": "00000000-0000-4000-8000-000000000002",
+        "candidateRevision": 1,
+        "allocationVersion": 1,
+        "unit": "session",
+        "candidateFingerprint": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "policyDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "status": "running",
+        "effectiveTrafficBps": 500,
+        "targetTrafficBps": 2000,
+        "split": {
+          "a": 5000,
+          "b": 5000
+        },
+        "completionPolicy": "explicit",
+        "agentProfile": "legacy-v2",
+        "current": {
+          "fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "params": {
+            "model": "current"
+          }
+        },
+        "baselineServing": null
+      },
+      "profile": "serving-trace-v1",
+      "serving": null
+    },
+    "legacyAssignment": {
+      "protocolVersion": 2,
+      "agentKey": "support",
+      "revision": 1,
+      "expiresAt": "2030-01-01T00:01:00.000Z",
+      "params": {
+        "model": "candidate"
+      },
+      "fingerprint": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "reason": "assigned",
+      "arm": "b",
+      "experimentId": "00000000-0000-4000-8000-000000000002",
+      "candidateRevision": 1,
+      "testId": "00000000-0000-4000-8000-000000000001",
+      "allocationVersion": 1,
+      "enrollmentId": "00000000-0000-4000-8000-000000000003",
+      "assignmentId": "00000000-0000-4000-8000-000000000004",
+      "unit": "session",
+      "completionPolicy": "explicit",
+      "profile": "serving-trace-v1"
+    }
   }
 }

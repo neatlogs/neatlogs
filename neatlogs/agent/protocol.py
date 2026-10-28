@@ -6,6 +6,9 @@ from uuid import UUID
 
 from ..ab_test.protocol import Params, integer, params, timestamp, valid_keys
 
+PROFILE = "serving-trace-v1"
+CAPABILITY_HEADER = "X-Neatlogs-Agent-Capability"
+
 
 def length(value):
     return len(value.encode("utf-16-le")) // 2
@@ -67,22 +70,78 @@ def _completion(value):
         raise ValueError("Unsupported agent completion policy")
 
 
+def _version(value):
+    _fields(value, "fingerprint params")
+    _fingerprint(value["fingerprint"])
+    _params(value["params"])
+
+
+def serving_ref(value, publication=False):
+    _fields(value, "revisionId revision digest" + (" publicationId" if publication else ""))
+    UUID(value["revisionId"])
+    integer(value["revision"], 1, 2**53 - 1)
+    _fingerprint(value["digest"])
+    if publication:
+        UUID(value["publicationId"])
+
+
+def _serving(value):
+    _fields(value, "revisionId revision digest unit requiredAttributeKeys allowedIdentities")
+    serving_ref({key: value[key] for key in ("revisionId", "revision", "digest")})
+    if value["unit"] not in {"end_user", "session"}:
+        raise ValueError("Invalid serving unit")
+    keys = value["requiredAttributeKeys"]
+    if type(keys) is not list or len(keys) > 20 or keys != sorted(set(keys)):
+        raise ValueError("Invalid serving attribute keys")
+    attributes({key: True for key in keys})
+    identities = value["allowedIdentities"]
+    if type(identities) is not list or len(identities) > 32:
+        raise ValueError("Invalid serving roster")
+    seen = set()
+    for identity in identities:
+        _fields(identity, "publicationId fingerprint")
+        UUID(identity["publicationId"])
+        _fingerprint(identity["fingerprint"])
+        if identity["publicationId"] in seen:
+            raise ValueError("Duplicate publication identity")
+        seen.add(identity["publicationId"])
+
+
 def parse_config(value):
-    _fields(value, "protocolVersion agentKey revision expiresAt current live")
+    enhanced = isinstance(value, dict) and value.get("profile") == PROFILE
+    _fields(
+        value,
+        "protocolVersion agentKey revision expiresAt current live"
+        + (" profile serving" if enhanced else ""),
+    )
     _base(value)
-    _fields(value["current"], "fingerprint params")
-    _fingerprint(value["current"]["fingerprint"])
-    _params(value["current"]["params"])
+    _version(value["current"])
+    serving = value.get("serving")
+    if serving is not None:
+        _serving(serving)
     live = value["live"]
     if live is not None:
         _fields(
             live,
-            "testId experimentId candidateRevision allocationVersion unit completionPolicy currentFingerprint candidateFingerprint policyDigest status effectiveTrafficBps targetTrafficBps split",
+            "testId experimentId candidateRevision allocationVersion unit completionPolicy candidateFingerprint policyDigest status effectiveTrafficBps targetTrafficBps split"
+            + (" agentProfile current baselineServing" if enhanced else " currentFingerprint"),
         )
         for key in ("testId", "experimentId"):
             UUID(live[key])
-        for key in ("currentFingerprint", "candidateFingerprint", "policyDigest"):
+        for key in ("candidateFingerprint", "policyDigest"):
             _fingerprint(live[key])
+        if enhanced:
+            if live["agentProfile"] not in {"legacy-v2", PROFILE}:
+                raise ValueError("Invalid agent policy profile")
+            _version(live["current"])
+            if live["baselineServing"] is not None:
+                serving_ref(live["baselineServing"])
+            if serving is not None and serving["unit"] != live["unit"]:
+                raise ValueError("Conflicting serving unit")
+        else:
+            _fingerprint(live["currentFingerprint"])
+            if live["currentFingerprint"] != value["current"]["fingerprint"]:
+                raise ValueError("Invalid legacy Current fingerprint")
         integer(live["candidateRevision"], 1, 2**53 - 1)
         integer(live["allocationVersion"], 1, 2147483647)
         integer(live["effectiveTrafficBps"], 0, 10000)
@@ -91,25 +150,27 @@ def parse_config(value):
         if integer(live["split"]["a"], 0, 10000) + integer(live["split"]["b"], 0, 10000) != 10000:
             raise ValueError("Invalid split")
         _completion(live)
-        if (
-            live["status"] not in {"running", "paused", "auto_paused"}
-            or live["currentFingerprint"] != value["current"]["fingerprint"]
-        ):
+        if live["status"] not in {"running", "paused", "auto_paused"}:
             raise ValueError("Unsupported agent allocation")
     return value
 
 
 def parse_assignment(value):
-    assigned = isinstance(value, dict) and value.get("reason") == "assigned"
-    _fields(
-        value,
-        "protocolVersion agentKey revision expiresAt params fingerprint reason arm"
-        + (
+    enhanced = isinstance(value, dict) and value.get("profile") == PROFILE
+    reason = value.get("reason") if isinstance(value, dict) else None
+    assigned, published = reason == "assigned", reason == "published" and enhanced
+    fields = "protocolVersion agentKey revision expiresAt params fingerprint reason" + (
+        " profile" if enhanced else ""
+    )
+    if published:
+        fields += " unit unitId attributesDigest serving"
+    else:
+        fields += " arm" + (
             " experimentId candidateRevision testId allocationVersion enrollmentId assignmentId unit completionPolicy"
             if assigned
             else ""
-        ),
-    )
+        )
+    _fields(value, fields)
     _base(value)
     _params(value["params"])
     _fingerprint(value["fingerprint"])
@@ -121,8 +182,14 @@ def parse_assignment(value):
         integer(value["allocationVersion"], 1, 2147483647)
         if value["arm"] not in {"a", "b"}:
             raise ValueError("Invalid arm")
+    elif published:
+        if value["unit"] not in {"session", "end_user"}:
+            raise ValueError("Invalid published unit")
+        unit(value["unitId"])
+        _fingerprint(value["attributesDigest"])
+        serving_ref(value["serving"], publication=True)
     elif (
-        value["reason"] not in {"outside_audience", "outside_share", "paused", "current"}
+        reason not in {"outside_audience", "outside_share", "paused", "current"}
         or value["arm"] != "a"
     ):
         raise ValueError("Invalid fallback")
@@ -133,7 +200,7 @@ def parse_assignment(value):
 class AgentDecision:
     agent_key: str
     unit_id: str
-    arm: str
+    arm: str | None
     params: Params
     reason: str
     revision: int | None = None
@@ -147,13 +214,19 @@ class AgentDecision:
     enrollment_id: str | None = None
     unit: str | None = None
     completion_policy: str | None = None
+    profile: str | None = None
+    serving: dict | None = None
+    attributes_digest: str | None = None
+    known_revision: int | None = None
+    known_unit: str | None = None
+    cause: str | None = None
 
 
 def decision(value, unit_id, expires):
     return AgentDecision(
         value["agentKey"],
         unit_id,
-        value["arm"],
+        value.get("arm"),
         dict(value["params"]),
         value["reason"],
         value["revision"],
@@ -167,4 +240,7 @@ def decision(value, unit_id, expires):
         value.get("enrollmentId"),
         value.get("unit"),
         value.get("completionPolicy"),
+        value.get("profile"),
+        value.get("serving"),
+        value.get("attributesDigest"),
     )

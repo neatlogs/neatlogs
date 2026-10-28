@@ -28,6 +28,9 @@ def connected():
         "assignment_status": 200,
         "exposure_status": 200,
         "changed": False,
+        "acknowledge": False,
+        "assignment_for_attributes": None,
+        "capabilities": [],
         "requests": [],
         "now": now,
     }
@@ -39,7 +42,10 @@ def connected():
 
         def do_GET(self):
             state["requests"].append((self.path, None))
+            state["capabilities"].append(self.headers.get("X-Neatlogs-Agent-Capability"))
             self.send_response(state["config_status"])
+            if state["acknowledge"]:
+                self.send_header("X-Neatlogs-Agent-Capability", "serving-trace-v1")
             self.send_header("ETag", '"config"')
             self.send_header("X-AB-Config-Expires-At", state["config"]["expiresAt"])
             self.end_headers()
@@ -49,6 +55,7 @@ def connected():
         def do_POST(self):
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             state["requests"].append((self.path, body))
+            state["capabilities"].append(self.headers.get("X-Neatlogs-Agent-Capability"))
             if self.path.endswith("/assignments"):
                 if state["changed"]:
                     state["changed"] = False
@@ -56,11 +63,18 @@ def connected():
                     state["assignment"]["revision"] += 1
                     status, response = 409, {"code": "CONFIG_CHANGED"}
                 else:
-                    status, response = state["assignment_status"], state["assignment"]
+                    status = state["assignment_status"]
+                    response = (
+                        state["assignment_for_attributes"](body)
+                        if state["assignment_for_attributes"]
+                        else state["assignment"]
+                    )
             else:
                 status = state["exposure_status"]
                 response = {"code": "AB_TRACE_NOT_READY"} if status == 409 else {"accepted": True}
             self.send_response(status)
+            if state["acknowledge"]:
+                self.send_header("X-Neatlogs-Agent-Capability", "serving-trace-v1")
             self.end_headers()
             self.wfile.write(json.dumps(response).encode())
 
@@ -362,3 +376,307 @@ async def test_assignment_policy_must_match_publication(connected):
     assert (await choose(client)).reason == "unavailable"
     del state["assignment"]["completionPolicy"]
     assert (await choose(client)).reason == "unavailable"
+
+
+def test_canonical_scalar_and_unicode_vectors():
+    import struct
+    import unicodedata
+
+    from neatlogs.agent.fingerprint import attributes_digest, version_fingerprint
+
+    canonical = VECTORS["canonicalVectors"]
+    for vector in canonical["vectors"]:
+        values = dict(vector["params"])
+        if "numberBits" in vector:
+            values["n"] = struct.unpack(">d", bytes.fromhex(vector["numberBits"]))[0]
+        unsupported = vector.get("profileUnicodeValid") is False or any(
+            type(value) is str and any(unicodedata.category(char) == "Cn" for char in value)
+            for value in values.values()
+        )
+        if unsupported:
+            with pytest.raises((ValueError, UnicodeError)):
+                version_fingerprint(canonical["agentKey"], values)
+        else:
+            assert (
+                version_fingerprint(canonical["agentKey"], values) == vector["fingerprint"]
+            ), vector["label"]
+    for vector in canonical["attributes"]:
+        assert attributes_digest(vector["attributes"]) == vector["digest"]
+    for value in (float("nan"), float("inf"), 9007199254740993, 1000000000000000100):
+        with pytest.raises(ValueError):
+            version_fingerprint("support", {"n": value})
+
+
+def enhanced_state(state, live=True):
+    state["config"] = json.loads(json.dumps(VECTORS["enhanced"]["config"]))
+    state["config"]["expiresAt"] = iso(state["now"] + 60)
+    if not live:
+        state["config"]["live"] = None
+    state["assignment"] = json.loads(
+        json.dumps(VECTORS["enhanced"]["assignment" if live else "published"])
+    )
+    state["assignment"]["expiresAt"] = state["config"]["expiresAt"]
+    state["acknowledge"] = True
+
+
+def fake_root(monkeypatch):
+    from types import SimpleNamespace
+
+    class Root:
+        def __init__(self):
+            self.attributes = {}
+
+        def is_recording(self):
+            return True
+
+        def get_span_context(self):
+            return SimpleNamespace(trace_id=int("c" * 32, 16))
+
+        def set_attribute(self, key, value):
+            self.attributes[key] = value
+
+    root = Root()
+    monkeypatch.setattr("neatlogs.agent.client.get_neatlogs_root_span", lambda: root)
+    return root.attributes
+
+
+@pytest.mark.asyncio
+async def test_enhanced_live_current_a_is_not_base(connected, monkeypatch):
+    client, state = connected
+    enhanced_state(state)
+    state["assignment"].update(arm="a", **state["config"]["live"]["current"])
+    selected = await choose(client)
+    assert selected.reason == "assigned"
+    assert selected.fingerprint == state["config"]["live"]["current"]["fingerprint"]
+    assert selected.fingerprint != state["config"]["current"]["fingerprint"]
+    assert set(state["capabilities"]) == {"serving-trace-v1"}
+    attrs = fake_root(monkeypatch)
+    assert client.record_agent_run(selected)
+    assert attrs["neatlogs.agent.support.served_fingerprint"] == selected.fingerprint
+
+
+@pytest.mark.asyncio
+async def test_enhanced_legacy_policy_preserves_receipts(connected, monkeypatch):
+    client, state = connected
+    enhanced_state(state)
+    state["config"] = json.loads(json.dumps(VECTORS["enhanced"]["legacyConfig"]))
+    state["config"]["expiresAt"] = iso(state["now"] + 60)
+    state["assignment"] = {
+        **VECTORS["enhanced"]["legacyAssignment"],
+        "expiresAt": state["config"]["expiresAt"],
+    }
+    selected = await choose(client)
+    assert selected.reason == "assigned"
+    fake_root(monkeypatch)
+    assert client.record_agent_run(selected)
+
+
+@pytest.mark.asyncio
+async def test_publication_dispatch_cache_and_identity_copy(connected, monkeypatch):
+    client, state = connected
+    enhanced_state(state, live=False)
+    state["assignment_for_attributes"] = lambda body: {
+        **VECTORS["enhanced"]["published" if body["attributes"]["premium"] else "publishedOther"],
+        "expiresAt": state["config"]["expiresAt"],
+    }
+    first = await choose(client)
+    assert first.reason == "published" and first.arm is None
+    first.serving["publicationId"] = "00000000-0000-4000-8000-000000000000"
+    cached = await client.choose_agent(
+        "support",
+        unit="session:42",
+        attributes={"premium": True, "irrelevant": "changed"},
+        fallback={"model": "deployed"},
+    )
+    assert cached.serving == VECTORS["enhanced"]["published"]["serving"]
+    other = await client.choose_agent(
+        "support", unit="session:42", attributes={"premium": False}, fallback={"model": "deployed"}
+    )
+    assert other.params == {"model": "other"}
+    assert len([item for item in state["requests"] if item[0].endswith("/assignments")]) == 2
+    attrs = fake_root(monkeypatch)
+    assert not client.record_agent_run(other)
+    assert attrs["neatlogs.agent.support.serving_policy_id"] == other.serving["publicationId"]
+    assert "neatlogs.agent.support.assignment_id" not in attrs
+    assert client.get_diagnostics()["pending"] == 0
+
+
+@pytest.mark.asyncio
+async def test_concurrent_preconfig_attributes_do_not_share_publication(connected):
+    import asyncio
+
+    client, state = connected
+    enhanced_state(state, live=False)
+    state["assignment_for_attributes"] = lambda body: {
+        **VECTORS["enhanced"]["published" if body["attributes"]["premium"] else "publishedOther"],
+        "expiresAt": state["config"]["expiresAt"],
+    }
+    decisions = await asyncio.gather(
+        choose(client),
+        client.choose_agent(
+            "support",
+            unit="session:42",
+            attributes={"premium": False},
+            fallback={"model": "deployed"},
+        ),
+    )
+    assert [item.params["model"] for item in decisions] == ["current", "other"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stage", ["config", "assignment", "304"])
+async def test_profile_acknowledgement_required(connected, stage):
+    client, state = connected
+    enhanced_state(state)
+    if stage != "config":
+        await client.refresh_async()
+    state["acknowledge"] = False
+    if stage == "304":
+        state["config_status"] = 304
+        await client.refresh_async()
+    selected = await choose(client)
+    assert selected.reason == "unavailable" and selected.cause == "invalid_identity"
+    assert client.get_diagnostics()["pending"] == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "field",
+    ["pair", "unadvertised", "revision", "unit", "attributes", "arm", "params", "currentparams"],
+)
+async def test_published_identity_is_not_self_certified(connected, field):
+    client, state = connected
+    enhanced_state(state, live=False)
+    assigned = state["assignment"]
+    if field == "pair":
+        assigned["serving"]["publicationId"] = VECTORS["enhanced"]["publishedOther"]["serving"][
+            "publicationId"
+        ]
+    if field == "unadvertised":
+        assigned["serving"]["publicationId"] = "00000000-0000-4000-8000-000000000000"
+    if field == "revision":
+        assigned["serving"]["revision"] += 1
+    if field == "unit":
+        assigned["unit"] = "end_user"
+    if field == "attributes":
+        assigned["attributesDigest"] = "0" * 64
+    if field == "arm":
+        assigned["arm"] = "a"
+    if field == "params":
+        assigned["params"]["model"] = "tampered"
+    if field == "currentparams":
+        state["assignment"] = {
+            "protocolVersion": 2,
+            "profile": "serving-trace-v1",
+            "agentKey": "support",
+            "revision": state["config"]["revision"],
+            "expiresAt": state["config"]["expiresAt"],
+            "reason": "current",
+            "arm": "a",
+            "fingerprint": state["config"]["current"]["fingerprint"],
+            "params": {"model": "tampered"},
+        }
+    selected = await choose(client)
+    assert selected.reason == "unavailable" and selected.cause == "invalid_identity"
+
+
+@pytest.mark.asyncio
+async def test_mutated_params_record_actual_but_refuse_signed_identity(connected, monkeypatch):
+    from neatlogs.agent.fingerprint import version_fingerprint
+
+    client, state = connected
+    enhanced_state(state)
+    selected = await choose(client)
+    selected.params["model"] = "mutated"
+    attrs = fake_root(monkeypatch)
+    assert not client.record_agent_run(selected)
+    assert attrs["neatlogs.agent.support.decision_reason"] == "assigned"
+    assert attrs["neatlogs.agent.support.decision_cause"] == "invalid_identity"
+    assert attrs["neatlogs.agent.support.served_fingerprint"] == version_fingerprint(
+        "support", selected.params
+    )
+    assert "neatlogs.agent.support.assignment_id" not in attrs
+    assert client.get_diagnostics()["pending"] == 0
+
+
+@pytest.mark.asyncio
+async def test_transport_fallback_is_observable_without_receipt(connected, monkeypatch):
+    client, state = connected
+    enhanced_state(state)
+    state["assignment_status"] = 503
+    selected = await choose(client)
+    assert selected.reason == "unavailable" and selected.cause == "transport_unavailable"
+    attrs = fake_root(monkeypatch)
+    assert not client.record_agent_run(selected)
+    assert attrs["neatlogs.agent.support.unit_id"] == "session:42"
+    assert attrs["neatlogs.agent.support.unit_kind"] == "session"
+    assert attrs["neatlogs.agent.support.decision_cause"] == "transport_unavailable"
+    assert "neatlogs.agent.support.assignment_id" not in attrs
+    assert client.get_diagnostics()["pending"] == 0
+
+
+@pytest.mark.asyncio
+async def test_replay_emits_no_ordinary_production_identity(connected, monkeypatch):
+    client, state = connected
+    enhanced_state(state)
+    selected = await choose(client)
+    attrs = fake_root(monkeypatch)
+    monkeypatch.setattr("neatlogs.agent.client.current_replay", lambda: object())
+    assert not client.record_agent_run(selected)
+    assert attrs == {}
+
+
+@pytest.mark.asyncio
+async def test_unsupported_nfc_has_bounded_cause_and_legacy_stays_live(connected, monkeypatch):
+    client, state = connected
+    enhanced_state(state)
+    state["config"]["current"]["params"] = {"prompt": "\U000105d2\u0307"}
+    selected = await choose(client)
+    assert selected.reason == "unavailable" and selected.cause == "unsupported_canonical_params"
+    state["config"] = json.loads(json.dumps(VECTORS["enhanced"]["legacyConfig"]))
+    state["config"]["expiresAt"] = iso(state["now"] + 60)
+    state["assignment"] = {
+        **VECTORS["enhanced"]["legacyAssignment"],
+        "params": {"prompt": "\U000105d2\u0307"},
+        "expiresAt": state["config"]["expiresAt"],
+    }
+    selected = await choose(client)
+    assert selected.reason == "assigned" and selected.cause is None
+    attrs = fake_root(monkeypatch)
+    assert client.record_agent_run(selected)
+    assert attrs["neatlogs.agent.support.decision_cause"] == "unsupported_canonical_params"
+    assert "neatlogs.agent.support.served_fingerprint" not in attrs
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "limit,count,expected", [(128, 125, True), (128, 128, True), (1, 1, False)]
+)
+async def test_real_provider_signed_attribute_budget(
+    connected, monkeypatch, limit, count, expected
+):
+    from opentelemetry.sdk.trace import SpanLimits, TracerProvider
+
+    client, _ = connected
+    selected = await choose(client)
+    telemetry = TracerProvider(span_limits=SpanLimits(max_attributes=limit))
+    root = telemetry.get_tracer("budget").start_span(
+        "budget-root", attributes={f"caller.{index}": index for index in range(count)}
+    )
+    monkeypatch.setattr("neatlogs.agent.client.get_neatlogs_root_span", lambda: root)
+    try:
+        recorded = client.record_agent_run(selected)
+        assert recorded == expected
+        assert client.get_diagnostics()["pending"] == int(expected)
+        if recorded:
+            assert root.attributes["neatlogs.agent.support.assignment_id"] == selected.assignment_id
+            assert root.attributes["neatlogs.agent.support.fingerprint"] == selected.fingerprint
+        else:
+            assert (
+                root.attributes.get("neatlogs.agent.support.assignment_id")
+                != selected.assignment_id
+                or root.attributes.get("neatlogs.agent.support.fingerprint") != selected.fingerprint
+            )
+    finally:
+        root.end()
+        telemetry.shutdown()

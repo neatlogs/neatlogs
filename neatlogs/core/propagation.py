@@ -18,8 +18,12 @@ from typing import Any, Dict, Iterator, Mapping, MutableMapping, Optional
 
 from opentelemetry import context as context_api
 from opentelemetry import trace as otel_trace
-from opentelemetry.propagate import extract, inject
 from opentelemetry.propagators.textmap import default_getter
+from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
+
+# Explicit W3C helpers must not depend on a host's global propagator or export
+# unrelated baggage. Keep both propagation directions private and deterministic.
+_W3C_PROPAGATOR = TraceContextTextMapPropagator()
 
 
 def _has_traceparent(carrier: Any) -> bool:
@@ -88,7 +92,7 @@ def inject_trace_context(carrier: MutableMapping[str, str]) -> bool:
         if ctx is None:
             return False
         before = len(carrier)
-        inject(carrier, context=ctx)
+        _W3C_PROPAGATOR.inject(carrier, context=ctx)
         # inject() writes traceparent (and optionally tracestate) when the context
         # carries a valid, sampled span context.
         return _has_traceparent(carrier) or len(carrier) > before
@@ -138,7 +142,9 @@ def extract_trace_context(
     tokens = []
     try:
         # Extract the remote span into a bare context (never the active one).
-        remote_ctx = extract(carrier, context=context_api.Context(), getter=default_getter)
+        remote_ctx = _W3C_PROPAGATOR.extract(
+            carrier, context=context_api.Context(), getter=default_getter
+        )
         remote_span = otel_trace.get_current_span(remote_ctx)
         sc = remote_span.get_span_context()
 

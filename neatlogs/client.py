@@ -36,7 +36,7 @@ from .constants import DEFAULT_INGEST_ENDPOINT, export_queue_capacity
 from .core.byte_limited_exporter import ByteLimitedSpanExporter
 from .core.byte_limited_log_exporter import ByteLimitedLogExporter
 from .core.client_registry import register_client, unregister_client
-from .core.deadline import DeadlineWorker, bounded_call
+from .core.deadline import DeadlineWorker, FlushGate, bounded_call
 from .core.delivery import (
     DeliveryDiagnostics,
     ObservableBatchLogRecordProcessor,
@@ -129,6 +129,7 @@ class Client:
         )
 
         self.workflow_name = name
+        self._flush_gate = FlushGate("neatlogs-client-flush")
         self._state = "running"
         self._shutdown_result = True
         self._shutdown_owner: int | None = None
@@ -311,12 +312,10 @@ class Client:
             return neatlogs.wrap(target, **workflow_attributes)
 
     def flush(self, timeout_millis: int = 30000) -> bool:
-        from .core.deadline import bounded_call
-
         deadline = time.monotonic() + max(0, timeout_millis) / 1000
         log_provider = self.log_provider
         processors = list(self._transport_processors)
-        completed, result = bounded_call(
+        completed, result = self._flush_gate.call(
             lambda: self._flush_pipeline(log_provider, processors, timeout_millis, deadline),
             deadline,
         )

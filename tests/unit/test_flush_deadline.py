@@ -5,6 +5,7 @@ import time
 import pytest
 
 import neatlogs
+from neatlogs.core.deadline import FlushGate
 
 init_module = sys.modules["neatlogs.init"]
 
@@ -187,3 +188,145 @@ def test_timed_out_client_flush_keeps_its_pipeline_snapshot(client, monkeypatch)
     finally:
         release.set()
         other.shutdown()
+
+
+class _CountingBlocker:
+    def __init__(self):
+        self.release = threading.Event()
+        self.calls = 0
+
+    def force_flush(self, timeout_millis=30000):
+        self.calls += 1
+        self.release.wait(5)
+        return True
+
+    def wait_for_calls(self, count, timeout=2):
+        deadline = time.monotonic() + timeout
+        while self.calls < count and time.monotonic() < deadline:
+            time.sleep(0.01)
+        return self.calls >= count
+
+
+def test_repeated_default_flush_timeouts_share_one_worker(monkeypatch):
+    blocker = _CountingBlocker()
+    monkeypatch.setattr(init_module, "_flush_gate", FlushGate())
+    monkeypatch.setattr(init_module, "_transport_span_processors", [blocker])
+    monkeypatch.setattr(init_module, "_log_provider", None)
+
+    for _ in range(15):
+        assert neatlogs.flush(timeout_millis=20) is False
+    blocker.release.set()
+
+    # one in-flight pass reaches the exporter once and then stops at its own
+    # deadline, instead of fifteen passes piling onto the stuck exporter
+    assert blocker.wait_for_calls(1)
+    time.sleep(0.2)
+    assert blocker.calls == 1
+
+
+def test_default_flush_recovers_after_the_blocked_exporter_returns(monkeypatch):
+    blocker = _CountingBlocker()
+    monkeypatch.setattr(init_module, "_flush_gate", FlushGate())
+    monkeypatch.setattr(init_module, "_transport_span_processors", [blocker])
+    monkeypatch.setattr(init_module, "_log_provider", None)
+
+    assert neatlogs.flush(timeout_millis=20) is False
+    blocker.release.set()
+    assert blocker.wait_for_calls(1)
+
+    # once the stuck pass settles, a fresh flush goes through again
+    recovered = False
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline:
+        if neatlogs.flush(timeout_millis=1000):
+            recovered = True
+            break
+        time.sleep(0.01)
+    assert recovered
+    assert blocker.calls == 3
+
+
+def test_concurrent_default_flushes_share_the_in_flight_pass(monkeypatch):
+    class Slow:
+        def __init__(self):
+            self.calls = 0
+
+        def force_flush(self, timeout_millis=30000):
+            self.calls += 1
+            time.sleep(0.2)
+            return True
+
+    slow = Slow()
+    monkeypatch.setattr(init_module, "_flush_gate", FlushGate())
+    monkeypatch.setattr(init_module, "_transport_span_processors", [slow])
+    monkeypatch.setattr(init_module, "_log_provider", None)
+
+    results = []
+    threads = [
+        threading.Thread(target=lambda: results.append(neatlogs.flush(timeout_millis=2000)))
+        for _ in range(5)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(5)
+
+    assert sorted(results) == [True] * 5
+    assert slow.calls == 2
+
+
+def test_timed_out_default_flush_does_not_hold_the_next_generation(monkeypatch):
+    blocker = _CountingBlocker()
+    monkeypatch.setattr(init_module, "_flush_gate", FlushGate())
+    monkeypatch.setattr(init_module, "_transport_span_processors", [blocker])
+    monkeypatch.setattr(init_module, "_log_provider", None)
+    assert neatlogs.flush(timeout_millis=20) is False
+
+    class Fast:
+        def __init__(self):
+            self.calls = 0
+
+        def force_flush(self, timeout_millis=30000):
+            self.calls += 1
+            return True
+
+    # shutdown() + init() install a fresh gate alongside the new pipeline
+    fast = Fast()
+    monkeypatch.setattr(init_module, "_flush_gate", FlushGate())
+    monkeypatch.setattr(init_module, "_transport_span_processors", [fast])
+    assert neatlogs.flush(timeout_millis=1000) is True
+    assert fast.calls == 2
+    blocker.release.set()
+
+
+def test_repeated_client_flush_timeouts_share_one_worker(client, monkeypatch):
+    blocker = _CountingBlocker()
+    with monkeypatch.context() as patch:
+        patch.setattr(client, "log_provider", None)
+        patch.setattr(client, "_transport_processors", [blocker])
+        for _ in range(15):
+            assert client.flush(timeout_millis=20) is False
+        blocker.release.set()
+        assert blocker.wait_for_calls(1)
+        time.sleep(0.2)
+        assert blocker.calls == 1
+
+
+def test_client_flush_recovers_after_the_blocked_exporter_returns(client, monkeypatch):
+    blocker = _CountingBlocker()
+    with monkeypatch.context() as patch:
+        patch.setattr(client, "log_provider", None)
+        patch.setattr(client, "_transport_processors", [blocker])
+        assert client.flush(timeout_millis=20) is False
+        blocker.release.set()
+        assert blocker.wait_for_calls(1)
+
+        recovered = False
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            if client.flush(timeout_millis=1000):
+                recovered = True
+                break
+            time.sleep(0.01)
+        assert recovered
+        assert blocker.calls == 3

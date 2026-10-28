@@ -32,7 +32,7 @@ from ._wrap_utils import _normalize_traces_endpoint
 from .constants import DEFAULT_INGEST_ENDPOINT, export_queue_capacity
 from .core.byte_limited_exporter import ByteLimitedSpanExporter
 from .core.byte_limited_log_exporter import ByteLimitedLogExporter
-from .core.deadline import DeadlineWorker, bounded_call
+from .core.deadline import DeadlineWorker, FlushGate, bounded_call
 from .core.delivery import (
     DeliveryDiagnostics,
     ObservableBatchLogRecordProcessor,
@@ -76,6 +76,7 @@ _upload_authority = None
 _media_store = None
 _signal_handlers = {}
 _signal_shutdown_in_progress = False
+_flush_gate = FlushGate("neatlogs-default-flush")
 _shutdown_condition = threading.Condition(threading.RLock())
 _shutdown_state = "idle"
 _shutdown_owner = None
@@ -779,6 +780,8 @@ def init(
             logger.debug(f"Instrumented libraries: {manager.instrumented}")
 
     _shutdown_worker = DeadlineWorker("neatlogs-default-shutdown")
+    global _flush_gate
+    _flush_gate = FlushGate("neatlogs-default-flush")
     atexit.register(_atexit_shutdown)
     _init_signature = candidate_signature
     _initialized = True
@@ -807,7 +810,7 @@ def flush(timeout_millis: int = 30000) -> bool:
     # reach into a pipeline created by a later shutdown()/init().
     log_provider = _log_provider
     processors = list(_transport_span_processors)
-    completed, result = bounded_call(
+    completed, result = _flush_gate.call(
         lambda: _flush_pipeline(log_provider, processors, timeout_millis, deadline), deadline
     )
     return bool(result) if completed else False
@@ -1005,7 +1008,7 @@ def _perform_shutdown(
     global _tracer_provider, _owns_tracer_provider, _log_provider, _span_processor, _initialized
     global _init_signature
     global _instrumentation_manager, _transport_span_processors, _completion_span_processor
-    global _debug_mode, _shutdown_worker
+    global _debug_mode, _shutdown_worker, _flush_gate
     global _upload_authority, _media_store
 
     try:
@@ -1276,6 +1279,7 @@ def _perform_shutdown(
 
     _initialized = False
     _init_signature = None
+    _flush_gate = FlushGate("neatlogs-default-flush")
     _tracer_provider = None
     _owns_tracer_provider = False
     _log_provider = None

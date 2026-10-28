@@ -87,3 +87,57 @@ def bounded_call(
         return completed.get(timeout=remaining)
     except queue.Empty:
         return False, TimeoutError("Neatlogs shutdown deadline exceeded")
+
+
+class _FlushFlight:
+    def __init__(self) -> None:
+        self.done = threading.Event()
+        self.result: tuple[bool, Any] | None = None
+
+
+class FlushGate:
+    """Keep flush work single-flight for one pipeline generation.
+
+    Python cannot cancel a blocked exporter call, so a timed-out flush leaves
+    its worker running. Callers that arrive while that worker is still busy
+    wait on the same outcome up to their own deadline instead of spawning
+    another thread that would pile onto the same exporter. Each pipeline
+    generation gets its own gate, so a stuck flush never holds the generation
+    that replaces it.
+    """
+
+    def __init__(self, name: str = "neatlogs-flush") -> None:
+        self._name = name
+        self._lock = threading.Lock()
+        self._flight: _FlushFlight | None = None
+
+    def call(self, operation: Callable[[], Any], deadline: float) -> tuple[bool, Any]:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False, TimeoutError("Neatlogs flush deadline exceeded")
+        with self._lock:
+            flight = self._flight
+            if flight is None:
+                flight = _FlushFlight()
+                self._flight = flight
+                threading.Thread(
+                    target=self._run,
+                    args=(flight, operation),
+                    name=self._name,
+                    daemon=True,
+                ).start()
+        if not flight.done.wait(remaining):
+            return False, TimeoutError("Neatlogs flush deadline exceeded")
+        assert flight.result is not None
+        return flight.result
+
+    def _run(self, flight: _FlushFlight, operation: Callable[[], Any]) -> None:
+        try:
+            result: tuple[bool, Any] = (True, operation())
+        except BaseException as exc:
+            result = (False, exc)
+        with self._lock:
+            flight.result = result
+            if self._flight is flight:
+                self._flight = None
+            flight.done.set()

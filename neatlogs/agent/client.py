@@ -1,25 +1,40 @@
 """Versioned agent adapter using the existing bounded transport and ordered outbox."""
+
 import asyncio
-from collections import OrderedDict
-from dataclasses import replace
 import threading
 import time
+from collections import OrderedDict
+from dataclasses import replace
 from uuid import uuid4
 
 import requests
 
+from .._wrap_utils import get_neatlogs_root_span
 from ..ab_test.client import AbTestClient, _TransientConfigError
 from ..ab_test.protocol import params, timestamp
-from .._wrap_utils import get_neatlogs_root_span
 from ..replay.session import current_replay
-from .protocol import AgentDecision, attributes, unit, parse_assignment, parse_config, decision, _params
+from .protocol import (
+    AgentDecision,
+    _params,
+    attributes,
+    decision,
+    parse_assignment,
+    parse_config,
+    unit,
+)
 
-_TRANSIENT = (_TransientConfigError, requests.ConnectionError, requests.Timeout,
-              requests.exceptions.ChunkedEncodingError, TimeoutError)
+_TRANSIENT = (
+    _TransientConfigError,
+    requests.ConnectionError,
+    requests.Timeout,
+    requests.exceptions.ChunkedEncodingError,
+    TimeoutError,
+)
 
 
 class AgentClient(AbTestClient):
-    """Session assignment may perform HTTP; call choose_agent before opening the root trace."""
+    """Customer or session assignment may perform HTTP; call choose_agent before opening the root trace."""
+
     _api_path = "/api/v2/experiment-agents"
 
     def __init__(self, *, base_url: str, api_key: str, keys: list[str]):
@@ -56,7 +71,11 @@ class AgentClient(AbTestClient):
                 return
             previous = self._publications.get(key)
         try:
-            status, headers, body = self._request(key, "config", headers={"If-None-Match": previous[1]} if previous and previous[1] else {})
+            status, headers, body = self._request(
+                key,
+                "config",
+                headers={"If-None-Match": previous[1]} if previous and previous[1] else {},
+            )
             if status in {408, 429} or status >= 500:
                 raise _TransientConfigError()
             if status == 304 and previous:
@@ -65,12 +84,22 @@ class AgentClient(AbTestClient):
                 raise ValueError("Agent config unavailable")
             config = parse_config(body)
             now = time.time()
-            if config["agentKey"] != key or not now < timestamp(config["expiresAt"]) <= now + 65 or previous and config["revision"] < previous[0]["revision"]:
+            if (
+                config["agentKey"] != key
+                or not now < timestamp(config["expiresAt"]) <= now + 65
+                or previous
+                and config["revision"] < previous[0]["revision"]
+            ):
                 raise ValueError("Invalid config identity or expiry")
             expiry = min(timestamp(config["expiresAt"]), now + 60)
             with self._lock:
                 if not self._stop.is_set():
-                    if not previous or {**previous[0], "expiresAt": ""} != {**config, "expiresAt": ""} or not config["live"] or config["live"]["status"] != "running":
+                    if (
+                        not previous
+                        or {**previous[0], "expiresAt": ""} != {**config, "expiresAt": ""}
+                        or not config["live"]
+                        or config["live"]["status"] != "running"
+                    ):
                         self._revoke(key)
                     self._publications[key] = (config, headers.get("ETag"), expiry)
         except _TRANSIENT:
@@ -108,14 +137,45 @@ class AgentClient(AbTestClient):
                 config, _, config_expiry = publication
                 live = config["live"]
                 if not live or live["status"] != "running":
-                    return AgentDecision(key, unit_id, "a", dict(config["current"]["params"]), "paused" if live else "current", config["revision"], config_expiry, config["current"]["fingerprint"])
+                    return AgentDecision(
+                        key,
+                        unit_id,
+                        "a",
+                        dict(config["current"]["params"]),
+                        "paused" if live else "current",
+                        config["revision"],
+                        config_expiry,
+                        config["current"]["fingerprint"],
+                    )
                 with self._lock:
                     lease = self._leases.get(identity)
-                if lease and lease.revision == config["revision"] and min(lease.expires_at, config_expiry) > time.time():
-                    return replace(lease, params=dict(lease.params), expires_at=min(lease.expires_at, config_expiry))
+                if (
+                    lease
+                    and lease.revision == config["revision"]
+                    and min(lease.expires_at, config_expiry) > time.time()
+                ):
+                    return replace(
+                        lease,
+                        params=dict(lease.params),
+                        expires_at=min(lease.expires_at, config_expiry),
+                    )
                 try:
-                    status, _, body = self._request(key, "assignments", payload={"protocolVersion": 2, "revision": config["revision"], "unitId": unit_id, "attributes": context})
-                    if status == 409 and isinstance(body, dict) and body.get("code") == "CONFIG_CHANGED" and attempt == 0:
+                    status, _, body = self._request(
+                        key,
+                        "assignments",
+                        payload={
+                            "protocolVersion": 2,
+                            "revision": config["revision"],
+                            "unitId": unit_id,
+                            "attributes": context,
+                        },
+                    )
+                    if (
+                        status == 409
+                        and isinstance(body, dict)
+                        and body.get("code") == "CONFIG_CHANGED"
+                        and attempt == 0
+                    ):
                         with self._lock:
                             self._revoke(key)
                         continue
@@ -128,10 +188,28 @@ class AgentClient(AbTestClient):
                         if self._stop.is_set() or self._publications.get(key) is not publication:
                             return unavailable
                         now = time.time()
-                        if result["agentKey"] != key or result["revision"] != config["revision"] or not now < timestamp(result["expiresAt"]) <= now + 65:
+                        if (
+                            result["agentKey"] != key
+                            or result["revision"] != config["revision"]
+                            or not now < timestamp(result["expiresAt"]) <= now + 65
+                        ):
                             raise ValueError("Invalid assignment identity or expiry")
                         if result["reason"] == "assigned":
-                            if any(result[field] != live[field] for field in ("testId", "experimentId", "candidateRevision", "allocationVersion")) or result["fingerprint"] != (config["current"]["fingerprint"] if result["arm"] == "a" else live["candidateFingerprint"]):
+                            if any(
+                                result[field] != live[field]
+                                for field in (
+                                    "testId",
+                                    "experimentId",
+                                    "candidateRevision",
+                                    "allocationVersion",
+                                    "unit",
+                                    "completionPolicy",
+                                )
+                            ) or result["fingerprint"] != (
+                                config["current"]["fingerprint"]
+                                if result["arm"] == "a"
+                                else live["candidateFingerprint"]
+                            ):
                                 raise ValueError("Invalid assignment version")
                         elif result["fingerprint"] != config["current"]["fingerprint"]:
                             raise ValueError("Invalid current fingerprint")
@@ -161,20 +239,31 @@ class AgentClient(AbTestClient):
         identity = (selected.agent_key, trace_id)
         with self._lock:
             publication = self._publications.get(selected.agent_key)
-            if not publication or not publication[0]["live"] or publication[0]["live"]["status"] != "running" or publication[0]["revision"] != selected.revision or min(publication[2], selected.expires_at or 0) <= time.time():
+            if (
+                not publication
+                or not publication[0]["live"]
+                or publication[0]["live"]["status"] != "running"
+                or publication[0]["revision"] != selected.revision
+                or min(publication[2], selected.expires_at or 0) <= time.time()
+            ):
                 return False
             if identity in self._recorded and self._recorded[identity] != selected.assignment_id:
                 return False
             if not self._queue_agent(selected, trace_id, False):
                 return False
-            root.set_attribute(f"neatlogs.agent.{selected.agent_key}.assignment_id", selected.assignment_id)
-            root.set_attribute(f"neatlogs.agent.{selected.agent_key}.fingerprint", selected.fingerprint)
+            root.set_attribute(
+                f"neatlogs.agent.{selected.agent_key}.assignment_id", selected.assignment_id
+            )
+            root.set_attribute(
+                f"neatlogs.agent.{selected.agent_key}.fingerprint", selected.fingerprint
+            )
             self._recorded[identity] = selected.assignment_id
             if len(self._recorded) > 10000:
                 self._recorded.popitem(last=False)
         return True
 
     def complete_agent_decision(self, selected: AgentDecision, trace_id: str):
+        """Complete an exported conversation; fixed-horizon customer units stay open."""
         if selected.reason != "assigned" or current_replay() is not None:
             return False
         with self._lock:
@@ -192,7 +281,17 @@ class AgentClient(AbTestClient):
             self._rejected += 1
             return False
         event_id = str(uuid4())
-        payload = {"protocolVersion": 2, "eventId": event_id, "assignmentId": selected.assignment_id, "unitId": selected.unit_id, "traceId": trace_id, "unitComplete": complete}
+        payload = {
+            "protocolVersion": 2,
+            "eventId": event_id,
+            "assignmentId": selected.assignment_id,
+            "unitId": selected.unit_id,
+            "traceId": trace_id,
+            "conversationComplete": complete,
+            "unitComplete": complete
+            and selected.unit == "session"
+            and selected.completion_policy == "explicit",
+        }
         self._seen[identity] = event_id
         if len(self._seen) > 10000:
             self._seen.popitem(last=False)

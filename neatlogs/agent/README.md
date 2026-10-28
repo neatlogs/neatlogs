@@ -1,6 +1,6 @@
-# Session agent connection (v2)
+# Agent connection (v2)
 
-Import `AgentClient` from `neatlogs.agent`. This adapter uses the server's persistent enrollment for **session** units; it does not support end-user assignment across conversations or make rollout decisions. Existing `neatlogs.ab_test` remains protocol v1.
+Import `AgentClient` from `neatlogs.agent`. This adapter uses the server's persistent enrollment for Customer ID (`end_user`) or Conversation ID (`session`) units. The server freezes the assignment unit and completion policy; this adapter does not make rollout decisions. Existing `neatlogs.ab_test` remains protocol v1.
 
 ```python
 from neatlogs.agent import AgentClient
@@ -9,11 +9,11 @@ import asyncio
 
 agents = AgentClient(base_url=base_url, api_key=api_key, keys=["support"])
 # Inside your async handler, before opening the root trace:
-version = await agents.choose_agent("support", unit=conversation_id,
+version = await agents.choose_agent("support", unit=customer_id,
     attributes={"environment": "production"}, fallback={"model": deployed_model})
 trace_id = None
 try:
-    with neatlogs.trace("reply", session_id=conversation_id) as span:
+    with neatlogs.trace("reply", session_id=conversation_id, end_user_id=customer_id) as span:
         trace_id = format(span.get_span_context().trace_id, "032x")
         if version.reason == "assigned" and not agents.record_agent_run(version):
             raise RuntimeError("Unable to record assigned execution")
@@ -27,8 +27,8 @@ finally:
 agents.close()
 ```
 
-Reuse one client. `choose_agent` performs bounded HTTP when config or the session's lease needs renewal; it runs blocking transport in a worker thread. `refresh_async()` explicitly refreshes config. Optional synchronous `start()` uses the existing daemon refresh/retry loop; do not call a blocking startup method on an event loop. Use the yielded Neatlogs span for trace identity, since the global OpenTelemetry span can belong to a separate host tracer.
+Reuse one client. `choose_agent` performs bounded HTTP when config or the customer's or conversation's lease needs renewal; it runs blocking transport in a worker thread. `refresh_async()` explicitly refreshes config. Optional synchronous `start()` uses the existing daemon refresh/retry loop; do not call a blocking startup method on an event loop. Use the yielded Neatlogs span for trace identity, since the global OpenTelemetry span can belong to a separate host tracer.
 
 The server freezes the first audience snapshot. Attributes accept strings and booleans, with bounded keys/values. A lease expires at `min(config expiry, assignment expiry)`. Temporary transport/408/429/5xx refresh failure keeps a still-valid original lease, never extends it. Invalid/revoked config clears candidate use; a successful pause serves Current. Remote pause observation is bounded by the60s TTL. `unavailable` uses the explicitly supplied deployed fallback; it cannot claim that fallback is the server's latest Current.
 
-Choosing does not record traffic. Record immediately before execution inside a Neatlogs trace; nested calls stamp its private root, and replay contexts are excluded. Complete only after the final trace of this session, preserving the original decision. Do not use an end-user ID across conversations. Current/outside-audience/outside-share/paused/fallback choices create no experiment exposure. `get_diagnostics()` reports pending/rejected receipts; `flush_async()` returns false if delivery is incomplete. Queues and caches are bounded and process-local; flush before shutdown.
+Choosing does not record traffic. Record immediately before execution inside a Neatlogs trace; nested calls stamp its private root, and replay contexts are excluded. Pass the customer ID as `unit` and `end_user_id` for customer assignment, while `session_id` remains the actual conversation ID. For conversation assignment, use the conversation ID as `unit` and `session_id`. After exporting the final trace of each conversation, call `complete_agent_decision` with its original decision. It sends `conversationComplete: true`. Session/`explicit` assignment also sends `unitComplete: true`; customer/`fixed_horizon` assignment leaves the customer open until the server cutoff and delivery grace, so later conversations can use the same active assignment. Current/outside-audience/outside-share/paused/fallback choices create no experiment exposure. `get_diagnostics()` reports pending/rejected receipts; `flush_async()` returns false if delivery is incomplete. Queues and caches are bounded and process-local; flush before shutdown.

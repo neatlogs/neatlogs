@@ -25,7 +25,8 @@
       "split": {
         "a": 5000,
         "b": 5000
-      }
+      },
+      "completionPolicy": "explicit"
     }
   },
   "assignment": {
@@ -44,7 +45,9 @@
     "testId": "00000000-0000-4000-8000-000000000001",
     "allocationVersion": 1,
     "enrollmentId": "00000000-0000-4000-8000-000000000003",
-    "assignmentId": "00000000-0000-4000-8000-000000000004"
+    "assignmentId": "00000000-0000-4000-8000-000000000004",
+    "unit": "session",
+    "completionPolicy": "explicit"
   },
   "attributeVectors": [
     {
@@ -125,5 +128,54 @@
       "unit": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀",
       "valid": false
     }
-  ]
+  ],
+  "completionVectors": [
+    {
+      "unit": "session",
+      "completionPolicy": "explicit",
+      "valid": true
+    },
+    {
+      "unit": "end_user",
+      "completionPolicy": "fixed_horizon",
+      "valid": true
+    },
+    {
+      "unit": "session",
+      "completionPolicy": "fixed_horizon",
+      "valid": false
+    },
+    {
+      "unit": "end_user",
+      "completionPolicy": "explicit",
+      "valid": false
+    },
+    {
+      "unit": "device",
+      "completionPolicy": "explicit",
+      "valid": false
+    },
+    {
+      "unit": "session",
+      "completionPolicy": "unknown",
+      "valid": false
+    }
+  ],
+  "customerJourney": {
+    "unitId": "customer:42",
+    "traces": [
+      {
+        "sessionId": "conversation:1",
+        "conversationComplete": false
+      },
+      {
+        "sessionId": "conversation:1",
+        "conversationComplete": true
+      },
+      {
+        "sessionId": "conversation:2",
+        "conversationComplete": true
+      }
+    ]
+  }
 }

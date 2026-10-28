@@ -1,6 +1,7 @@
-"""Session-only agent protocol. Validation occurs before a decision enters the cache."""
-from dataclasses import dataclass
+"""Customer and session agent protocol. Validation occurs before a decision enters the cache."""
+
 import re
+from dataclasses import dataclass
 from uuid import UUID
 
 from ..ab_test.protocol import Params, integer, params, timestamp, valid_keys
@@ -23,7 +24,7 @@ def attributes(value):
 
 def unit(value):
     if not isinstance(value, str) or not 1 <= length(value) <= 512:
-        raise ValueError("A session ID is required")
+        raise ValueError("A customer or session ID is required")
     return value
 
 
@@ -43,7 +44,10 @@ def _params(value):
     result = {}
     for key, item in value.items():
         result.update(params({key: item}))
-    if any(length(key) > 100 or isinstance(item, str) and length(item) > 2000 for key, item in result.items()):
+    if any(
+        length(key) > 100 or isinstance(item, str) and length(item) > 2000
+        for key, item in result.items()
+    ):
         raise ValueError("Invalid agent params")
     return result
 
@@ -55,6 +59,14 @@ def _base(value):
     timestamp(value["expiresAt"])
 
 
+def _completion(value):
+    if (value.get("unit"), value.get("completionPolicy")) not in {
+        ("session", "explicit"),
+        ("end_user", "fixed_horizon"),
+    }:
+        raise ValueError("Unsupported agent completion policy")
+
+
 def parse_config(value):
     _fields(value, "protocolVersion agentKey revision expiresAt current live")
     _base(value)
@@ -63,7 +75,10 @@ def parse_config(value):
     _params(value["current"]["params"])
     live = value["live"]
     if live is not None:
-        _fields(live, "testId experimentId candidateRevision allocationVersion unit currentFingerprint candidateFingerprint policyDigest status effectiveTrafficBps targetTrafficBps split")
+        _fields(
+            live,
+            "testId experimentId candidateRevision allocationVersion unit completionPolicy currentFingerprint candidateFingerprint policyDigest status effectiveTrafficBps targetTrafficBps split",
+        )
         for key in ("testId", "experimentId"):
             UUID(live[key])
         for key in ("currentFingerprint", "candidateFingerprint", "policyDigest"):
@@ -75,25 +90,41 @@ def parse_config(value):
         _fields(live["split"], "a b")
         if integer(live["split"]["a"], 0, 10000) + integer(live["split"]["b"], 0, 10000) != 10000:
             raise ValueError("Invalid split")
-        if live["unit"] != "session" or live["status"] not in {"running", "paused", "auto_paused"} or live["currentFingerprint"] != value["current"]["fingerprint"]:
+        _completion(live)
+        if (
+            live["status"] not in {"running", "paused", "auto_paused"}
+            or live["currentFingerprint"] != value["current"]["fingerprint"]
+        ):
             raise ValueError("Unsupported agent allocation")
     return value
 
 
 def parse_assignment(value):
     assigned = isinstance(value, dict) and value.get("reason") == "assigned"
-    _fields(value, "protocolVersion agentKey revision expiresAt params fingerprint reason arm" + (" experimentId candidateRevision testId allocationVersion enrollmentId assignmentId" if assigned else ""))
+    _fields(
+        value,
+        "protocolVersion agentKey revision expiresAt params fingerprint reason arm"
+        + (
+            " experimentId candidateRevision testId allocationVersion enrollmentId assignmentId unit completionPolicy"
+            if assigned
+            else ""
+        ),
+    )
     _base(value)
     _params(value["params"])
     _fingerprint(value["fingerprint"])
     if assigned:
+        _completion(value)
         for key in ("experimentId", "testId", "enrollmentId", "assignmentId"):
             UUID(value[key])
         integer(value["candidateRevision"], 1, 2**53 - 1)
         integer(value["allocationVersion"], 1, 2147483647)
         if value["arm"] not in {"a", "b"}:
             raise ValueError("Invalid arm")
-    elif value["reason"] not in {"outside_audience", "outside_share", "paused", "current"} or value["arm"] != "a":
+    elif (
+        value["reason"] not in {"outside_audience", "outside_share", "paused", "current"}
+        or value["arm"] != "a"
+    ):
         raise ValueError("Invalid fallback")
     return value
 
@@ -114,7 +145,26 @@ class AgentDecision:
     experiment_id: str | None = None
     candidate_revision: int | None = None
     enrollment_id: str | None = None
+    unit: str | None = None
+    completion_policy: str | None = None
 
 
 def decision(value, unit_id, expires):
-    return AgentDecision(value["agentKey"], unit_id, value["arm"], dict(value["params"]), value["reason"], value["revision"], expires, value["fingerprint"], value.get("assignmentId"), value.get("testId"), value.get("allocationVersion"), value.get("experimentId"), value.get("candidateRevision"), value.get("enrollmentId"))
+    return AgentDecision(
+        value["agentKey"],
+        unit_id,
+        value["arm"],
+        dict(value["params"]),
+        value["reason"],
+        value["revision"],
+        expires,
+        value["fingerprint"],
+        value.get("assignmentId"),
+        value.get("testId"),
+        value.get("allocationVersion"),
+        value.get("experimentId"),
+        value.get("candidateRevision"),
+        value.get("enrollmentId"),
+        value.get("unit"),
+        value.get("completionPolicy"),
+    )

@@ -37,6 +37,8 @@ class _TransientConfigError(Exception):
 
 
 class AbTestClient:
+    _api_path = "/api/v1/ab-tests"
+
     def __init__(self, *, base_url: str, api_key: str, keys: list[str]):
         if not isinstance(api_key, str) or not api_key.strip():
             raise ValueError("A/B api_key is required")
@@ -381,7 +383,7 @@ class AbTestClient:
             suppress_instrumentation(),
             requests.request(
                 "POST" if payload is not None else "GET",
-                f"{self._base_url}/api/v1/ab-tests/{quote(key, safe='')}/{operation}",
+                f"{self._base_url}{self._api_path}/{quote(key, safe='')}/{operation}",
                 headers={
                     "Authorization": f"Bearer {self._api_key}",
                     "Content-Type": "application/json",

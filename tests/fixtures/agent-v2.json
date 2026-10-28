@@ -1,0 +1,129 @@
+{
+  "config": {
+    "protocolVersion": 2,
+    "agentKey": "support",
+    "revision": 1,
+    "expiresAt": "2030-01-01T00:01:00.000Z",
+    "current": {
+      "fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "params": {
+        "model": "current"
+      }
+    },
+    "live": {
+      "testId": "00000000-0000-4000-8000-000000000001",
+      "experimentId": "00000000-0000-4000-8000-000000000002",
+      "candidateRevision": 1,
+      "allocationVersion": 1,
+      "unit": "session",
+      "currentFingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "candidateFingerprint": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "policyDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "status": "running",
+      "effectiveTrafficBps": 500,
+      "targetTrafficBps": 2000,
+      "split": {
+        "a": 5000,
+        "b": 5000
+      }
+    }
+  },
+  "assignment": {
+    "protocolVersion": 2,
+    "agentKey": "support",
+    "revision": 1,
+    "expiresAt": "2030-01-01T00:01:00.000Z",
+    "params": {
+      "model": "candidate"
+    },
+    "fingerprint": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "reason": "assigned",
+    "arm": "b",
+    "experimentId": "00000000-0000-4000-8000-000000000002",
+    "candidateRevision": 1,
+    "testId": "00000000-0000-4000-8000-000000000001",
+    "allocationVersion": 1,
+    "enrollmentId": "00000000-0000-4000-8000-000000000003",
+    "assignmentId": "00000000-0000-4000-8000-000000000004"
+  },
+  "attributeVectors": [
+    {
+      "attributes": {},
+      "valid": true
+    },
+    {
+      "attributes": {
+        "environment": "production",
+        "premium": true,
+        "locale": "用户-α-😀"
+      },
+      "valid": true
+    },
+    {
+      "attributes": {
+        "premium": "true"
+      },
+      "valid": true
+    },
+    {
+      "attributes": {
+        "premium": 1
+      },
+      "valid": false
+    },
+    {
+      "attributes": {
+        "premium": null
+      },
+      "valid": false
+    },
+    {
+      "attributes": {
+        "nested": {
+          "key": "x"
+        }
+      },
+      "valid": false
+    },
+    {
+      "attributes": {
+        "bad key": "x"
+      },
+      "valid": false
+    },
+    {
+      "attributes": {
+        "unicode": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀"
+      },
+      "valid": true
+    },
+    {
+      "attributes": {
+        "unicode": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀"
+      },
+      "valid": false
+    }
+  ],
+  "unitVectors": [
+    {
+      "unit": "session:42",
+      "valid": true
+    },
+    {
+      "unit": "用户-α-😀",
+      "valid": true
+    },
+    {
+      "unit": "",
+      "valid": false
+    },
+    {
+      "unit": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀",
+      "valid": true
+    },
+    {
+      "unit": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀",
+      "valid": false
+    }
+  ]
+}

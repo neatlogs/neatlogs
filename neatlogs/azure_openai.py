@@ -159,6 +159,11 @@ def _set_chat_input(span: Any, kwargs: dict) -> None:
             span.set_attribute(f"neatlogs.llm.{param}", kwargs[param])
 
 
+def _usage_only_chunk(chunk: Any) -> bool:
+    """The trailing usage chunk the API adds for include_usage: no choices, usage set."""
+    return not getattr(chunk, "choices", None) and getattr(chunk, "usage", None) is not None
+
+
 def _patch_completions(completions: Any) -> None:
     if getattr(completions, "_neatlogs_azure_patched", False):
         return
@@ -173,10 +178,12 @@ def _patch_completions(completions: Any) -> None:
         is_stream = kwargs.get("stream", False)
 
         if is_stream:
-            opts = kwargs.get("stream_options") or {}
+            forced_usage_chunk = False
+            opts = dict(kwargs.get("stream_options") or {})
             if not opts.get("include_usage"):
                 opts["include_usage"] = True
                 kwargs["stream_options"] = opts
+                forced_usage_chunk = True
 
         span = _chat_start_span(model, is_stream)
         _set_chat_input(span, kwargs)
@@ -189,7 +196,12 @@ def _patch_completions(completions: Any) -> None:
             raise
 
         if is_stream:
-            return SyncStreamWrapper(response, span, OpenAIStreamFinalizer())
+            return SyncStreamWrapper(
+                response,
+                span,
+                OpenAIStreamFinalizer(),
+                skip_chunk=_usage_only_chunk if forced_usage_chunk else None,
+            )
 
         _finalize_response(span, response, (time.perf_counter() - start) * 1000)
         return response
@@ -212,10 +224,12 @@ def _patch_async_completions(completions: Any) -> None:
         is_stream = kwargs.get("stream", False)
 
         if is_stream:
-            opts = kwargs.get("stream_options") or {}
+            forced_usage_chunk = False
+            opts = dict(kwargs.get("stream_options") or {})
             if not opts.get("include_usage"):
                 opts["include_usage"] = True
                 kwargs["stream_options"] = opts
+                forced_usage_chunk = True
 
         span = _chat_start_span(model, is_stream)
         _set_chat_input(span, kwargs)
@@ -228,7 +242,12 @@ def _patch_async_completions(completions: Any) -> None:
             raise
 
         if is_stream:
-            return AsyncStreamWrapper(response, span, OpenAIStreamFinalizer())
+            return AsyncStreamWrapper(
+                response,
+                span,
+                OpenAIStreamFinalizer(),
+                skip_chunk=_usage_only_chunk if forced_usage_chunk else None,
+            )
 
         _finalize_response(span, response, (time.perf_counter() - start) * 1000)
         return response

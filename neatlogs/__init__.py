@@ -46,7 +46,7 @@ from .core.identity import identify
 from .core.llm_binder import bind_templates
 from .core.log import log
 from .core.masking_exporter import MaskContext
-from .core.propagation import extract_trace_context, inject_trace_context
+from .core.propagation import current_trace_id, extract_trace_context, inject_trace_context
 from .core.telemetry_v2 import (
     InMemoryDiagnosticSpanExporter,
     OwnershipV2,
@@ -303,6 +303,12 @@ def wrap(client, **workflow_attributes):
         from .openrouter import wrap_openrouter_client
 
         return _finish(wrap_openrouter_client(client))
+
+    # Supermemory Python SDK — Supermemory / AsyncSupermemory client instances.
+    if cls_name in ("Supermemory", "AsyncSupermemory") or module.startswith("supermemory"):
+        from .supermemory import wrap_supermemory_client
+
+        return _finish(wrap_supermemory_client(client))
 
     # Claude Agent SDK (Anthropic): the agentic loop runs in a CLI SUBPROCESS and is consumed as an
     # async iterator of typed messages (query() / ClaudeSDKClient). There's no in-process LLM client

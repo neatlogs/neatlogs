@@ -50,6 +50,9 @@ _active_client: ContextVar[Optional[Any]] = ContextVar("neatlogs.active_client",
 # True when Neatlogs has its required private provider. Neatlogs threads parents
 # through a private context key so co-tenant instrumentors never inherit them.
 _isolated: bool = False
+_active_owned_span: ContextVar[Optional[otel_trace.Span]] = ContextVar(
+    "neatlogs.active_owned_span", default=None
+)
 
 
 def set_neatlogs_provider(provider: Optional[TracerProvider]) -> None:
@@ -518,13 +521,13 @@ def _bootstrap_from_env(api_key: str) -> None:
     from opentelemetry.exporter.otlp.proto.http import Compression
     from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
     from opentelemetry.sdk.resources import SERVICE_NAME, Resource
-    from opentelemetry.sdk.trace import SpanLimits
 
     from .core.byte_limited_exporter import ByteLimitedSpanExporter
     from .core.delivery import DeliveryDiagnostics, ObservableBatchSpanProcessor
     from .core.masking_exporter import MaskingSpanExporter
     from .core.media import PendingMediaStore, set_default_media_store
     from .core.media_exporter import TypedMediaSpanExporter
+    from .core.pipeline import default_span_limits
     from .core.transport import build_otlp_session
     from .core.upload_authority import (
         AuthenticatedUploadAuthority,
@@ -550,7 +553,7 @@ def _bootstrap_from_env(api_key: str) -> None:
     resource = Resource.create(resource_attrs)
     provider = TracerProvider(
         resource=resource,
-        span_limits=SpanLimits(max_span_attributes=10_000),
+        span_limits=default_span_limits(),
     )
     exporter = OTLPSpanExporter(
         endpoint=endpoint,
@@ -646,7 +649,7 @@ def attach_as_current(span: otel_trace.Span, *, force_owned: bool = False):
         try:
             ...
         finally:
-            context_api.detach(token)
+            detach(token)
     """
     is_nl = force_owned or _is_neatlogs_span(span)
     if _isolation_active():
@@ -666,7 +669,8 @@ def attach_as_current(span: otel_trace.Span, *, force_owned: bool = False):
     # detaching. Context is immutable+nested, so the flag scopes to the subtree.
     if is_nl:
         ctx = set_neatlogs_span_in_context(span, ctx, force_owned=force_owned)
-    return context_api.attach(ctx)
+    token = context_api.attach(ctx)
+    return (token, _active_owned_span.set(span)) if is_nl else token
 
 
 def _current_neatlogs_parent(
@@ -707,8 +711,7 @@ def active_neatlogs_context(
     (the global current-span is the host's), so we resolve it from there and
     rebuild a context with it as the current span — exactly what W3C
     ``inject(context=...)`` needs to write our ``traceparent``. In DEFAULT mode
-    the neatlogs span already IS the global current-span, so the ambient context
-    works and we return it unchanged.
+    the owned span is tracked separately so a foreign root cannot hide it.
 
     Returns None when no recording neatlogs span is active, so callers can no-op
     (the inject helper leaves the carrier untouched)."""
@@ -718,10 +721,14 @@ def active_neatlogs_context(
             return None
         base = context if context is not None else context_api.Context()
         return otel_trace.set_span_in_context(parent, base)
-    # DEFAULT mode: only report a context when a recording neatlogs span is the
-    # active ancestor — never let a purely foreign current-span be injected as ours.
-    current = otel_trace.get_current_span()
-    if current and current.is_recording() and _has_neatlogs_ancestor():
+    current = _active_owned_span.get()
+    if current is not None:
+        if not current.is_recording():
+            return None
+        base = context if context is not None else context_api.get_current()
+        return otel_trace.set_span_in_context(current, base)
+    current = otel_trace.get_current_span(context)
+    if current and current.is_recording() and _is_neatlogs_span(current):
         return context if context is not None else context_api.get_current()
     return None
 
@@ -744,6 +751,9 @@ def get_neatlogs_root_span() -> Optional[otel_trace.Span]:
 def detach(token: Any) -> None:
     """Detach a context token returned by :func:`attach_as_current`."""
     try:
+        if isinstance(token, tuple):
+            token, owned_token = token
+            _active_owned_span.reset(owned_token)
         context_api.detach(token)
     except Exception:
         pass
@@ -1028,6 +1038,32 @@ def get_provider_tracer() -> "_AutoRootTracer":
     return _AutoRootTracer(get_tracer())
 
 
+def message_as_dict(msg: Any) -> dict:
+    """Return a chat message as a plain dict.
+
+    Chat APIs accept either dicts or SDK message objects (for example the
+    ``ChatCompletionMessage`` a caller appends straight from a previous
+    response). Telemetry code that reads ``msg.get(...)`` must not crash on
+    the objects.
+    """
+    if isinstance(msg, dict):
+        return msg
+    for name in ("model_dump", "dict"):
+        dump = getattr(msg, name, None)
+        if callable(dump):
+            try:
+                out = dump()
+                if isinstance(out, dict):
+                    return out
+            except Exception:
+                pass
+    return {
+        key: getattr(msg, key)
+        for key in ("role", "content", "tool_call_id")
+        if getattr(msg, key, None) is not None
+    }
+
+
 def serialize(obj: Any, max_length: Optional[int] = DEFAULT_MAX_CAPTURE_VALUE_BYTES) -> str:
     """Safe JSON serialization with explicit, byte-aware overflow diagnostics."""
     from .core.media import sanitize_media_payload
@@ -1072,6 +1108,20 @@ class _InterruptedSpanProxy:
         if code is StatusCode.OK:
             return
         self._span.set_status(status_or_status_code, *args, **kwargs)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._span, name)
+
+
+class _FailedStreamSpanProxy:
+    def __init__(self, span: otel_trace.Span) -> None:
+        self._span = span
+
+    def set_status(self, *args: Any, **kwargs: Any) -> None:
+        pass
+
+    def end(self, *args: Any, **kwargs: Any) -> None:
+        pass
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._span, name)
@@ -1149,10 +1199,17 @@ class SyncStreamWrapper:
     while recording timestamps. Calls finalizer on stream exhaustion.
     """
 
-    def __init__(self, stream: Any, span: otel_trace.Span, finalizer: Callable):
+    def __init__(
+        self,
+        stream: Any,
+        span: otel_trace.Span,
+        finalizer: Callable,
+        skip_chunk: Optional[Callable[[Any], bool]] = None,
+    ):
         self._stream = stream
         self._span = span
         self._finalizer = finalizer
+        self._skip_chunk = skip_chunk
         self._start_time = _stream_start_perf(span)
         self._first_chunk_time: Optional[float] = None
         self._incremental = hasattr(finalizer, "on_chunk") and hasattr(finalizer, "finish")
@@ -1179,34 +1236,39 @@ class SyncStreamWrapper:
         return consume()
 
     def __next__(self):
-        try:
-            chunk = next(self._stream)
-        except StopIteration:
-            self._exhausted = True
-            self._finalize(interrupted=False)
-            raise
-        except BaseException as e:
-            self._finalize_error(e)
-            raise
+        while True:
+            try:
+                chunk = next(self._stream)
+            except StopIteration:
+                self._exhausted = True
+                self._finalize(interrupted=False)
+                raise
+            except BaseException as e:
+                self._finalize_error(e)
+                raise
 
-        if self._first_chunk_time is None:
-            self._first_chunk_time = time.perf_counter()
-        if self._finalized:
+            if self._first_chunk_time is None:
+                self._first_chunk_time = time.perf_counter()
+            if not self._finalized:
+                if self._incremental:
+                    self._finalizer.on_chunk(self._span, chunk)
+                else:
+                    chunk_bytes = _bounded_object_size(
+                        chunk,
+                        _MAX_LEGACY_STREAM_BYTES - self._chunk_bytes,
+                    )
+                    if self._chunk_bytes + chunk_bytes <= _MAX_LEGACY_STREAM_BYTES:
+                        self._chunks.append(chunk)
+                        self._chunk_bytes += chunk_bytes
+                    else:
+                        self._dropped_chunks += 1
+                        self._mark_chunk_overflow()
+            # Telemetry-only chunks (e.g. the usage chunk neatroots asked the
+            # provider for) still feed the finalizer above but are not the
+            # caller's data, so they are not yielded.
+            if self._skip_chunk is not None and self._skip_chunk(chunk):
+                continue
             return chunk
-        if self._incremental:
-            self._finalizer.on_chunk(self._span, chunk)
-        else:
-            chunk_bytes = _bounded_object_size(
-                chunk,
-                _MAX_LEGACY_STREAM_BYTES - self._chunk_bytes,
-            )
-            if self._chunk_bytes + chunk_bytes <= _MAX_LEGACY_STREAM_BYTES:
-                self._chunks.append(chunk)
-                self._chunk_bytes += chunk_bytes
-            else:
-                self._dropped_chunks += 1
-                self._mark_chunk_overflow()
-        return chunk
 
     def _mark_chunk_overflow(self) -> None:
         self._span.set_attribute("neatlogs.capture.truncated", True)
@@ -1292,6 +1354,24 @@ class SyncStreamWrapper:
         if self._incremental and hasattr(self._finalizer, "fail"):
             self._finalizer.fail(self._span, error)
             return
+        if not self._incremental:
+            elapsed_ms = (time.perf_counter() - self._start_time) * 1000
+            ttft_ms = (
+                (self._first_chunk_time - self._start_time) * 1000
+                if self._first_chunk_time is not None
+                else None
+            )
+            capture_span = _FailedStreamSpanProxy(self._span)
+            try:
+                if _accepts_keyword(self._finalizer, "interrupted"):
+                    self._finalizer(
+                        capture_span, self._chunks, elapsed_ms, ttft_ms, interrupted=True
+                    )
+                else:
+                    self._finalizer(capture_span, self._chunks, elapsed_ms, ttft_ms)
+            except BaseException:
+                pass
+
         from opentelemetry.trace import StatusCode
 
         if error.__class__.__name__ in {"CancelledError", "GeneratorExit"}:
@@ -1312,10 +1392,17 @@ class AsyncStreamWrapper:
     Wraps an async streaming response. Same contract as SyncStreamWrapper.
     """
 
-    def __init__(self, stream: Any, span: otel_trace.Span, finalizer: Callable):
+    def __init__(
+        self,
+        stream: Any,
+        span: otel_trace.Span,
+        finalizer: Callable,
+        skip_chunk: Optional[Callable[[Any], bool]] = None,
+    ):
         self._stream = stream
         self._span = span
         self._finalizer = finalizer
+        self._skip_chunk = skip_chunk
         self._start_time = _stream_start_perf(span)
         self._first_chunk_time: Optional[float] = None
         self._incremental = hasattr(finalizer, "on_chunk") and hasattr(finalizer, "finish")
@@ -1342,34 +1429,36 @@ class AsyncStreamWrapper:
         return consume()
 
     async def __anext__(self):
-        try:
-            chunk = await self._stream.__anext__()
-        except StopAsyncIteration:
-            self._exhausted = True
-            self._finalize(interrupted=False)
-            raise
-        except BaseException as e:
-            self._finalize_error(e)
-            raise
+        while True:
+            try:
+                chunk = await self._stream.__anext__()
+            except StopAsyncIteration:
+                self._exhausted = True
+                self._finalize(interrupted=False)
+                raise
+            except BaseException as e:
+                self._finalize_error(e)
+                raise
 
-        if self._first_chunk_time is None:
-            self._first_chunk_time = time.perf_counter()
-        if self._finalized:
+            if self._first_chunk_time is None:
+                self._first_chunk_time = time.perf_counter()
+            if not self._finalized:
+                if self._incremental:
+                    self._finalizer.on_chunk(self._span, chunk)
+                else:
+                    chunk_bytes = _bounded_object_size(
+                        chunk,
+                        _MAX_LEGACY_STREAM_BYTES - self._chunk_bytes,
+                    )
+                    if self._chunk_bytes + chunk_bytes <= _MAX_LEGACY_STREAM_BYTES:
+                        self._chunks.append(chunk)
+                        self._chunk_bytes += chunk_bytes
+                    else:
+                        self._dropped_chunks += 1
+                        self._mark_chunk_overflow()
+            if self._skip_chunk is not None and self._skip_chunk(chunk):
+                continue
             return chunk
-        if self._incremental:
-            self._finalizer.on_chunk(self._span, chunk)
-        else:
-            chunk_bytes = _bounded_object_size(
-                chunk,
-                _MAX_LEGACY_STREAM_BYTES - self._chunk_bytes,
-            )
-            if self._chunk_bytes + chunk_bytes <= _MAX_LEGACY_STREAM_BYTES:
-                self._chunks.append(chunk)
-                self._chunk_bytes += chunk_bytes
-            else:
-                self._dropped_chunks += 1
-                self._mark_chunk_overflow()
-        return chunk
 
     def _mark_chunk_overflow(self) -> None:
         self._span.set_attribute("neatlogs.capture.truncated", True)
@@ -1455,6 +1544,24 @@ class AsyncStreamWrapper:
         if self._incremental and hasattr(self._finalizer, "fail"):
             self._finalizer.fail(self._span, error)
             return
+        if not self._incremental:
+            elapsed_ms = (time.perf_counter() - self._start_time) * 1000
+            ttft_ms = (
+                (self._first_chunk_time - self._start_time) * 1000
+                if self._first_chunk_time is not None
+                else None
+            )
+            capture_span = _FailedStreamSpanProxy(self._span)
+            try:
+                if _accepts_keyword(self._finalizer, "interrupted"):
+                    self._finalizer(
+                        capture_span, self._chunks, elapsed_ms, ttft_ms, interrupted=True
+                    )
+                else:
+                    self._finalizer(capture_span, self._chunks, elapsed_ms, ttft_ms)
+            except BaseException:
+                pass
+
         from opentelemetry.trace import StatusCode
 
         if error.__class__.__name__ in {"CancelledError", "GeneratorExit"}:

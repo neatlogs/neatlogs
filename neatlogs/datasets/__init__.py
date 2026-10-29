@@ -1,6 +1,6 @@
 """Create datasets, capture instrumented executions, and publish per-case outcomes."""
 
-from ._api import DatasetError, create, upsert, versions, update_outcomes
+from ._api import DatasetError, create, update_outcomes, upsert, versions
 from ._capture import capture
 from ._handle import CaptureHandle, DatasetCaptureError
 

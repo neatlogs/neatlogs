@@ -162,23 +162,47 @@ def test_invalid_publication_receipt_is_rejected(requests, monkeypatch):
 
 
 def test_import_and_upsert_use_stable_external_keys(requests):
-    datasets.create("Sheet", cases=[{"row_id": 42, "input": "question"}], key_field="row_id", **CONFIG)
+    datasets.create(
+        "Sheet", cases=[{"row_id": 42, "input": "question"}], key_field="row_id", **CONFIG
+    )
     created = json.loads(requests[-1][2]["content"])
     assert created["cases"] == [{"key": "42", "input": "question"}]
     datasets.create("Input keys", cases=[{"input": "keep input"}], key_field="input", **CONFIG)
-    assert json.loads(requests[-1][2]["content"])["cases"] == [{"key": "keep input", "input": "keep input"}]
+    assert json.loads(requests[-1][2]["content"])["cases"] == [
+        {"key": "keep input", "input": "keep input"}
+    ]
     key = str(uuid4())
-    result = datasets.upsert(DATASET, [{"row_id": 42, "input": "changed"}], base_version_id=VERSION, key_field="row_id", idempotency_key=key, **CONFIG)
+    result = datasets.upsert(
+        DATASET,
+        [{"row_id": 42, "input": "changed"}],
+        base_version_id=VERSION,
+        key_field="row_id",
+        idempotency_key=key,
+        **CONFIG,
+    )
     method, url, request = requests[-1]
     body = json.loads(request["content"])
     assert result == {"datasetId": DATASET, "versionId": VERSION}
     assert method == "POST" and url.endswith(f"/datasets/{DATASET}/versions")
-    assert body == {"baseVersionId": VERSION, "idempotencyKey": key, "upsertCases": [{"key": "42", "input": "changed"}]}
+    assert body == {
+        "baseVersionId": VERSION,
+        "idempotencyKey": key,
+        "upsertCases": [{"key": "42", "input": "changed"}],
+    }
     assert "actor" not in body and "createdBy" not in body
     assert request["headers"]["Idempotency-Key"] == key
 
 
-@pytest.mark.parametrize("cases", [[{"input": "missing key"}], [{"key": "duplicate"}, {"key": "duplicate"}], [{"key": " leading"}], [{"key": "x" * 129}], [{"key": "bad\nkey"}]])
+@pytest.mark.parametrize(
+    "cases",
+    [
+        [{"input": "missing key"}],
+        [{"key": "duplicate"}, {"key": "duplicate"}],
+        [{"key": " leading"}],
+        [{"key": "x" * 129}],
+        [{"key": "bad\nkey"}],
+    ],
+)
 def test_upsert_rejects_ambiguous_keys_before_network(requests, cases):
     with pytest.raises(ValueError):
         datasets.upsert(DATASET, cases, base_version_id=VERSION, **CONFIG)
@@ -186,11 +210,23 @@ def test_upsert_rejects_ambiguous_keys_before_network(requests, cases):
 
 
 def test_version_history_preserves_trusted_actors_and_legacy_null(monkeypatch):
-    payload = {"dataset": {"id": DATASET}, "versions": [
-        {"id": VERSION, "version": 2, "createdAt": "2026-10-21T00:00:00Z", "createdBy": {"kind": "service_account", "id": PROJECT}, "tags": ["golden"]},
-        {"id": REVISION, "version": 1, "createdAt": "2026-10-20T00:00:00Z"},
-    ]}
-    monkeypatch.setattr("neatlogs.datasets._api.httpx.request", lambda *args, **kwargs: httpx.Response(200, json={"success": True, "data": payload}))
+    payload = {
+        "dataset": {"id": DATASET},
+        "versions": [
+            {
+                "id": VERSION,
+                "version": 2,
+                "createdAt": "2026-10-21T00:00:00Z",
+                "createdBy": {"kind": "service_account", "id": PROJECT},
+                "tags": ["golden"],
+            },
+            {"id": REVISION, "version": 1, "createdAt": "2026-10-20T00:00:00Z"},
+        ],
+    }
+    monkeypatch.setattr(
+        "neatlogs.datasets._api.httpx.request",
+        lambda *args, **kwargs: httpx.Response(200, json={"success": True, "data": payload}),
+    )
     history = datasets.versions(DATASET, **CONFIG)
     assert history[0]["createdBy"] == {"kind": "service_account", "id": PROJECT}
     assert history[1]["createdBy"] is None

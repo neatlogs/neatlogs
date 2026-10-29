@@ -288,6 +288,7 @@ def _decorate_span(
 
             @functools.wraps(func)
             async def async_generator_wrapper(*args: Any, **kwargs: Any):
+                from ..core.capture import BoundedTextAccumulator
                 from ..core.log import _CaptureStdoutContext
 
                 is_root = _is_root_span()
@@ -306,16 +307,29 @@ def _decorate_span(
                         is_root=is_root and not span_context.has_auto_root,
                     )
                     chunks: list[Any] = []
+                    stream_output = BoundedTextAccumulator()
                     stdout_ctx = _CaptureStdoutContext() if capture_stdout else None
                     if stdout_ctx:
                         stdout_ctx.__enter__()
+                    iterator = func(*args, **kwargs)
                     try:
-                        async for chunk in func(*args, **kwargs):
+                        async for chunk in iterator:
                             chunks.append(chunk)
                             _record_stream_chunk(span, len(chunks) - 1, chunk)
                             _set_stream_counts(span, len(chunks))
                             if cap_out:
-                                span.set_attribute("output.value", _safe_json_dumps(chunks))
+                                # Incremental, bounded: re-serializing the whole chunk list on
+                                # every chunk is O(n^2); the accumulator keeps a bounded prefix
+                                # plus a running digest, so partial output survives shutdown
+                                # without the quadratic cost.
+                                stream_output.append(
+                                    ("[" if len(chunks) == 1 else ",") + _safe_json_dumps(chunk)
+                                )
+                                span.set_attribute(
+                                    "output.value",
+                                    stream_output.value()
+                                    + ("" if stream_output.truncated else "]"),
+                                )
                                 span.set_attribute("output.mime_type", "application/json")
                             yield chunk
                         _finish_stream(span, chunks, bound_inputs)
@@ -335,8 +349,11 @@ def _decorate_span(
                         span.set_status(Status(StatusCode.ERROR, str(exc)))
                         raise
                     finally:
-                        if stdout_ctx:
-                            stdout_ctx.__exit__(None, None, None)
+                        try:
+                            await iterator.aclose()
+                        finally:
+                            if stdout_ctx:
+                                stdout_ctx.__exit__(None, None, None)
 
             return async_generator_wrapper
 
@@ -344,6 +361,7 @@ def _decorate_span(
 
             @functools.wraps(func)
             def generator_wrapper(*args: Any, **kwargs: Any):
+                from ..core.capture import BoundedTextAccumulator
                 from ..core.log import _CaptureStdoutContext
 
                 is_root = _is_root_span()
@@ -362,6 +380,7 @@ def _decorate_span(
                         is_root=is_root and not span_context.has_auto_root,
                     )
                     chunks: list[Any] = []
+                    stream_output = BoundedTextAccumulator()
                     stdout_ctx = _CaptureStdoutContext() if capture_stdout else None
                     if stdout_ctx:
                         stdout_ctx.__enter__()
@@ -371,7 +390,18 @@ def _decorate_span(
                             _record_stream_chunk(span, len(chunks) - 1, chunk)
                             _set_stream_counts(span, len(chunks))
                             if cap_out:
-                                span.set_attribute("output.value", _safe_json_dumps(chunks))
+                                # Incremental, bounded: re-serializing the whole chunk list on
+                                # every chunk is O(n^2); the accumulator keeps a bounded prefix
+                                # plus a running digest, so partial output survives shutdown
+                                # without the quadratic cost.
+                                stream_output.append(
+                                    ("[" if len(chunks) == 1 else ",") + _safe_json_dumps(chunk)
+                                )
+                                span.set_attribute(
+                                    "output.value",
+                                    stream_output.value()
+                                    + ("" if stream_output.truncated else "]"),
+                                )
                                 span.set_attribute("output.mime_type", "application/json")
                             yield chunk
                         _finish_stream(span, chunks, bound_inputs)

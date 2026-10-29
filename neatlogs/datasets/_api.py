@@ -121,7 +121,11 @@ class DatasetApi:
 
 
 def _keyed_cases(cases, key_field=None, require_keys=False):
-    if not isinstance(cases, list) or len(cases) > 500 or any(not isinstance(item, dict) for item in cases):
+    if (
+        not isinstance(cases, list)
+        or len(cases) > 500
+        or any(not isinstance(item, dict) for item in cases)
+    ):
         raise ValueError("cases must be a list of at most 500 case objects")
     if key_field is not None and (not isinstance(key_field, str) or not key_field):
         raise ValueError("key_field must be a nonempty field name")
@@ -130,7 +134,20 @@ def _keyed_cases(cases, key_field=None, require_keys=False):
         item = dict(item)
         if key_field is not None:
             value = item.get(key_field)
-            if key_field not in ("key", "caseId", "revisionId", "input", "observedOutput", "expected", "acceptanceCriteria", "context", "metadata", "tags", "source", "metrics"):
+            if key_field not in (
+                "key",
+                "caseId",
+                "revisionId",
+                "input",
+                "observedOutput",
+                "expected",
+                "acceptanceCriteria",
+                "context",
+                "metadata",
+                "tags",
+                "source",
+                "metrics",
+            ):
                 item.pop(key_field, None)
             if isinstance(value, bool) or not isinstance(value, (str, int)):
                 raise ValueError("The key field must contain a string or integer")
@@ -139,8 +156,15 @@ def _keyed_cases(cases, key_field=None, require_keys=False):
         if key is None and require_keys:
             raise ValueError("Each upserted case requires a stable key")
         if key is not None:
-            if not isinstance(key, str) or not 1 <= len(key) <= 128 or key != key.strip() or any(ord(char) < 32 or ord(char) == 127 for char in key):
-                raise ValueError("Item keys must contain 1–128 characters without outer whitespace or controls")
+            if (
+                not isinstance(key, str)
+                or not 1 <= len(key) <= 128
+                or key != key.strip()
+                or any(ord(char) < 32 or ord(char) == 127 for char in key)
+            ):
+                raise ValueError(
+                    "Item keys must contain 1–128 characters without outer whitespace or controls"
+                )
             if key in seen:
                 raise ValueError("Each case key may appear only once")
             seen.add(key)
@@ -230,7 +254,17 @@ def update_outcomes(
     )
 
 
-def upsert(dataset_id, cases, *, base_version_id, project_id, token, base_url, key_field=None, idempotency_key=None):
+def upsert(
+    dataset_id,
+    cases,
+    *,
+    base_version_id,
+    project_id,
+    token,
+    base_url,
+    key_field=None,
+    idempotency_key=None,
+):
     """Replace 1–500 keyed items in a new version, retaining other items.
 
     ``key_field`` maps a caller column such as ``id`` to the stable item key.
@@ -242,15 +276,22 @@ def upsert(dataset_id, cases, *, base_version_id, project_id, token, base_url, k
     if not cases:
         raise ValueError("Supply at least one keyed case")
     key = str(UUID(idempotency_key)) if idempotency_key is not None else str(uuid4())
-    content = encode_json({"baseVersionId": str(UUID(base_version_id)), "idempotencyKey": key, "upsertCases": cases})
+    content = encode_json(
+        {"baseVersionId": str(UUID(base_version_id)), "idempotencyKey": key, "upsertCases": cases}
+    )
     api = DatasetApi(project_id=project_id, token=token, base_url=base_url)
-    return publication(api.request("POST", f"/datasets/{dataset_id}/versions", content=content, key=key), dataset_id)
+    return publication(
+        api.request("POST", f"/datasets/{dataset_id}/versions", content=content, key=key),
+        dataset_id,
+    )
 
 
 def versions(dataset_id, *, project_id, token, base_url):
     """Read published version tags and trusted audit actors; legacy actors can be null."""
     dataset_id = str(UUID(dataset_id))
-    data = DatasetApi(project_id=project_id, token=token, base_url=base_url).request("GET", f"/datasets/{dataset_id}")
+    data = DatasetApi(project_id=project_id, token=token, base_url=base_url).request(
+        "GET", f"/datasets/{dataset_id}"
+    )
     try:
         if str(UUID(data["dataset"]["id"])) != dataset_id or not isinstance(data["versions"], list):
             raise ValueError()
@@ -258,14 +299,32 @@ def versions(dataset_id, *, project_id, token, base_url):
         for version in data["versions"]:
             actor = version.get("createdBy")
             if actor is not None:
-                if not isinstance(actor, dict) or actor.get("kind") not in ("user", "service_account", "guest"):
+                if not isinstance(actor, dict) or actor.get("kind") not in (
+                    "user",
+                    "service_account",
+                    "guest",
+                ):
                     raise ValueError()
                 actor = {"kind": actor["kind"], "id": str(UUID(actor["id"]))}
             number = version["version"]
             tags = version.get("tags", [])
-            if type(number) is not int or number < 1 or not isinstance(version["createdAt"], str) or not isinstance(tags, list) or any(not isinstance(tag, str) for tag in tags):
+            if (
+                type(number) is not int
+                or number < 1
+                or not isinstance(version["createdAt"], str)
+                or not isinstance(tags, list)
+                or any(not isinstance(tag, str) for tag in tags)
+            ):
                 raise ValueError()
-            history.append({"id": str(UUID(version["id"])), "version": number, "createdAt": version["createdAt"], "createdBy": actor, "tags": tags})
+            history.append(
+                {
+                    "id": str(UUID(version["id"])),
+                    "version": number,
+                    "createdAt": version["createdAt"],
+                    "createdBy": actor,
+                    "tags": tags,
+                }
+            )
         return history
     except (KeyError, TypeError, AttributeError, ValueError):
         raise DatasetError("Invalid dataset version history") from None

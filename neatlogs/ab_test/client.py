@@ -134,8 +134,12 @@ class AbTestClient:
         if decision.reason == "assigned":
             self.record_run(decision)
         return AbAssignment(
-            decision.key, decision.arm, decision.params, decision.reason,
-            decision.revision, decision.allocation_version,
+            decision.key,
+            decision.arm,
+            decision.params,
+            decision.reason,
+            decision.revision,
+            decision.allocation_version,
         )
 
     def choose(self, key: str, *, unit: str, fallback: Params | None = None) -> AbDecision:
@@ -171,8 +175,11 @@ class AbTestClient:
         if decision.reason != "assigned" or decision.allocation_version is None:
             return False
         return self._queue_exposure(
-            decision.key, unit_id=decision.unit_id, arm=decision.arm,
-            source="sdk", allocation_version=decision.allocation_version,
+            decision.key,
+            unit_id=decision.unit_id,
+            arm=decision.arm,
+            source="sdk",
+            allocation_version=decision.allocation_version,
         )
 
     def complete_decision(self, decision: AbDecision, trace_id: str) -> bool:
@@ -180,8 +187,11 @@ class AbTestClient:
         if decision.reason != "assigned" or decision.allocation_version is None:
             return False
         return self.complete_unit(
-            decision.key, unit_id=decision.unit_id, arm=decision.arm,
-            trace_id=trace_id, allocation_version=decision.allocation_version,
+            decision.key,
+            unit_id=decision.unit_id,
+            arm=decision.arm,
+            trace_id=trace_id,
+            allocation_version=decision.allocation_version,
         )
 
     def log_exposure(
@@ -318,10 +328,21 @@ class AbTestClient:
         if self._stop.is_set() or not self._flush_lock.acquire(blocking=False):
             return self.get_diagnostics() == {"pending": 0, "rejected": 0}
         deadline = time.monotonic() + max(0, min(timeout_seconds, 5))
+        blocked_units: set[tuple[str, str, str]] = set()
         try:
             while not self._stop.is_set() and time.monotonic() < deadline:
+                now = time.time()
                 with self._lock:
-                    item = next(iter(self._queue.items()), None)
+                    item = next(
+                        (
+                            item
+                            for item in self._queue.items()
+                            if now - item[1][2] > 86400
+                            or (self._api_path, item[1][0], item[1][1]["unitId"])
+                            not in blocked_units
+                        ),
+                        None,
+                    )
                 if item is None:
                     break
                 event_id, (key, exposure, queued_at) = item
@@ -347,6 +368,13 @@ class AbTestClient:
                             and body.get("code") not in {None, "AB_TRACE_NOT_READY"}
                         ):
                             rejected = True
+                        elif 200 <= status < 300 or (
+                            status == 409
+                            and isinstance(body, dict)
+                            and body.get("code") == "AB_TRACE_NOT_READY"
+                        ):
+                            blocked_units.add((self._api_path, key, exposure["unitId"]))
+                            continue
                         else:
                             break
                     except Exception:

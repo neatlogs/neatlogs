@@ -14,6 +14,8 @@ from opentelemetry.sdk.trace import TracerProvider
 import neatlogs
 from neatlogs.ab_test import AbTestClient
 from neatlogs.ab_test.protocol import assignment_bucket
+from neatlogs.agent import AgentClient
+from neatlogs.agent.protocol import AgentDecision
 
 client_module = importlib.import_module("neatlogs.ab_test.client")
 shared = importlib.import_module("neatlogs.ab_test")
@@ -72,9 +74,14 @@ def server():
         def do_POST(self):
             payload = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             state["requests"].append(("POST", self.path, dict(self.headers), payload))
-            self.send_response(state["exposure_status"])
+            status, body = (
+                state["exposure_responder"](self.path, payload)
+                if state.get("exposure_responder")
+                else (state["exposure_status"], state["exposure_body"])
+            )
+            self.send_response(status)
             self.end_headers()
-            self.wfile.write(json.dumps(state["exposure_body"]).encode())
+            self.wfile.write(json.dumps(body).encode())
 
     http = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     thread = threading.Thread(target=http.serve_forever, daemon=True)
@@ -147,10 +154,12 @@ def test_transient_refresh_never_extends_server_expiry(server, monkeypatch, fail
     expires_at = client_module.timestamp(server["config"]["expiresAt"])
     with connected(server) as client:
         if failure in {"disconnect", "interrupted"}:
+
             def disconnected(*args, **kwargs):
                 if failure == "interrupted":
                     raise requests.exceptions.ChunkedEncodingError("interrupted")
                 raise requests.ConnectionError("disconnected")
+
             monkeypatch.setattr(client, "_request", disconnected)
         else:
             server["status"] = failure
@@ -159,7 +168,9 @@ def test_transient_refresh_never_extends_server_expiry(server, monkeypatch, fail
         assert client.choose("example", unit="session:42").reason == "assigned"
         monkeypatch.setattr(client_module.time, "time", lambda: expires_at)
         client.refresh()
-        assert client.choose("example", unit="session:42", fallback={"model": "safe"}).params == {"model": "safe"}
+        assert client.choose("example", unit="session:42", fallback={"model": "safe"}).params == {
+            "model": "safe"
+        }
 
 
 @pytest.mark.parametrize("failure", [401, 403, 404, 302, "invalid"])
@@ -175,9 +186,10 @@ def test_revoked_or_invalid_refresh_discards_unexpired_cache(server, failure):
 
 @pytest.mark.parametrize("kind", ["WORKFLOW", "CHAIN"])
 def test_nested_assignment_tags_neatlogs_root_without_tagging_host(server, kind):
-    from neatlogs._wrap_utils import get_neatlogs_provider, set_neatlogs_provider
     from opentelemetry.sdk.trace.export import SimpleSpanProcessor
     from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    from neatlogs._wrap_utils import get_neatlogs_provider, set_neatlogs_provider
 
     provider = TracerProvider()
     exporter = InMemorySpanExporter()
@@ -197,7 +209,9 @@ def test_nested_assignment_tags_neatlogs_root_without_tagging_host(server, kind)
         roots = [span for span in spans if span.parent is None]
         assert len(roots) == 1
         assert roots[0].attributes["neatlogs.ab.example"] == "b"
-        assert all("neatlogs.ab.example" not in span.attributes for span in spans if span is not roots[0])
+        assert all(
+            "neatlogs.ab.example" not in span.attributes for span in spans if span is not roots[0]
+        )
     finally:
         set_neatlogs_provider(previous)
         provider.shutdown()
@@ -287,6 +301,94 @@ def test_external_exposure_conflict_is_observable_and_bounded(server):
         assert not client.flush()
         assert server["requests"][-1][3]["source"] == "external"
         assert client.get_diagnostics() == {"pending": 0, "rejected": 2}
+
+
+@pytest.mark.parametrize(
+    "delayed", [(409, {"code": "AB_TRACE_NOT_READY"}), (200, {"accepted": False})]
+)
+def test_delayed_unit_preserves_closure_but_does_not_block_other_units(server, delayed):
+    ready = False
+    server["exposure_responder"] = lambda _path, body: (
+        delayed if body["unitId"] == "blocked" and not ready else (200, {"accepted": True})
+    )
+    with connected(server) as client:
+        for unit, complete in [
+            ("blocked", False),
+            ("blocked", True),
+            ("independent", False),
+            ("independent", True),
+        ]:
+            assert client.log_exposure(
+                "example", unit_id=unit, arm="a", trace_id=f"{unit}-trace", unit_complete=complete
+            )
+        assert not client.flush()
+        sent = [row[3] for row in server["requests"] if row[0] == "POST"]
+        assert [(row["unitId"], row["unitComplete"]) for row in sent] == [
+            ("blocked", False),
+            ("independent", False),
+            ("independent", True),
+        ]
+        assert client.get_diagnostics() == {"pending": 2, "rejected": 0}
+        event_id = sent[0]["eventId"]
+        ready = True
+        assert client.flush()
+        later = [row[3] for row in server["requests"] if row[0] == "POST"][3:]
+        assert later[0]["eventId"] == event_id
+        assert [row["unitComplete"] for row in later] == [False, True]
+
+
+def test_agent_delayed_unit_blocks_renewed_lease_closure_but_not_other_keys(server):
+    ready = False
+    server["exposure_responder"] = lambda _path, body: (
+        (409, {"code": "AB_TRACE_NOT_READY"})
+        if body["traceId"] == "old-run" and not ready
+        else (200, {"accepted": True})
+    )
+    client = AgentClient(base_url=server["url"], api_key="test-key", keys=["example", "other"])
+    try:
+        for key, unit, trace_id, complete in [
+            ("example", "blocked", "old-run", False),
+            ("example", "blocked", "renewed-closure", True),
+            ("example", "independent", "other-unit", False),
+            ("other", "blocked", "other-key", False),
+        ]:
+            decision = AgentDecision(
+                key,
+                unit,
+                "a",
+                {},
+                "assigned",
+                assignment_id=str(uuid4()),
+                unit="session",
+                completion_policy="explicit",
+            )
+            assert client._queue_agent(decision, trace_id, complete)
+        assert not client.flush()
+        sent = [(row[1], row[3]) for row in server["requests"] if row[0] == "POST"]
+        assert [body["traceId"] for _path, body in sent] == ["old-run", "other-unit", "other-key"]
+        assert all(path.startswith("/api/v2/experiment-agents/") for path, _body in sent)
+        assert client.get_diagnostics() == {"pending": 2, "rejected": 0}
+        first = sent[0][1]
+        ready = True
+        assert client.flush()
+        later = [row[3] for row in server["requests"] if row[0] == "POST"][3:]
+        assert later[0] == first
+        assert later[1]["assignmentId"] != first["assignmentId"]
+        assert later[1]["conversationComplete"] is True
+    finally:
+        client.close()
+
+
+@pytest.mark.parametrize("status", [408, 429, 500, 503, 409])
+def test_global_delivery_failures_still_stop_independent_units(server, status):
+    server["exposure_status"] = status
+    server["exposure_body"] = {}
+    with connected(server) as client:
+        for unit in ["first", "other"]:
+            assert client.log_exposure("example", unit_id=unit, arm="a", trace_id=f"{unit}-trace")
+        assert not client.flush()
+        assert len([row for row in server["requests"] if row[0] == "POST"]) == 1
+        assert client.get_diagnostics() == {"pending": 2, "rejected": 0}
 
 
 def test_shared_init_and_flush_deliver_after_telemetry(server, monkeypatch):

@@ -1,5 +1,5 @@
 version = 1
-revision = 5
+revision = 3
 requires-python = ">=3.10, <3.15"
 resolution-markers = [
     "python_full_version >= '3.14' and sys_platform == 'win32'",
@@ -25,7 +25,7 @@ version = "0.1.22"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pydantic", version = "2.12.5", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra != 'extra-8-neatlogs-crewai' or extra == 'extra-8-neatlogs-hermes'" },
+    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/e8/f7/9bf788e7d3608725d022a248a58427040f4f930ab87ddb54bd29ee4d9a51/ag_ui_protocol-0.1.22.tar.gz", hash = "sha256:d21f265284a50d9fc87ad7bcbd58f737b4b16eef7b5375f13a6e925117b52046", size = 18110, upload-time = "2026-08-31T18:20:04.334Z" }
 wheels = [
@@ -43,7 +43,7 @@ dependencies = [
     { name = "httpx", extra = ["http2"] },
     { name = "packaging" },
     { name = "pydantic", version = "2.12.5", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra != 'extra-8-neatlogs-crewai' or extra == 'extra-8-neatlogs-hermes'" },
+    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
     { name = "pydantic-settings" },
     { name = "pyyaml" },
     { name = "rich" },
@@ -90,7 +90,7 @@ resolution-markers = [
     "python_full_version < '3.11'",
 ]
 dependencies = [
-    { name = "caio", version = "0.9.25", source = { registry = "https://pypi.org/simple" } },
+    { name = "caio", version = "0.9.25", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/67/e2/d7cb819de8df6b5c1968a2756c3cb4122d4fa2b8fc768b53b7c9e5edb646/aiofile-3.9.0.tar.gz", hash = "sha256:e5ad718bb148b265b6df1b3752c4d1d83024b93da9bd599df74b9d9ffcf7919b", size = 17943, upload-time = "2024-10-08T10:39:35.846Z" }
 wheels = [
@@ -114,7 +114,7 @@ resolution-markers = [
     "python_full_version == '3.11.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
 ]
 dependencies = [
-    { name = "caio", version = "0.12.4", source = { registry = "https://pypi.org/simple" } },
+    { name = "caio", version = "0.12.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/14/31/edb06aabd8f8f0b56d659f30800795f40b93cba96be946ce179f6931e3a5/aiofile-3.12.3.tar.gz", hash = "sha256:caa6aa746b5e47e2165f7abd741b6415e49cf4d44fddc0f61844612cc3924d41", size = 21600, upload-time = "2026-08-04T22:59:27.171Z" }
 wheels = [
@@ -146,12 +146,12 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohappyeyeballs" },
     { name = "aiosignal" },
-    { name = "async-timeout", marker = "python_full_version < '3.11'" },
+    { name = "async-timeout", marker = "python_full_version < '3.11' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
     { name = "attrs" },
     { name = "frozenlist" },
     { name = "multidict" },
     { name = "propcache" },
-    { name = "typing-extensions", marker = "python_full_version < '3.13'" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
     { name = "yarl" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/58/d9/22ce5786ac0c1653ae8b6c23bded02c1686d11f0dbb45b31ce128e0df985/aiohttp-3.14.3.tar.gz", hash = "sha256:9491196535a88924a60afd5b5f434b5b203b6cc616250878dbdb223a8f7844bc", size = 7971213, upload-time = "2026-07-23T01:57:27.037Z" }
@@ -282,7 +282,7 @@ version = "1.4.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "frozenlist" },
-    { name = "typing-extensions", marker = "python_full_version < '3.13'" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/61/62/06741b579156360248d1ec624842ad0edf697050bbaf7c3e46394e106ad1/aiosignal-1.4.0.tar.gz", hash = "sha256:f47eecd9468083c2029cc99945502cb7708b082c232f9aca65da147157b251c7", size = 25007, upload-time = "2025-07-03T22:54:43.528Z" }
 wheels = [
@@ -365,7 +365,7 @@ dependencies = [
     { name = "httpx" },
     { name = "jiter" },
     { name = "pydantic", version = "2.12.5", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra != 'extra-8-neatlogs-crewai' or extra == 'extra-8-neatlogs-hermes'" },
+    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
     { name = "sniffio" },
     { name = "typing-extensions" },
 ]
@@ -379,9 +379,9 @@ name = "anyio"
 version = "4.14.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "exceptiongroup", marker = "python_full_version < '3.11'" },
+    { name = "exceptiongroup", marker = "python_full_version < '3.11' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
     { name = "idna" },
-    { name = "typing-extensions", marker = "python_full_version < '3.13'" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/61/cc/a381afa6efea9f496eff839d4a6a1aed3bfafc7b3ab4b0d1b243a12573dd/anyio-4.14.2.tar.gz", hash = "sha256:cfa139f3ed1a23ee8f88a145ddb5ac7605b8bbfd8592baacd7ce3d8bb4313c7f", size = 260176, upload-time = "2026-07-12T20:29:07.082Z" }
 wheels = [
@@ -472,7 +472,7 @@ dependencies = [
     { name = "pillow" },
     { name = "protobuf" },
     { name = "pydantic", version = "2.12.5", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra != 'extra-8-neatlogs-crewai' or extra == 'extra-8-neatlogs-hermes'" },
+    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
     { name = "typing-extensions" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/b1/11/fea52bf3541c5308bed1ee9b9b3596fa510b2c5db893d32b649d22f02b87/autogen_core-0.7.5.tar.gz", hash = "sha256:70c2871389f1d0a7f6db8ef78717a51b7ce877ff4a08a836b7758d604dece203", size = 101980, upload-time = "2025-09-30T06:16:25.957Z" }
@@ -561,7 +561,7 @@ dependencies = [
     { name = "jinja2" },
     { name = "platformdirs" },
     { name = "pydantic", version = "2.12.5", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra != 'extra-8-neatlogs-crewai' or extra == 'extra-8-neatlogs-hermes'" },
+    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/6d/f0/ce5b3105a8551fdcedb509ab5340066247b3cd1b28e79f9296be2d6d3bf4/banks-2.5.0.tar.gz", hash = "sha256:fdd4fd54b84dbe31cb51a1173c960697c73d683a52fb0b1d1957a557a8d6fcc8", size = 194585, upload-time = "2026-08-08T15:54:16.548Z" }
 wheels = [
@@ -660,7 +660,7 @@ dependencies = [
     { name = "pytokens" },
     { name = "tomli", version = "2.0.2", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and extra == 'extra-8-neatlogs-crewai') or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
     { name = "tomli", version = "2.4.1", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and extra != 'extra-8-neatlogs-crewai') or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
-    { name = "typing-extensions", marker = "python_full_version < '3.11'" },
+    { name = "typing-extensions", marker = "python_full_version < '3.11' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/c0/37/5628dd55bf2b34257fc7603f0fe97c40e3aaf24265f416a9c85c95ca1436/black-26.5.1.tar.gz", hash = "sha256:dd321f668053961824bcc1be1cc1df748b2d7e4fa28086b08331e577b0100a73", size = 679439, upload-time = "2026-05-18T16:53:36.107Z" }
 wheels = [
@@ -725,8 +725,8 @@ name = "build"
 version = "1.5.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "colorama", marker = "os_name == 'nt'" },
-    { name = "importlib-metadata", marker = "python_full_version < '3.10.2'" },
+    { name = "colorama", marker = "os_name == 'nt' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "importlib-metadata", marker = "python_full_version < '3.10.2' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
     { name = "packaging" },
     { name = "pyproject-hooks" },
     { name = "tomli", version = "2.0.2", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and extra == 'extra-8-neatlogs-crewai') or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
@@ -870,7 +870,7 @@ name = "cffi"
 version = "2.1.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "pycparser", marker = "implementation_name != 'PyPy'" },
+    { name = "pycparser", marker = "implementation_name != 'PyPy' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/9e/ef/008a1939e372c06329a3fce4279c02f328488f3526744906eeec3da7ad5f/cffi-2.1.1.tar.gz", hash = "sha256:dd31f52ea1086513bb9df30f8fcee9b8918323ae067a3d5b78bc826a000712be", size = 530807, upload-time = "2026-08-03T21:21:18.939Z" }
 wheels = [
@@ -1089,18 +1089,18 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "bcrypt" },
     { name = "build" },
-    { name = "grpcio", version = "1.67.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.14'" },
-    { name = "grpcio", version = "1.84.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.14'" },
+    { name = "grpcio", version = "1.67.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "grpcio", version = "1.84.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
     { name = "httpx" },
     { name = "importlib-resources" },
     { name = "jsonschema" },
     { name = "kubernetes" },
     { name = "mmh3" },
-    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
-    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
-    { name = "numpy", version = "2.5.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
-    { name = "onnxruntime", version = "1.23.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
-    { name = "onnxruntime", version = "1.28.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "numpy", version = "2.5.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "onnxruntime", version = "1.23.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "onnxruntime", version = "1.28.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
     { name = "opentelemetry-api" },
     { name = "opentelemetry-exporter-otlp-proto-grpc" },
     { name = "opentelemetry-sdk" },
@@ -1108,7 +1108,7 @@ dependencies = [
     { name = "overrides" },
     { name = "pybase64" },
     { name = "pydantic", version = "2.12.5", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra != 'extra-8-neatlogs-crewai' or extra == 'extra-8-neatlogs-hermes'" },
+    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
     { name = "pydantic-settings" },
     { name = "pypika" },
     { name = "pyyaml" },
@@ -1134,7 +1134,7 @@ name = "click"
 version = "8.4.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "colorama", marker = "sys_platform == 'win32'" },
+    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/76/d4/81420972a676e8ffea40450d8c8c92943e7218a78fe9b64359836cc9876b/click-8.4.2.tar.gz", hash = "sha256:9a6cea6e60b17ebe0a44c5cc636d94f09bd66142c1cd7d8b4cd731c4917a15f6", size = 338000, upload-time = "2026-06-24T17:45:15.148Z" }
 wheels = [
@@ -1158,9 +1158,9 @@ dependencies = [
     { name = "fastavro" },
     { name = "httpx" },
     { name = "pydantic", version = "2.12.5", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra != 'extra-8-neatlogs-crewai' or extra == 'extra-8-neatlogs-hermes'" },
+    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
     { name = "pydantic-core", version = "2.41.5", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "pydantic-core", version = "2.46.4", source = { registry = "https://pypi.org/simple" }, marker = "extra != 'extra-8-neatlogs-crewai' or extra == 'extra-8-neatlogs-hermes'" },
+    { name = "pydantic-core", version = "2.46.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
     { name = "requests" },
     { name = "tokenizers" },
     { name = "types-requests" },
@@ -1185,7 +1185,7 @@ name = "coloredlogs"
 version = "15.0.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "humanfriendly" },
+    { name = "humanfriendly", marker = "python_full_version < '3.11' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/cc/c7/eed8f27100517e8c0e6b923d5f0845d0cb99763da6fdee00478f91db7325/coloredlogs-15.0.1.tar.gz", hash = "sha256:7c991aa71a4577af2f82600d8f8f3a89f936baeaf9b50a9c197da014e5bf16b0", size = 278520, upload-time = "2021-06-11T10:22:45.202Z" }
 wheels = [
@@ -1212,7 +1212,7 @@ dependencies = [
     { name = "jsonref" },
     { name = "lancedb" },
     { name = "mcp", version = "1.28.1", source = { registry = "https://pypi.org/simple" } },
-    { name = "oauthlib" },
+    { name = "oauthlib", version = "4.0.0", source = { registry = "https://pypi.org/simple" } },
     { name = "openai", version = "2.54.0", source = { registry = "https://pypi.org/simple" } },
     { name = "openpyxl" },
     { name = "opentelemetry-api" },
@@ -1309,8 +1309,8 @@ name = "cryptography"
 version = "50.0.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "cffi", marker = "platform_python_implementation != 'PyPy'" },
-    { name = "typing-extensions", marker = "python_full_version < '3.11'" },
+    { name = "cffi", marker = "platform_python_implementation != 'PyPy' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "typing-extensions", marker = "python_full_version < '3.11' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/de/41/6cbdcf9142d00fe82836fbb51e503e58088575cf7a0fe1dbff6695bf0840/cryptography-50.0.0.tar.gz", hash = "sha256:eeac2acb5a20ed25e0ad6d1df9891a520b78b404266b6d11778f25d5d691a6c9", size = 880201, upload-time = "2026-07-31T14:25:10.11Z" }
 wheels = [
@@ -1372,7 +1372,7 @@ dependencies = [
     { name = "rich-rst" },
     { name = "tomli", version = "2.0.2", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and extra == 'extra-8-neatlogs-crewai') or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
     { name = "tomli", version = "2.4.1", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and extra != 'extra-8-neatlogs-crewai') or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
-    { name = "typing-extensions", marker = "python_full_version < '3.11'" },
+    { name = "typing-extensions", marker = "python_full_version < '3.11' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/16/8f/6caec9cf291ba294a0d0669b0388e5676d8887d8b75a8c3ad0a2dc2eeed9/cyclopts-4.25.2.tar.gz", hash = "sha256:0776bc1fa796cd351646c345b7420279e58d6c2c4a8f5d5dd54dea85bdb2de8f", size = 202467, upload-time = "2026-09-08T16:58:04.426Z" }
 wheels = [
@@ -1508,15 +1508,15 @@ dependencies = [
     { name = "diskcache" },
     { name = "gepa" },
     { name = "json-repair", version = "0.60.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "json-repair", version = "0.63.2", source = { registry = "https://pypi.org/simple" }, marker = "extra != 'extra-8-neatlogs-crewai' or extra == 'extra-8-neatlogs-hermes'" },
+    { name = "json-repair", version = "0.63.2", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
     { name = "litellm" },
     { name = "openai", version = "2.24.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.11' and extra == 'extra-8-neatlogs-hermes') or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
     { name = "openai", version = "2.54.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or extra == 'extra-8-neatlogs-crewai' or extra != 'extra-8-neatlogs-hermes'" },
     { name = "orjson" },
     { name = "pydantic", version = "2.12.5", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra != 'extra-8-neatlogs-crewai' or extra == 'extra-8-neatlogs-hermes'" },
+    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
     { name = "regex", version = "2026.1.15", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "regex", version = "2026.7.19", source = { registry = "https://pypi.org/simple" }, marker = "extra != 'extra-8-neatlogs-crewai' or extra == 'extra-8-neatlogs-hermes'" },
+    { name = "regex", version = "2026.7.19", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
     { name = "requests" },
     { name = "tenacity" },
     { name = "tqdm" },
@@ -1553,8 +1553,8 @@ name = "environs"
 version = "9.5.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "marshmallow" },
-    { name = "python-dotenv" },
+    { name = "marshmallow", marker = "python_full_version >= '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "python-dotenv", marker = "python_full_version >= '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/d4/e3/c3c6c76f3dbe3e019e9a451b35bf9f44690026a5bb1232f7b77097b72ff5/environs-9.5.0.tar.gz", hash = "sha256:a76307b36fbe856bdca7ee9161e6c466fd7fcffc297109a118c59b54e27e30c9", size = 20795, upload-time = "2022-01-30T18:07:56.251Z" }
 wheels = [
@@ -1584,7 +1584,7 @@ name = "exceptiongroup"
 version = "1.3.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "typing-extensions", marker = "python_full_version < '3.13'" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/50/79/66800aadf48771f6b62f7eb014e352e5d06856655206165d775e675a02c9/exceptiongroup-1.3.1.tar.gz", hash = "sha256:8b412432c6055b0b7d14c310000ae93352ed6754f70fa8f7c34141f91c4e3219", size = 30371, upload-time = "2025-11-21T23:01:54.787Z" }
 wheels = [
@@ -1619,7 +1619,7 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "annotated-doc" },
     { name = "pydantic", version = "2.12.5", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra != 'extra-8-neatlogs-crewai' or extra == 'extra-8-neatlogs-hermes'" },
+    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
     { name = "starlette" },
     { name = "typing-extensions" },
     { name = "typing-inspection" },
@@ -1673,7 +1673,7 @@ dependencies = [
     { name = "fastar" },
     { name = "httpx" },
     { name = "pydantic", version = "2.12.5", source = { registry = "https://pypi.org/simple" }, extra = ["email"], marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, extra = ["email"], marker = "extra != 'extra-8-neatlogs-crewai' or extra == 'extra-8-neatlogs-hermes'" },
+    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, extra = ["email"], marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
     { name = "rich-toolkit" },
     { name = "rignore" },
     { name = "sentry-sdk" },
@@ -1872,7 +1872,7 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "platformdirs" },
     { name = "pydantic", version = "2.12.5", source = { registry = "https://pypi.org/simple" }, extra = ["email"], marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, extra = ["email"], marker = "extra != 'extra-8-neatlogs-crewai' or extra == 'extra-8-neatlogs-hermes'" },
+    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, extra = ["email"], marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
     { name = "pydantic-settings" },
     { name = "python-dotenv" },
     { name = "rich" },
@@ -1889,7 +1889,7 @@ client = [
     { name = "exceptiongroup" },
     { name = "httpx" },
     { name = "mcp", version = "1.28.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "mcp", version = "1.29.0", source = { registry = "https://pypi.org/simple" }, marker = "extra != 'extra-8-neatlogs-crewai' or extra == 'extra-8-neatlogs-hermes'" },
+    { name = "mcp", version = "1.29.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
     { name = "opentelemetry-api" },
     { name = "py-key-value-aio", extra = ["filetree", "keyring", "memory"] },
     { name = "starlette" },
@@ -1904,7 +1904,7 @@ server = [
     { name = "jsonref" },
     { name = "jsonschema-path" },
     { name = "mcp", version = "1.28.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "mcp", version = "1.29.0", source = { registry = "https://pypi.org/simple" }, marker = "extra != 'extra-8-neatlogs-crewai' or extra == 'extra-8-neatlogs-hermes'" },
+    { name = "mcp", version = "1.29.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
     { name = "openapi-pydantic" },
     { name = "opentelemetry-api" },
     { name = "packaging" },
@@ -2166,7 +2166,7 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "httpx2" },
     { name = "pydantic", version = "2.12.5", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra != 'extra-8-neatlogs-crewai' or extra == 'extra-8-neatlogs-hermes'" },
+    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/09/14/a188df294f013ec9cd97fc6b145f5427f89067bfb2c260fc3fb5c8d1fb34/genai_prices-0.1.3.tar.gz", hash = "sha256:62c30cddd6c2d2199d878d1a70521c3e37347cd9394446d107dc774a78ed3780", size = 92638, upload-time = "2026-08-15T00:10:31.771Z" }
 wheels = [
@@ -2189,7 +2189,7 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
     { name = "aiosqlite", version = "0.21.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "aiosqlite", version = "0.22.1", source = { registry = "https://pypi.org/simple" }, marker = "extra != 'extra-8-neatlogs-crewai' or extra == 'extra-8-neatlogs-hermes'" },
+    { name = "aiosqlite", version = "0.22.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
     { name = "authlib" },
     { name = "click" },
     { name = "fastapi" },
@@ -2202,7 +2202,7 @@ dependencies = [
     { name = "opentelemetry-sdk" },
     { name = "packaging" },
     { name = "pydantic", version = "2.12.5", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra != 'extra-8-neatlogs-crewai' or extra == 'extra-8-neatlogs-hermes'" },
+    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
     { name = "python-dotenv" },
     { name = "python-multipart" },
     { name = "pyyaml" },
@@ -2229,11 +2229,11 @@ resolution-markers = [
     "python_full_version >= '3.14' and sys_platform != 'win32'",
 ]
 dependencies = [
-    { name = "google-auth" },
-    { name = "googleapis-common-protos" },
-    { name = "proto-plus" },
-    { name = "protobuf" },
-    { name = "requests" },
+    { name = "google-auth", marker = "python_full_version >= '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "googleapis-common-protos", marker = "python_full_version >= '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "proto-plus", marker = "python_full_version >= '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "protobuf", marker = "python_full_version >= '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "requests", marker = "python_full_version >= '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/09/cd/63f1557235c2440fe0577acdbc32577c5c002684c58c7f4d770a92366a24/google_api_core-2.25.2.tar.gz", hash = "sha256:1c63aa6af0d0d5e37966f157a77f9396d820fba59f9e43e9415bc3dc5baff300", size = 166266, upload-time = "2025-10-03T00:07:34.778Z" }
 wheels = [
@@ -2242,8 +2242,8 @@ wheels = [
 
 [package.optional-dependencies]
 grpc = [
-    { name = "grpcio", version = "1.84.0", source = { registry = "https://pypi.org/simple" } },
-    { name = "grpcio-status" },
+    { name = "grpcio", version = "1.84.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "grpcio-status", marker = "python_full_version >= '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
 ]
 
 [[package]]
@@ -2262,11 +2262,11 @@ resolution-markers = [
     "python_full_version < '3.11'",
 ]
 dependencies = [
-    { name = "google-auth" },
-    { name = "googleapis-common-protos" },
-    { name = "proto-plus" },
-    { name = "protobuf" },
-    { name = "requests" },
+    { name = "google-auth", marker = "python_full_version < '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "googleapis-common-protos", marker = "python_full_version < '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "proto-plus", marker = "python_full_version < '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "protobuf", marker = "python_full_version < '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "requests", marker = "python_full_version < '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/87/62/8fb1fb647d2788c950d69d6a769cd9d55c918ac1fc57be2f90b7e4029787/google_api_core-2.33.0.tar.gz", hash = "sha256:3a36bcc3e319783f4c97da41f6f45ea6ffcaa55848e341de16e09cb70243c2bb", size = 181607, upload-time = "2026-07-22T16:28:28.027Z" }
 wheels = [
@@ -2275,8 +2275,8 @@ wheels = [
 
 [package.optional-dependencies]
 grpc = [
-    { name = "grpcio", version = "1.67.1", source = { registry = "https://pypi.org/simple" } },
-    { name = "grpcio-status" },
+    { name = "grpcio", version = "1.67.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "grpcio-status", marker = "python_full_version < '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
 ]
 
 [[package]]
@@ -2309,19 +2309,19 @@ resolution-markers = [
     "python_full_version >= '3.14' and sys_platform != 'win32'",
 ]
 dependencies = [
-    { name = "docstring-parser" },
-    { name = "google-api-core", version = "2.25.2", source = { registry = "https://pypi.org/simple" }, extra = ["grpc"] },
-    { name = "google-auth" },
-    { name = "google-cloud-bigquery", version = "3.42.3", source = { registry = "https://pypi.org/simple" } },
-    { name = "google-cloud-resource-manager" },
-    { name = "google-cloud-storage", version = "2.19.0", source = { registry = "https://pypi.org/simple" } },
-    { name = "packaging" },
-    { name = "proto-plus" },
-    { name = "protobuf" },
-    { name = "pydantic", version = "2.12.5", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra != 'extra-8-neatlogs-crewai' or extra == 'extra-8-neatlogs-hermes'" },
-    { name = "shapely" },
-    { name = "typing-extensions" },
+    { name = "docstring-parser", marker = "python_full_version >= '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "google-api-core", version = "2.25.2", source = { registry = "https://pypi.org/simple" }, extra = ["grpc"], marker = "python_full_version >= '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "google-auth", marker = "python_full_version >= '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "google-cloud-bigquery", version = "3.42.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "google-cloud-resource-manager", marker = "python_full_version >= '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "google-cloud-storage", version = "2.19.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "packaging", marker = "python_full_version >= '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "proto-plus", marker = "python_full_version >= '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "protobuf", marker = "python_full_version >= '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "pydantic", version = "2.12.5", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.14' and extra == 'extra-8-neatlogs-crewai') or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.14' and extra != 'extra-8-neatlogs-crewai') or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "shapely", marker = "python_full_version >= '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "typing-extensions", marker = "python_full_version >= '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/50/08/5854569782efbbc8efd0aeda3a4486153605104cbab6ac836b2328bae48e/google_cloud_aiplatform-1.91.0.tar.gz", hash = "sha256:b14e5e52b52b6012c7dc253beab34c511fdc53c69b13f436ddb06882c1a92cd7", size = 9102586, upload-time = "2025-04-30T17:15:23.546Z" }
 wheels = [
@@ -2344,20 +2344,20 @@ resolution-markers = [
     "python_full_version < '3.11'",
 ]
 dependencies = [
-    { name = "certifi" },
-    { name = "docstring-parser" },
-    { name = "google-api-core", version = "2.33.0", source = { registry = "https://pypi.org/simple" }, extra = ["grpc"] },
-    { name = "google-auth" },
-    { name = "google-cloud-bigquery", version = "3.43.0", source = { registry = "https://pypi.org/simple" } },
-    { name = "google-cloud-resource-manager" },
-    { name = "google-cloud-storage", version = "3.13.1", source = { registry = "https://pypi.org/simple" } },
-    { name = "google-genai" },
-    { name = "packaging" },
-    { name = "proto-plus" },
-    { name = "protobuf" },
-    { name = "pydantic", version = "2.12.5", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra != 'extra-8-neatlogs-crewai' or extra == 'extra-8-neatlogs-hermes'" },
-    { name = "typing-extensions" },
+    { name = "certifi", marker = "python_full_version < '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "docstring-parser", marker = "python_full_version < '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "google-api-core", version = "2.33.0", source = { registry = "https://pypi.org/simple" }, extra = ["grpc"], marker = "python_full_version < '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "google-auth", marker = "python_full_version < '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "google-cloud-bigquery", version = "3.43.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "google-cloud-resource-manager", marker = "python_full_version < '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "google-cloud-storage", version = "3.13.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "google-genai", marker = "python_full_version < '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "packaging", marker = "python_full_version < '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "proto-plus", marker = "python_full_version < '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "protobuf", marker = "python_full_version < '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "pydantic", version = "2.12.5", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.14' and extra == 'extra-8-neatlogs-crewai') or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.14' and extra != 'extra-8-neatlogs-crewai') or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "typing-extensions", marker = "python_full_version < '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/81/bd/ddc72de71fd76ad40e88d23a634d0e6f2108330b98f349463016e5f7c0c1/google_cloud_aiplatform-1.164.0.tar.gz", hash = "sha256:51fb881523631e591a3d11a46cb9d7bd390e05127fe1d08c596ddce3e45fed2d", size = 11298864, upload-time = "2026-08-12T20:40:52.538Z" }
 wheels = [
@@ -2373,13 +2373,13 @@ resolution-markers = [
     "python_full_version >= '3.14' and sys_platform != 'win32'",
 ]
 dependencies = [
-    { name = "google-api-core", version = "2.25.2", source = { registry = "https://pypi.org/simple" }, extra = ["grpc"] },
-    { name = "google-auth", extra = ["pyopenssl"] },
-    { name = "google-cloud-core", version = "2.6.0", source = { registry = "https://pypi.org/simple" } },
-    { name = "google-resumable-media" },
-    { name = "packaging" },
-    { name = "python-dateutil" },
-    { name = "requests" },
+    { name = "google-api-core", version = "2.25.2", source = { registry = "https://pypi.org/simple" }, extra = ["grpc"], marker = "python_full_version >= '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "google-auth", extra = ["pyopenssl"], marker = "python_full_version >= '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "google-cloud-core", version = "2.6.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "google-resumable-media", marker = "python_full_version >= '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "packaging", marker = "python_full_version >= '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "python-dateutil", marker = "python_full_version >= '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "requests", marker = "python_full_version >= '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/0a/53/6a9c19cde15ffe3f218653e4f11d08b2ef97dad78c07c473bc95f8ce7aa9/google_cloud_bigquery-3.42.3.tar.gz", hash = "sha256:d03f8da5ed94aeae5457f3127216cb385392ba266bede25ea257aeec94512900", size = 518359, upload-time = "2026-07-30T18:15:19.314Z" }
 wheels = [
@@ -2402,13 +2402,13 @@ resolution-markers = [
     "python_full_version < '3.11'",
 ]
 dependencies = [
-    { name = "google-api-core", version = "2.33.0", source = { registry = "https://pypi.org/simple" }, extra = ["grpc"] },
-    { name = "google-auth", extra = ["pyopenssl"] },
-    { name = "google-cloud-core", version = "2.6.1", source = { registry = "https://pypi.org/simple" } },
-    { name = "google-resumable-media" },
-    { name = "packaging" },
-    { name = "python-dateutil" },
-    { name = "requests" },
+    { name = "google-api-core", version = "2.33.0", source = { registry = "https://pypi.org/simple" }, extra = ["grpc"], marker = "python_full_version < '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "google-auth", extra = ["pyopenssl"], marker = "python_full_version < '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "google-cloud-core", version = "2.6.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "google-resumable-media", marker = "python_full_version < '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "packaging", marker = "python_full_version < '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "python-dateutil", marker = "python_full_version < '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "requests", marker = "python_full_version < '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/99/a2/5ee4a9eae62dbd61e59504458d5cf870809f790ed136967d94c294b9a3ba/google_cloud_bigquery-3.43.0.tar.gz", hash = "sha256:e3dc25ab9ac8b2b089408493177d4d4508b098c80c3931786fbc20b075298fe6", size = 519709, upload-time = "2026-08-06T06:24:11.919Z" }
 wheels = [
@@ -2424,8 +2424,8 @@ resolution-markers = [
     "python_full_version >= '3.14' and sys_platform != 'win32'",
 ]
 dependencies = [
-    { name = "google-api-core", version = "2.25.2", source = { registry = "https://pypi.org/simple" } },
-    { name = "google-auth" },
+    { name = "google-api-core", version = "2.25.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "google-auth", marker = "python_full_version >= '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/a8/dd/1eef226e470369b26824a505c34482c0b493bc35fe8e0c6b003b5feca21a/google_cloud_core-2.6.0.tar.gz", hash = "sha256:e76149739f90fac1fc6757c09f47eaccb3145b54adbd7759b0f7c4b235f46c83", size = 36001, upload-time = "2026-05-07T08:04:04.124Z" }
 wheels = [
@@ -2448,8 +2448,8 @@ resolution-markers = [
     "python_full_version < '3.11'",
 ]
 dependencies = [
-    { name = "google-api-core", version = "2.33.0", source = { registry = "https://pypi.org/simple" } },
-    { name = "google-auth" },
+    { name = "google-api-core", version = "2.33.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "google-auth", marker = "python_full_version < '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/4a/c6/9d7d9ed6703eb35306ca7bf381fb66ba8d978c61a1b550a2e1730a4c4ce8/google_cloud_core-2.6.1.tar.gz", hash = "sha256:1e044b131f2ae097b92312fa195164b0aeb6dc6a88e00231e1210516314c420c", size = 36017, upload-time = "2026-08-06T06:24:18.211Z" }
 wheels = [
@@ -2461,12 +2461,12 @@ name = "google-cloud-resource-manager"
 version = "1.18.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "google-api-core", version = "2.25.2", source = { registry = "https://pypi.org/simple" }, extra = ["grpc"], marker = "python_full_version >= '3.14'" },
-    { name = "google-api-core", version = "2.33.0", source = { registry = "https://pypi.org/simple" }, extra = ["grpc"], marker = "python_full_version < '3.14'" },
+    { name = "google-api-core", version = "2.25.2", source = { registry = "https://pypi.org/simple" }, extra = ["grpc"], marker = "python_full_version >= '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "google-api-core", version = "2.33.0", source = { registry = "https://pypi.org/simple" }, extra = ["grpc"], marker = "python_full_version < '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
     { name = "google-auth" },
     { name = "grpc-google-iam-v1" },
-    { name = "grpcio", version = "1.67.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.14'" },
-    { name = "grpcio", version = "1.84.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.14'" },
+    { name = "grpcio", version = "1.67.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "grpcio", version = "1.84.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
     { name = "proto-plus" },
     { name = "protobuf" },
 ]
@@ -2484,12 +2484,12 @@ resolution-markers = [
     "python_full_version >= '3.14' and sys_platform != 'win32'",
 ]
 dependencies = [
-    { name = "google-api-core", version = "2.25.2", source = { registry = "https://pypi.org/simple" } },
-    { name = "google-auth" },
-    { name = "google-cloud-core", version = "2.6.0", source = { registry = "https://pypi.org/simple" } },
-    { name = "google-crc32c" },
-    { name = "google-resumable-media" },
-    { name = "requests" },
+    { name = "google-api-core", version = "2.25.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "google-auth", marker = "python_full_version >= '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "google-cloud-core", version = "2.6.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "google-crc32c", marker = "python_full_version >= '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "google-resumable-media", marker = "python_full_version >= '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "requests", marker = "python_full_version >= '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/36/76/4d965702e96bb67976e755bed9828fa50306dca003dbee08b67f41dd265e/google_cloud_storage-2.19.0.tar.gz", hash = "sha256:cd05e9e7191ba6cb68934d8eb76054d9be4562aa89dbc4236feee4d7d51342b2", size = 5535488, upload-time = "2024-12-05T01:35:06.49Z" }
 wheels = [
@@ -2512,12 +2512,12 @@ resolution-markers = [
     "python_full_version < '3.11'",
 ]
 dependencies = [
-    { name = "google-api-core", version = "2.33.0", source = { registry = "https://pypi.org/simple" } },
-    { name = "google-auth" },
-    { name = "google-cloud-core", version = "2.6.1", source = { registry = "https://pypi.org/simple" } },
-    { name = "google-crc32c" },
-    { name = "google-resumable-media" },
-    { name = "requests" },
+    { name = "google-api-core", version = "2.33.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "google-auth", marker = "python_full_version < '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "google-cloud-core", version = "2.6.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "google-crc32c", marker = "python_full_version < '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "google-resumable-media", marker = "python_full_version < '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "requests", marker = "python_full_version < '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/ce/7e/73bb7512df1d1aad6ce3f9aed847cd40e0cd400ba4a85d86ab8eb412e9cc/google_cloud_storage-3.13.1.tar.gz", hash = "sha256:a80bf8cac2794808aa61c50c5f769ecbbe2d10331bacd0d69d30e59b14b346b2", size = 17341051, upload-time = "2026-08-06T06:24:42.229Z" }
 wheels = [
@@ -2569,7 +2569,7 @@ dependencies = [
     { name = "google-auth", extra = ["requests"] },
     { name = "httpx" },
     { name = "pydantic", version = "2.12.5", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra != 'extra-8-neatlogs-crewai' or extra == 'extra-8-neatlogs-hermes'" },
+    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
     { name = "requests" },
     { name = "sniffio" },
     { name = "tenacity" },
@@ -2669,8 +2669,8 @@ wheels = [
 
 [package.optional-dependencies]
 grpc = [
-    { name = "grpcio", version = "1.67.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.14'" },
-    { name = "grpcio", version = "1.84.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.14'" },
+    { name = "grpcio", version = "1.67.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "grpcio", version = "1.84.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
 ]
 
 [[package]]
@@ -2778,7 +2778,7 @@ dependencies = [
     { name = "distro" },
     { name = "httpx" },
     { name = "pydantic", version = "2.12.5", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra != 'extra-8-neatlogs-crewai' or extra == 'extra-8-neatlogs-hermes'" },
+    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
     { name = "sniffio" },
     { name = "typing-extensions" },
 ]
@@ -2793,8 +2793,8 @@ version = "0.14.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "googleapis-common-protos", extra = ["grpc"] },
-    { name = "grpcio", version = "1.67.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.14'" },
-    { name = "grpcio", version = "1.84.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.14'" },
+    { name = "grpcio", version = "1.67.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "grpcio", version = "1.84.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
     { name = "protobuf" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/44/4f/d098419ad0bfc06c9ce440575f05aa22d8973b6c276e86ac7890093d3c37/grpc_google_iam_v1-0.14.4.tar.gz", hash = "sha256:392b3796947ed6334e61171d9ab06bf7eb357f554e5fc7556ad7aab6d0e17038", size = 23706, upload-time = "2026-04-01T01:57:49.813Z" }
@@ -2866,7 +2866,7 @@ resolution-markers = [
     "python_full_version >= '3.14' and sys_platform != 'win32'",
 ]
 dependencies = [
-    { name = "typing-extensions" },
+    { name = "typing-extensions", marker = "python_full_version >= '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/3f/4f/4435c0aae54657258d9cfcba78598f3d9e5fe4c82ff18d78558567b90faf/grpcio-1.84.0.tar.gz", hash = "sha256:19aaf172fc2edbefccce3f6e92c5150975dbe56c45744e9e87cf72ebdf85bfbe", size = 13493876, upload-time = "2026-09-14T06:59:33.291Z" }
 wheels = [
@@ -2928,8 +2928,8 @@ version = "1.67.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "googleapis-common-protos" },
-    { name = "grpcio", version = "1.67.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.14'" },
-    { name = "grpcio", version = "1.84.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.14'" },
+    { name = "grpcio", version = "1.67.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "grpcio", version = "1.84.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
     { name = "protobuf" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/be/c7/fe0e79a80ac6346e0c6c0a24e9e3cbc3ae1c2a009acffb59eab484a6f69b/grpcio_status-1.67.1.tar.gz", hash = "sha256:2bf38395e028ceeecfd8866b081f61628114b384da7d51ae064ddc8d766a5d11", size = 13673, upload-time = "2024-10-29T06:30:21.787Z" }
@@ -2959,10 +2959,11 @@ dependencies = [
     { name = "opentelemetry-sdk" },
     { name = "pip" },
     { name = "pydantic", version = "2.12.5", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra != 'extra-8-neatlogs-crewai' or extra == 'extra-8-neatlogs-hermes'" },
+    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
     { name = "pydash" },
     { name = "pyjwt", version = "2.12.1", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.11' and extra == 'extra-8-neatlogs-hermes') or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
-    { name = "pyjwt", version = "2.15.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or extra == 'extra-8-neatlogs-crewai' or extra != 'extra-8-neatlogs-hermes'" },
+    { name = "pyjwt", version = "2.13.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and extra == 'extra-8-neatlogs-hermes') or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "pyjwt", version = "2.15.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai' or extra != 'extra-8-neatlogs-hermes'" },
     { name = "python-dateutil" },
     { name = "requests" },
     { name = "rich" },
@@ -2984,7 +2985,7 @@ version = "0.5.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pydantic", version = "2.12.5", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra != 'extra-8-neatlogs-crewai' or extra == 'extra-8-neatlogs-hermes'" },
+    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/f8/b5/aa41b36e4859424c3bc98a9e81e22bb7e0f159ff19bbd5bed91aa9b36a85/guardrails_ai_types-0.5.0.tar.gz", hash = "sha256:de872718c09c7560ee4b79190f6b10f994983c1c90df1b774c8a4df422fe835f", size = 17164, upload-time = "2026-07-10T17:23:57.206Z" }
 wheels = [
@@ -3035,16 +3036,16 @@ dependencies = [
     { name = "lazy-imports" },
     { name = "markupsafe" },
     { name = "more-itertools" },
-    { name = "networkx", version = "3.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
-    { name = "networkx", version = "3.6.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
-    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
-    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
-    { name = "numpy", version = "2.5.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "networkx", version = "3.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "networkx", version = "3.6.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "numpy", version = "2.5.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
     { name = "openai", version = "2.24.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.11' and extra == 'extra-8-neatlogs-hermes') or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
     { name = "openai", version = "2.54.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or extra == 'extra-8-neatlogs-crewai' or extra != 'extra-8-neatlogs-hermes'" },
     { name = "posthog" },
     { name = "pydantic", version = "2.12.5", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra != 'extra-8-neatlogs-crewai' or extra == 'extra-8-neatlogs-hermes'" },
+    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
     { name = "python-dateutil" },
     { name = "pyyaml" },
     { name = "tenacity" },
@@ -3140,8 +3141,8 @@ name = "httpcore2"
 version = "2.10.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "h11" },
-    { name = "truststore" },
+    { name = "h11", marker = "python_full_version < '3.11' or python_full_version >= '3.13' or sys_platform != 'emscripten' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "truststore", marker = "python_full_version < '3.11' or python_full_version >= '3.13' or sys_platform != 'emscripten' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/a9/83/a896fc59940fc5a6e2aff3a4be1d92fa890112936803b331cae75a993c34/httpcore2-2.10.0.tar.gz", hash = "sha256:13c0cc3d1919d4f28457f60cd2c2abe04113a8af184ccf1142811beba936f9dc", size = 67427, upload-time = "2026-08-09T09:11:32.123Z" }
 wheels = [
@@ -3235,12 +3236,12 @@ name = "httpx2"
 version = "2.10.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "anyio", marker = "sys_platform != 'emscripten'" },
-    { name = "httpcore2", marker = "sys_platform != 'emscripten'" },
-    { name = "httpx2-jsfetch", marker = "python_full_version >= '3.12' and sys_platform == 'emscripten'" },
+    { name = "anyio", marker = "sys_platform != 'emscripten' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "httpcore2", marker = "sys_platform != 'emscripten' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "httpx2-jsfetch", marker = "(python_full_version >= '3.12' and sys_platform == 'emscripten') or (python_full_version < '3.12' and extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes') or (sys_platform != 'emscripten' and extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
     { name = "idna" },
-    { name = "truststore", marker = "sys_platform != 'emscripten'" },
-    { name = "typing-extensions", marker = "python_full_version < '3.13'" },
+    { name = "truststore", marker = "sys_platform != 'emscripten' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/bd/3d/f9a8c07a3884f3e5b26205e8436a18b3af61c5d53192c3bea235574dbbec/httpx2-2.10.0.tar.gz", hash = "sha256:8741d7329fe2c7885fc9ceb61c8217acfb87a85f75723714b89ebf7ad7196338", size = 98749, upload-time = "2026-08-09T09:11:33.24Z" }
 wheels = [
@@ -3263,7 +3264,7 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "filelock" },
     { name = "fsspec" },
-    { name = "hf-xet", marker = "platform_machine == 'aarch64' or platform_machine == 'amd64' or platform_machine == 'arm64' or platform_machine == 'x86_64'" },
+    { name = "hf-xet", marker = "platform_machine == 'aarch64' or platform_machine == 'amd64' or platform_machine == 'arm64' or platform_machine == 'x86_64' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
     { name = "packaging" },
     { name = "pyyaml" },
     { name = "requests" },
@@ -3285,7 +3286,7 @@ name = "humanfriendly"
 version = "10.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "pyreadline3", marker = "sys_platform == 'win32'" },
+    { name = "pyreadline3", marker = "(python_full_version < '3.11' and sys_platform == 'win32') or (python_full_version >= '3.11' and extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes') or (sys_platform != 'win32' and extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/cc/3f/2c29224acb2e2df4d2046e4c73ee2662023c58ff5b113c4c1adac0886c43/humanfriendly-10.0.tar.gz", hash = "sha256:6b0b831ce8f15f7300721aa49829fc4e83921a9a301cc7f606be6686a2288ddc", size = 360702, upload-time = "2021-09-17T21:40:43.31Z" }
 wheels = [
@@ -3352,9 +3353,9 @@ dependencies = [
     { name = "openai", version = "2.24.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.11' and extra == 'extra-8-neatlogs-hermes') or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
     { name = "openai", version = "2.54.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or extra == 'extra-8-neatlogs-crewai' or extra != 'extra-8-neatlogs-hermes'" },
     { name = "pydantic", version = "2.12.5", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra != 'extra-8-neatlogs-crewai' or extra == 'extra-8-neatlogs-hermes'" },
+    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
     { name = "pydantic-core", version = "2.41.5", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "pydantic-core", version = "2.46.4", source = { registry = "https://pypi.org/simple" }, marker = "extra != 'extra-8-neatlogs-crewai' or extra == 'extra-8-neatlogs-hermes'" },
+    { name = "pydantic-core", version = "2.46.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
     { name = "requests" },
     { name = "rich" },
     { name = "tenacity" },
@@ -3412,7 +3413,7 @@ name = "jaraco-context"
 version = "6.1.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "backports-tarfile", marker = "python_full_version < '3.12'" },
+    { name = "backports-tarfile", marker = "python_full_version < '3.12' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/af/50/4763cd07e722bb6285316d390a164bc7e479db9d90daa769f22578f698b4/jaraco_context-6.1.2.tar.gz", hash = "sha256:f1a6c9d391e661cc5b8d39861ff077a7dc24dc23833ccee564b234b81c82dfe3", size = 16801, upload-time = "2026-03-20T22:13:33.922Z" }
 wheels = [
@@ -3685,8 +3686,8 @@ dependencies = [
     { name = "attrs" },
     { name = "jsonschema-specifications" },
     { name = "referencing" },
-    { name = "rpds-py", version = "0.30.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
-    { name = "rpds-py", version = "2026.6.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "rpds-py", version = "0.30.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "rpds-py", version = "2026.6.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/b3/fc/e067678238fa451312d4c62bf6e6cf5ec56375422aee02f9cb5f909b3047/jsonschema-4.26.0.tar.gz", hash = "sha256:0c26707e2efad8aa1bfc5b7ce170f3fccc2e4918ff85989ba9ffa9facb2be326", size = 366583, upload-time = "2026-01-07T13:41:07.246Z" }
 wheels = [
@@ -3738,13 +3739,13 @@ name = "keyring"
 version = "25.7.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "importlib-metadata", marker = "python_full_version < '3.12'" },
+    { name = "importlib-metadata", marker = "python_full_version < '3.12' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
     { name = "jaraco-classes" },
     { name = "jaraco-context" },
     { name = "jaraco-functools" },
-    { name = "jeepney", marker = "sys_platform == 'linux'" },
-    { name = "pywin32-ctypes", marker = "sys_platform == 'win32'" },
-    { name = "secretstorage", marker = "sys_platform == 'linux'" },
+    { name = "jeepney", marker = "sys_platform == 'linux' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "pywin32-ctypes", marker = "sys_platform == 'win32' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "secretstorage", marker = "sys_platform == 'linux' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/43/4b/674af6ef2f97d56f0ab5153bf0bfa28ccb6c3ed4d1babf4305449668807b/keyring-25.7.0.tar.gz", hash = "sha256:fe01bd85eb3f8fb3dd0405defdeac9a5b4f6f0439edbb3149577f244a2e8245b", size = 63516, upload-time = "2025-11-16T16:26:09.482Z" }
 wheels = [
@@ -3832,7 +3833,7 @@ dependencies = [
     { name = "langchain-core" },
     { name = "langgraph" },
     { name = "pydantic", version = "2.12.5", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra != 'extra-8-neatlogs-crewai' or extra == 'extra-8-neatlogs-hermes'" },
+    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/6a/1c/b84579174a8e82ed79f4c3e0cd5a7f2323facc5ccd4d1b8390e7d175b663/langchain-1.3.15.tar.gz", hash = "sha256:ab4b775b9703f7e37babe0b325dbbaef25573bda60ecf79f7850bc875f252795", size = 665047, upload-time = "2026-08-11T19:10:52.455Z" }
 wheels = [
@@ -3844,12 +3845,12 @@ name = "langchain-classic"
 version = "1.0.8"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "async-timeout", marker = "python_full_version < '3.11'" },
+    { name = "async-timeout", marker = "python_full_version < '3.11' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
     { name = "langchain-core" },
     { name = "langchain-text-splitters" },
     { name = "langsmith" },
     { name = "pydantic", version = "2.12.5", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra != 'extra-8-neatlogs-crewai' or extra == 'extra-8-neatlogs-hermes'" },
+    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
     { name = "pyyaml" },
     { name = "requests" },
     { name = "sqlalchemy" },
@@ -3869,9 +3870,9 @@ dependencies = [
     { name = "langchain-classic" },
     { name = "langchain-core" },
     { name = "langsmith" },
-    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
-    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
-    { name = "numpy", version = "2.5.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "numpy", version = "2.5.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
     { name = "pydantic-settings" },
     { name = "pyyaml" },
     { name = "requests" },
@@ -3894,7 +3895,7 @@ dependencies = [
     { name = "langsmith" },
     { name = "packaging" },
     { name = "pydantic", version = "2.12.5", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra != 'extra-8-neatlogs-crewai' or extra == 'extra-8-neatlogs-hermes'" },
+    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
     { name = "pyyaml" },
     { name = "tenacity" },
     { name = "typing-extensions" },
@@ -3954,7 +3955,7 @@ dependencies = [
     { name = "langgraph-prebuilt" },
     { name = "langgraph-sdk" },
     { name = "pydantic", version = "2.12.5", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra != 'extra-8-neatlogs-crewai' or extra == 'extra-8-neatlogs-hermes'" },
+    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
     { name = "xxhash" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/56/0d/c8e7ee98896659e1b6555db0ab115a9ca899844744645d5d894032bab1d7/langgraph-1.2.11.tar.gz", hash = "sha256:9ecfe11e50d338b34b15cf4d8a442642de103e8ae6971320efba84e4542eb363", size = 725753, upload-time = "2026-08-11T14:00:36.945Z" }
@@ -4012,10 +4013,10 @@ dependencies = [
     { name = "anyio" },
     { name = "distro" },
     { name = "httpx" },
-    { name = "orjson", marker = "platform_python_implementation != 'PyPy'" },
+    { name = "orjson", marker = "platform_python_implementation != 'PyPy' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
     { name = "packaging" },
     { name = "pydantic", version = "2.12.5", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra != 'extra-8-neatlogs-crewai' or extra == 'extra-8-neatlogs-hermes'" },
+    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
     { name = "requests" },
     { name = "requests-toolbelt" },
     { name = "sniffio" },
@@ -4075,7 +4076,7 @@ dependencies = [
     { name = "openai", version = "2.24.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.11' and extra == 'extra-8-neatlogs-hermes') or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
     { name = "openai", version = "2.54.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or extra == 'extra-8-neatlogs-crewai' or extra != 'extra-8-neatlogs-hermes'" },
     { name = "pydantic", version = "2.12.5", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra != 'extra-8-neatlogs-crewai' or extra == 'extra-8-neatlogs-hermes'" },
+    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
     { name = "pydantic-settings" },
     { name = "python-dotenv" },
     { name = "tiktoken" },
@@ -4114,7 +4115,7 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
     { name = "aiosqlite", version = "0.21.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "aiosqlite", version = "0.22.1", source = { registry = "https://pypi.org/simple" }, marker = "extra != 'extra-8-neatlogs-crewai' or extra == 'extra-8-neatlogs-hermes'" },
+    { name = "aiosqlite", version = "0.22.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
     { name = "banks" },
     { name = "dataclasses-json" },
     { name = "deprecated" },
@@ -4124,16 +4125,16 @@ dependencies = [
     { name = "httpx" },
     { name = "llama-index-workflows" },
     { name = "nest-asyncio" },
-    { name = "networkx", version = "3.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
-    { name = "networkx", version = "3.6.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "networkx", version = "3.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "networkx", version = "3.6.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
     { name = "nltk" },
-    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
-    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
-    { name = "numpy", version = "2.5.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "numpy", version = "2.5.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
     { name = "pillow" },
     { name = "platformdirs" },
     { name = "pydantic", version = "2.12.5", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra != 'extra-8-neatlogs-crewai' or extra == 'extra-8-neatlogs-hermes'" },
+    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
     { name = "pyyaml" },
     { name = "requests" },
     { name = "setuptools" },
@@ -4172,7 +4173,7 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "deprecated" },
     { name = "pydantic", version = "2.12.5", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra != 'extra-8-neatlogs-crewai' or extra == 'extra-8-neatlogs-hermes'" },
+    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/4e/d0/671b23ccff255c9bce132a84ffd5a6f4541ceefdeab9c1786b08c9722f2e/llama_index_instrumentation-0.5.0.tar.gz", hash = "sha256:eeb724648b25d149de882a5ac9e21c5acb1ce780da214bda2b075341af29ad8e", size = 43831, upload-time = "2026-03-12T20:17:06.742Z" }
 wheels = [
@@ -4200,7 +4201,7 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "llama-index-instrumentation" },
     { name = "pydantic", version = "2.12.5", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra != 'extra-8-neatlogs-crewai' or extra == 'extra-8-neatlogs-hermes'" },
+    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
     { name = "typing-extensions" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/7c/8d/245701cf6ad7ed09418f32c39a2aacae05cc318520e72bbca79525bb3268/llama_index_workflows-2.23.1.tar.gz", hash = "sha256:a9194aae7926551fb007dcdb84183ffa6e6d7872b6a372c1fe240b2518ca1845", size = 136964, upload-time = "2026-08-12T23:05:12.768Z" }
@@ -4539,20 +4540,21 @@ resolution-markers = [
     "python_full_version < '3.11'",
 ]
 dependencies = [
-    { name = "anyio", marker = "extra != 'extra-8-neatlogs-crewai' or extra == 'extra-8-neatlogs-hermes'" },
-    { name = "httpx", marker = "extra != 'extra-8-neatlogs-crewai' or extra == 'extra-8-neatlogs-hermes'" },
-    { name = "httpx-sse", marker = "extra != 'extra-8-neatlogs-crewai' or extra == 'extra-8-neatlogs-hermes'" },
-    { name = "jsonschema", marker = "extra != 'extra-8-neatlogs-crewai' or extra == 'extra-8-neatlogs-hermes'" },
-    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra != 'extra-8-neatlogs-crewai' or extra == 'extra-8-neatlogs-hermes'" },
-    { name = "pydantic-settings", marker = "extra != 'extra-8-neatlogs-crewai' or extra == 'extra-8-neatlogs-hermes'" },
+    { name = "anyio", marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "httpx", marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "httpx-sse", marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "jsonschema", marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "pydantic-settings", marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
     { name = "pyjwt", version = "2.12.1", source = { registry = "https://pypi.org/simple" }, extra = ["crypto"], marker = "(python_full_version >= '3.11' and extra == 'extra-8-neatlogs-hermes') or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
-    { name = "pyjwt", version = "2.15.1", source = { registry = "https://pypi.org/simple" }, extra = ["crypto"], marker = "(python_full_version < '3.11' and extra == 'extra-8-neatlogs-hermes') or (extra != 'extra-8-neatlogs-crewai' and extra != 'extra-8-neatlogs-hermes') or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
-    { name = "python-multipart", marker = "extra != 'extra-8-neatlogs-crewai' or extra == 'extra-8-neatlogs-hermes'" },
+    { name = "pyjwt", version = "2.13.0", source = { registry = "https://pypi.org/simple" }, extra = ["crypto"], marker = "(python_full_version < '3.11' and extra == 'extra-8-neatlogs-hermes') or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "pyjwt", version = "2.15.1", source = { registry = "https://pypi.org/simple" }, extra = ["crypto"], marker = "(extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes') or (extra != 'extra-8-neatlogs-crewai' and extra != 'extra-8-neatlogs-hermes')" },
+    { name = "python-multipart", marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
     { name = "pywin32", marker = "(sys_platform == 'win32' and extra != 'extra-8-neatlogs-crewai') or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
-    { name = "sse-starlette", marker = "extra != 'extra-8-neatlogs-crewai' or extra == 'extra-8-neatlogs-hermes'" },
-    { name = "starlette", marker = "extra != 'extra-8-neatlogs-crewai' or extra == 'extra-8-neatlogs-hermes'" },
-    { name = "typing-extensions", marker = "extra != 'extra-8-neatlogs-crewai' or extra == 'extra-8-neatlogs-hermes'" },
-    { name = "typing-inspection", marker = "extra != 'extra-8-neatlogs-crewai' or extra == 'extra-8-neatlogs-hermes'" },
+    { name = "sse-starlette", marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "starlette", marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "typing-extensions", marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "typing-inspection", marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
     { name = "uvicorn", marker = "(sys_platform != 'emscripten' and extra != 'extra-8-neatlogs-crewai') or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/30/d3/f9acc21dfc886e4f78e2add1a47db46ce16884346afde53f8a064c02c891/mcp-1.29.0.tar.gz", hash = "sha256:52d01f334de1868cc3bb2d6604931126a67631f99a6c5d3b82ba47290315ec36", size = 643148, upload-time = "2026-07-28T13:41:41.939Z" }
@@ -4606,7 +4608,7 @@ dependencies = [
     { name = "opentelemetry-api" },
     { name = "opentelemetry-semantic-conventions" },
     { name = "pydantic", version = "2.12.5", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra != 'extra-8-neatlogs-crewai' or extra == 'extra-8-neatlogs-hermes'" },
+    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
     { name = "python-dateutil" },
     { name = "typing-inspection" },
 ]
@@ -4778,7 +4780,7 @@ name = "multidict"
 version = "6.7.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "typing-extensions", marker = "python_full_version < '3.11'" },
+    { name = "typing-extensions", marker = "python_full_version < '3.11' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/1a/c2/c2d94cbe6ac1753f3fc980da97b3d930efe1da3af3c9f5125354436c073d/multidict-6.7.1.tar.gz", hash = "sha256:ec6652a1bee61c53a3e5776b6049172c53b6aaba34f18c9ad04f82712bac623d", size = 102010, upload-time = "2026-01-26T02:46:45.979Z" }
 wheels = [
@@ -4933,14 +4935,14 @@ dependencies = [
     { name = "openinference-instrumentation-anthropic" },
     { name = "openinference-instrumentation-autogen-agentchat" },
     { name = "openinference-instrumentation-bedrock" },
-    { name = "openinference-instrumentation-crewai", marker = "python_full_version < '3.14'" },
+    { name = "openinference-instrumentation-crewai", marker = "python_full_version < '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
     { name = "openinference-instrumentation-dspy" },
     { name = "openinference-instrumentation-google-adk" },
     { name = "openinference-instrumentation-google-genai" },
     { name = "openinference-instrumentation-groq" },
     { name = "openinference-instrumentation-guardrails" },
     { name = "openinference-instrumentation-haystack" },
-    { name = "openinference-instrumentation-instructor", marker = "python_full_version < '3.14'" },
+    { name = "openinference-instrumentation-instructor", marker = "python_full_version < '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
     { name = "openinference-instrumentation-langchain" },
     { name = "openinference-instrumentation-litellm" },
     { name = "openinference-instrumentation-llama-index" },
@@ -5036,12 +5038,12 @@ llama-index = [
 ]
 mcp = [
     { name = "mcp", version = "1.28.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "mcp", version = "1.29.0", source = { registry = "https://pypi.org/simple" }, marker = "extra != 'extra-8-neatlogs-crewai' or extra == 'extra-8-neatlogs-hermes'" },
+    { name = "mcp", version = "1.29.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
 ]
 milvus = [
     { name = "milvus-lite" },
-    { name = "pymilvus", version = "2.4.9", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.14'" },
-    { name = "pymilvus", version = "2.4.15", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.14'" },
+    { name = "pymilvus", version = "2.4.9", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "pymilvus", version = "2.4.15", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
 ]
 mistralai = [
     { name = "mistralai" },
@@ -5072,8 +5074,8 @@ vertex-ai = [
     { name = "google-genai" },
 ]
 vertexai = [
-    { name = "google-cloud-aiplatform", version = "1.91.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.14'" },
-    { name = "google-cloud-aiplatform", version = "1.164.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.14'" },
+    { name = "google-cloud-aiplatform", version = "1.91.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "google-cloud-aiplatform", version = "1.164.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
 ]
 
 [package.dev-dependencies]
@@ -5278,7 +5280,7 @@ dependencies = [
     { name = "defusedxml" },
     { name = "joblib" },
     { name = "regex", version = "2026.1.15", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "regex", version = "2026.7.19", source = { registry = "https://pypi.org/simple" }, marker = "extra != 'extra-8-neatlogs-crewai' or extra == 'extra-8-neatlogs-hermes'" },
+    { name = "regex", version = "2026.7.19", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
     { name = "tqdm" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/e0/e6/fe51d2bb1a3b446f59c5c8165999a9fee208bc346af90a7cbf7657bc0d75/nltk-3.10.3.tar.gz", hash = "sha256:bb9327a461c3811c2fa4900e03840401f2126adfb30c0072827c433bd2444ea4", size = 5137152, upload-time = "2026-08-12T23:46:37.258Z" }
@@ -5497,8 +5499,43 @@ wheels = [
 
 [[package]]
 name = "oauthlib"
+version = "3.3.1"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "python_full_version >= '3.14' and sys_platform == 'win32'",
+    "python_full_version >= '3.14' and sys_platform != 'win32'",
+    "python_full_version == '3.13.*' and sys_platform == 'win32'",
+    "python_full_version == '3.13.*' and sys_platform != 'win32'",
+    "python_full_version == '3.12.*' and sys_platform == 'win32'",
+    "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
+    "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version == '3.11.*' and sys_platform == 'win32'",
+    "python_full_version == '3.11.*' and sys_platform == 'emscripten'",
+    "python_full_version == '3.11.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version < '3.11'",
+]
+sdist = { url = "https://files.pythonhosted.org/packages/0b/5f/19930f824ffeb0ad4372da4812c50edbd1434f678c90c2733e1188edfc63/oauthlib-3.3.1.tar.gz", hash = "sha256:0f0f8aa759826a193cf66c12ea1af1637f87b9b4622d46e866952bb022e538c9", size = 185918, upload-time = "2025-06-19T22:48:08.269Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/be/9c/92789c596b8df838baa98fa71844d84283302f7604ed565dafe5a6b5041a/oauthlib-3.3.1-py3-none-any.whl", hash = "sha256:88119c938d2b8fb88561af5f6ee0eec8cc8d552b7bb1f712743136eb7523b7a1", size = 160065, upload-time = "2025-06-19T22:48:06.508Z" },
+]
+
+[[package]]
+name = "oauthlib"
 version = "4.0.0"
 source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "python_full_version >= '3.14' and sys_platform == 'win32'",
+    "python_full_version >= '3.14' and sys_platform != 'win32'",
+    "python_full_version == '3.13.*' and sys_platform == 'win32'",
+    "python_full_version == '3.13.*' and sys_platform != 'win32'",
+    "python_full_version == '3.12.*' and sys_platform == 'win32'",
+    "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
+    "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version == '3.11.*' and sys_platform == 'win32'",
+    "python_full_version == '3.11.*' and sys_platform == 'emscripten'",
+    "python_full_version == '3.11.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version < '3.11'",
+]
 sdist = { url = "https://files.pythonhosted.org/packages/7a/d8/a1bcc8ba112a627f8ffbdc212a78ce18d3ac07e91a5ca65d27918eee25a1/oauthlib-4.0.0.tar.gz", hash = "sha256:efb274799819440f95b4ab3b818869f1ce9ae26c5beacba0201d1a1b76b54f86", size = 187232, upload-time = "2026-09-28T06:01:18.77Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/d9/f4/78229a1066068ca14fc60fb26cf7381cabe4382261392b90e5f9552722d4/oauthlib-4.0.0-py3-none-any.whl", hash = "sha256:624c28c13a0a59cabf9747dfa52af63be3e512a7f2714df16e91b5b3a145e6cd", size = 159715, upload-time = "2026-09-28T06:01:17.008Z" },
@@ -5512,12 +5549,12 @@ resolution-markers = [
     "python_full_version < '3.11'",
 ]
 dependencies = [
-    { name = "coloredlogs" },
-    { name = "flatbuffers" },
-    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" } },
-    { name = "packaging" },
-    { name = "protobuf" },
-    { name = "sympy" },
+    { name = "coloredlogs", marker = "python_full_version < '3.11' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "flatbuffers", marker = "python_full_version < '3.11' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "packaging", marker = "python_full_version < '3.11' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "protobuf", marker = "python_full_version < '3.11' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "sympy", marker = "python_full_version < '3.11' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/35/d6/311b1afea060015b56c742f3531168c1644650767f27ef40062569960587/onnxruntime-1.23.2-cp310-cp310-macosx_13_0_arm64.whl", hash = "sha256:a7730122afe186a784660f6ec5807138bf9d792fa1df76556b27307ea9ebcbe3", size = 17195934, upload-time = "2025-10-27T23:06:14.143Z" },
@@ -5561,11 +5598,11 @@ resolution-markers = [
     "python_full_version == '3.11.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
 ]
 dependencies = [
-    { name = "flatbuffers" },
-    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
-    { name = "numpy", version = "2.5.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
-    { name = "packaging" },
-    { name = "protobuf" },
+    { name = "flatbuffers", marker = "python_full_version >= '3.11' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "numpy", version = "2.5.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "packaging", marker = "python_full_version >= '3.11' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "protobuf", marker = "python_full_version >= '3.11' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/17/4d/5014667e2a3a77d6e1b74cc3d88948d06163b8e0a33a84c85073322b5dec/onnxruntime-1.28.0-cp311-cp311-macosx_14_0_arm64.whl", hash = "sha256:f5c5daabd28aad610f83fdcf32acec8fb57e6adc6c6a39fe2a3c755db957b410", size = 19130506, upload-time = "2026-07-25T01:22:34.489Z" },
@@ -5630,6 +5667,7 @@ name = "openai"
 version = "2.54.0"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
+    "python_full_version < '3.11'",
     "python_full_version >= '3.14' and sys_platform == 'win32'",
     "python_full_version >= '3.14' and sys_platform != 'win32'",
     "python_full_version == '3.13.*' and sys_platform == 'win32'",
@@ -5640,7 +5678,6 @@ resolution-markers = [
     "python_full_version == '3.11.*' and sys_platform == 'win32'",
     "python_full_version == '3.11.*' and sys_platform == 'emscripten'",
     "python_full_version == '3.11.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version < '3.11'",
 ]
 dependencies = [
     { name = "anyio", marker = "python_full_version < '3.11' or extra == 'extra-8-neatlogs-crewai' or extra != 'extra-8-neatlogs-hermes'" },
@@ -5648,7 +5685,7 @@ dependencies = [
     { name = "httpx", marker = "python_full_version < '3.11' or extra == 'extra-8-neatlogs-crewai' or extra != 'extra-8-neatlogs-hermes'" },
     { name = "jiter", marker = "python_full_version < '3.11' or extra == 'extra-8-neatlogs-crewai' or extra != 'extra-8-neatlogs-hermes'" },
     { name = "pydantic", version = "2.12.5", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and extra == 'extra-8-neatlogs-hermes') or (extra != 'extra-8-neatlogs-crewai' and extra != 'extra-8-neatlogs-hermes') or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and extra != 'extra-8-neatlogs-crewai') or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes') or (extra != 'extra-8-neatlogs-crewai' and extra != 'extra-8-neatlogs-hermes')" },
     { name = "sniffio", marker = "python_full_version < '3.11' or extra == 'extra-8-neatlogs-crewai' or extra != 'extra-8-neatlogs-hermes'" },
     { name = "tqdm", marker = "python_full_version < '3.11' or extra == 'extra-8-neatlogs-crewai' or extra != 'extra-8-neatlogs-hermes'" },
     { name = "typing-extensions", marker = "python_full_version < '3.11' or extra == 'extra-8-neatlogs-crewai' or extra != 'extra-8-neatlogs-hermes'" },
@@ -5665,11 +5702,11 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "griffe" },
     { name = "mcp", version = "1.28.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "mcp", version = "1.29.0", source = { registry = "https://pypi.org/simple" }, marker = "extra != 'extra-8-neatlogs-crewai' or extra == 'extra-8-neatlogs-hermes'" },
+    { name = "mcp", version = "1.29.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
     { name = "openai", version = "2.24.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.11' and extra == 'extra-8-neatlogs-hermes') or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
     { name = "openai", version = "2.54.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or extra == 'extra-8-neatlogs-crewai' or extra != 'extra-8-neatlogs-hermes'" },
     { name = "pydantic", version = "2.12.5", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra != 'extra-8-neatlogs-crewai' or extra == 'extra-8-neatlogs-hermes'" },
+    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
     { name = "requests" },
     { name = "types-requests" },
     { name = "typing-extensions" },
@@ -5685,7 +5722,7 @@ version = "0.5.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pydantic", version = "2.12.5", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra != 'extra-8-neatlogs-crewai' or extra == 'extra-8-neatlogs-hermes'" },
+    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/02/2e/58d83848dd1a79cb92ed8e63f6ba901ca282c5f09d04af9423ec26c56fd7/openapi_pydantic-0.5.1.tar.gz", hash = "sha256:ff6835af6bde7a459fb93eb93bb92b8749b754fc6e51b2f1590a19dc3005ee0d", size = 60892, upload-time = "2025-01-08T19:29:27.083Z" }
 wheels = [
@@ -6183,8 +6220,8 @@ version = "1.43.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "googleapis-common-protos" },
-    { name = "grpcio", version = "1.67.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.14'" },
-    { name = "grpcio", version = "1.84.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.14'" },
+    { name = "grpcio", version = "1.67.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "grpcio", version = "1.84.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
     { name = "opentelemetry-api" },
     { name = "opentelemetry-exporter-otlp-proto-common" },
     { name = "opentelemetry-proto" },
@@ -6464,10 +6501,10 @@ resolution-markers = [
     "python_full_version < '3.11'",
 ]
 dependencies = [
-    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" } },
-    { name = "python-dateutil" },
-    { name = "pytz" },
-    { name = "tzdata" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "python-dateutil", marker = "python_full_version < '3.11' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "pytz", marker = "python_full_version < '3.11' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "tzdata", marker = "python_full_version < '3.11' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/33/01/d40b85317f86cf08d853a4f495195c73815fdf205eef3993821720274518/pandas-2.3.3.tar.gz", hash = "sha256:e05e1af93b977f7eafa636d043f9f94c7ee3ac81af99c13508215942e64c993b", size = 4495223, upload-time = "2025-09-29T23:34:51.853Z" }
 wheels = [
@@ -6537,10 +6574,10 @@ resolution-markers = [
     "python_full_version == '3.11.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
 ]
 dependencies = [
-    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
-    { name = "numpy", version = "2.5.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
-    { name = "python-dateutil" },
-    { name = "tzdata", marker = "sys_platform == 'emscripten' or sys_platform == 'win32'" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "numpy", version = "2.5.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "python-dateutil", marker = "python_full_version >= '3.11' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "tzdata", marker = "(python_full_version >= '3.11' and sys_platform == 'emscripten') or (python_full_version >= '3.11' and sys_platform == 'win32') or (sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes') or (sys_platform == 'emscripten' and extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes') or (sys_platform == 'win32' and extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/be/4f/5f3422a2afec5ffc46308b79e53291365a93748b498ac2e58bead0197916/pandas-3.0.5.tar.gz", hash = "sha256:dca3734d6ab7c906e6730f0788b0a1dbb9f2467731f9711f77995c8e9d62d712", size = 4658219, upload-time = "2026-07-22T22:19:28.819Z" }
 wheels = [
@@ -6862,7 +6899,7 @@ dependencies = [
     { name = "httpx" },
     { name = "jiter" },
     { name = "pydantic", version = "2.12.5", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra != 'extra-8-neatlogs-crewai' or extra == 'extra-8-neatlogs-hermes'" },
+    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
     { name = "sniffio" },
     { name = "tqdm" },
     { name = "types-requests" },
@@ -7106,8 +7143,8 @@ wheels = [
 
 [package.optional-dependencies]
 filetree = [
-    { name = "aiofile", version = "3.9.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
-    { name = "aiofile", version = "3.12.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "aiofile", version = "3.9.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "aiofile", version = "3.12.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
     { name = "anyio" },
 ]
 keyring = [
@@ -7399,10 +7436,10 @@ resolution-markers = [
     "python_full_version < '3.11'",
 ]
 dependencies = [
-    { name = "annotated-types", marker = "extra != 'extra-8-neatlogs-crewai' or extra == 'extra-8-neatlogs-hermes'" },
-    { name = "pydantic-core", version = "2.46.4", source = { registry = "https://pypi.org/simple" }, marker = "extra != 'extra-8-neatlogs-crewai' or extra == 'extra-8-neatlogs-hermes'" },
-    { name = "typing-extensions", marker = "extra != 'extra-8-neatlogs-crewai' or extra == 'extra-8-neatlogs-hermes'" },
-    { name = "typing-inspection", marker = "extra != 'extra-8-neatlogs-crewai' or extra == 'extra-8-neatlogs-hermes'" },
+    { name = "annotated-types", marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "pydantic-core", version = "2.46.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "typing-extensions", marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
+    { name = "typing-inspection", marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/18/a5/b60d21ac674192f8ab0ba4e9fd860690f9b4a6e51ca5df118733b487d8d6/pydantic-2.13.4.tar.gz", hash = "sha256:c40756b57adaa8b1efeeced5c196f3f3b7c435f90e84ea7f443901bec8099ef6", size = 844775, upload-time = "2026-05-06T13:43:05.343Z" }
 wheels = [
@@ -7411,7 +7448,7 @@ wheels = [
 
 [package.optional-dependencies]
 email = [
-    { name = "email-validator", marker = "extra != 'extra-8-neatlogs-crewai' or extra == 'extra-8-neatlogs-hermes'" },
+    { name = "email-validator", marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
 ]
 
 [[package]]
@@ -7431,13 +7468,13 @@ name = "pydantic-ai-slim"
 version = "1.44.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "exceptiongroup", marker = "python_full_version < '3.11'" },
+    { name = "exceptiongroup", marker = "python_full_version < '3.11' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
     { name = "genai-prices" },
     { name = "griffe" },
     { name = "httpx" },
     { name = "opentelemetry-api" },
     { name = "pydantic", version = "2.12.5", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra != 'extra-8-neatlogs-crewai' or extra == 'extra-8-neatlogs-hermes'" },
+    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
     { name = "pydantic-graph" },
     { name = "typing-inspection" },
 ]
@@ -7464,7 +7501,7 @@ cli = [
     { name = "rich" },
 ]
 cohere = [
-    { name = "cohere", marker = "sys_platform != 'emscripten'" },
+    { name = "cohere", marker = "sys_platform != 'emscripten' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
 ]
 evals = [
     { name = "pydantic-evals" },
@@ -7486,7 +7523,7 @@ logfire = [
 ]
 mcp = [
     { name = "mcp", version = "1.28.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "mcp", version = "1.29.0", source = { registry = "https://pypi.org/simple" }, marker = "extra != 'extra-8-neatlogs-crewai' or extra == 'extra-8-neatlogs-hermes'" },
+    { name = "mcp", version = "1.29.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
 ]
 mistral = [
     { name = "mistralai" },
@@ -7659,7 +7696,7 @@ resolution-markers = [
     "python_full_version < '3.11'",
 ]
 dependencies = [
-    { name = "typing-extensions", marker = "extra != 'extra-8-neatlogs-crewai' or extra == 'extra-8-neatlogs-hermes'" },
+    { name = "typing-extensions", marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/9d/56/921726b776ace8d8f5db44c4ef961006580d91dc52b803c489fafd1aa249/pydantic_core-2.46.4.tar.gz", hash = "sha256:62f875393d7f270851f20523dd2e29f082bcc82292d66db2b64ea71f64b6e1c1", size = 471464, upload-time = "2026-05-06T13:37:06.98Z" }
 wheels = [
@@ -7778,7 +7815,7 @@ dependencies = [
     { name = "anyio" },
     { name = "logfire-api" },
     { name = "pydantic", version = "2.12.5", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra != 'extra-8-neatlogs-crewai' or extra == 'extra-8-neatlogs-hermes'" },
+    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
     { name = "pydantic-ai-slim" },
     { name = "pyyaml" },
     { name = "rich" },
@@ -7794,7 +7831,7 @@ version = "2.11.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pydantic", version = "2.12.5", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra != 'extra-8-neatlogs-crewai' or extra == 'extra-8-neatlogs-hermes'" },
+    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
     { name = "typing-extensions" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/66/71/dba38ee2651f84f7842206adbd2233d8bbdb59fb85e9fa14232486a8c471/pydantic_extra_types-2.11.1.tar.gz", hash = "sha256:46792d2307383859e923d8fcefa82108b1a141f8a9c0198982b3832ab5ef1049", size = 172002, upload-time = "2026-03-16T08:08:03.92Z" }
@@ -7810,7 +7847,7 @@ dependencies = [
     { name = "httpx" },
     { name = "logfire-api" },
     { name = "pydantic", version = "2.12.5", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra != 'extra-8-neatlogs-crewai' or extra == 'extra-8-neatlogs-hermes'" },
+    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
     { name = "typing-inspection" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/aa/d9/83f1921633634cb1fd5947ebdc48a992cd1e660d9d0ba10f23450af654b8/pydantic_graph-1.44.0.tar.gz", hash = "sha256:81bb14bb47d3313fd7114f3ae9650dab77729451659e0247d298e1800f997c23", size = 58454, upload-time = "2026-01-17T01:26:12.113Z" }
@@ -7824,7 +7861,7 @@ version = "2.15.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pydantic", version = "2.12.5", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra != 'extra-8-neatlogs-crewai' or extra == 'extra-8-neatlogs-hermes'" },
+    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
     { name = "python-dotenv" },
     { name = "typing-inspection" },
 ]
@@ -7882,6 +7919,26 @@ crypto = [
 
 [[package]]
 name = "pyjwt"
+version = "2.13.0"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "python_full_version < '3.11'",
+]
+dependencies = [
+    { name = "typing-extensions", marker = "(python_full_version < '3.11' and extra == 'extra-8-neatlogs-hermes') or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/3b/81/58d0ac84e1ef3a3843791d6954d94c0b33d526c75eeb1efbce9d0a4c4077/pyjwt-2.13.0.tar.gz", hash = "sha256:41571c89ca91598c79e8ef18a2d07367d4810fbbd6f637794879baf1b7703423", size = 107515, upload-time = "2026-05-21T19:54:36.618Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a3/5e/ecf12fdb62546d64385c158514e9b2b671f7832108ef2ecd2020ce0af2d1/pyjwt-2.13.0-py3-none-any.whl", hash = "sha256:66adcc2aff09b3f1bbd95fc1e1577df8ac8723c978552fd43304c8a290ac5728", size = 31274, upload-time = "2026-05-21T19:54:35.362Z" },
+]
+
+[package.optional-dependencies]
+crypto = [
+    { name = "cryptography", marker = "(python_full_version < '3.11' and extra == 'extra-8-neatlogs-hermes') or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+]
+
+[[package]]
+name = "pyjwt"
 version = "2.15.1"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
@@ -7898,7 +7955,7 @@ resolution-markers = [
     "python_full_version < '3.11'",
 ]
 dependencies = [
-    { name = "typing-extensions", marker = "python_full_version < '3.11'" },
+    { name = "typing-extensions", marker = "(python_full_version < '3.11' and extra == 'extra-8-neatlogs-crewai') or (python_full_version < '3.11' and extra != 'extra-8-neatlogs-hermes') or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/43/ea/5194e52748b0da83d71e082d75496eaec6e58f419f5e184786ded517e6a9/pyjwt-2.15.1.tar.gz", hash = "sha256:4f259e80cdfb6b3fc18a7de51fd1ef9ec79652f25019bae68975ca2468a34df8", size = 121252, upload-time = "2026-09-28T18:40:42.598Z" }
 wheels = [
@@ -7907,7 +7964,7 @@ wheels = [
 
 [package.optional-dependencies]
 crypto = [
-    { name = "cryptography", marker = "python_full_version < '3.11' or extra == 'extra-8-neatlogs-crewai' or extra != 'extra-8-neatlogs-hermes'" },
+    { name = "cryptography", marker = "extra == 'extra-8-neatlogs-crewai' or extra != 'extra-8-neatlogs-hermes'" },
 ]
 
 [[package]]
@@ -7919,13 +7976,13 @@ resolution-markers = [
     "python_full_version >= '3.14' and sys_platform != 'win32'",
 ]
 dependencies = [
-    { name = "environs" },
-    { name = "grpcio", version = "1.84.0", source = { registry = "https://pypi.org/simple" } },
-    { name = "milvus-lite", marker = "sys_platform != 'win32'" },
-    { name = "pandas", version = "3.0.5", source = { registry = "https://pypi.org/simple" } },
-    { name = "protobuf" },
-    { name = "setuptools" },
-    { name = "ujson" },
+    { name = "environs", marker = "python_full_version >= '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "grpcio", version = "1.84.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "milvus-lite", marker = "(python_full_version >= '3.14' and sys_platform != 'win32') or (python_full_version < '3.14' and extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes') or (sys_platform == 'win32' and extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "pandas", version = "3.0.5", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "protobuf", marker = "python_full_version >= '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "setuptools", marker = "python_full_version >= '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "ujson", marker = "python_full_version >= '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/1c/e4/208ac8d384bdcfa1a2983a6394705edccfd15a99f6f0e478ea0400fc1c73/pymilvus-2.4.9.tar.gz", hash = "sha256:0937663700007c23a84cfc0656160b301f6ff9247aaec4c96d599a6b43572136", size = 1219775, upload-time = "2024-10-29T10:36:08.413Z" }
 wheels = [
@@ -7948,14 +8005,14 @@ resolution-markers = [
     "python_full_version < '3.11'",
 ]
 dependencies = [
-    { name = "grpcio", version = "1.67.1", source = { registry = "https://pypi.org/simple" } },
-    { name = "milvus-lite", marker = "sys_platform != 'win32'" },
-    { name = "pandas", version = "2.3.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or python_full_version >= '3.14'" },
-    { name = "pandas", version = "3.0.5", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' and python_full_version < '3.14'" },
-    { name = "protobuf" },
-    { name = "python-dotenv" },
-    { name = "setuptools" },
-    { name = "ujson" },
+    { name = "grpcio", version = "1.67.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "milvus-lite", marker = "(python_full_version < '3.14' and sys_platform != 'win32') or (python_full_version >= '3.14' and extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes') or (sys_platform == 'win32' and extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "pandas", version = "2.3.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "pandas", version = "3.0.5", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.11' and python_full_version < '3.14') or (python_full_version < '3.11' and extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes') or (python_full_version >= '3.14' and extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "protobuf", marker = "python_full_version < '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "python-dotenv", marker = "python_full_version < '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "setuptools", marker = "python_full_version < '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "ujson", marker = "python_full_version < '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/8b/e6/8606b0dc479e4e6f2a2052c035d09d1911903b6c51f99c623268a4181cc8/pymilvus-2.4.15.tar.gz", hash = "sha256:b21878e5df74dca91b3f3cf0b0597fa6b6aed7bf5cde9a1b10641994faa353bf", size = 1232886, upload-time = "2025-02-24T03:02:04.469Z" }
 wheels = [
@@ -8005,7 +8062,7 @@ name = "pypika"
 version = "0.51.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "typing-extensions", marker = "python_full_version < '3.11'" },
+    { name = "typing-extensions", marker = "python_full_version < '3.11' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/f8/78/cbaebba88e05e2dcda13ca203131b38d3640219f20ebb49676d26714861b/pypika-0.51.1.tar.gz", hash = "sha256:c30c7c1048fbf056fd3920c5a2b88b0c29dd190a9b2bee971fd17e4abe4d0ebe", size = 80919, upload-time = "2026-02-04T11:27:48.304Z" }
 wheels = [
@@ -8035,8 +8092,8 @@ name = "pytest"
 version = "9.1.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "colorama", marker = "sys_platform == 'win32'" },
-    { name = "exceptiongroup", marker = "python_full_version < '3.11'" },
+    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "exceptiongroup", marker = "python_full_version < '3.11' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
     { name = "iniconfig" },
     { name = "packaging" },
     { name = "pluggy" },
@@ -8054,9 +8111,9 @@ name = "pytest-asyncio"
 version = "1.4.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "backports-asyncio-runner", marker = "python_full_version < '3.11'" },
+    { name = "backports-asyncio-runner", marker = "python_full_version < '3.11' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
     { name = "pytest" },
-    { name = "typing-extensions", marker = "python_full_version < '3.13'" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/43/7c/d36d04db312ecf4298932ef77e6e4a9e8ad017906e24e34f0b0c361a2473/pytest_asyncio-1.4.0.tar.gz", hash = "sha256:c6c0d2259945122819f171a32ecea2c349ead889ee28176caaf492143424be42", size = 58514, upload-time = "2026-05-26T09:56:04.083Z" }
 wheels = [
@@ -8266,17 +8323,17 @@ name = "qdrant-client"
 version = "1.15.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "grpcio", version = "1.67.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.14'" },
-    { name = "grpcio", version = "1.84.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.14'" },
+    { name = "grpcio", version = "1.67.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "grpcio", version = "1.84.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
     { name = "httpx", extra = ["http2"] },
-    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
-    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
-    { name = "numpy", version = "2.5.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "numpy", version = "2.5.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
     { name = "portalocker", version = "2.7.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "portalocker", version = "3.2.0", source = { registry = "https://pypi.org/simple" }, marker = "extra != 'extra-8-neatlogs-crewai' or extra == 'extra-8-neatlogs-hermes'" },
+    { name = "portalocker", version = "3.2.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
     { name = "protobuf" },
     { name = "pydantic", version = "2.12.5", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra != 'extra-8-neatlogs-crewai' or extra == 'extra-8-neatlogs-hermes'" },
+    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
     { name = "urllib3" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/79/8b/76c7d325e11d97cb8eb5e261c3759e9ed6664735afbf32fdded5b580690c/qdrant_client-1.15.1.tar.gz", hash = "sha256:631f1f3caebfad0fd0c1fba98f41be81d9962b7bf3ca653bed3b727c0e0cbe0e", size = 295297, upload-time = "2025-07-31T19:35:19.627Z" }
@@ -8290,9 +8347,9 @@ version = "0.37.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "attrs" },
-    { name = "rpds-py", version = "0.30.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
-    { name = "rpds-py", version = "2026.6.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
-    { name = "typing-extensions", marker = "python_full_version < '3.13'" },
+    { name = "rpds-py", version = "0.30.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "rpds-py", version = "2026.6.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/22/f5/df4e9027acead3ecc63e50fe1e36aca1523e1719559c499951bb4b53188f/referencing-0.37.0.tar.gz", hash = "sha256:44aefc3142c5b842538163acb373e24cce6632bd54bdb01b21ad5863489f50d8", size = 78036, upload-time = "2025-10-13T15:30:48.871Z" }
 wheels = [
@@ -8587,7 +8644,8 @@ name = "requests-oauthlib"
 version = "2.0.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "oauthlib" },
+    { name = "oauthlib", version = "3.3.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes'" },
+    { name = "oauthlib", version = "4.0.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai' or extra != 'extra-8-neatlogs-hermes'" },
     { name = "requests" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/42/f2/05f29bc3913aea15eb670be136045bf5c5bbf4b99ecb839da9b422bb2c85/requests-oauthlib-2.0.0.tar.gz", hash = "sha256:b3dffaebd884d8cd778494369603a9e7b58d29111bf6b41bdc2dcd87203af4e9", size = 55650, upload-time = "2024-03-22T20:32:29.939Z" }
@@ -9144,8 +9202,8 @@ name = "secretstorage"
 version = "3.5.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "cryptography" },
-    { name = "jeepney" },
+    { name = "cryptography", marker = "(python_full_version < '3.11' and sys_platform == 'emscripten') or (python_full_version >= '3.13' and sys_platform == 'emscripten') or (python_full_version < '3.11' and sys_platform == 'win32') or (sys_platform != 'emscripten' and sys_platform != 'win32') or (sys_platform == 'emscripten' and extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes') or (sys_platform == 'win32' and extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
+    { name = "jeepney", marker = "(python_full_version < '3.11' and sys_platform == 'emscripten') or (python_full_version >= '3.13' and sys_platform == 'emscripten') or (python_full_version < '3.11' and sys_platform == 'win32') or (sys_platform != 'emscripten' and sys_platform != 'win32') or (sys_platform == 'emscripten' and extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes') or (sys_platform == 'win32' and extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/1c/03/e834bcd866f2f8a49a85eaff47340affa3bfa391ee9912a952a1faa68c7b/secretstorage-3.5.0.tar.gz", hash = "sha256:f04b8e4689cbce351744d5537bf6b1329c6fc68f91fa666f60a380edddcd11be", size = 19884, upload-time = "2025-11-23T19:02:53.191Z" }
 wheels = [
@@ -9188,7 +9246,7 @@ name = "shapely"
 version = "2.2.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "numpy", version = "2.5.2", source = { registry = "https://pypi.org/simple" } },
+    { name = "numpy", version = "2.5.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.14' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/f3/ab/924b6e202f796d270a3041a230151f7908db5ea48c74effe6f8023e9bd05/shapely-2.2.0.tar.gz", hash = "sha256:e8865e553d874a1ec4a032057ea81fca9def37b188cd8fb550af3b3480b3f88c", size = 380326, upload-time = "2026-10-07T09:18:01.001Z" }
 wheels = [
@@ -9297,7 +9355,7 @@ name = "sqlalchemy"
 version = "2.0.52"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "greenlet", marker = "platform_machine == 'AMD64' or platform_machine == 'WIN32' or platform_machine == 'aarch64' or platform_machine == 'amd64' or platform_machine == 'ppc64le' or platform_machine == 'win32' or platform_machine == 'x86_64'" },
+    { name = "greenlet", marker = "platform_machine == 'AMD64' or platform_machine == 'WIN32' or platform_machine == 'aarch64' or platform_machine == 'amd64' or platform_machine == 'ppc64le' or platform_machine == 'win32' or platform_machine == 'x86_64' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
     { name = "typing-extensions" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/3b/21/77b4c147963073040dc3c3a5cb7a8c3001a1893c0209432cb77f9df836aa/sqlalchemy-2.0.52.tar.gz", hash = "sha256:5e2d46356ac2ccb7d268ab6c2319ac6a2b42f1b8d5fd8bd3d46855cd82abee97", size = 9945637, upload-time = "2026-08-11T19:07:09.829Z" }
@@ -9365,7 +9423,7 @@ version = "1.6.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anyio" },
-    { name = "typing-extensions", marker = "python_full_version < '3.13'" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/b5/b4/205b0d5241d934e8add0c38aa924c4f9fb7330834ff11e5444db964ec3f9/starlette-1.6.0.tar.gz", hash = "sha256:d4e3ac5e546444960c710297a3c9fc3f7ebae1b7e963f3d36173b49da535be9b", size = 2716969, upload-time = "2026-08-08T18:27:57.512Z" }
 wheels = [
@@ -9383,12 +9441,12 @@ dependencies = [
     { name = "httpx" },
     { name = "jsonschema" },
     { name = "mcp", version = "1.28.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "mcp", version = "1.29.0", source = { registry = "https://pypi.org/simple" }, marker = "extra != 'extra-8-neatlogs-crewai' or extra == 'extra-8-neatlogs-hermes'" },
+    { name = "mcp", version = "1.29.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
     { name = "opentelemetry-api" },
     { name = "opentelemetry-instrumentation-threading" },
     { name = "opentelemetry-sdk" },
     { name = "pydantic", version = "2.12.5", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra != 'extra-8-neatlogs-crewai' or extra == 'extra-8-neatlogs-hermes'" },
+    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
     { name = "pyyaml" },
     { name = "typing-extensions" },
     { name = "watchdog" },
@@ -9403,7 +9461,7 @@ name = "sympy"
 version = "1.14.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "mpmath" },
+    { name = "mpmath", marker = "python_full_version < '3.11' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/83/d3/803453b36afefb7c2bb238361cd4ae6125a569b4db67cd9e79846ba2d68c/sympy-1.14.0.tar.gz", hash = "sha256:d3d3fe8df1e5a0b42f0e7bdf50541697dbe7d23746e894990c030e2b05e72517", size = 7793921, upload-time = "2025-04-27T18:05:01.611Z" }
 wheels = [
@@ -9417,7 +9475,7 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "nexus-rpc" },
     { name = "protobuf" },
-    { name = "python-dateutil", marker = "python_full_version < '3.11'" },
+    { name = "python-dateutil", marker = "python_full_version < '3.11' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
     { name = "types-protobuf" },
     { name = "typing-extensions" },
 ]
@@ -9471,7 +9529,7 @@ version = "0.13.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "regex", version = "2026.1.15", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-crewai'" },
-    { name = "regex", version = "2026.7.19", source = { registry = "https://pypi.org/simple" }, marker = "extra != 'extra-8-neatlogs-crewai' or extra == 'extra-8-neatlogs-hermes'" },
+    { name = "regex", version = "2026.7.19", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-8-neatlogs-hermes' or extra != 'extra-8-neatlogs-crewai'" },
     { name = "requests" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/e4/e5/5f3cb2159769d0f4324c0e9e87f9de3c4b1cd45848a96b2eb3566ad5ca77/tiktoken-0.13.0.tar.gz", hash = "sha256:c9435714c3a84c2319499de9a300c0e604449dd0799ff246458b3bb6a7f433c1", size = 38986, upload-time = "2026-05-15T04:51:27.153Z" }
@@ -9656,7 +9714,7 @@ name = "tqdm"
 version = "4.70.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "colorama", marker = "sys_platform == 'win32'" },
+    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/21/3b/6c24bec5be5e743ffd99576daa5cc077722fc7d5bbc00bd133fa0c698dc6/tqdm-4.70.0.tar.gz", hash = "sha256:55b0b0dbd97462d06ebee91e4dac24ed4d4702be82b24f07e6c1d27e08cea220", size = 795438, upload-time = "2026-07-27T11:33:15.271Z" }
 wheels = [
@@ -9756,7 +9814,7 @@ name = "tzlocal"
 version = "5.4.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "tzdata", marker = "sys_platform == 'win32'" },
+    { name = "tzdata", marker = "sys_platform == 'win32' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/81/5b/879b2f932adfa7a053c360d50bc896c977fa6426109185f7c12ebdd0cb9d/tzlocal-5.4.4.tar.gz", hash = "sha256:8dbb8660838688a7b6ba4fed31d18dedf842afb4d47ca050d6d891c2c15f3be4", size = 31170, upload-time = "2026-06-29T08:03:40.026Z" }
 wheels = [
@@ -10033,7 +10091,7 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "click" },
     { name = "h11" },
-    { name = "typing-extensions", marker = "python_full_version < '3.11'" },
+    { name = "typing-extensions", marker = "python_full_version < '3.11' or (extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/2e/28/64ca011edf31c715b4fad359c587ea52391aaffa125065695590241ff617/uvicorn-0.52.3.tar.gz", hash = "sha256:18857b9e6579300be55c91c0a1cfd37d9a2cf0cabea33b88275f199eb73b8b58", size = 100621, upload-time = "2026-08-13T16:50:02.899Z" }
 wheels = [
@@ -10045,7 +10103,7 @@ standard = [
     { name = "httptools" },
     { name = "python-dotenv" },
     { name = "pyyaml" },
-    { name = "uvloop", marker = "platform_python_implementation != 'PyPy' and sys_platform != 'cygwin' and sys_platform != 'win32'" },
+    { name = "uvloop", marker = "(platform_python_implementation != 'PyPy' and sys_platform != 'cygwin' and sys_platform != 'win32') or (platform_python_implementation == 'PyPy' and extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes') or (sys_platform == 'cygwin' and extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes') or (sys_platform == 'win32' and extra == 'extra-8-neatlogs-crewai' and extra == 'extra-8-neatlogs-hermes')" },
     { name = "watchfiles" },
     { name = "websockets" },
 ]

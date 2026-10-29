@@ -320,7 +320,6 @@ def _patch_async_completions(completions: Any) -> None:
             span.set_status(StatusCode.UNSET)
             span.end()
             raise
-
         except Exception as e:
             span.set_status(StatusCode.ERROR, str(e))
             span.record_exception(e)
@@ -670,7 +669,6 @@ def _patch_async_responses(responses: Any) -> None:
             span.set_status(StatusCode.UNSET)
             span.end()
             raise
-
         except Exception as e:
             span.set_status(StatusCode.ERROR, str(e))
             span.record_exception(e)

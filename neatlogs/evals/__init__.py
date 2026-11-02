@@ -57,7 +57,7 @@ def _save(path, state):
     os.replace(temporary, target)
 
 
-def _resolve(api, dataset):
+def _resolve(api, dataset, selected=None):
     if dataset.tag is not None and dataset.version_id is not None:
         raise ValueError("Choose a dataset tag or version_id")
     try:
@@ -79,19 +79,27 @@ def _resolve(api, dataset):
     overview = api.request("GET", f"/datasets/{dataset_id}{suffix}")
     version_id = str(UUID(overview["version"]["id"]))
     total = overview["dataset"]["caseCount"]
-    if not isinstance(total, int) or not 1 <= total <= 100:
-        raise ValueError("run_eval requires between 1 and 100 pinned cases per run")
-    page = api.request(
-        "GET", f"/datasets/{dataset_id}/cases?versionId={version_id}&offset=0&limit=100"
-    )
-    if page["total"] != total or len(page["cases"]) != total:
-        raise ValueError("Dataset case enumeration is incomplete")
+    if not isinstance(total, int) or not 1 <= total <= 100000:
+        raise ValueError("Dataset case count is invalid")
+    if selected is None and total > 100:
+        raise ValueError("Select up to 100 cases for one run")
+    entries = []
+    for offset in range(0, total, 100):
+        page = api.request(
+            "GET", f"/datasets/{dataset_id}/cases?versionId={version_id}&offset={offset}&limit=100"
+        )
+        if page["total"] != total or len(page["cases"]) != min(100, total - offset):
+            raise ValueError("Dataset case enumeration is incomplete")
+        entries.extend(page["cases"])
+    if selected is not None and not set(selected).issubset({item["caseId"] for item in entries}):
+        raise ValueError("Selected cases must belong to the pinned dataset")
     cases = [
         api.request(
             "GET",
             f"/datasets/{dataset_id}/cases/{str(UUID(item['caseId']))}?versionId={version_id}",
         )["case"]
-        for item in page["cases"]
+        for item in entries
+        if selected is None or item["caseId"] in selected
     ]
     return version_id, cases
 
@@ -115,6 +123,7 @@ def run_eval(
     state_path=None,
     resume=False,
     max_error_rate=0,
+    case_ids=None,
 ):
     """Execute each case/trial once, upload outputs, wait for existing form grading.
 
@@ -149,7 +158,12 @@ def run_eval(
     saved_state = json.loads(Path(state_path).read_text()) if resume else None
     if saved_state is not None:
         dataset = Dataset(dataset.name, version_id=saved_state["request"]["datasetVersionId"])
-    version_id, cases = _resolve(dataset_api, dataset)
+    selected = None
+    if case_ids is not None:
+        selected = [str(UUID(value)) for value in case_ids]
+        if not selected or len(selected) > 100 or len(set(selected)) != len(selected):
+            raise ValueError("Select between 1 and 100 unique cases")
+    version_id, cases = _resolve(dataset_api, dataset, selected)
     request = {
         "datasetVersionId": version_id,
         "caseIds": [case["caseId"] for case in cases],

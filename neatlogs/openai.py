@@ -30,6 +30,7 @@ from ._wrap_utils import (
 )
 from .core.choice_accumulator import ChoiceAccumulator, OpenAIStreamFinalizer
 from .core.media import set_media_attributes
+from .replay.provider import cached_model_span, prepare_provider_capture, provider_replay
 
 _PATCHED = False
 _ORIG_INIT = None
@@ -192,8 +193,15 @@ def _patch_completions(completions: Any) -> None:
 
         start = time.perf_counter()
 
+        supported = not is_stream and not args
+        capture = prepare_provider_capture(
+            span, "openai.chat.completions.create", kwargs, supported=supported
+        )
+        saved = provider_replay(
+            "openai.chat.completions.create", kwargs, supported=supported, span=span
+        )
         try:
-            response = orig_create(*args, **kwargs)
+            response = saved if saved is not None else orig_create(*args, **kwargs)
         except Exception as e:
             span.set_status(StatusCode.ERROR, str(e))
             span.record_exception(e)
@@ -209,7 +217,11 @@ def _patch_completions(completions: Any) -> None:
             )
 
         duration_ms = (time.perf_counter() - start) * 1000
-        _finalize_response(span, response, duration_ms)
+        if saved is None:
+            capture(response)
+        _finalize_response(
+            cached_model_span(span) if saved is not None else span, response, duration_ms
+        )
         return response
 
     completions.create = patched_create
@@ -294,8 +306,15 @@ def _patch_async_completions(completions: Any) -> None:
 
         start = time.perf_counter()
 
+        supported = not is_stream and not args
+        capture = prepare_provider_capture(
+            span, "openai.chat.completions.create", kwargs, supported=supported
+        )
+        saved = provider_replay(
+            "openai.chat.completions.create", kwargs, supported=supported, span=span
+        )
         try:
-            response = await orig_create(*args, **kwargs)
+            response = saved if saved is not None else await orig_create(*args, **kwargs)
         except asyncio.CancelledError:
             span.set_attribute("neatlogs.stream.cancelled", True)
             span.set_status(StatusCode.UNSET)
@@ -316,7 +335,11 @@ def _patch_async_completions(completions: Any) -> None:
             )
 
         duration_ms = (time.perf_counter() - start) * 1000
-        _finalize_response(span, response, duration_ms)
+        if saved is None:
+            capture(response)
+        _finalize_response(
+            cached_model_span(span) if saved is not None else span, response, duration_ms
+        )
         return response
 
     completions.create = patched_create
@@ -350,8 +373,13 @@ def _patch_responses(responses: Any) -> None:
         )
 
         start = time.perf_counter()
+        supported = not is_stream and not args
+        capture = prepare_provider_capture(
+            span, "openai.responses.create", kwargs, supported=supported
+        )
+        saved = provider_replay("openai.responses.create", kwargs, supported=supported, span=span)
         try:
-            response = orig_create(*args, **kwargs)
+            response = saved if saved is not None else orig_create(*args, **kwargs)
         except Exception as e:
             span.set_status(StatusCode.ERROR, str(e))
             span.record_exception(e)
@@ -362,7 +390,11 @@ def _patch_responses(responses: Any) -> None:
             return SyncStreamWrapper(response, span, _finalize_responses_stream)
 
         duration_ms = (time.perf_counter() - start) * 1000
-        _finalize_responses_response(span, response, duration_ms)
+        if saved is None:
+            capture(response)
+        _finalize_responses_response(
+            cached_model_span(span) if saved is not None else span, response, duration_ms
+        )
         return response
 
     responses.create = patched_create
@@ -625,8 +657,13 @@ def _patch_async_responses(responses: Any) -> None:
             },
         )
         start = time.perf_counter()
+        supported = not is_stream and not args
+        capture = prepare_provider_capture(
+            span, "openai.responses.create", kwargs, supported=supported
+        )
+        saved = provider_replay("openai.responses.create", kwargs, supported=supported, span=span)
         try:
-            response = await orig_create(*args, **kwargs)
+            response = saved if saved is not None else await orig_create(*args, **kwargs)
         except asyncio.CancelledError:
             span.set_attribute("neatlogs.stream.cancelled", True)
             span.set_status(StatusCode.UNSET)
@@ -639,7 +676,13 @@ def _patch_async_responses(responses: Any) -> None:
             raise
         if is_stream:
             return AsyncStreamWrapper(response, span, _finalize_responses_stream)
-        _finalize_responses_response(span, response, (time.perf_counter() - start) * 1000)
+        if saved is None:
+            capture(response)
+        _finalize_responses_response(
+            cached_model_span(span) if saved is not None else span,
+            response,
+            (time.perf_counter() - start) * 1000,
+        )
         return response
 
     responses.create = patched_create

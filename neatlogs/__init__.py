@@ -27,6 +27,18 @@ Available span kinds:
 """
 
 from . import datasets
+from .ab_test import (
+    AbAssignment,
+    AbDecision,
+    AbTestClient,
+    ab_test,
+    choose_ab_test,
+    record_ab_test_run,
+    complete_ab_test_decision,
+    complete_ab_test_unit,
+    configure_ab_tests,
+    log_exposure,
+)
 from .client import Client
 from .core.context import trace
 from .core.crewai_task_registry import register_crewai_task
@@ -74,6 +86,19 @@ from .prompt.client import (
     update_prompt,
 )
 from .prompt.template import PromptTemplate, SystemPromptTemplate, UserPromptTemplate
+from .replay import (
+    LocalRunApi,
+    LocalRunApiError,
+    ReplayEntry,
+    ReplayError,
+    ReplayRecording,
+    ReplayRunBinding,
+    ReplaySession,
+    get_replay_status,
+    parse_replay_recording,
+    replay_model,
+    replay_recording_from_case,
+)
 from .schema_v2 import (
     TELEMETRY_CONTRACT_VERSION,
     TELEMETRY_SCHEMA_SHA256,
@@ -309,11 +334,32 @@ def wrap(client, **workflow_attributes):
 
 __all__ = [
     "datasets",
+    "AbAssignment",
+    "AbDecision",
+    "AbTestClient",
+    "ab_test",
+    "choose_ab_test",
+    "record_ab_test_run",
+    "complete_ab_test_decision",
+    "complete_ab_test_unit",
+    "configure_ab_tests",
+    "log_exposure",
     "Client",
     "init",
     "flush",
     "shutdown",
     "flush_all",
+    "LocalRunApi",
+    "LocalRunApiError",
+    "ReplayEntry",
+    "ReplayError",
+    "ReplayRecording",
+    "ReplayRunBinding",
+    "ReplaySession",
+    "get_replay_status",
+    "parse_replay_recording",
+    "replay_model",
+    "replay_recording_from_case",
     "NeatlogsError",
     "NeatlogsConfigurationError",
     "span",

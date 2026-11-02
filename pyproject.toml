@@ -36,6 +36,8 @@ dependencies = [
     "opentelemetry-exporter-otlp-proto-http>=1.35.0",
     "opentelemetry-sdk>=1.35.0",
     "requests>=2.31.0",
+    "rfc8785==0.1.4",
+    "PyYAML>=6.0.3,<7",
     "agnost>=0.1.8,<0.2.0",
     "opentelemetry-instrumentation>=0.56b0",
     "opentelemetry-instrumentation-threading>=0.56b0",

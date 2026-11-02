@@ -17,6 +17,9 @@ class _Span:
     def set_attribute(self, key, value):
         self.attributes[key] = value
 
+    def is_recording(self):
+        return not self.ended
+
     def set_status(self, status, *args):
         self.status = status
 

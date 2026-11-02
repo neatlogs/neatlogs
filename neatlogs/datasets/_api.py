@@ -120,6 +120,58 @@ class DatasetApi:
         raise AssertionError("request retry exhausted")
 
 
+def _keyed_cases(cases, key_field=None, require_keys=False):
+    if (
+        not isinstance(cases, list)
+        or len(cases) > 500
+        or any(not isinstance(item, dict) for item in cases)
+    ):
+        raise ValueError("cases must be a list of at most 500 case objects")
+    if key_field is not None and (not isinstance(key_field, str) or not key_field):
+        raise ValueError("key_field must be a nonempty field name")
+    normalized, seen = [], set()
+    for item in cases:
+        item = dict(item)
+        if key_field is not None:
+            value = item.get(key_field)
+            if key_field not in (
+                "key",
+                "caseId",
+                "revisionId",
+                "input",
+                "observedOutput",
+                "expected",
+                "acceptanceCriteria",
+                "context",
+                "metadata",
+                "tags",
+                "source",
+                "metrics",
+            ):
+                item.pop(key_field, None)
+            if isinstance(value, bool) or not isinstance(value, (str, int)):
+                raise ValueError("The key field must contain a string or integer")
+            item["key"] = str(value)
+        key = item.get("key")
+        if key is None and require_keys:
+            raise ValueError("Each upserted case requires a stable key")
+        if key is not None:
+            if (
+                not isinstance(key, str)
+                or not 1 <= len(key) <= 128
+                or key != key.strip()
+                or any(ord(char) < 32 or ord(char) == 127 for char in key)
+            ):
+                raise ValueError(
+                    "Item keys must contain 1–128 characters without outer whitespace or controls"
+                )
+            if key in seen:
+                raise ValueError("Each case key may appear only once")
+            seen.add(key)
+        normalized.append(item)
+    return normalized
+
+
 def create(
     name,
     *,
@@ -127,6 +179,7 @@ def create(
     token,
     base_url,
     cases=None,
+    key_field=None,
     description=None,
     idempotency_key=None,
 ):
@@ -140,13 +193,7 @@ def create(
         raise ValueError("name must contain 1–255 characters")
     if description is not None and (not isinstance(description, str) or len(description) > 2000):
         raise ValueError("description must be at most 2000 characters")
-    cases = [] if cases is None else cases
-    if (
-        not isinstance(cases, list)
-        or len(cases) > 500
-        or any(not isinstance(c, dict) for c in cases)
-    ):
-        raise ValueError("cases must be a list of at most 500 case objects")
+    cases = _keyed_cases([] if cases is None else cases, key_field)
     key = str(UUID(idempotency_key)) if idempotency_key is not None else str(uuid4())
     content = encode_json(
         {"name": name.strip(), "description": description, "cases": cases, "idempotencyKey": key}
@@ -205,3 +252,79 @@ def update_outcomes(
         api.request("POST", f"/datasets/{dataset_id}/versions", content=content, key=key),
         dataset_id,
     )
+
+
+def upsert(
+    dataset_id,
+    cases,
+    *,
+    base_version_id,
+    project_id,
+    token,
+    base_url,
+    key_field=None,
+    idempotency_key=None,
+):
+    """Replace 1–500 keyed items in a new version, retaining other items.
+
+    ``key_field`` maps a caller column such as ``id`` to the stable item key.
+    Supplied items are complete replacements; include expected labels to retain them.
+    The authenticated token determines the version's audit actor.
+    """
+    dataset_id = str(UUID(dataset_id))
+    cases = _keyed_cases(cases, key_field, require_keys=True)
+    if not cases:
+        raise ValueError("Supply at least one keyed case")
+    key = str(UUID(idempotency_key)) if idempotency_key is not None else str(uuid4())
+    content = encode_json(
+        {"baseVersionId": str(UUID(base_version_id)), "idempotencyKey": key, "upsertCases": cases}
+    )
+    api = DatasetApi(project_id=project_id, token=token, base_url=base_url)
+    return publication(
+        api.request("POST", f"/datasets/{dataset_id}/versions", content=content, key=key),
+        dataset_id,
+    )
+
+
+def versions(dataset_id, *, project_id, token, base_url):
+    """Read published version tags and trusted audit actors; legacy actors can be null."""
+    dataset_id = str(UUID(dataset_id))
+    data = DatasetApi(project_id=project_id, token=token, base_url=base_url).request(
+        "GET", f"/datasets/{dataset_id}"
+    )
+    try:
+        if str(UUID(data["dataset"]["id"])) != dataset_id or not isinstance(data["versions"], list):
+            raise ValueError()
+        history = []
+        for version in data["versions"]:
+            actor = version.get("createdBy")
+            if actor is not None:
+                if not isinstance(actor, dict) or actor.get("kind") not in (
+                    "user",
+                    "service_account",
+                    "guest",
+                ):
+                    raise ValueError()
+                actor = {"kind": actor["kind"], "id": str(UUID(actor["id"]))}
+            number = version["version"]
+            tags = version.get("tags", [])
+            if (
+                type(number) is not int
+                or number < 1
+                or not isinstance(version["createdAt"], str)
+                or not isinstance(tags, list)
+                or any(not isinstance(tag, str) for tag in tags)
+            ):
+                raise ValueError()
+            history.append(
+                {
+                    "id": str(UUID(version["id"])),
+                    "version": number,
+                    "createdAt": version["createdAt"],
+                    "createdBy": actor,
+                    "tags": tags,
+                }
+            )
+        return history
+    except (KeyError, TypeError, AttributeError, ValueError):
+        raise DatasetError("Invalid dataset version history") from None

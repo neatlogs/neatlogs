@@ -1,0 +1,14 @@
+[
+  {
+    "operation": "openai.chat.completions.create",
+    "capture": "{\"version\":1,\"operation\":\"openai.chat.completions.create\",\"input\":{\"model\":\"fixture\",\"messages\":[{\"role\":\"user\",\"content\":\"fixture\"}]},\"output\":{\"id\":\"chat_fixture\",\"object\":\"chat.completion\",\"created\":1,\"model\":\"fixture\",\"choices\":[{\"index\":0,\"finish_reason\":\"stop\",\"message\":{\"role\":\"assistant\",\"content\":\"hello\"}}],\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":7,\"total_tokens\":18}},\"digest\":\"635f1abbb64df1bfe6a900d0b0ed39b6528de6636131e319768c1e57774edcaf\"}"
+  },
+  {
+    "operation": "openai.responses.create",
+    "capture": "{\"version\":1,\"operation\":\"openai.responses.create\",\"input\":{\"model\":\"fixture\",\"input\":\"fixture\"},\"output\":{\"id\":\"resp_fixture\",\"object\":\"response\",\"created_at\":1,\"model\":\"fixture\",\"status\":\"completed\",\"output\":[{\"id\":\"msg_fixture\",\"type\":\"message\",\"role\":\"assistant\",\"status\":\"completed\",\"content\":[{\"type\":\"output_text\",\"text\":\"hello\",\"annotations\":[]}]}],\"parallel_tool_calls\":true,\"tool_choice\":\"auto\",\"tools\":[],\"output_text\":\"hello\",\"usage\":{\"input_tokens\":11,\"output_tokens\":7,\"total_tokens\":18,\"input_tokens_details\":{\"cached_tokens\":2},\"output_tokens_details\":{\"reasoning_tokens\":1}}},\"digest\":\"52fe3ffc69eb7f53fe7b2851c58ae56cba6a247247339d08ea3d6888834d8b53\"}"
+  },
+  {
+    "operation": "google_genai.models.generate_content",
+    "capture": "{\"version\":1,\"operation\":\"google_genai.models.generate_content\",\"input\":{\"model\":\"fixture\",\"contents\":\"fixture\"},\"output\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"hello\"}],\"role\":\"model\"},\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"promptTokenCount\":11,\"candidatesTokenCount\":7,\"totalTokenCount\":18}},\"digest\":\"f568fbea3682ad28426c153fb299ce919f65de34152111902999c1917214c9a4\"}"
+  }
+]

@@ -29,6 +29,7 @@ from ._wrap_utils import (
 )
 from .core.choice_accumulator import ChoiceAccumulator, GoogleStreamFinalizer
 from .core.media import set_media_attributes
+from .replay.provider import cached_model_span, prepare_provider_capture, provider_replay
 
 _PATCHED = False
 _ORIG_INIT = None
@@ -91,8 +92,14 @@ def _patch_models(models: Any) -> None:
 
         start = time.perf_counter()
 
+        capture = prepare_provider_capture(
+            span, "google_genai.models.generate_content", kwargs, supported=not args
+        )
+        saved = provider_replay(
+            "google_genai.models.generate_content", kwargs, supported=not args, span=span
+        )
         try:
-            response = orig_generate(*args, **kwargs)
+            response = saved if saved is not None else orig_generate(*args, **kwargs)
         except Exception as e:
             span.set_status(StatusCode.ERROR, str(e))
             span.record_exception(e)
@@ -100,7 +107,11 @@ def _patch_models(models: Any) -> None:
             raise
 
         duration_ms = (time.perf_counter() - start) * 1000
-        _finalize_response(span, response, duration_ms)
+        if saved is None:
+            capture(response)
+        _finalize_response(
+            cached_model_span(span) if saved is not None else span, response, duration_ms
+        )
         return response
 
     models.generate_content = patched_generate_content
@@ -127,6 +138,9 @@ def _patch_models(models: Any) -> None:
             )
 
             _set_input_attributes(span, contents, kwargs)
+            provider_replay(
+                "google_genai.models.generate_content", None, supported=False, span=span
+            )
 
             try:
                 stream = orig_stream(*args, **kwargs)
@@ -170,8 +184,14 @@ def _patch_async_models(models: Any) -> None:
 
         start = time.perf_counter()
 
+        capture = prepare_provider_capture(
+            span, "google_genai.models.generate_content", kwargs, supported=not args
+        )
+        saved = provider_replay(
+            "google_genai.models.generate_content", kwargs, supported=not args, span=span
+        )
         try:
-            response = await orig_generate(*args, **kwargs)
+            response = saved if saved is not None else await orig_generate(*args, **kwargs)
         except Exception as e:
             span.set_status(StatusCode.ERROR, str(e))
             span.record_exception(e)
@@ -179,7 +199,11 @@ def _patch_async_models(models: Any) -> None:
             raise
 
         duration_ms = (time.perf_counter() - start) * 1000
-        _finalize_response(span, response, duration_ms)
+        if saved is None:
+            capture(response)
+        _finalize_response(
+            cached_model_span(span) if saved is not None else span, response, duration_ms
+        )
         return response
 
     models.generate_content = patched_generate_content
@@ -212,6 +236,9 @@ def _patch_async_models(models: Any) -> None:
             )
 
             _set_input_attributes(span, contents, kwargs)
+            provider_replay(
+                "google_genai.models.generate_content", None, supported=False, span=span
+            )
 
             try:
                 stream = await orig_stream(*args, **kwargs)

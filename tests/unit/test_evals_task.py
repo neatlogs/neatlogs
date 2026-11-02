@@ -1,6 +1,7 @@
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlsplit
 from uuid import uuid4
 
 import pytest
@@ -11,9 +12,21 @@ from neatlogs.replay.api import LocalRunApiError
 PROJECT, DATASET, VERSION, CASE, REVISION, RUN = [str(uuid4()) for _ in range(6)]
 
 
+def test_rejects_case_outside_dataset_before_running(server):
+    _, config = server
+    with pytest.raises(ValueError, match="belong to the pinned dataset"):
+        run_eval(
+            dataset=DATASET,
+            case_ids=[str(uuid4())],
+            task=lambda *_: "answer",
+            label="selection",
+            **config,
+        )
+
+
 @pytest.fixture
 def server():
-    state = {"outputs": [], "fail_upload": False, "verdict": "pass", "requests": []}
+    state = {"outputs": [], "fail_upload": False, "verdict": "pass", "requests": [], "cases": []}
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):
@@ -23,10 +36,11 @@ def server():
             state["requests"].append(self.path)
             if "/comparison" in self.path:
                 data = {"state": "ready", "coverage": {"complete": True}}
-            elif f"/cases/{CASE}" in self.path:
+            elif "/cases/" in self.path:
+                case_id = self.path.split("/cases/")[1].split("?")[0]
                 data = {
                     "case": {
-                        "caseId": CASE,
+                        "caseId": case_id,
                         "revisionId": REVISION,
                         "input": {"message": "hello"},
                         "expected": {"value": "hello"},
@@ -34,9 +48,17 @@ def server():
                     }
                 }
             elif "/cases?" in self.path:
-                data = {"cases": [{"caseId": CASE}], "total": 1}
+                cases = state["cases"] or [CASE]
+                offset = int(parse_qs(urlsplit(self.path).query)["offset"][0])
+                data = {
+                    "cases": [{"caseId": item} for item in cases[offset : offset + 100]],
+                    "total": len(cases),
+                }
             else:
-                data = {"dataset": {"caseCount": 1}, "version": {"id": VERSION}}
+                data = {
+                    "dataset": {"caseCount": len(state["cases"]) or 1},
+                    "version": {"id": VERSION},
+                }
             self.respond(200, data)
 
         def do_POST(self):
@@ -110,6 +132,20 @@ def test_runs_real_http_task_trials_and_returns_failed_gate_exit(server):
     assert len(state["outputs"]) == 2
     assert "grading" not in state["registration"]
     assert any("?tag=golden-v3" in path for path in state["requests"])
+
+
+def test_selects_case_from_later_dataset_page(server):
+    state, config = server
+    state["cases"] = [str(uuid4()) for _ in range(101)]
+    result = run_eval(
+        dataset=DATASET,
+        case_ids=[state["cases"][-1]],
+        task=lambda *_: "answer",
+        label="selected",
+        **config,
+    )
+    assert result.exit_code == 0 and len(state["outputs"]) == 1
+    assert any("offset=100" in path for path in state["requests"])
 
 
 def test_resume_retries_saved_upload_without_reexecuting_task(server, tmp_path):

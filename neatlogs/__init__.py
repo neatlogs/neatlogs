@@ -34,6 +34,7 @@ from .ab_test import (
     complete_ab_test_unit,
     configure_ab_tests,
     log_exposure,
+    record_ab_test_run,
 )
 from .client import Client
 from .core.context import trace

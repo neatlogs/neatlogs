@@ -246,7 +246,7 @@ def test_default_flush_recovers_after_the_blocked_exporter_returns(monkeypatch):
     assert blocker.calls == 3
 
 
-def test_concurrent_default_flushes_share_the_in_flight_pass(monkeypatch):
+def test_concurrent_default_flushes_each_run_a_serial_pass(monkeypatch):
     class Slow:
         def __init__(self):
             self.calls = 0
@@ -263,7 +263,7 @@ def test_concurrent_default_flushes_share_the_in_flight_pass(monkeypatch):
 
     results = []
     threads = [
-        threading.Thread(target=lambda: results.append(neatlogs.flush(timeout_millis=2000)))
+        threading.Thread(target=lambda: results.append(neatlogs.flush(timeout_millis=5000)))
         for _ in range(5)
     ]
     for thread in threads:
@@ -272,7 +272,7 @@ def test_concurrent_default_flushes_share_the_in_flight_pass(monkeypatch):
         thread.join(5)
 
     assert sorted(results) == [True] * 5
-    assert slow.calls == 2
+    assert slow.calls == 10
 
 
 def test_timed_out_default_flush_does_not_hold_the_next_generation(monkeypatch):
@@ -330,3 +330,125 @@ def test_client_flush_recovers_after_the_blocked_exporter_returns(client, monkey
             time.sleep(0.01)
         assert recovered
         assert blocker.calls == 3
+
+
+@pytest.mark.parametrize("target", ["default", "client"])
+def test_later_flush_covers_records_queued_during_final_drain(monkeypatch, client, target):
+    class SnapshotProcessor:
+        def __init__(self):
+            self.pending = ["first"]
+            self.exported = []
+            self.final_drain = threading.Event()
+            self.release = threading.Event()
+            self.calls = 0
+
+        def force_flush(self, timeout_millis=30000):
+            self.calls += 1
+            snapshot, self.pending = self.pending, []
+            if self.calls == 2:
+                self.final_drain.set()
+                assert self.release.wait(2)
+            self.exported.extend(snapshot)
+            return True
+
+    processor = SnapshotProcessor()
+    if target == "default":
+        monkeypatch.setattr(init_module, "_flush_gate", FlushGate())
+        monkeypatch.setattr(init_module, "_log_provider", None)
+        monkeypatch.setattr(init_module, "_transport_span_processors", [processor])
+        flush = neatlogs.flush
+        gate = init_module._flush_gate
+    else:
+        monkeypatch.setattr(client, "log_provider", None)
+        monkeypatch.setattr(client, "_transport_processors", [processor])
+        flush = client.flush
+        gate = client._flush_gate
+    results = []
+    first = threading.Thread(target=lambda: results.append(flush(timeout_millis=1500)))
+    first.start()
+    assert processor.final_drain.wait(1)
+    processor.pending.append("second")
+    joined_flight = threading.Event()
+    original_wait = gate._flight.done.wait
+
+    def tracked_wait(timeout=None):
+        joined_flight.set()
+        return original_wait(timeout)
+
+    monkeypatch.setattr(gate._flight.done, "wait", tracked_wait)
+    second = threading.Thread(target=lambda: results.append(flush(timeout_millis=1500)))
+    second.start()
+    assert joined_flight.wait(1)
+    try:
+        processor.release.set()
+        first.join(2)
+        second.join(2)
+        assert results == [True, True]
+        assert processor.pending == []
+        assert processor.exported == ["first", "second"]
+    finally:
+        processor.release.set()
+        first.join(2)
+        second.join(2)
+
+
+def test_waiting_flush_keeps_its_deadline_and_does_not_run_after_timeout():
+    gate = FlushGate()
+    started = threading.Event()
+    release = threading.Event()
+    second_calls = []
+
+    def blocked():
+        started.set()
+        release.wait(2)
+        return True
+
+    first = threading.Thread(target=lambda: gate.call(blocked, time.monotonic() + 2))
+    first.start()
+    assert started.wait(1)
+    try:
+        before = time.monotonic()
+        completed, _ = gate.call(lambda: second_calls.append(True), before + 0.03)
+        assert completed is False
+        assert time.monotonic() - before < 1
+        release.set()
+        first.join(2)
+        assert second_calls == []
+    finally:
+        release.set()
+        first.join(2)
+
+
+def test_flush_gate_never_overlaps_worker_operations():
+    gate = FlushGate()
+    active = 0
+    peak = 0
+    calls = 0
+    lock = threading.Lock()
+    ready = threading.Barrier(9)
+    results = []
+
+    def operation():
+        nonlocal active, peak, calls
+        with lock:
+            active += 1
+            peak = max(peak, active)
+            calls += 1
+        time.sleep(0.005)
+        with lock:
+            active -= 1
+        return True
+
+    def call():
+        ready.wait()
+        results.append(gate.call(operation, time.monotonic() + 2))
+
+    threads = [threading.Thread(target=call) for _ in range(8)]
+    for thread in threads:
+        thread.start()
+    ready.wait()
+    for thread in threads:
+        thread.join(3)
+    assert results == [(True, True)] * 8
+    assert calls == 8
+    assert peak == 1

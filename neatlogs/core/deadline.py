@@ -96,14 +96,11 @@ class _FlushFlight:
 
 
 class FlushGate:
-    """Keep flush work single-flight for one pipeline generation.
+    """Serialize flush passes without dropping a caller's flush barrier.
 
-    Python cannot cancel a blocked exporter call, so a timed-out flush leaves
-    its worker running. Callers that arrive while that worker is still busy
-    wait on the same outcome up to their own deadline instead of spawning
-    another thread that would pile onto the same exporter. Each pipeline
-    generation gets its own gate, so a stuck flush never holds the generation
-    that replaces it.
+    A timed-out exporter can keep its daemon worker alive. Later callers wait
+    for that worker to settle, then run their own pass within their original
+    deadline. Expired callers never enqueue another operation.
     """
 
     def __init__(self, name: str = "neatlogs-flush") -> None:
@@ -112,24 +109,28 @@ class FlushGate:
         self._flight: _FlushFlight | None = None
 
     def call(self, operation: Callable[[], Any], deadline: float) -> tuple[bool, Any]:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            return False, TimeoutError("Neatlogs flush deadline exceeded")
-        with self._lock:
-            flight = self._flight
-            if flight is None:
-                flight = _FlushFlight()
-                self._flight = flight
-                threading.Thread(
-                    target=self._run,
-                    args=(flight, operation),
-                    name=self._name,
-                    daemon=True,
-                ).start()
-        if not flight.done.wait(remaining):
-            return False, TimeoutError("Neatlogs flush deadline exceeded")
-        assert flight.result is not None
-        return flight.result
+        while True:
+            with self._lock:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return False, TimeoutError("Neatlogs flush deadline exceeded")
+                flight = self._flight
+                own_flight = flight is None
+                if own_flight:
+                    flight = _FlushFlight()
+                    self._flight = flight
+                    threading.Thread(
+                        target=self._run,
+                        args=(flight, operation),
+                        name=self._name,
+                        daemon=True,
+                    ).start()
+            assert flight is not None
+            if not flight.done.wait(max(0, deadline - time.monotonic())):
+                return False, TimeoutError("Neatlogs flush deadline exceeded")
+            if own_flight:
+                assert flight.result is not None
+                return flight.result
 
     def _run(self, flight: _FlushFlight, operation: Callable[[], Any]) -> None:
         try:

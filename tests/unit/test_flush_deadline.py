@@ -1,0 +1,454 @@
+import sys
+import threading
+import time
+
+import pytest
+
+import neatlogs
+from neatlogs.core.deadline import FlushGate
+
+init_module = sys.modules["neatlogs.init"]
+
+
+class _BlockingProcessor:
+    def __init__(self):
+        self.release = threading.Event()
+
+    def force_flush(self, timeout_millis=30000):
+        self.release.wait(5)
+        return True
+
+
+def test_default_flush_returns_false_at_its_deadline(monkeypatch):
+    blocker = _BlockingProcessor()
+    monkeypatch.setattr(init_module, "_transport_span_processors", [blocker])
+    monkeypatch.setattr(init_module, "_log_provider", None)
+
+    started = time.monotonic()
+    ok = neatlogs.flush(timeout_millis=200)
+    elapsed = time.monotonic() - started
+    blocker.release.set()
+
+    assert ok is False
+    assert elapsed < 2
+
+
+def test_default_flush_still_returns_true_when_fast(monkeypatch):
+    class Fast:
+        def force_flush(self, timeout_millis=30000):
+            return True
+
+    monkeypatch.setattr(init_module, "_transport_span_processors", [Fast()])
+    monkeypatch.setattr(init_module, "_log_provider", None)
+    assert neatlogs.flush(timeout_millis=1000) is True
+
+
+def test_timed_out_flush_never_touches_a_pipeline_created_afterwards(monkeypatch):
+    release = threading.Event()
+    finished = threading.Event()
+
+    class SlowLogs:
+        def force_flush(self, timeout_millis=30000):
+            release.wait(5)
+            finished.set()
+            return True
+
+    class NewProcessor:
+        calls = 0
+
+        def force_flush(self, timeout_millis=30000):
+            NewProcessor.calls += 1
+            return True
+
+    class OldProcessor(NewProcessor):
+        calls = 0
+
+        def force_flush(self, timeout_millis=30000):
+            OldProcessor.calls += 1
+            return True
+
+    monkeypatch.setattr(init_module, "_log_provider", SlowLogs())
+    monkeypatch.setattr(init_module, "_transport_span_processors", [OldProcessor()])
+
+    assert neatlogs.flush(timeout_millis=50) is False
+
+    # shutdown() + init() would replace the default pipeline while the old flush is still stuck.
+    new_processor = NewProcessor()
+    monkeypatch.setattr(init_module, "_log_provider", None)
+    monkeypatch.setattr(init_module, "_transport_span_processors", [new_processor])
+
+    release.set()
+    assert finished.wait(2)
+    time.sleep(0.2)
+
+    assert NewProcessor.calls == 0
+    assert OldProcessor.calls == 0
+
+
+@pytest.fixture
+def client():
+    value = neatlogs.Client(
+        api_key="flush-test-key",
+        workflow_name="flush-deadline",
+        disable_export=True,
+    )
+    yield value
+    value.shutdown()
+
+
+@pytest.mark.parametrize("stage", ["logs", "traces"])
+def test_client_flush_returns_false_at_blocking_stage_deadline(client, monkeypatch, stage):
+    blocker = _BlockingProcessor()
+    with monkeypatch.context() as patch:
+        patch.setattr(client, "log_provider", blocker if stage == "logs" else None)
+        patch.setattr(client, "_transport_processors", [blocker] if stage == "traces" else [])
+        try:
+            started = time.monotonic()
+            assert client.flush(timeout_millis=50) is False
+            assert time.monotonic() - started < 1
+        finally:
+            blocker.release.set()
+
+
+def test_client_flush_success_preserves_stage_order(client, monkeypatch):
+    calls = []
+
+    class Fast:
+        def __init__(self, name):
+            self.name = name
+
+        def force_flush(self, timeout_millis=30000):
+            calls.append(self.name)
+            return True
+
+    with monkeypatch.context() as patch:
+        patch.setattr(client, "log_provider", Fast("logs"))
+        patch.setattr(client, "_transport_processors", [Fast("traces"), Fast("completion")])
+        assert client.flush(timeout_millis=1000) is True
+    assert calls == ["logs", "traces", "completion", "traces"]
+
+
+@pytest.mark.parametrize("raises", [False, True])
+def test_client_flush_reports_processor_failure(client, monkeypatch, raises):
+    class Failed:
+        def force_flush(self, timeout_millis=30000):
+            if raises:
+                raise RuntimeError("export failed")
+            return False
+
+    with monkeypatch.context() as patch:
+        patch.setattr(client, "log_provider", None)
+        patch.setattr(client, "_transport_processors", [Failed()])
+        assert client.flush(timeout_millis=1000) is False
+
+
+def test_timed_out_client_flush_keeps_its_pipeline_snapshot(client, monkeypatch):
+    release = threading.Event()
+    finished = threading.Event()
+    calls = []
+    original = neatlogs.Client._flush_pipeline
+
+    class SlowLogs:
+        def force_flush(self, timeout_millis=30000):
+            release.wait(5)
+            return True
+
+    class Processor:
+        def __init__(self, name):
+            self.name = name
+
+        def force_flush(self, timeout_millis=30000):
+            calls.append(self.name)
+            return True
+
+    def tracked(*args):
+        try:
+            return original(*args)
+        finally:
+            finished.set()
+
+    other = neatlogs.Client(
+        api_key="other-flush-key", workflow_name="other-flush", disable_export=True
+    )
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(neatlogs.Client, "_flush_pipeline", staticmethod(tracked))
+            patch.setattr(client, "log_provider", SlowLogs())
+            patch.setattr(client, "_transport_processors", [Processor("old-client")])
+            patch.setattr(other, "_transport_processors", [Processor("other-client")])
+            patch.setattr(init_module, "_transport_span_processors", [Processor("default")])
+            assert client.flush(timeout_millis=50) is False
+            patch.setattr(client, "log_provider", None)
+            patch.setattr(client, "_transport_processors", [Processor("new-client")])
+            release.set()
+            assert finished.wait(2)
+            assert calls == []
+            assert other.flush(timeout_millis=1000) is True
+            assert calls == ["other-client", "other-client"]
+    finally:
+        release.set()
+        other.shutdown()
+
+
+class _CountingBlocker:
+    def __init__(self):
+        self.release = threading.Event()
+        self.calls = 0
+
+    def force_flush(self, timeout_millis=30000):
+        self.calls += 1
+        self.release.wait(5)
+        return True
+
+    def wait_for_calls(self, count, timeout=2):
+        deadline = time.monotonic() + timeout
+        while self.calls < count and time.monotonic() < deadline:
+            time.sleep(0.01)
+        return self.calls >= count
+
+
+def test_repeated_default_flush_timeouts_share_one_worker(monkeypatch):
+    blocker = _CountingBlocker()
+    monkeypatch.setattr(init_module, "_flush_gate", FlushGate())
+    monkeypatch.setattr(init_module, "_transport_span_processors", [blocker])
+    monkeypatch.setattr(init_module, "_log_provider", None)
+
+    for _ in range(15):
+        assert neatlogs.flush(timeout_millis=20) is False
+    blocker.release.set()
+
+    # one in-flight pass reaches the exporter once and then stops at its own
+    # deadline, instead of fifteen passes piling onto the stuck exporter
+    assert blocker.wait_for_calls(1)
+    time.sleep(0.2)
+    assert blocker.calls == 1
+
+
+def test_default_flush_recovers_after_the_blocked_exporter_returns(monkeypatch):
+    blocker = _CountingBlocker()
+    monkeypatch.setattr(init_module, "_flush_gate", FlushGate())
+    monkeypatch.setattr(init_module, "_transport_span_processors", [blocker])
+    monkeypatch.setattr(init_module, "_log_provider", None)
+
+    assert neatlogs.flush(timeout_millis=20) is False
+    blocker.release.set()
+    assert blocker.wait_for_calls(1)
+
+    # once the stuck pass settles, a fresh flush goes through again
+    recovered = False
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline:
+        if neatlogs.flush(timeout_millis=1000):
+            recovered = True
+            break
+        time.sleep(0.01)
+    assert recovered
+    assert blocker.calls == 3
+
+
+def test_concurrent_default_flushes_each_run_a_serial_pass(monkeypatch):
+    class Slow:
+        def __init__(self):
+            self.calls = 0
+
+        def force_flush(self, timeout_millis=30000):
+            self.calls += 1
+            time.sleep(0.2)
+            return True
+
+    slow = Slow()
+    monkeypatch.setattr(init_module, "_flush_gate", FlushGate())
+    monkeypatch.setattr(init_module, "_transport_span_processors", [slow])
+    monkeypatch.setattr(init_module, "_log_provider", None)
+
+    results = []
+    threads = [
+        threading.Thread(target=lambda: results.append(neatlogs.flush(timeout_millis=5000)))
+        for _ in range(5)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(5)
+
+    assert sorted(results) == [True] * 5
+    assert slow.calls == 10
+
+
+def test_timed_out_default_flush_does_not_hold_the_next_generation(monkeypatch):
+    blocker = _CountingBlocker()
+    monkeypatch.setattr(init_module, "_flush_gate", FlushGate())
+    monkeypatch.setattr(init_module, "_transport_span_processors", [blocker])
+    monkeypatch.setattr(init_module, "_log_provider", None)
+    assert neatlogs.flush(timeout_millis=20) is False
+
+    class Fast:
+        def __init__(self):
+            self.calls = 0
+
+        def force_flush(self, timeout_millis=30000):
+            self.calls += 1
+            return True
+
+    # shutdown() + init() install a fresh gate alongside the new pipeline
+    fast = Fast()
+    monkeypatch.setattr(init_module, "_flush_gate", FlushGate())
+    monkeypatch.setattr(init_module, "_transport_span_processors", [fast])
+    assert neatlogs.flush(timeout_millis=1000) is True
+    assert fast.calls == 2
+    blocker.release.set()
+
+
+def test_repeated_client_flush_timeouts_share_one_worker(client, monkeypatch):
+    blocker = _CountingBlocker()
+    with monkeypatch.context() as patch:
+        patch.setattr(client, "log_provider", None)
+        patch.setattr(client, "_transport_processors", [blocker])
+        for _ in range(15):
+            assert client.flush(timeout_millis=20) is False
+        blocker.release.set()
+        assert blocker.wait_for_calls(1)
+        time.sleep(0.2)
+        assert blocker.calls == 1
+
+
+def test_client_flush_recovers_after_the_blocked_exporter_returns(client, monkeypatch):
+    blocker = _CountingBlocker()
+    with monkeypatch.context() as patch:
+        patch.setattr(client, "log_provider", None)
+        patch.setattr(client, "_transport_processors", [blocker])
+        assert client.flush(timeout_millis=20) is False
+        blocker.release.set()
+        assert blocker.wait_for_calls(1)
+
+        recovered = False
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            if client.flush(timeout_millis=1000):
+                recovered = True
+                break
+            time.sleep(0.01)
+        assert recovered
+        assert blocker.calls == 3
+
+
+@pytest.mark.parametrize("target", ["default", "client"])
+def test_later_flush_covers_records_queued_during_final_drain(monkeypatch, client, target):
+    class SnapshotProcessor:
+        def __init__(self):
+            self.pending = ["first"]
+            self.exported = []
+            self.final_drain = threading.Event()
+            self.release = threading.Event()
+            self.calls = 0
+
+        def force_flush(self, timeout_millis=30000):
+            self.calls += 1
+            snapshot, self.pending = self.pending, []
+            if self.calls == 2:
+                self.final_drain.set()
+                assert self.release.wait(2)
+            self.exported.extend(snapshot)
+            return True
+
+    processor = SnapshotProcessor()
+    if target == "default":
+        monkeypatch.setattr(init_module, "_flush_gate", FlushGate())
+        monkeypatch.setattr(init_module, "_log_provider", None)
+        monkeypatch.setattr(init_module, "_transport_span_processors", [processor])
+        flush = neatlogs.flush
+        gate = init_module._flush_gate
+    else:
+        monkeypatch.setattr(client, "log_provider", None)
+        monkeypatch.setattr(client, "_transport_processors", [processor])
+        flush = client.flush
+        gate = client._flush_gate
+    results = []
+    first = threading.Thread(target=lambda: results.append(flush(timeout_millis=1500)))
+    first.start()
+    assert processor.final_drain.wait(1)
+    processor.pending.append("second")
+    joined_flight = threading.Event()
+    original_wait = gate._flight.done.wait
+
+    def tracked_wait(timeout=None):
+        joined_flight.set()
+        return original_wait(timeout)
+
+    monkeypatch.setattr(gate._flight.done, "wait", tracked_wait)
+    second = threading.Thread(target=lambda: results.append(flush(timeout_millis=1500)))
+    second.start()
+    assert joined_flight.wait(1)
+    try:
+        processor.release.set()
+        first.join(2)
+        second.join(2)
+        assert results == [True, True]
+        assert processor.pending == []
+        assert processor.exported == ["first", "second"]
+    finally:
+        processor.release.set()
+        first.join(2)
+        second.join(2)
+
+
+def test_waiting_flush_keeps_its_deadline_and_does_not_run_after_timeout():
+    gate = FlushGate()
+    started = threading.Event()
+    release = threading.Event()
+    second_calls = []
+
+    def blocked():
+        started.set()
+        release.wait(2)
+        return True
+
+    first = threading.Thread(target=lambda: gate.call(blocked, time.monotonic() + 2))
+    first.start()
+    assert started.wait(1)
+    try:
+        before = time.monotonic()
+        completed, _ = gate.call(lambda: second_calls.append(True), before + 0.03)
+        assert completed is False
+        assert time.monotonic() - before < 1
+        release.set()
+        first.join(2)
+        assert second_calls == []
+    finally:
+        release.set()
+        first.join(2)
+
+
+def test_flush_gate_never_overlaps_worker_operations():
+    gate = FlushGate()
+    active = 0
+    peak = 0
+    calls = 0
+    lock = threading.Lock()
+    ready = threading.Barrier(9)
+    results = []
+
+    def operation():
+        nonlocal active, peak, calls
+        with lock:
+            active += 1
+            peak = max(peak, active)
+            calls += 1
+        time.sleep(0.005)
+        with lock:
+            active -= 1
+        return True
+
+    def call():
+        ready.wait()
+        results.append(gate.call(operation, time.monotonic() + 2))
+
+    threads = [threading.Thread(target=call) for _ in range(8)]
+    for thread in threads:
+        thread.start()
+    ready.wait()
+    for thread in threads:
+        thread.join(3)
+    assert results == [(True, True)] * 8
+    assert calls == 8
+    assert peak == 1

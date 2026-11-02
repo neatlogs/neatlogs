@@ -28,7 +28,7 @@ from ._wrap_utils import _normalize_traces_endpoint
 from .constants import DEFAULT_INGEST_ENDPOINT, export_queue_capacity
 from .core.byte_limited_exporter import ByteLimitedSpanExporter
 from .core.byte_limited_log_exporter import ByteLimitedLogExporter
-from .core.deadline import DeadlineWorker, bounded_call
+from .core.deadline import DeadlineWorker, FlushGate, bounded_call
 from .core.delivery import (
     DeliveryDiagnostics,
     ObservableBatchLogRecordProcessor,
@@ -74,6 +74,7 @@ _upload_authority = None
 _media_store = None
 _signal_handlers = {}
 _signal_shutdown_in_progress = False
+_flush_gate = FlushGate("neatlogs-default-flush")
 _shutdown_condition = threading.Condition(threading.RLock())
 _shutdown_state = "idle"
 _shutdown_owner = None
@@ -770,6 +771,8 @@ def init(
             logger.debug(f"Instrumented libraries: {manager.instrumented}")
 
     _shutdown_worker = DeadlineWorker("neatlogs-default-shutdown")
+    global _flush_gate
+    _flush_gate = FlushGate("neatlogs-default-flush")
     atexit.register(_atexit_shutdown)
     _init_signature = candidate_signature
     _initialized = True
@@ -806,24 +809,44 @@ def _warn_if_run_was_quiet(processor: Any) -> None:
 
 
 def flush(timeout_millis: int = 30000) -> bool:
-    """Flush the process-default Neatlogs pipeline only."""
-    global _tracer_provider
+    """Flush the process-default Neatlogs pipeline only.
+
+    Returns False if the flush did not finish within ``timeout_millis``. The
+    call itself never blocks longer than that, even when the collector is
+    unreachable and exporter retries are still running.
+    """
+    deadline = time.monotonic() + max(0, timeout_millis) / 1000
+    # Capture this generation's pipeline now: an abandoned worker must never
+    # reach into a pipeline created by a later shutdown()/init().
+    log_provider = _log_provider
+    processors = list(_transport_span_processors)
+    completed, result = _flush_gate.call(
+        lambda: _flush_pipeline(log_provider, processors, timeout_millis, deadline), deadline
+    )
+    return bool(result) if completed else False
+
+
+def _flush_pipeline(
+    log_provider: Any, processors: List[Any], timeout_millis: int, deadline: float
+) -> bool:
     success = True
 
     # Log provider must flush BEFORE tracer provider: the tracer batch includes
     # the neatlogs.trace.complete marker which triggers server-side finalization.
     # Flushing logs first guarantees LOG records reach ClickHouse before the
     # completion marker fires the trace-finalizer query.
-    if _log_provider:
+    if log_provider:
         try:
             logger.debug("Flushing log provider...")
-            _log_provider.force_flush(timeout_millis=timeout_millis)
+            log_provider.force_flush(timeout_millis=timeout_millis)
             logger.debug("Log provider flushed successfully")
         except Exception as e:
             logger.error(f"Error flushing logs: {e}", exc_info=True)
             success = False
 
-    for processor in _transport_span_processors:
+    for processor in processors:
+        if time.monotonic() >= deadline:
+            return False
         try:
             logger.debug("Flushing Neatlogs trace processor...")
             ok = processor.force_flush(timeout_millis=timeout_millis)
@@ -835,9 +858,11 @@ def flush(timeout_millis: int = 30000) -> bool:
     # A root is accepted only at the final post-mask export boundary. That
     # acceptance queues its completion marker, so drain the trace batch once
     # more to include the newly queued marker in this flush contract.
-    if _transport_span_processors:
+    if processors and time.monotonic() >= deadline:
+        return False
+    if processors:
         try:
-            ok = _transport_span_processors[0].force_flush(timeout_millis=timeout_millis)
+            ok = processors[0].force_flush(timeout_millis=timeout_millis)
             success = (ok is None or bool(ok)) and success
         except Exception as e:
             logger.error(f"Error flushing completion markers: {e}", exc_info=True)
@@ -993,7 +1018,7 @@ def _perform_shutdown(
     global _tracer_provider, _owns_tracer_provider, _log_provider, _span_processor, _initialized
     global _init_signature
     global _instrumentation_manager, _transport_span_processors, _completion_span_processor
-    global _debug_mode, _shutdown_worker
+    global _debug_mode, _shutdown_worker, _flush_gate
     global _upload_authority, _media_store
 
     try:
@@ -1265,6 +1290,7 @@ def _perform_shutdown(
     _warn_if_run_was_quiet(_span_processor)
     _initialized = False
     _init_signature = None
+    _flush_gate = FlushGate("neatlogs-default-flush")
     _tracer_provider = None
     _owns_tracer_provider = False
     _log_provider = None

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+import re
 from datetime import datetime
 from uuid import uuid4
 
@@ -29,7 +30,15 @@ class LocalRunApi:
         self._token = token.strip()
 
     def request(self, method, path, body=None, *, key=None, limit=64 * 1024, timeout=30):
-        if not (path == "/datasets" or path.startswith(("/datasets/", "/runs"))) or ".." in path:
+        evaluation_dispatch = re.fullmatch(r"/evaluations/[0-9a-fA-F-]{36}/ai-dispatches", path)
+        if (
+            not (
+                path == "/datasets"
+                or path.startswith(("/datasets/", "/runs"))
+                or evaluation_dispatch
+            )
+            or ".." in path
+        ):
             raise ReplayError("Invalid local replay API path.")
         content = ecmascript_json(body) if body is not None else None
         if content is not None and len(content) > 64 * 1024:

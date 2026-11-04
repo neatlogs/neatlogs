@@ -27,15 +27,6 @@ Available span kinds:
 """
 
 from . import datasets
-from .ab_test import (
-    AbAssignment,
-    AbTestClient,
-    ab_test,
-    complete_ab_test_unit,
-    configure_ab_tests,
-    log_exposure,
-    record_ab_test_run,
-)
 from .client import Client
 from .core.context import trace
 from .core.crewai_task_registry import register_crewai_task
@@ -331,12 +322,6 @@ def wrap(client, **workflow_attributes):
 
 __all__ = [
     "datasets",
-    "AbAssignment",
-    "AbTestClient",
-    "ab_test",
-    "complete_ab_test_unit",
-    "configure_ab_tests",
-    "log_exposure",
     "Client",
     "init",
     "flush",

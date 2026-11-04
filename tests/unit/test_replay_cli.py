@@ -14,8 +14,6 @@ from neatlogs.replay import ReplayError
 from neatlogs.replay.local_command import parse_agent_config, run_local_command
 from neatlogs.replay.provider import read_provider_capture
 
-pytest_plugins = ["respx.plugin"]
-
 PROJECT = "00000000-0000-4000-8000-000000000001"
 DATASET = "00000000-0000-4000-8000-000000000002"
 VERSION = "00000000-0000-4000-8000-000000000003"

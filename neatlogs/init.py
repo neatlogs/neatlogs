@@ -277,7 +277,6 @@ def init(
     uploads_enabled: Optional[bool] = None,
     _doctor_probe: bool = False,
     _doctor_probe_exporter: Optional[Any] = None,
-    ab_test_keys: Optional[List[str]] = None,
 ) -> None:
     """
     Initialize Neatlogs SDK.
@@ -357,9 +356,6 @@ def init(
         uploads_enabled: Enable the authenticated typed-media and oversized OTLP
               upload contract. Defaults to ``NEATLOGS_UPLOADS_ENABLED``, which
               is false when unset.
-        ab_test_keys: Experiment keys to fetch at initialization and refresh every
-              60 seconds. Assignment reads only cached settings; disabled export
-              performs no A/B requests.
     """
     global _initialized, _init_signature, _shutdown_worker
 
@@ -367,9 +363,6 @@ def init(
     from .replay.environment import configure_replay_from_environment
 
     configure_replay_from_environment()
-    from .ab_test.protocol import valid_keys
-
-    ab_test_keys = valid_keys(ab_test_keys or [])
     uploads_enabled_resolved = resolve_uploads_enabled(
         uploads_enabled, os.getenv("NEATLOGS_UPLOADS_ENABLED")
     )
@@ -397,7 +390,6 @@ def init(
         isolate=isolate,
         register_shutdown_handlers=register_shutdown_handlers,
         uploads_enabled=uploads_enabled_resolved,
-        ab_test_keys=ab_test_keys,
         _doctor_probe=_doctor_probe,
         _doctor_probe_exporter=_doctor_probe_exporter,
     )
@@ -488,10 +480,6 @@ def init(
     traces_endpoint = _normalize_traces_endpoint(endpoint)
     _parsed = _urlparse(traces_endpoint)
     _base_url = f"{_parsed.scheme}://{_parsed.netloc}"
-    if ab_test_keys and not disable_export_resolved:
-        from .ab_test.protocol import validate_origin
-
-        validate_origin(_base_url)
 
     # Session and end-user identity are deliberately NOT resource attributes:
     # they are per-request, set at the trace root (trace()/@span) or via
@@ -788,10 +776,6 @@ def init(
     atexit.register(_atexit_shutdown)
     _init_signature = candidate_signature
     _initialized = True
-    if ab_test_keys and not disable_export_resolved:
-        from .ab_test import configure_ab_tests
-
-        configure_ab_tests(keys=ab_test_keys)
     if register_shutdown_handlers:
         _register_shutdown_signal_handlers()
 
@@ -828,7 +812,6 @@ def flush(timeout_millis: int = 30000) -> bool:
     """Flush the process-default Neatlogs pipeline only."""
     global _tracer_provider
     success = True
-    ab_deadline = time.monotonic() + max(0, timeout_millis) / 1000
 
     # Log provider must flush BEFORE tracer provider: the tracer batch includes
     # the neatlogs.trace.complete marker which triggers server-side finalization.
@@ -863,9 +846,7 @@ def flush(timeout_millis: int = 30000) -> bool:
             logger.error(f"Error flushing completion markers: {e}", exc_info=True)
             success = False
 
-    from .ab_test import flush_ab_tests
-
-    return flush_ab_tests(max(0, ab_deadline - time.monotonic())) and success
+    return success
 
 
 def get_log_provider() -> Optional[LoggerProvider]:
@@ -1278,11 +1259,8 @@ def _perform_shutdown(
     _upload_authority = None
 
     try:
-        from .ab_test import close_ab_tests, flush_ab_tests
         from .prompt.client import _close_shared_prompt_clients
 
-        success = flush_ab_tests(max(0, deadline - time.monotonic())) and success
-        close_ab_tests()
         _close_shared_prompt_clients()
     except Exception:
         success = False

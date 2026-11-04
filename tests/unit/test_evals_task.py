@@ -26,7 +26,18 @@ def test_rejects_case_outside_dataset_before_running(server):
 
 @pytest.fixture
 def server():
-    state = {"outputs": [], "fail_upload": False, "verdict": "pass", "requests": [], "cases": []}
+    state = {
+        "outputs": [],
+        "fail_upload": False,
+        "verdict": "pass",
+        "requests": [],
+        "cases": [],
+        "grading": None,
+        "dispatches": [],
+        "dispatch_failures": 0,
+        "completion_keys": [],
+        "completion_failures": 0,
+    }
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):
@@ -36,6 +47,15 @@ def server():
             state["requests"].append(self.path)
             if "/comparison" in self.path:
                 data = {"state": "ready", "coverage": {"complete": True}}
+            elif "/runs/" in self.path and "includeGrading=true" in self.path:
+                data = {
+                    "runId": RUN,
+                    "state": "completed",
+                    "deadlineAt": "2030-01-01T00:00:00Z",
+                    "itemCount": 1,
+                    "gradingHandoffState": "ready",
+                    "grading": state["grading"],
+                }
             elif "/cases/" in self.path:
                 case_id = self.path.split("/cases/")[1].split("?")[0]
                 data = {
@@ -66,7 +86,21 @@ def server():
             assert self.headers["Authorization"] == "Bearer task-token"
             assert self.headers["x-project-id"] == PROJECT
             assert self.headers["Idempotency-Key"]
-            if self.path.endswith("/outputs"):
+            if self.path.endswith("/ai-dispatches"):
+                state["dispatches"].append((body["batchId"], self.headers["Idempotency-Key"]))
+                if (
+                    body["batchId"] == state["grading"]["candidateBatchId"]
+                    and state["dispatch_failures"]
+                ):
+                    state["dispatch_failures"] -= 1
+                    self.respond(503, {})
+                    return
+                data = {
+                    "evaluationId": state["grading"]["evaluationId"],
+                    "batchId": body["batchId"],
+                    "dispatchStatus": "accepted",
+                }
+            elif self.path.endswith("/outputs"):
                 if state["fail_upload"]:
                     self.respond(503, {})
                     return
@@ -75,6 +109,11 @@ def server():
             elif self.path.endswith("/gate"):
                 data = {"verdict": state["verdict"]}
             elif self.path.endswith("/complete"):
+                state["completion_keys"].append(self.headers["Idempotency-Key"])
+                if state["completion_failures"]:
+                    state["completion_failures"] -= 1
+                    self.respond(503, {})
+                    return
                 data = {}
             else:
                 state["registration"] = body
@@ -132,6 +171,86 @@ def test_runs_real_http_task_trials_and_returns_failed_gate_exit(server):
     assert len(state["outputs"]) == 2
     assert "grading" not in state["registration"]
     assert any("?tag=golden-v3" in path for path in state["requests"])
+
+
+def test_resumes_uncertain_completion_with_original_key(server, tmp_path):
+    state, config = server
+    state["completion_failures"] = 2
+
+    def task(*_):
+        return "answer"
+
+    options = dict(
+        dataset=DATASET,
+        task=task,
+        label="retry completion",
+        state_path=tmp_path / "completion.json",
+        **config,
+    )
+    with pytest.raises(LocalRunApiError):
+        run_eval(**options)
+    result = run_eval(**options, resume=True)
+    assert result.exit_code == 0
+    assert len(state["completion_keys"]) == 3
+    assert len(set(state["completion_keys"])) == 1
+    assert len(state["outputs"]) == 1
+
+
+def test_dispatches_both_grading_batches_with_distinct_keys(server, tmp_path):
+    state, config = server
+    state["grading"] = {
+        "evaluationId": str(uuid4()),
+        "candidateBatchId": str(uuid4()),
+        "recordedBatchId": str(uuid4()),
+    }
+    result = run_eval(
+        dataset=DATASET,
+        task=lambda *_: "answer",
+        label="graded",
+        grading={"formVersionId": str(uuid4()), "evaluatorIds": [str(uuid4())]},
+        state_path=tmp_path / "run.json",
+        **config,
+    )
+    assert result.exit_code == 0
+    assert [item[0] for item in state["dispatches"]] == [
+        state["grading"]["recordedBatchId"],
+        state["grading"]["candidateBatchId"],
+    ]
+    assert len({item[1] for item in state["dispatches"]}) == 2
+
+
+def test_resumes_uncertain_grading_with_original_key(server, tmp_path):
+    state, config = server
+    state["grading"] = {
+        "evaluationId": str(uuid4()),
+        "candidateBatchId": str(uuid4()),
+        "recordedBatchId": str(uuid4()),
+    }
+    state["dispatch_failures"] = 2
+
+    def task(*_):
+        return "answer"
+
+    options = dict(
+        dataset=DATASET,
+        task=task,
+        label="graded",
+        grading={"formVersionId": str(uuid4()), "evaluatorIds": [str(uuid4())]},
+        state_path=tmp_path / "run.json",
+        **config,
+    )
+    with pytest.raises(LocalRunApiError):
+        run_eval(**options)
+    result = run_eval(**options, resume=True)
+    assert result.exit_code == 0
+    recorded = [
+        item for item in state["dispatches"] if item[0] == state["grading"]["recordedBatchId"]
+    ]
+    candidate = [
+        item for item in state["dispatches"] if item[0] == state["grading"]["candidateBatchId"]
+    ]
+    assert len(recorded) == 1
+    assert len(candidate) == 3 and len({item[1] for item in candidate}) == 1
 
 
 def test_selects_case_from_later_dataset_page(server):

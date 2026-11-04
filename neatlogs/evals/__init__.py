@@ -264,12 +264,64 @@ def run_eval(
             run_api.request("POST", f"/runs/{run_id}/outputs", slot["body"], key=slot["key"])
             slot["accepted"] = True
             _save(state_path, state)
-    run_api.request(
-        "POST", f"/runs/{run_id}/complete", {}, key=state.setdefault("completeKey", str(uuid4()))
-    )
+    complete_key = state.setdefault("completeKey", str(uuid4()))
+    _save(state_path, state)
+    run_api.request("POST", f"/runs/{run_id}/complete", {}, key=complete_key)
     _save(state_path, state)
     errors = sum("error" in slot["body"] for slot in state["slots"].values())
     deadline = time.monotonic() + wait_timeout
+    if grading:
+        while True:
+            status = run_api.request("GET", f"/runs/{run_id}?includeGrading=true")
+            if status.get("runId") != run_id:
+                raise ValueError("Grading status belongs to a different run")
+            batches = status.get("grading")
+            if (
+                batches
+                or status.get("gradingHandoffState") == "failed"
+                or time.monotonic() >= deadline
+            ):
+                break
+            time.sleep(min(1, max(0, deadline - time.monotonic())))
+        if not isinstance(batches, dict):
+            raise RuntimeError(
+                "Grading batches are not ready. Resume after checking the grading worker."
+            )
+        evaluation_id = str(UUID(batches["evaluationId"]))
+        recorded_id = str(UUID(batches["recordedBatchId"]))
+        candidate_id = str(UUID(batches["candidateBatchId"]))
+        dispatch = state.setdefault(
+            "gradingDispatch",
+            {
+                "evaluationId": evaluation_id,
+                "recorded": {"batchId": recorded_id, "key": str(uuid4()), "accepted": False},
+                "candidate": {"batchId": candidate_id, "key": str(uuid4()), "accepted": False},
+            },
+        )
+        _save(state_path, state)
+        if (
+            dispatch["evaluationId"],
+            dispatch["recorded"]["batchId"],
+            dispatch["candidate"]["batchId"],
+        ) != (evaluation_id, recorded_id, candidate_id):
+            raise ValueError("Saved grading batches do not match this run")
+        for batch in (dispatch["recorded"], dispatch["candidate"]):
+            if not batch["accepted"]:
+                result = run_api.request(
+                    "POST",
+                    f"/evaluations/{evaluation_id}/ai-dispatches",
+                    {"batchId": batch["batchId"]},
+                    key=batch["key"],
+                    timeout=120,
+                )
+                if (
+                    result.get("evaluationId") != evaluation_id
+                    or result.get("batchId") != batch["batchId"]
+                    or result.get("dispatchStatus") != "accepted"
+                ):
+                    raise ValueError("Grading receipt belongs to a different batch")
+                batch["accepted"] = True
+                _save(state_path, state)
     while True:
         comparison = run_api.request("GET", f"/runs/{run_id}/comparison", limit=17 * 1024 * 1024)
         if (

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 from contextlib import contextmanager
 from pathlib import Path
@@ -76,9 +77,20 @@ def configuration(value):
     else:
         object_fields(replay, {"mode", "untilSpan"})
         identifier(replay["untilSpan"])
-    from ..ab_test.protocol import params
-
-    result["params"] = params(result["params"])
+    parameters = result["params"]
+    if type(parameters) is not dict or len(parameters) > 20:
+        raise ReplayError("Saved local parameters are invalid.")
+    for key, item in parameters.items():
+        if type(key) is not str or not 1 <= len(key) <= 100:
+            raise ReplayError("Saved local parameter name is invalid.")
+        if item is None or type(item) is bool:
+            continue
+        if type(item) is str and len(item) <= 2000:
+            continue
+        if type(item) in (int, float) and math.isfinite(item):
+            continue
+        raise ReplayError("Saved local parameter value is invalid.")
+    result["params"] = dict(parameters)
     grading = result["grading"]
     if grading is not None:
         object_fields(grading, {"formVersionId", "evaluatorIds"})

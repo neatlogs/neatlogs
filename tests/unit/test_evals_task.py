@@ -33,7 +33,10 @@ def server():
         "requests": [],
         "cases": [],
         "grading": None,
+        "grading_handoff_state": None,
         "dispatches": [],
+        "comparison_pending": 0,
+        "comparison_calls": 0,
         "dispatch_failures": 0,
         "completion_keys": [],
         "completion_failures": 0,
@@ -46,16 +49,22 @@ def server():
         def do_GET(self):
             state["requests"].append(self.path)
             if "/comparison" in self.path:
-                data = {"state": "ready", "coverage": {"complete": True}}
+                state["comparison_calls"] += 1
+                if state["comparison_pending"]:
+                    state["comparison_pending"] -= 1
+                    data = {"state": "pending", "coverage": {"complete": False}}
+                else:
+                    data = {"state": "ready", "coverage": {"complete": True}}
             elif "/runs/" in self.path and "includeGrading=true" in self.path:
                 data = {
                     "runId": RUN,
                     "state": "completed",
                     "deadlineAt": "2030-01-01T00:00:00Z",
                     "itemCount": 1,
-                    "gradingHandoffState": "ready",
                     "grading": state["grading"],
                 }
+                if state["grading_handoff_state"] is not None:
+                    data["gradingHandoffState"] = state["grading_handoff_state"]
             elif "/cases/" in self.path:
                 case_id = self.path.split("/cases/")[1].split("?")[0]
                 data = {
@@ -217,6 +226,36 @@ def test_dispatches_both_grading_batches_with_distinct_keys(server, tmp_path):
         state["grading"]["candidateBatchId"],
     ]
     assert len({item[1] for item in state["dispatches"]}) == 2
+
+
+@pytest.mark.parametrize("handoff,with_ids", [("pending", False), ("ready", True)])
+def test_server_managed_grading_polls_comparison_without_dispatch(
+    server, tmp_path, handoff, with_ids
+):
+    state, config = server
+    state["grading_handoff_state"] = handoff
+    state["grading"] = (
+        {
+            "evaluationId": str(uuid4()),
+            "candidateBatchId": str(uuid4()),
+            "recordedBatchId": str(uuid4()),
+        }
+        if with_ids
+        else None
+    )
+    state["comparison_pending"] = 1
+    result = run_eval(
+        dataset=DATASET,
+        task=lambda *_: "answer",
+        label="server managed grading",
+        grading={"formVersionId": str(uuid4()), "evaluatorIds": [str(uuid4())]},
+        state_path=tmp_path / "run.json",
+        wait_timeout=5,
+        **config,
+    )
+    assert result.exit_code == 0
+    assert state["dispatches"] == []
+    assert state["comparison_calls"] == 2
 
 
 def test_resumes_uncertain_grading_with_original_key(server, tmp_path):

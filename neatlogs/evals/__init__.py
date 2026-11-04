@@ -271,6 +271,10 @@ def run_eval(
     errors = sum("error" in slot["body"] for slot in state["slots"].values())
     deadline = time.monotonic() + wait_timeout
     if grading:
+        status = run_api.request("GET", f"/runs/{run_id}?includeGrading=true")
+        if status.get("runId") != run_id:
+            raise ValueError("Grading status belongs to a different run")
+    if grading and "gradingHandoffState" not in status:
         while True:
             status = run_api.request("GET", f"/runs/{run_id}?includeGrading=true")
             if status.get("runId") != run_id:

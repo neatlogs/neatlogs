@@ -110,7 +110,8 @@ class LocalRunApi:
         return receipt
 
     def status(self, run_id):
-        receipt = self.request("GET", f"/runs/{uuid(run_id)}")
+        run_id = uuid(run_id)
+        receipt = self.request("GET", f"/runs/{run_id}")
         self._receipt(receipt)
         if receipt["runId"] != run_id:
             raise LocalRunApiError("Local run status belongs to a different run.")

@@ -7,7 +7,9 @@ from uuid import uuid4
 import pytest
 
 from neatlogs.evals import Dataset, run_eval
-from neatlogs.replay.api import LocalRunApiError
+from neatlogs.evals.cli import main as run_eval_cli
+from neatlogs.replay.api import LocalRunApi, LocalRunApiError
+from neatlogs.replay.contracts import ReplayError
 
 PROJECT, DATASET, VERSION, CASE, REVISION, RUN = [str(uuid4()) for _ in range(6)]
 
@@ -40,6 +42,8 @@ def server():
         "dispatch_failures": 0,
         "completion_keys": [],
         "completion_failures": 0,
+        "gate_keys": [],
+        "gate_failures": 0,
     }
 
     class Handler(BaseHTTPRequestHandler):
@@ -116,6 +120,11 @@ def server():
                 state["outputs"].append(body)
                 data = {"state": "succeeded", "outputId": str(uuid4())}
             elif self.path.endswith("/gate"):
+                state["gate_keys"].append(self.headers["Idempotency-Key"])
+                if state["gate_failures"]:
+                    state["gate_failures"] -= 1
+                    self.respond(503, {})
+                    return
                 data = {"verdict": state["verdict"]}
             elif self.path.endswith("/complete"):
                 state["completion_keys"].append(self.headers["Idempotency-Key"])
@@ -166,7 +175,7 @@ def test_runs_real_http_task_trials_and_returns_failed_gate_exit(server):
         return {"answer": value["message"], "trial": context.trial}
 
     result = run_eval(
-        dataset=Dataset(DATASET, tag="golden-v3"),
+        dataset=Dataset(DATASET, version_id=VERSION),
         task=task,
         label="candidate",
         params={"model": "small"},
@@ -179,7 +188,36 @@ def test_runs_real_http_task_trials_and_returns_failed_gate_exit(server):
     assert seen[0][2:] == ({"value": "hello"}, "small")
     assert len(state["outputs"]) == 2
     assert "grading" not in state["registration"]
-    assert any("?tag=golden-v3" in path for path in state["requests"])
+    assert f"/api/v1/public/datasets/{DATASET}?versionId={VERSION}" in state["requests"]
+
+
+@pytest.mark.parametrize("fail_upload, expected_exit", [(False, 1), (True, 3)])
+def test_cli_reports_saved_run_id_when_eval_fails(
+    server, tmp_path, monkeypatch, capsys, fail_upload, expected_exit
+):
+    state, config = server
+    state["verdict"] = "fail"
+    state["fail_upload"] = fail_upload
+    task = tmp_path / "task.py"
+    task.write_text("def task(value, context):\n    print('task output')\n    return value\n")
+    receipt = tmp_path / "receipt"
+    monkeypatch.setattr("sys.argv", ["neatlogs.evals.cli", str(task)])
+    monkeypatch.setenv("NEATLOGS_EVAL_RESULT_FILE", str(receipt))
+    monkeypatch.setenv(
+        "NEATLOGS_EVAL_OPTIONS",
+        json.dumps(
+            dict(config, dataset={"name": DATASET, "versionId": VERSION}, label="candidate")
+        ),
+    )
+    assert run_eval_cli() == expected_exit
+    captured = capsys.readouterr()
+    assert receipt.read_text() == RUN
+    assert receipt.stat().st_mode & 0o077 == 0
+    if fail_upload:
+        assert not captured.out and "HTTP 503" in captured.err
+    else:
+        assert json.loads(captured.out)["runId"] == RUN
+    assert "task output" in captured.err
 
 
 def test_resumes_uncertain_completion_with_original_key(server, tmp_path):
@@ -202,6 +240,29 @@ def test_resumes_uncertain_completion_with_original_key(server, tmp_path):
     assert result.exit_code == 0
     assert len(state["completion_keys"]) == 3
     assert len(set(state["completion_keys"])) == 1
+    assert len(state["outputs"]) == 1
+
+
+def test_resumes_uncertain_gate_with_original_key(server, tmp_path):
+    state, config = server
+    state["gate_failures"] = 2
+
+    def task(*_):
+        return "answer"
+
+    options = dict(
+        dataset=DATASET,
+        task=task,
+        label="retry gate",
+        state_path=tmp_path / "gate.json",
+        **config,
+    )
+    with pytest.raises(LocalRunApiError):
+        run_eval(**options)
+    result = run_eval(**options, resume=True)
+    assert result.exit_code == 0
+    assert len(state["gate_keys"]) == 3
+    assert len(set(state["gate_keys"])) == 1
     assert len(state["outputs"]) == 1
 
 
@@ -358,3 +419,46 @@ def test_resume_rejects_changed_task_code(server, tmp_path):
             dataset=DATASET, task=changed, label="resume", state_path=path, resume=True, **config
         )
     assert state["outputs"] == []
+
+
+def test_refuses_concurrent_owner_of_eval_state(server, tmp_path):
+    state, config = server
+    path = tmp_path / "locked.json"
+    (tmp_path / "locked.json.lock").write_text("{}")
+    executions = []
+
+    def task(*_):
+        executions.append(1)
+        return "answer"
+
+    with pytest.raises(ReplayError, match="locked"):
+        run_eval(dataset=DATASET, task=task, label="locked", state_path=path, **config)
+    assert executions == []
+    assert state["requests"] == []
+
+
+def test_status_accepts_canonical_equivalent_run_id(server, monkeypatch):
+    _, config = server
+    api = LocalRunApi(**config)
+    receipt = {
+        "runId": RUN,
+        "state": "completed",
+        "deadlineAt": "2030-01-01T00:00:00Z",
+        "itemCount": 1,
+    }
+    seen = []
+
+    def request(method, path):
+        seen.append((method, path))
+        return receipt
+
+    monkeypatch.setattr(api, "request", request)
+    assert api.status(RUN.upper()) == receipt
+    assert seen == [("GET", f"/runs/{RUN}")]
+
+
+def test_dataset_and_run_api_use_same_trimmed_token(server):
+    _, config = server
+    config = {**config, "token": "  task-token  "}
+    result = run_eval(dataset=DATASET, task=lambda *_: "answer", label="auth", **config)
+    assert result.exit_code == 0

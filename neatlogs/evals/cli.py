@@ -27,9 +27,7 @@ def main():
             if not callable(task):
                 raise ValueError("Task file must export task(input, context)")
             selector = options.pop("dataset")
-            dataset = Dataset(
-                selector["name"], version_id=selector.get("versionId"), tag=selector.get("tag")
-            )
+            dataset = Dataset(selector["name"], version_id=selector.get("versionId"))
             result = run_eval(dataset=dataset, task=task, **options)
         print(
             json.dumps(

@@ -72,7 +72,7 @@ class DatasetApi:
         ):
             raise ValueError("base_url must be an HTTPS origin; HTTP is allowed on loopback")
         self.base_url = base_url.rstrip("/") + "/api/v1/public"
-        self._token = token
+        self._token = token.strip()
 
     def request(self, method, path, *, content=None, key=None):
         headers = {"Authorization": "Bearer " + self._token, "x-project-id": self.project_id}

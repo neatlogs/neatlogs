@@ -1,4 +1,4 @@
-"""Run a task on pinned cases and grade it with the dataset's saved eval form."""
+"""Run a task on pinned cases and grade it with a selected evaluation form."""
 
 from __future__ import annotations
 
@@ -7,22 +7,23 @@ import inspect
 import json
 import os
 import time
+from contextlib import suppress
 from dataclasses import dataclass, field
+from functools import wraps
 from pathlib import Path
 from typing import Any, Callable
-from urllib.parse import quote
 from uuid import UUID, uuid4
 
 from ..core.context import trace
 from ..datasets._api import DatasetApi, encode_json
 from ..replay.api import LocalRunApi
+from ..replay.state import state_lock
 
 
 @dataclass(frozen=True)
 class Dataset:
     name: str
     version_id: str | None = None
-    tag: str | None = None
 
 
 @dataclass(frozen=True)
@@ -46,6 +47,18 @@ class EvalResult:
     exit_code: int
 
 
+def _with_state_lock(run):
+    @wraps(run)
+    def locked(*args, **kwargs):
+        state_path = kwargs.get("state_path")
+        if state_path is None:
+            return run(*args, **kwargs)
+        with state_lock(state_path):
+            return run(*args, **kwargs)
+
+    return locked
+
+
 def _save(path, state):
     if path is None:
         return
@@ -58,8 +71,6 @@ def _save(path, state):
 
 
 def _resolve(api, dataset, selected=None):
-    if dataset.tag is not None and dataset.version_id is not None:
-        raise ValueError("Choose a dataset tag or version_id")
     try:
         dataset_id = str(UUID(dataset.name))
     except ValueError:
@@ -71,11 +82,7 @@ def _resolve(api, dataset, selected=None):
         if len(matches) != 1:
             raise ValueError("Use a dataset UUID or one unambiguous dataset name") from None
         dataset_id = str(UUID(matches[0]["id"]))
-    suffix = (
-        "?versionId=" + str(UUID(dataset.version_id))
-        if dataset.version_id
-        else "?tag=" + quote(dataset.tag, safe="") if dataset.tag else ""
-    )
+    suffix = "?versionId=" + str(UUID(dataset.version_id)) if dataset.version_id else ""
     overview = api.request("GET", f"/datasets/{dataset_id}{suffix}")
     version_id = str(UUID(overview["version"]["id"]))
     total = overview["dataset"]["caseCount"]
@@ -104,6 +111,7 @@ def _resolve(api, dataset, selected=None):
     return version_id, cases
 
 
+@_with_state_lock
 def run_eval(
     *,
     dataset: Dataset | str,
@@ -209,10 +217,19 @@ def run_eval(
             "slots": {},
         }
         _save(state_path, state)
+    registered_id = state["runId"]
+    if registered_id is None:
+        registered_id = run_api.register(request, key=state["registrationKey"])["runId"]
+    run_id = str(UUID(registered_id))
+    receipt = os.environ.get("NEATLOGS_EVAL_RESULT_FILE")
+    if receipt:
+        with suppress(OSError):
+            fd = os.open(receipt, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as file:
+                file.write(run_id)
     if state["runId"] is None:
-        state["runId"] = run_api.register(request, key=state["registrationKey"])["runId"]
+        state["runId"] = run_id
         _save(state_path, state)
-    run_id = str(UUID(state["runId"]))
     for case in cases:
         for trial in range(1, trials + 1):
             key = f"{case['caseId']}:{trial}"
@@ -338,7 +355,9 @@ def run_eval(
         "complete"
     ):
         return EvalResult(run_id, comparison, None, errors, 4)
-    gate = run_api.request("POST", f"/runs/{run_id}/gate", {}, key=str(uuid4()))
+    gate_key = state.setdefault("gateKey", str(uuid4()))
+    _save(state_path, state)
+    gate = run_api.request("POST", f"/runs/{run_id}/gate", {}, key=gate_key)
     code = {"pass": 0, "fail": 1, "incomplete": 4}[gate["verdict"]]
     return EvalResult(run_id, comparison, gate, errors, code)
 

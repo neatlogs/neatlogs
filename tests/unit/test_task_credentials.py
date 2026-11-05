@@ -26,6 +26,7 @@ def test_task_renewal_is_bounded_and_keeps_request_identity(monkeypatch, kind, s
     def request(method, url, **kwargs):
         if url.endswith("/refresh"):
             assert kwargs["headers"]["Authorization"] == "Bearer private-capability"
+            assert kwargs["timeout"] == 30
             refreshes.append(kwargs["json"])
             return httpx.Response(200, json={"token": TOKEN})
         calls.append((method, url, dict(kwargs["headers"]), kwargs.get("content")))

@@ -233,6 +233,8 @@ def span(
         # Tool-specific parameters (when kind="TOOL" or kind="MCP_TOOL"):
         tool_name: Tool identifier
         parameters: Tool parameter schema
+        replay: Opt in to JSON tool replay. "awaitable" requires an async def tool;
+              synchronous factories returning Tasks/coroutines cannot be captured losslessly.
 
         # End-user identity (typically only on the WORKFLOW root):
         end_user_id: Identifier of the END-USER this trace belongs to — the user
@@ -323,8 +325,11 @@ def span(
             return decorate
 
         def replay_mcp(func):
+            from ..replay.contracts import ReplayError
             from ..replay.tools import replay_tool
 
+            if replay == "awaitable" and not inspect.iscoroutinefunction(func):
+                raise ReplayError("Use async def for captured awaitable tool replay.")
             return decorate(replay_tool(func, name=tool_name or func.__name__, result=replay))
 
         return replay_mcp
@@ -377,8 +382,11 @@ def span(
         return decorate
 
     def replay_decorator(func):
+        from ..replay.contracts import ReplayError
         from ..replay.tools import replay_tool
 
+        if replay == "awaitable" and not inspect.iscoroutinefunction(func):
+            raise ReplayError("Use async def for captured awaitable tool replay.")
         # Export the same default identity used by replay lookup.
         if kind_upper == "TOOL" and not tool_name:
             extra["tool.name"] = name or func.__name__

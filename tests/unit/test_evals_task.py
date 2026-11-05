@@ -35,6 +35,9 @@ def server():
         "dataset_pages": [],
         "catalog_preferences": [],
         "fail_upload": False,
+        "reject_evidence": False,
+        "rejection_code": "GRADING_EVIDENCE_LIMIT",
+        "upload_requests": [],
         "verdict": "pass",
         "requests": [],
         "cases": [],
@@ -126,6 +129,13 @@ def server():
                     "dispatchStatus": "accepted",
                 }
             elif self.path.endswith("/outputs"):
+                state["upload_requests"].append((self.headers["Idempotency-Key"], body))
+                if state["reject_evidence"] and "output" in body:
+                    self.send_response(413)
+                    self.send_header("Content-Type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"code": state["rejection_code"]}).encode())
+                    return
                 if state["fail_upload"]:
                     self.respond(503, {})
                     return
@@ -175,6 +185,80 @@ def server():
     http.shutdown()
     worker.join()
     http.server_close()
+
+
+def test_metrics_preserve_app_json_types_and_reject_nested_nonfinite(server):
+    state, config = server
+    metrics = {"cache_hit": True, "source": "docs", "details": {"scores": [1, None, False]}}
+
+    def task(value, context):
+        context.metrics.update(metrics)
+        return "answer"
+
+    result = run_eval(grading=GRADING, dataset=DATASET, label="metrics", task=task, **config)
+    assert result.exit_code == 0
+    for key, value in metrics.items():
+        assert state["outputs"][0]["metrics"][key] == value
+    metrics["details"]["scores"].append(float("nan"))
+    result = run_eval(
+        grading=GRADING, dataset=DATASET, label="invalid metrics", task=task, **config
+    )
+    assert result.exit_code == 4 and "error" in state["outputs"][-1]
+
+
+def test_definite_evidence_rejection_saves_new_failure_key_without_rerunning(server, tmp_path):
+    state, config = server
+    state["reject_evidence"] = state["fail_upload"] = True
+    path = tmp_path / "eval-state.json"
+    calls = []
+
+    def task(*_):
+        calls.append(True)
+        return {"answer": "original private evidence"}
+
+    options = dict(
+        grading=GRADING,
+        dataset=DATASET,
+        label="evidence rejection",
+        task=task,
+        state_path=path,
+        **config,
+    )
+    with pytest.raises(LocalRunApiError):
+        run_eval(**options)
+    saved = json.loads(path.read_text())["slots"][f"{CASE}:1"]
+    assert saved["body"]["output"] == {"answer": "original private evidence"}
+    assert saved["rejection"]["key"] != saved["key"]
+    failure_key = saved["rejection"]["key"]
+    state["fail_upload"] = False
+    result = run_eval(**options, resume=True)
+    assert calls == [True] and result.exit_code == 4
+    assert state["outputs"] == [{"caseId": CASE, "trial": 1, "error": saved["rejection"]["error"]}]
+    assert state["upload_requests"][0][0] == saved["key"]
+    assert all(key == failure_key for key, body in state["upload_requests"][1:])
+
+
+def test_other_413_does_not_replace_original_body_or_idempotency_key(server, tmp_path):
+    state, config = server
+    state["reject_evidence"] = True
+    state["rejection_code"] = "OTHER_LIMIT"
+    path = tmp_path / "other-limit.json"
+    calls = []
+
+    def task(*_):
+        calls.append(True)
+        return "private output"
+
+    options = dict(
+        grading=GRADING, dataset=DATASET, label="other limit", task=task, state_path=path, **config
+    )
+    for resume in (False, True):
+        with pytest.raises(LocalRunApiError):
+            run_eval(**options, resume=resume)
+    saved = json.loads(path.read_text())["slots"][f"{CASE}:1"]
+    assert saved["body"]["output"] == "private output" and "rejection" not in saved
+    assert calls == [True]
+    assert state["upload_requests"][0] == state["upload_requests"][1]
 
 
 def test_descriptive_run_has_no_quality_gate(server):
@@ -655,7 +739,7 @@ def test_round_identity_is_pinned_across_resume(server, tmp_path):
 def test_trials_copy_nested_case_and_context_values(server):
     state, config = server
     seen = []
-    params = {"nested": {"model": "original"}}
+    params = {"model": "original"}
 
     def task(value, context):
         seen.append(
@@ -663,13 +747,13 @@ def test_trials_copy_nested_case_and_context_values(server):
                 value["message"],
                 context.expected["value"],
                 context.metadata["language"],
-                context.params["nested"]["model"],
+                context.params["model"],
             )
         )
         value["message"] = "changed"
         context.expected["value"] = "changed"
         context.metadata["language"] = "changed"
-        context.params["nested"]["model"] = "changed"
+        context.params["model"] = "changed"
         return value
 
     result = run_eval(
@@ -677,7 +761,7 @@ def test_trials_copy_nested_case_and_context_values(server):
     )
     assert result.exit_code == 0
     assert seen == [("hello", "hello", "en", "original")] * 2
-    assert params == {"nested": {"model": "original"}}
+    assert params == {"model": "original"}
 
 
 @pytest.mark.parametrize("defect", ["nonfinite", "envelope", "emoji"])

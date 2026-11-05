@@ -9,7 +9,7 @@ import pytest
 from neatlogs.replay import ReplayError
 from neatlogs.replay.all_command import enumerate_cases, resume_whole_dataset, start_whole_dataset
 from neatlogs.replay.api import LocalRunApiError
-from neatlogs.replay.state import create_state, read_state, save_state, state_lock
+from neatlogs.replay.state import create_state, digest, read_state, save_state, state_lock
 
 PROJECT = "00000000-0000-4000-8000-000000000001"
 DATASET = "00000000-0000-4000-8000-000000000002"
@@ -224,6 +224,43 @@ def test_whole_dataset_checkpoint_is_rejected_before_state_or_registration(setup
             path, api=api, **{**options, "replay": {"mode": "until_span", "untilSpan": "tool"}}
         )
     assert not path.exists() and not calls and not api.registrations
+
+
+@pytest.mark.parametrize("count, unsafe", [(1, None), (2, None), (1, "pending"), (1, "source")])
+def test_legacy_checkpoint_only_reconciles_single_already_computed_recording(
+    setup, capsys, count, unsafe
+):
+    path, options, calls = setup
+    api = Api(count)
+    api.fail_upload = unsafe != "source"
+    if unsafe == "source":
+        options = {**options, "trials": 2}
+    assert start_whole_dataset(path, api=api, **options) == (0 if unsafe == "source" else 1)
+    capsys.readouterr()
+    state = read_state(path)
+    state["configuration"]["replay"] = {"mode": "until_span", "untilSpan": "checkpoint"}
+    state["configurationDigest"] = digest(state["configuration"])
+    for batch in state["batches"]:
+        for slot in batch["slots"]:
+            if slot["execution"] and slot["execution"]["status"]:
+                slot["execution"]["status"]["mode"] = "until_span"
+    if unsafe == "pending":
+        slot = state["batches"][0]["slots"][0]
+        slot["progress"] = {"kind": "pending"}
+        slot["execution"] = None
+    elif unsafe == "source":
+        slot = state["batches"][0]["slots"][0]
+        slot["execution"]["sourceTraceId"] = "different-recording"
+        slot["execution"]["status"]["sourceTraceId"] = "different-recording"
+    save_state(path, state)
+    if count > 1 or unsafe:
+        with pytest.raises(ReplayError, match="belongs to one recording"):
+            resume_whole_dataset(path, api=api, as_json=True)
+    else:
+        assert resume_whole_dataset(path, api=api, as_json=True) == 0
+        capsys.readouterr()
+        assert api.uploads[0][1]["key"] == api.uploads[1][1]["key"]
+    assert len(calls) == (2 if unsafe == "source" else 1)
 
 
 def test_terminal_child_failure_seals_server_batch_without_rerun(setup, monkeypatch, capsys):

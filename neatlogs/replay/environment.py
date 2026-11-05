@@ -15,6 +15,7 @@ from .session import ReplaySession, set_environment_replay
 
 _configured = None
 _report = None
+_report_owner = None
 
 
 def bounded_file(path, limit):
@@ -54,8 +55,18 @@ def write_private_json(path, value, *, limit=16 * 1024):
 
 
 def save_environment_report():
+    global _report_owner
     if _configured is not None and _report:
-        write_private_json(_report, _configured.get_status())
+        report = Path(_report).absolute()
+        try:
+            status = _configured.get_status()
+            write_private_json(report, status)
+        except ReplayError:
+            if _report_owner == (_configured, report):
+                report.unlink(missing_ok=True)
+                _report_owner = None
+            raise
+        _report_owner = (_configured, report)
 
 
 def _exit_report():

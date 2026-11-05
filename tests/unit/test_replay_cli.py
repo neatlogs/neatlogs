@@ -105,6 +105,54 @@ def test_real_native_child_replays_without_credentials_and_cleans_private_files(
     assert len(result["status"]["traceIds"]) == 1
 
 
+@pytest.mark.parametrize(
+    "failure, interim_report", [("thread", False), ("thread", True), ("write", True)]
+)
+def test_final_report_failure_cannot_return_a_successful_child_report(
+    agent, tmp_path, failure, interim_report
+):
+    script = Path(json.loads(agent.read_text())["command"][1])
+    live_body = tmp_path / "live-body-ran"
+    code = AGENT.replace("import json,sys,neatlogs", "import json,sys,neatlogs,threading")
+    code = code.replace(
+        '    raise AssertionError("A cached tool must not execute")',
+        f"    from pathlib import Path\n    Path({str(live_body)!r}).write_text('ran')\n    return {{'live': True}}",
+    )
+    prelude = (
+        "    lookup(value)\n    from neatlogs.replay.environment import save_environment_report\n"
+        "    save_environment_report()\n"
+        if interim_report
+        else ""
+    )
+    if failure == "thread":
+        work = (
+            "    class Worker(threading.Thread):\n        def run(self):\n            lookup(value)\n"
+            "    worker=Worker()\n    worker.start()\n    worker.join()\n"
+        )
+    else:
+        work = (
+            "    lookup(value)\n    from neatlogs.replay import environment, ReplayError\n"
+            "    def fail_report(*args,**kwargs):\n        raise ReplayError('fixture atomic report write failed')\n"
+            "    environment.write_private_json=fail_report\n"
+        )
+    code = code.replace(
+        "    return lookup(value)", prelude + work + "    return {'answer':'parent returned'}"
+    )
+    script.write_text(code)
+    saved = recording()
+    if failure == "write":
+        saved["entries"].append({**saved["entries"][0], "spanId": "tool-2"})
+    with pytest.raises(ReplayError, match="did not report replay activity"):
+        run_local_command(
+            recording=saved,
+            replay={"mode": "tools_only"},
+            input={"value": 1},
+            config=parse_agent_config(agent.read_text()),
+            cwd=os.getcwd(),
+        )
+    assert not live_body.exists()
+
+
 def test_native_cli_recording_option_uses_python_agent(agent, tmp_path, capsys):
     source = tmp_path / "case.json"
     source.write_text(json.dumps(saved_case()))
@@ -117,9 +165,15 @@ def test_native_cli_recording_option_uses_python_agent(agent, tmp_path, capsys):
     assert result["caseId"] is None
 
 
+@pytest.mark.parametrize(
+    "outcome", ["success", "child_failed", "child_no_report", "upload_uncertain"]
+)
 def test_pinned_case_upload_uses_actual_child_trace_and_stable_retry_key(
-    agent, monkeypatch, capsys, respx_mock
+    agent, monkeypatch, capsys, respx_mock, outcome
 ):
+    if outcome in {"child_failed", "child_no_report"}:
+        script = Path(json.loads(agent.read_text())["command"][1])
+        script.write_text((AGENT if outcome == "child_failed" else "") + "\nraise SystemExit(7)\n")
     monkeypatch.setenv("NEATLOGS_PROJECT_ID", PROJECT)
     monkeypatch.setenv("NEATLOGS_TOKEN", "fixture-token")
     monkeypatch.setenv("NEATLOGS_HOST", "http://localhost:3181")
@@ -145,6 +199,8 @@ def test_pinned_case_upload_uses_actual_child_trace_and_stable_retry_key(
         body = json.loads(request.content)
         uploads.append((request.headers["Idempotency-Key"], body))
         assert body["caseId"] == CASE and body["trial"] == 1
+        if outcome == "upload_uncertain":
+            return httpx.Response(503, json={})
         if len(uploads) == 1:
             return httpx.Response(409, json={"code": "TRACE_NOT_READY"})
         return httpx.Response(
@@ -162,31 +218,36 @@ def test_pinned_case_upload_uses_actual_child_trace_and_stable_retry_key(
         )
 
     respx_mock.post(f"{root}/runs/{RUN}/outputs").mock(side_effect=uploaded)
-    assert (
-        main(
-            [
-                "simulate",
-                "local",
-                "--dataset",
-                DATASET,
-                "--version",
-                VERSION,
-                "--case",
-                CASE,
-                "--agent",
-                str(agent),
-                "--upload",
-                "--form",
-                FORM,
-                "--evaluator",
-                EVALUATOR,
-                "--json",
-            ]
-        )
-        == 0
+    completion = respx_mock.post(f"{root}/runs/{RUN}/complete").respond(
+        200, json={"success": True, "data": {}}
     )
+    assert main(
+        [
+            "simulate",
+            "local",
+            "--dataset",
+            DATASET,
+            "--version",
+            VERSION,
+            "--case",
+            CASE,
+            "--agent",
+            str(agent),
+            "--upload",
+            "--form",
+            FORM,
+            "--evaluator",
+            EVALUATOR,
+            "--json",
+        ]
+    ) == (0 if outcome == "success" else 1)
     result = json.loads(capsys.readouterr().out)
-    assert result["uploaded"] and result["runId"] == RUN
+    assert result["runId"] == RUN
+    assert completion.call_count == (0 if outcome == "upload_uncertain" else 1)
+    if outcome in {"child_failed", "child_no_report"}:
+        assert result["exitCode"] == 1 and not uploads and not result["uploaded"]
+        return
+    assert result["uploaded"] == (outcome == "success")
     assert len(uploads) == 2 and uploads[0] == uploads[1]
     assert uploads[0][1]["traceId"] == result["status"]["traceIds"][0]
     assert json.loads(registration.calls[0].request.content)["replay"] == {"mode": "tools_only"}

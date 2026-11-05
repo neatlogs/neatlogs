@@ -6,7 +6,6 @@ import copy
 import hashlib
 import inspect
 import json
-import math
 import os
 import time
 from contextlib import suppress
@@ -19,7 +18,7 @@ from uuid import UUID, uuid4
 from .._task_credentials import task_credential_refresh
 from ..core.context import trace
 from ..datasets._api import DatasetApi, encode_json
-from ..replay.api import LocalRunApi
+from ..replay.api import LocalRunApi, LocalRunApiError
 from ..replay.contracts import MAX_RECORDING_BYTES
 from ..replay.environment import write_private_json
 from ..replay.provider import ecmascript_json
@@ -362,15 +361,10 @@ def run_eval(
                     )
                     metrics = body["metrics"]
                     if any(
-                        type(key) is not str
-                        or len(key.encode("utf-16-le")) > 200
-                        or type(value) not in (int, float)
-                        or not math.isfinite(value)
-                        for key, value in metrics.items()
+                        type(key) is not str or len(key.encode("utf-16-le")) > 200
+                        for key in metrics
                     ):
-                        raise ValueError(
-                            "Task metrics must have finite numeric values and names up to 100 UTF-16 units"
-                        )
+                        raise ValueError("Task metric names must have up to 100 UTF-16 units")
                     if len(ecmascript_json(body)) > 64 * 1024:
                         raise ValueError("Complete task output request exceeds 64 KiB")
                 except Exception as error:
@@ -388,14 +382,50 @@ def run_eval(
                     }
                 slot.update(executing=False, body=body)
                 _save(state_path, state)
-            run_api.request("POST", f"/runs/{run_id}/outputs", slot["body"], key=slot["key"])
+            rejection = slot.get("rejection")
+            upload_body = (
+                {"caseId": case["caseId"], "trial": trial, "error": rejection["error"]}
+                if rejection
+                else slot["body"]
+            )
+            try:
+                run_api.request(
+                    "POST",
+                    f"/runs/{run_id}/outputs",
+                    upload_body,
+                    key=rejection["key"] if rejection else slot["key"],
+                )
+            except LocalRunApiError as error:
+                if (
+                    rejection
+                    or "output" not in slot["body"]
+                    or error.status != 413
+                    or error.code != "GRADING_EVIDENCE_LIMIT"
+                ):
+                    raise
+                slot["rejection"] = {
+                    "key": str(uuid4()),
+                    "error": {
+                        "code": "GRADING_EVIDENCE_LIMIT",
+                        "message": "Saved input and task output exceed the grading evidence limit.",
+                    },
+                }
+                _save(state_path, state)
+                run_api.request(
+                    "POST",
+                    f"/runs/{run_id}/outputs",
+                    {"caseId": case["caseId"], "trial": trial, "error": slot["rejection"]["error"]},
+                    key=slot["rejection"]["key"],
+                )
             slot["accepted"] = True
             _save(state_path, state)
     complete_key = state.setdefault("completeKey", str(uuid4()))
     _save(state_path, state)
     run_api.request("POST", f"/runs/{run_id}/complete", {}, key=complete_key)
     _save(state_path, state)
-    errors = sum("error" in slot["body"] for slot in state["slots"].values())
+    errors = sum(
+        "error" in slot["body"] or bool(slot.get("rejection")) for slot in state["slots"].values()
+    )
     deadline = time.monotonic() + wait_timeout
     if grading:
         status = run_api.request("GET", f"/runs/{run_id}?includeGrading=true")

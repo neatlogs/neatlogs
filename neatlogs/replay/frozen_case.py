@@ -166,8 +166,8 @@ def replay_recording_from_case(value):
                     and type(output["result"]) is str
                 ):
                     raise ReplayError("Legacy MCP string output does not preserve its return type.")
-            safe_body(input)
-            safe_body(output)
+            safe_body(input, provider_transport=False)
+            safe_body(output, provider_transport=False)
             entries.append(
                 {
                     "spanId": span_id,

@@ -358,7 +358,22 @@ def resume_whole_dataset(path, *, api, as_json):
         agent = parse_agent_config(bounded_file(config["agentFile"], 64 * 1024).decode())
         if agent_digest(agent) != config["agentDigest"]:
             raise ReplayError("Agent command settings changed. Start a new state file.")
-        if config["replay"].get("mode") == "until_span":
+        if config["replay"].get("mode") == "until_span" and (
+            len(state["cases"]) != 1
+            or any(
+                slot["progress"]["kind"] not in {"accepted", "upload_pending", "local_complete"}
+                for batch in state["batches"]
+                for slot in batch["slots"]
+            )
+            or len(
+                {
+                    slot["execution"]["sourceTraceId"]
+                    for batch in state["batches"]
+                    for slot in batch["slots"]
+                }
+            )
+            != 1
+        ):
             raise ReplayError(
                 "A checkpoint belongs to one recording. Select that case instead of --all."
             )

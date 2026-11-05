@@ -8,6 +8,7 @@ import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from uuid import uuid4
 
 from .api import LocalRunApi
 from .contracts import (
@@ -212,6 +213,7 @@ def run_simulate_cli(argv):
             )
         reports = []
         output_bytes = 0
+        settled = 0
         for case_id, item, converted in sources:
             for trial in range(1, trials + 1):
                 report = {
@@ -221,6 +223,7 @@ def run_simulate_cli(argv):
                     "uploaded": False,
                 }
                 reports.append(report)
+                execution_started = upload_started = False
                 try:
                     remaining = _remaining(run)
                     if remaining < 1 or output_bytes > 32 * 1024 * 1024:
@@ -240,6 +243,7 @@ def run_simulate_cli(argv):
                         if run is None
                         else min(config["timeout_seconds"], max(1, int(remaining)))
                     )
+                    execution_started = True
                     result = run_local_command(
                         recording=converted["recording"],
                         replay=settings,
@@ -269,6 +273,7 @@ def run_simulate_cli(argv):
                             raise ReplayError(
                                 "Upload requires exactly one workflow trace. Wrap the agent in one root span and call shutdown()."
                             )
+                        upload_started = True
                         receipt = api.upload(
                             run["runId"],
                             case_id=case_id,
@@ -277,7 +282,10 @@ def run_simulate_cli(argv):
                             wait_millis=60_000,
                         )
                         report.update(uploaded=True, outputId=receipt["outputId"])
+                        settled += 1
                 except (ReplayError, OSError, UnicodeError) as error:
+                    if execution_started and not upload_started:
+                        settled += 1
                     report["error"] = (
                         str(error)
                         if isinstance(error, ReplayError)
@@ -290,6 +298,8 @@ def run_simulate_cli(argv):
                     print(
                         f"{case_id or 'Recording'}, attempt {trial}: {report.get('error') or ('Saved to Runs; grading is pending.' if report['uploaded'] else 'Finished locally.')} "
                     )
+        if run and settled == len(reports):
+            api.request("POST", f"/runs/{run['runId']}/complete", {}, key=str(uuid4()))
         exit_code = int(any("error" in report for report in reports))
         if args.json:
             output = {

@@ -48,7 +48,7 @@ def task_credential_refresh(*, token, project_id, base_url):
                         endpoint,
                         headers={"Authorization": "Bearer " + key},
                         json={"rejectedToken": rejected},
-                        timeout=5,
+                        timeout=30,
                         follow_redirects=False,
                         trust_env=False,
                     ) as response,

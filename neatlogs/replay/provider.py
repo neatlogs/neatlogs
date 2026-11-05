@@ -29,6 +29,10 @@ _TRANSPORT = re.compile(
     r"^(?:api_?key|authorization|proxy_?authorization|headers|extra_?headers|http_?options|abort_?signal|credentials|access_token|client_secret)$",
     re.I,
 )
+_CREDENTIAL = re.compile(
+    r"^(?:api[-_]?key|authorization|proxy[-_]?authorization|credentials|access_token|client_secret|cookie|set-cookie|x-api-key)$",
+    re.I,
+)
 
 
 def ecmascript_json(value):
@@ -61,7 +65,7 @@ def ecmascript_json(value):
     return emit(value)
 
 
-def safe_body(value):
+def safe_body(value, *, provider_transport=True):
     body = json_value(value, limit=MAX_INPUT_BYTES)
     nodes = 0
 
@@ -72,12 +76,17 @@ def safe_body(value):
             raise ReplayError("Provider capture exceeds its traversal limit.")
         if type(item) is dict:
             for key, child in item.items():
-                if _TRANSPORT.fullmatch(key) or key in {
-                    "__proto__",
-                    "prototype",
-                    "constructor",
-                    "neatlogs_capture_unavailable",
-                }:
+                if (
+                    (provider_transport and _TRANSPORT.fullmatch(key))
+                    or _CREDENTIAL.fullmatch(key)
+                    or key
+                    in {
+                        "__proto__",
+                        "prototype",
+                        "constructor",
+                        "neatlogs_capture_unavailable",
+                    }
+                ):
                     raise ReplayError("Provider transport data cannot be captured.")
                 inspect(child, depth + 1)
         elif type(item) is list:

@@ -3,6 +3,7 @@
 import asyncio
 import json
 import os
+from contextlib import nullcontext
 from pathlib import Path
 
 import pytest
@@ -33,6 +34,7 @@ def reset_replay_environment(monkeypatch):
 
     monkeypatch.setattr(environment, "_configured", None)
     monkeypatch.setattr(environment, "_report", None)
+    monkeypatch.setattr(environment, "_report_owner", None)
     monkeypatch.setattr(session, "_environment", None)
     for name in list(os.environ):
         if name.startswith("NEATLOGS_REPLAY_"):
@@ -173,12 +175,9 @@ async def test_async_tools_factories_and_independent_sessions():
         return {"live": True}
 
     @neatlogs.span(kind="TOOL", tool_name="factory", replay="awaitable")
-    def factory(value):
-        async def result():
-            calls.append(value)
-            return {"factory": True}
-
-        return result()
+    async def factory(value):
+        calls.append(value)
+        return {"factory": True}
 
     async def workflow(session, value):
         async with session:
@@ -252,6 +251,29 @@ def test_environment_rejects_partial_binding_before_initializing(monkeypatch, tm
     monkeypatch.setenv("NEATLOGS_REPLAY_RUN_ID", "00000000-0000-4000-8000-000000000001")
     with pytest.raises(ReplayError):
         neatlogs.init(disable_export=True)
+
+
+@pytest.mark.parametrize("failure", ["status", "write"])
+def test_failed_report_does_not_delete_a_preexisting_unowned_file(monkeypatch, tmp_path, failure):
+    from neatlogs.replay import environment
+
+    target = tmp_path / "existing.json"
+    target.write_text("existing user data")
+    session = ReplaySession(recording())
+    if failure == "status":
+        with pytest.raises(ReplayError):
+            session._reject_thread_context()
+    else:
+
+        def failed_write(*args, **kwargs):
+            raise ReplayError("fixture atomic report write failed")
+
+        monkeypatch.setattr(environment, "write_private_json", failed_write)
+    monkeypatch.setattr(environment, "_configured", session)
+    monkeypatch.setattr(environment, "_report", str(target))
+    with pytest.raises(ReplayError):
+        environment.save_environment_report()
+    assert target.read_text() == "existing user data"
 
 
 def test_manual_model_hit_cannot_export_new_billed_tokens():
@@ -401,3 +423,192 @@ def test_decorated_circular_result_is_marked_lossy_before_frozen_capture(
         span for span in in_memory_span_exporter.get_finished_spans() if span.name == "circular"
     )
     assert span.attributes["neatlogs.capture_fidelity"] == "lossy"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"headers": {"content-type": "text/plain"}, "body": "ok"},
+        {"headers": {"authorization": "secret"}},
+        {"body": {"api_key": "secret"}},
+    ],
+)
+def test_real_tool_capture_replays_benign_headers_but_not_credentials(
+    tracer_provider, in_memory_span_exporter, payload
+):
+    from neatlogs.replay.frozen_case import replay_recording_from_case
+
+    neatlogs.init(
+        tracer_provider=tracer_provider,
+        disable_export=True,
+        register_shutdown_handlers=False,
+        instrumentations=[],
+    )
+    calls = []
+
+    @neatlogs.span(kind="TOOL", replay=True)
+    def read_page(url):
+        calls.append(True)
+        return payload
+
+    assert read_page("https://example.invalid") == payload
+    saved = next(
+        span for span in in_memory_span_exporter.get_finished_spans() if span.name == "read_page"
+    )
+    converted = replay_recording_from_case(
+        {
+            "source": {"kind": "trace", "traceId": f"{saved.context.trace_id:032x}"},
+            "context": {
+                "spans": [
+                    {
+                        "span_id": f"{saved.context.span_id:016x}",
+                        "span_type": "TOOL",
+                        "attributes": dict(saved.attributes),
+                    }
+                ]
+            },
+        }
+    )
+    benign = payload.get("body") == "ok"
+    assert converted["skippedTools"] == (0 if benign else 1)
+    with ReplaySession(converted["recording"]) as session:
+        assert read_page("https://example.invalid") == payload
+    assert session.get_status()["hits"] == int(benign)
+    assert len(calls) == (1 if benign else 2)
+
+
+@pytest.mark.parametrize("environment", [False, True])
+@pytest.mark.parametrize("worker_kind", ["target", "override", "copied_override"])
+def test_thread_replay_requires_actual_parent_context(
+    tracer_provider, in_memory_span_exporter, monkeypatch, environment, worker_kind
+):
+    import threading
+    from contextvars import copy_context
+
+    from neatlogs.replay import session as replay_session
+
+    neatlogs.init(
+        tracer_provider=tracer_provider,
+        disable_export=True,
+        register_shutdown_handlers=False,
+        instrumentations=[],
+    )
+    outcomes, calls, errors = [], [], []
+    monkeypatch.setattr(threading, "excepthook", lambda args: errors.append(args.exc_value))
+
+    @neatlogs.span(kind="TOOL", tool_name="lookup", replay=True)
+    def lookup(value):
+        calls.append(value)
+        return {"live": value}
+
+    def execute():
+        outcomes.append(lookup(1))
+        outcomes.append(lookup(2))
+
+    session = ReplaySession(recording([entry()]))
+
+    def exercise():
+        with nullcontext(session) if environment else session:
+            with neatlogs.trace("workflow", kind="WORKFLOW") as workflow:
+                captured = copy_context()
+
+                class Worker(threading.Thread):
+                    def run(self):
+                        if worker_kind == "copied_override":
+                            captured.run(execute)
+                        else:
+                            execute()
+
+                thread = threading.Thread(target=execute) if worker_kind == "target" else Worker()
+                thread.start()
+                thread.join()
+            if environment:
+                session.get_status()
+        return workflow
+
+    with monkeypatch.context() as patch:
+        if environment:
+            patch.setattr(replay_session, "_environment", session)
+        if worker_kind == "override":
+            # An ignored worker exception must still make the parent run fail.
+            with pytest.raises(ReplayError, match="Thread.run override"):
+                exercise()
+            with pytest.raises(ReplayError, match="Thread.run override"):
+                session.get_status()
+        else:
+            workflow = exercise()
+    if worker_kind == "override":
+        assert outcomes == calls == []
+        assert len(errors) == 1 and isinstance(errors[0], ReplayError)
+    else:
+        assert errors == [] and outcomes == [{"saved": True}, {"live": 2}] and calls == [2]
+        assert session.get_status()["hits"] == session.get_status()["liveCalls"] == 1
+        tools = [
+            span
+            for span in in_memory_span_exporter.get_finished_spans()
+            if "neatlogs.replay.outcome" in span.attributes
+        ]
+        assert [span.attributes["neatlogs.replay.outcome"] for span in tools] == ["HIT", "MISS"]
+        assert {span.context.trace_id for span in tools} == {workflow.get_span_context().trace_id}
+        assert {span.parent.span_id if span.parent else None for span in tools} == {
+            workflow.get_span_context().span_id
+        }
+        assert session.get_status()["traceIds"] == [f"{workflow.get_span_context().trace_id:032x}"]
+    assert get_replay_status() is None
+
+
+@pytest.mark.parametrize("kind", ["TOOL", "MCP_TOOL"])
+def test_public_awaitable_replay_requires_async_def_before_factory_executes(kind):
+    calls = []
+
+    def task_factory():
+        calls.append(True)
+        return asyncio.create_task(asyncio.sleep(0))
+
+    with pytest.raises(ReplayError, match="async def"):
+        neatlogs.span(kind=kind, replay="awaitable")(task_factory)
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_public_async_tool_captures_completed_value_for_frozen_replay(
+    tracer_provider, in_memory_span_exporter
+):
+    from neatlogs.replay.frozen_case import replay_recording_from_case
+
+    neatlogs.init(
+        tracer_provider=tracer_provider,
+        disable_export=True,
+        register_shutdown_handlers=False,
+        instrumentations=[],
+    )
+    calls = []
+
+    @neatlogs.span(kind="TOOL", replay="awaitable")
+    async def awaited(value):
+        await asyncio.sleep(0)
+        calls.append(True)
+        return {"answer": value}
+
+    assert await awaited("done") == {"answer": "done"}
+    saved = next(
+        span for span in in_memory_span_exporter.get_finished_spans() if span.name == "awaited"
+    )
+    converted = replay_recording_from_case(
+        {
+            "source": {"kind": "trace", "traceId": f"{saved.context.trace_id:032x}"},
+            "context": {
+                "spans": [
+                    {
+                        "span_id": f"{saved.context.span_id:016x}",
+                        "span_type": "TOOL",
+                        "attributes": dict(saved.attributes),
+                    }
+                ]
+            },
+        }
+    )
+    assert converted["skippedTools"] == 0
+    async with ReplaySession(converted["recording"]) as session:
+        assert await awaited("done") == {"answer": "done"}
+    assert calls == [True] and session.get_status()["hits"] == 1

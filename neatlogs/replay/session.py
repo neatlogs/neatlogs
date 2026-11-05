@@ -36,6 +36,8 @@ class ReplayLive:
 
 
 class ReplaySession:
+    """Replay scoped calls; use Thread(target=...) or explicitly copy thread context."""
+
     def __init__(self, recording, *, mode="tools_only", until_span=None, run=None):
         self.recording = parse_replay_recording(recording)
         if mode not in ("tools_only", "until_span"):
@@ -60,6 +62,7 @@ class ReplaySession:
         self._lock = threading.RLock()
         self._used = False
         self._token = None
+        self._failure = None
         self._status = {
             "sourceTraceId": self.recording.source_trace_id,
             "mode": mode,
@@ -87,10 +90,13 @@ class ReplaySession:
         self._token = _current.set(self)
         return self
 
-    def __exit__(self, *_):
+    def __exit__(self, exc_type, *_):
         _current.reset(self._token)
         otel_context.detach(self._context_token)
         self._token = None
+        if exc_type is None:
+            with self._lock:
+                self._raise_if_failed()
 
     async def __aenter__(self):
         return self.__enter__()
@@ -116,7 +122,17 @@ class ReplaySession:
 
     def get_status(self):
         with self._lock:
+            self._raise_if_failed()
             return copy.deepcopy(self._status)
+
+    def _raise_if_failed(self):
+        if self._failure:
+            raise ReplayError(self._failure)
+
+    def _reject_thread_context(self):
+        with self._lock:
+            self._failure = "This Thread.run override did not forward replay and trace context. Use Thread(target=...) or explicitly copy the context."
+            self._raise_if_failed()
 
     def _miss(self, kind, name):
         self._status.update(
@@ -127,6 +143,7 @@ class ReplaySession:
 
     def decide(self, kind, name, input, can_restore=None):
         with self._lock:
+            self._raise_if_failed()
             if self._status["switchedToLive"] or self.mode == "tools_only" and kind == "model":
                 self._status["liveCalls"] += 1
                 return ReplayLive("LIVE")
@@ -175,7 +192,29 @@ class ReplaySession:
 
 
 def current_replay():
-    return _current.get() or otel_context.get_value(_context_key) or _environment
+    scoped = _current.get() or otel_context.get_value(_context_key)
+    session = scoped or _environment
+    thread = threading.current_thread()
+    if scoped is None and inspect.getattr_static(type(thread), "run") is not inspect.getattr_static(
+        threading.Thread, "run"
+    ):
+        context = getattr(thread, "_otel_context", None)
+        inherited = otel_context.get_value(_context_key, context) if context is not None else None
+        session = session or inherited
+        if session is not None:
+            from opentelemetry import trace
+
+            from .._wrap_utils import _current_neatlogs_parent
+
+            parent = _current_neatlogs_parent(context) or trace.get_current_span(context)
+            current = _current_neatlogs_parent() or trace.get_current_span()
+            if not (
+                parent.is_recording()
+                and current.is_recording()
+                and parent.get_span_context().trace_id == current.get_span_context().trace_id
+            ):
+                session._reject_thread_context()
+    return session
 
 
 def set_environment_replay(session):

@@ -289,3 +289,115 @@ def test_manual_model_hit_cannot_export_new_billed_tokens():
     assert exported.attributes["neatlogs.llm.token_count.completion"] == 0
     assert exported.attributes["neatlogs.llm.cost.total"] == 0
     provider.shutdown()
+
+
+def test_programmatic_replay_propagates_to_threads_and_pools():
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Thread
+
+    session = ReplaySession(recording([entry()]))
+    results = []
+    with session:
+        thread = Thread(
+            target=lambda: results.append(lookup_replay("tool", "lookup", {"value": 1}).outcome)
+        )
+        thread.start()
+        thread.join()
+        with ThreadPoolExecutor(1) as pool:
+            assert (
+                pool.submit(lambda: lookup_replay("tool", "absent", {}).outcome).result() == "MISS"
+            )
+    assert results == ["HIT"]
+    assert session.get_status()["hits"] == 1
+    assert session.get_status()["liveCalls"] == 1
+    with ThreadPoolExecutor(1) as pool:
+        assert pool.submit(get_replay_status).result() is None
+
+
+def test_unused_oversize_entry_does_not_abort_other_replay():
+    oversized = entry("large", input={"text": "x" * (1024 * 1024 + 1)})
+    session = ReplaySession(recording([oversized, entry()]))
+    with session:
+        assert lookup_replay("tool", "lookup", {"value": 1}).outcome == "HIT"
+        assert lookup_replay("tool", "lookup", oversized["input"]).outcome == "MISS"
+
+
+def test_tuple_varargs_match_captured_json_arrays():
+    from neatlogs.replay.tools import replay_tool
+
+    def values(*args):
+        raise AssertionError("must use recorded result")
+
+    wrapped = replay_tool(values, name="values", result=True)
+    with ReplaySession(recording([entry(name="values", input={"args": [1, 2]}, output=3)])):
+        assert wrapped(1, 2) == 3
+
+
+def test_sync_task_factory_keeps_eager_task_identity_outside_replay():
+    from neatlogs.replay.tools import replay_tool
+
+    async def run():
+        tasks = []
+
+        def factory():
+            task = asyncio.create_task(asyncio.sleep(0, result="done"))
+            tasks.append(task)
+            return task
+
+        wrapped = replay_tool(factory, name="factory", result="awaitable")
+        task = wrapped()
+        assert task is tasks[0] and isinstance(task, asyncio.Task)
+        assert await task == "done"
+        with ReplaySession(recording([{**entry(name="factory", output="saved"), "input": {}}])):
+            assert await wrapped() == "saved"
+        assert len(tasks) == 1
+
+    asyncio.run(run())
+
+
+def test_default_tool_name_is_exported_for_recording_and_replay(
+    tracer_provider, in_memory_span_exporter
+):
+    neatlogs.init(
+        tracer_provider=tracer_provider,
+        disable_export=True,
+        register_shutdown_handlers=False,
+        instrumentations=[],
+    )
+
+    @neatlogs.span(kind="TOOL", replay=True)
+    def default_lookup(value):
+        return {"value": value}
+
+    assert default_lookup(1) == {"value": 1}
+    span = next(
+        span
+        for span in in_memory_span_exporter.get_finished_spans()
+        if span.name == "default_lookup"
+    )
+    assert span.attributes["neatlogs.tool.name"] == "default_lookup"
+    assert json.loads(span.attributes["neatlogs.tool.output"]) == {"value": 1}
+
+
+def test_decorated_circular_result_is_marked_lossy_before_frozen_capture(
+    tracer_provider, in_memory_span_exporter
+):
+    neatlogs.init(
+        tracer_provider=tracer_provider,
+        disable_export=True,
+        register_shutdown_handlers=False,
+        instrumentations=[],
+    )
+
+    @neatlogs.span(kind="TOOL", replay=True)
+    def circular():
+        result = {}
+        result["loop"] = result
+        return result
+
+    result = circular()
+    assert result["loop"] is result
+    span = next(
+        span for span in in_memory_span_exporter.get_finished_spans() if span.name == "circular"
+    )
+    assert span.attributes["neatlogs.capture_fidelity"] == "lossy"

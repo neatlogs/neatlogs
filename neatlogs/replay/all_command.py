@@ -6,6 +6,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from uuid import NAMESPACE_URL, uuid5
 
 from .cli import _remaining
 from .contracts import MAX_RECORDING_BYTES, ReplayError, uuid
@@ -70,7 +71,7 @@ def _upload(state, path, api, batch, slot):
         trial=slot["trial"],
         trace_id=trace_id,
         key=slot["uploadKey"],
-        wait_millis=max(1, min(60_000, int(_remaining(batch["run"]) * 1000))),
+        wait_millis=60_000,
     )
     slot["progress"] = {"kind": "accepted", "traceId": trace_id, "outputId": receipt["outputId"]}
     save_state(path, state)
@@ -229,6 +230,15 @@ def _execute(state, path, api, agent, as_json):
             _register(state, path, api, batch)
             for slot in batch["slots"]:
                 _slot(state, path, api, agent, batch, slot, as_json)
+            if batch["run"] and all(
+                slot["progress"]["kind"] in {"accepted", "failed"} for slot in batch["slots"]
+            ):
+                api.request(
+                    "POST",
+                    f"/runs/{batch['run']['runId']}/complete",
+                    body={},
+                    key=str(uuid5(NAMESPACE_URL, batch["registrationKey"] + ":complete")),
+                )
     except (ReplayError, OSError, ValueError) as failure:
         error = (
             str(failure)[:2000]
@@ -306,6 +316,10 @@ def start_whole_dataset(
     batch_size,
     as_json,
 ):
+    if replay.get("mode") == "until_span":
+        raise ReplayError(
+            "A checkpoint belongs to one recording. Select that case instead of --all."
+        )
     with state_lock(path) as target:
         if target.exists():
             raise ReplayError("The state file already exists. Resume it or choose a new file.")
@@ -344,4 +358,8 @@ def resume_whole_dataset(path, *, api, as_json):
         agent = parse_agent_config(bounded_file(config["agentFile"], 64 * 1024).decode())
         if agent_digest(agent) != config["agentDigest"]:
             raise ReplayError("Agent command settings changed. Start a new state file.")
+        if config["replay"].get("mode") == "until_span":
+            raise ReplayError(
+                "A checkpoint belongs to one recording. Select that case instead of --all."
+            )
         return _execute(state, target, api, agent, as_json)

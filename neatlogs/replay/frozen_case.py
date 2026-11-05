@@ -5,10 +5,18 @@ from __future__ import annotations
 from collections import Counter
 
 from .contracts import ReplayError, identifier, json_value, parse_json_bytes, parse_replay_recording
-from .provider import MODEL_CAPTURE_ATTRIBUTE, read_provider_capture
+from .provider import MODEL_CAPTURE_ATTRIBUTE, read_provider_capture, safe_body
 
 _MISSING = object()
-_UNAVAILABLE = {"unavailable", "retentionExpired", "truncated", "previewOnly", "redacted", "masked"}
+_UNAVAILABLE = {
+    "unavailable",
+    "retentionExpired",
+    "truncated",
+    "previewOnly",
+    "redacted",
+    "masked",
+    "lossy",
+}
 
 
 def _object(value):
@@ -78,6 +86,21 @@ def replay_recording_from_case(value):
         or any(type(span) is not dict for span in spans)
     ):
         raise ReplayError("A frozen case needs a bounded saved span list.")
+    if item["source"].get("kind") == "span":
+        selected = identifier(item["source"].get("spanId"))
+        if sum(span.get("span_id") == selected for span in spans) != 1:
+            raise ReplayError("Selected span is missing or ambiguous.")
+        children = {}
+        for span in spans:
+            if type(span.get("span_id")) is str:
+                children.setdefault(span.get("parent_span_id"), []).append(span["span_id"])
+        subtree, pending = set(), [selected]
+        while pending:
+            identity = pending.pop()
+            if identity not in subtree:
+                subtree.add(identity)
+                pending.extend(children.get(identity, []))
+        spans = [span for span in spans if span.get("span_id") in subtree]
     counts = Counter(span.get("span_id") for span in spans if type(span.get("span_id")) is str)
     entries, skipped = [], 0
     for span in spans:
@@ -116,6 +139,7 @@ def replay_recording_from_case(value):
             else:
                 name = _first(
                     span.get("tool_name"),
+                    attributes.get("tool.name"),
                     attributes.get("neatlogs.tool.name"),
                     attributes.get("neatlogs.raw.tool.name"),
                 )
@@ -142,6 +166,8 @@ def replay_recording_from_case(value):
                     and type(output["result"]) is str
                 ):
                     raise ReplayError("Legacy MCP string output does not preserve its return type.")
+            safe_body(input)
+            safe_body(output)
             entries.append(
                 {
                     "spanId": span_id,

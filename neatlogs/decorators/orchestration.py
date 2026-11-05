@@ -379,6 +379,9 @@ def span(
     def replay_decorator(func):
         from ..replay.tools import replay_tool
 
+        # Export the same default identity used by replay lookup.
+        if kind_upper == "TOOL" and not tool_name:
+            extra["tool.name"] = name or func.__name__
         return decorate(replay_tool(func, name=tool_name or name or func.__name__, result=replay))
 
     return replay_decorator

@@ -252,7 +252,9 @@ def test_child_exception_still_has_an_honest_activity_report(agent):
     assert result["status"]["firstMiss"] == {"kind": "tool", "name": "lookup"}
 
 
-@pytest.mark.parametrize("defect", ["missing-result", "duplicate-id", "masked", "truncated"])
+@pytest.mark.parametrize(
+    "defect", ["missing-result", "duplicate-id", "masked", "truncated", "lossy", "media"]
+)
 def test_incomplete_frozen_tools_are_skipped_instead_of_becoming_cache_hits(defect):
     from neatlogs.replay import replay_recording_from_case
 
@@ -264,8 +266,106 @@ def test_incomplete_frozen_tools_are_skipped_instead_of_becoming_cache_hits(defe
         item["context"]["spans"].append(dict(tool))
     if defect == "masked":
         tool["attributes"] = {"neatlogs.capture_fidelity": "masked"}
+    if defect == "lossy":
+        tool["attributes"] = {"neatlogs.capture_fidelity": "lossy"}
+    if defect == "media":
+        tool["tool_output"] = {
+            "type": "image_url",
+            "image_url": {"url": "data:image/png;base64,AA=="},
+        }
     if defect == "truncated":
         tool["output_content_state"] = "truncated"
     result = replay_recording_from_case(item)
     assert result["recording"].entries == ()
     assert result["skippedTools"] >= 1
+
+
+def test_selected_span_replays_only_its_own_subtree():
+    from neatlogs.replay import replay_recording_from_case
+
+    item = saved_case()
+    original = item["context"]["spans"][0]
+    item["source"].update(kind="span", spanId="selected")
+    item["context"]["spans"] = [
+        {**original, "span_id": "sibling", "tool_output": "wrong"},
+        {**original, "span_id": "selected", "tool_output": "selected"},
+        {**original, "span_id": "child", "parent_span_id": "selected", "tool_output": "child"},
+        {**original, "span_id": None, "parent_span_id": "selected"},
+    ]
+    result = replay_recording_from_case(item)
+    assert [entry.span_id for entry in result["recording"].entries] == ["selected", "child"]
+    assert result["skippedTools"] == 0
+
+
+def test_api_honors_rate_limit_retry_and_preserves_idempotency(respx_mock):
+    from neatlogs.replay.api import LocalRunApi
+
+    root = "http://localhost:3181/api/v1/public"
+    route = respx_mock.post(f"{root}/runs/{RUN}/complete").mock(
+        side_effect=[
+            httpx.Response(429, headers={"Retry-After": "0"}),
+            httpx.Response(200, json={"success": True, "data": {}}),
+        ]
+    )
+    api = LocalRunApi(project_id=PROJECT, token="fixture", base_url="http://localhost:3181")
+    api.request("POST", f"/runs/{RUN}/complete", {}, key=CASE)
+    assert route.call_count == 2
+    assert route.calls[0].request.content == route.calls[1].request.content
+    assert (
+        route.calls[0].request.headers["Idempotency-Key"]
+        == route.calls[1].request.headers["Idempotency-Key"]
+        == CASE
+    )
+
+
+def test_comparison_exposes_bounded_continuation_without_resumming_metrics(respx_mock):
+    from neatlogs.replay.api import LocalRunApi
+
+    root = "http://localhost:3181/api/v1/public"
+    route = respx_mock.get(f"{root}/runs/{RUN}/comparison").respond(
+        200,
+        json={
+            "success": True,
+            "data": {"nextCursor": CASE + ":trial:1", "coverage": {"complete": True}, "cost": 1},
+        },
+    )
+    api = LocalRunApi(project_id=PROJECT, token="fixture", base_url="http://localhost:3181")
+    result = api.comparison(
+        RUN, baseline="current model", after=CASE + ":trial:1", limit=100, new_failures_only=True
+    )
+    assert route.calls[0].request.url.params == httpx.QueryParams(
+        baseline="current model", after=CASE + ":trial:1", limit=100, newFailuresOnly="true"
+    )
+    assert result["cost"] == 1 and result["nextCursor"] == CASE + ":trial:1"
+    with pytest.raises(ReplayError):
+        api.comparison(RUN, limit=101)
+
+
+@pytest.mark.parametrize("defect", ["depth", "cycle", "nodes", "truncated", "unavailable"])
+def test_actual_capture_markers_never_become_tool_hits(defect):
+    from neatlogs._wrap_utils import serialize
+    from neatlogs.replay import replay_recording_from_case
+
+    if defect == "depth":
+        value = "value"
+        for _ in range(40):
+            value = {"nested": value}
+    elif defect == "cycle":
+        value = []
+        value.append(value)
+    elif defect == "nodes":
+        value = list(range(15000))
+    elif defect == "truncated":
+        value = "x" * 200000
+    else:
+
+        class Unsupported:
+            def __str__(self):
+                raise ValueError("unavailable")
+
+        value = Unsupported()
+    captured = serialize(value)
+    item = saved_case()
+    item["context"]["spans"][0]["tool_output"] = captured
+    result = replay_recording_from_case(item)
+    assert not result["recording"].entries and result["skippedTools"] == 1

@@ -274,7 +274,7 @@ def run_simulate_cli(argv):
                             case_id=case_id,
                             trial=trial,
                             trace_id=result["status"]["traceIds"][0],
-                            wait_millis=max(1, min(60_000, int(_remaining(run) * 1000))),
+                            wait_millis=60_000,
                         )
                         report.update(uploaded=True, outputId=receipt["outputId"])
                 except (ReplayError, OSError, UnicodeError) as error:

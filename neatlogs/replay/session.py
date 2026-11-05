@@ -9,6 +9,8 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Literal
 
+from opentelemetry import context as otel_context
+
 from .contracts import (
     ReplayEntry,
     ReplayError,
@@ -19,6 +21,7 @@ from .contracts import (
 
 _current = ContextVar("neatlogs.local_replay", default=None)
 _environment = None
+_context_key = otel_context.create_key("neatlogs.local_replay")
 
 
 @dataclass(frozen=True)
@@ -49,9 +52,11 @@ class ReplaySession:
         self._entries = {}
         self._positions = {}
         for index, entry in enumerate(self.recording.entries):
-            self._entries.setdefault(replay_key(entry.kind, entry.name, entry.input), []).append(
-                (index, entry)
-            )
+            try:
+                key = replay_key(entry.kind, entry.name, entry.input)
+            except ReplayError:
+                continue
+            self._entries.setdefault(key, []).append((index, entry))
         self._lock = threading.RLock()
         self._used = False
         self._token = None
@@ -73,11 +78,18 @@ class ReplaySession:
             if self._used:
                 raise ReplayError("Create a new ReplaySession for each local run.")
             self._used = True
+        from opentelemetry.instrumentation.threading import ThreadingInstrumentor
+
+        instrumentor = ThreadingInstrumentor()
+        if not instrumentor.is_instrumented_by_opentelemetry:
+            instrumentor.instrument()
+        self._context_token = otel_context.attach(otel_context.set_value(_context_key, self))
         self._token = _current.set(self)
         return self
 
     def __exit__(self, *_):
         _current.reset(self._token)
+        otel_context.detach(self._context_token)
         self._token = None
 
     async def __aenter__(self):
@@ -163,7 +175,7 @@ class ReplaySession:
 
 
 def current_replay():
-    return _current.get() or _environment
+    return _current.get() or otel_context.get_value(_context_key) or _environment
 
 
 def set_environment_replay(session):

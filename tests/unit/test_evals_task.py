@@ -33,6 +33,7 @@ def server():
     state = {
         "outputs": [],
         "dataset_pages": [],
+        "catalog_preferences": [],
         "fail_upload": False,
         "verdict": "pass",
         "requests": [],
@@ -47,6 +48,7 @@ def server():
         "completion_failures": 0,
         "gate_keys": [],
         "gate_failures": 0,
+        "deadline_at": "2030-01-01T00:00:00Z",
     }
 
     class Handler(BaseHTTPRequestHandler):
@@ -56,6 +58,7 @@ def server():
         def do_GET(self):
             state["requests"].append(self.path)
             if urlsplit(self.path).path == "/api/v1/public/datasets":
+                state["catalog_preferences"].append(self.headers.get("Prefer"))
                 cursor = parse_qs(urlsplit(self.path).query).get("before", [None])[0]
                 index = 1 if cursor else 0
                 data = state["dataset_pages"][index]
@@ -70,7 +73,7 @@ def server():
                 data = {
                     "runId": RUN,
                     "state": "completed",
-                    "deadlineAt": "2030-01-01T00:00:00Z",
+                    "deadlineAt": state["deadline_at"],
                     "itemCount": 1,
                     "grading": state["grading"],
                 }
@@ -147,7 +150,7 @@ def server():
                 data = {
                     "runId": RUN,
                     "state": "queued",
-                    "deadlineAt": "2030-01-01T00:00:00Z",
+                    "deadlineAt": state["deadline_at"],
                     "itemCount": body["trials"],
                 }
             self.respond(200, data)
@@ -587,6 +590,7 @@ def test_resolves_dataset_name_after_first_500(server):
     )
     assert result.exit_code == 0
     assert f"/api/v1/public/datasets?before={cursor}" in state["requests"]
+    assert state["catalog_preferences"] == ["pagination=cursor", "pagination=cursor"]
 
 
 def test_rejects_duplicate_dataset_name_on_later_page(server):
@@ -646,3 +650,163 @@ def test_round_identity_is_pinned_across_resume(server, tmp_path):
     options["local"] = {**local, "variant": "A"}
     with pytest.raises(ValueError, match="same"):
         run_eval(**options, resume=True)
+
+
+def test_trials_copy_nested_case_and_context_values(server):
+    state, config = server
+    seen = []
+    params = {"nested": {"model": "original"}}
+
+    def task(value, context):
+        seen.append(
+            (
+                value["message"],
+                context.expected["value"],
+                context.metadata["language"],
+                context.params["nested"]["model"],
+            )
+        )
+        value["message"] = "changed"
+        context.expected["value"] = "changed"
+        context.metadata["language"] = "changed"
+        context.params["nested"]["model"] = "changed"
+        return value
+
+    result = run_eval(
+        grading=GRADING, dataset=DATASET, task=task, label="copy", trials=2, params=params, **config
+    )
+    assert result.exit_code == 0
+    assert seen == [("hello", "hello", "en", "original")] * 2
+    assert params == {"nested": {"model": "original"}}
+
+
+@pytest.mark.parametrize("defect", ["nonfinite", "envelope", "emoji"])
+def test_invalid_results_save_sendable_failure_without_repeating_callback(server, tmp_path, defect):
+    state, config = server
+    state["fail_upload"] = True
+    calls = []
+
+    def task(value, context):
+        calls.append(value)
+        if defect == "nonfinite":
+            context.metrics["score"] = float("nan")
+            return "answer"
+        if defect == "envelope":
+            return "x" * 65500
+        raise RuntimeError("😀" * 501)
+
+    path = tmp_path / "state.json"
+    options = dict(
+        grading=GRADING, dataset=DATASET, task=task, label="bounded", state_path=path, **config
+    )
+    with pytest.raises(LocalRunApiError):
+        run_eval(**options)
+    body = json.loads(path.read_text())["slots"][f"{CASE}:1"]["body"]
+    assert set(body) == {"caseId", "trial", "error"}
+    assert len(body["error"]["message"].encode("utf-16-le")) <= 2000
+    assert len(json.dumps(body).encode()) < 65536
+    state["fail_upload"] = False
+    result = run_eval(**options, resume=True)
+    assert result.exit_code == 4 and len(calls) == 1
+    assert state["outputs"] == [body]
+
+
+def test_deadline_is_configurable_and_stops_callbacks_after_expiry(server, tmp_path):
+    state, config = server
+    state["deadline_at"] = "2000-01-01T00:00:00Z"
+    calls = []
+    with pytest.raises(RuntimeError, match="deadline reached"):
+        run_eval(
+            grading=GRADING,
+            dataset=DATASET,
+            task=lambda *_: calls.append(True),
+            label="expired",
+            deadline_seconds=3600,
+            state_path=tmp_path / "state.json",
+            **config,
+        )
+    assert not calls
+    assert state["registration"]["deadlineSeconds"] == 3600
+    assert json.loads((tmp_path / "state.json").read_text())["deadlineAt"] == state["deadline_at"]
+
+
+def test_nonzero_error_tolerance_is_rejected_before_network_or_task(monkeypatch):
+    from neatlogs import evals
+
+    monkeypatch.setattr(evals, "DatasetApi", lambda **_: pytest.fail("no network"))
+    with pytest.raises(ValueError, match="require every selected case"):
+        run_eval(
+            grading=GRADING,
+            dataset=DATASET,
+            task=lambda *_: pytest.fail("no task"),
+            label="invalid",
+            max_error_rate=0.1,
+        )
+
+
+def test_private_state_writer_never_follows_fixed_tmp_symlink(tmp_path):
+    from neatlogs.evals import _save
+
+    victim = tmp_path / "victim"
+    victim.write_text("untouched")
+    state = tmp_path / "state.json"
+    state.with_suffix(".json.tmp").symlink_to(victim)
+    _save(state, {"slots": {}})
+    assert victim.read_text() == "untouched"
+    assert state.stat().st_mode & 0o077 == 0
+    assert not list(tmp_path.glob(".neatlogs-report-*"))
+
+
+def test_expiry_between_trials_preserves_accepted_output_without_next_callback(server, monkeypatch):
+    from neatlogs.replay import cli
+
+    state, config = server
+    remaining = iter([1, 0])
+    monkeypatch.setattr(cli, "_remaining", lambda _: next(remaining))
+    calls = []
+
+    def task(value, context):
+        calls.append(context.trial)
+        return value
+
+    with pytest.raises(RuntimeError, match="deadline reached"):
+        run_eval(grading=GRADING, dataset=DATASET, task=task, label="expires", trials=2, **config)
+    assert calls == [1] and len(state["outputs"]) == 1
+
+
+def test_legacy_small_catalog_without_cursor_still_resolves(server):
+    state, config = server
+    state["dataset_pages"] = [{"datasets": [{"id": DATASET, "name": "legacy"}]}]
+    result = run_eval(
+        dataset="legacy", task=lambda *_: "answer", label="legacy", grading=GRADING, **config
+    )
+    assert result.exit_code == 0
+    assert state["catalog_preferences"] == ["pagination=cursor"]
+
+
+@pytest.mark.parametrize(
+    "method,path,preferred",
+    [
+        ("GET", "/datasets", True),
+        ("GET", "/datasets?before=cursor", True),
+        ("GET", f"/datasets/{DATASET}", False),
+        ("POST", "/datasets", False),
+    ],
+)
+def test_dataset_cursor_preference_is_fixed_and_catalog_get_only(
+    monkeypatch, method, path, preferred
+):
+    import httpx
+
+    from neatlogs.datasets._api import DatasetApi
+
+    requests = []
+
+    def request(method, url, **kwargs):
+        requests.append(kwargs)
+        return httpx.Response(200, json={"success": True, "data": {"datasets": []}})
+
+    monkeypatch.setattr(httpx, "request", request)
+    api = DatasetApi(project_id=PROJECT, token="fixture", base_url="http://localhost:3181")
+    api.request(method, path)
+    assert requests[0]["headers"].get("Prefer") == ("pagination=cursor" if preferred else None)

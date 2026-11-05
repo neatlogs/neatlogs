@@ -21,9 +21,31 @@ def replay_tool(func, *, name, result):
             return None
         bound = signature.bind(*args, **kwargs)
         bound.apply_defaults()
-        return lookup_replay("tool", name, dict(bound.arguments))
+        values = dict(bound.arguments)
+        for key, parameter in signature.parameters.items():
+            if parameter.kind == inspect.Parameter.VAR_POSITIONAL:
+                values[key] = list(values[key])
+        return lookup_replay("tool", name, values)
 
-    if inspect.iscoroutinefunction(func) or result == "awaitable":
+    if result == "awaitable" and not inspect.iscoroutinefunction(func):
+
+        @functools.wraps(func)
+        def awaitable_wrapper(*args, **kwargs):
+            replay = decision(args, kwargs)
+            if isinstance(replay, ReplayHit):
+
+                async def saved():
+                    return replay.entry.output
+
+                return saved()
+            value = func(*args, **kwargs)
+            if not inspect.isawaitable(value):
+                raise ReplayError("This replay tool must return an awaitable.")
+            return value
+
+        return awaitable_wrapper
+
+    if inspect.iscoroutinefunction(func):
 
         @functools.wraps(func)
         async def async_wrapper(*args, **kwargs):

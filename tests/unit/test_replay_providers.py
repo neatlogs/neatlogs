@@ -300,3 +300,13 @@ def test_unsupported_google_stream_never_restores_a_cached_model_null_input():
     assert session.get_status()["hits"] == 0
     assert session.get_status()["liveCalls"] == 1
     assert session.get_status()["reason"] == "missing_recording"
+
+
+def test_numeric_property_order_handles_many_keys_and_very_long_digits():
+    value = {str(index): index for index in range(50000)}
+    long_key = "9" * 4301
+    value[long_key] = "ordinary"
+    serialized = ecmascript_json(value)
+    parsed = json.loads(serialized)
+    assert list(parsed)[:3] == ["0", "1", "2"]
+    assert list(parsed)[-1] == long_key

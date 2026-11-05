@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import inspect
 import json
+import math
 import os
 import time
 from contextlib import suppress
@@ -18,6 +20,9 @@ from .._task_credentials import task_credential_refresh
 from ..core.context import trace
 from ..datasets._api import DatasetApi, encode_json
 from ..replay.api import LocalRunApi
+from ..replay.contracts import MAX_RECORDING_BYTES
+from ..replay.environment import write_private_json
+from ..replay.provider import ecmascript_json
 from ..replay.state import state_lock
 
 
@@ -63,12 +68,7 @@ def _with_state_lock(run):
 def _save(path, state):
     if path is None:
         return
-    target = Path(path)
-    temporary = target.with_name(target.name + ".tmp")
-    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as handle:
-        json.dump(state, handle, allow_nan=False)
-    os.replace(temporary, target)
+    write_private_json(path, state, limit=MAX_RECORDING_BYTES)
 
 
 def _validate_grading(grading):
@@ -167,6 +167,7 @@ def run_eval(
     state_path=None,
     resume=False,
     max_error_rate=0,
+    deadline_seconds=900,
     case_ids=None,
 ):
     """Execute each case/trial once, upload outputs, wait for existing form grading.
@@ -175,8 +176,16 @@ def run_eval(
     task whose execution may have started without a saved result. Code checks
     belong to the dataset's eval form and run in the existing isolated runner.
     ``exit_code`` is 0 for pass, 1 for failed gate, and 4 for incomplete runs.
+    ``comparison`` is one page with global coverage; use LocalRunApi.comparison
+    with its nextCursor for remaining rows. Gates cover the entire run.
     """
     _validate_grading(grading)
+    if max_error_rate != 0:
+        raise ValueError(
+            "max_error_rate must be zero: graded runs require every selected case to complete"
+        )
+    if type(deadline_seconds) is not int or not 60 <= deadline_seconds <= 3600:
+        raise ValueError("deadline_seconds must be from 60 to 3600")
     dataset = Dataset(dataset) if isinstance(dataset, str) else dataset
     if (
         not isinstance(dataset, Dataset)
@@ -234,7 +243,7 @@ def run_eval(
         "label": label,
         "params": params or {},
         "trials": trials,
-        "deadlineSeconds": 900,
+        "deadlineSeconds": deadline_seconds,
     }
     for key, value in [
         ("local", local),
@@ -276,7 +285,9 @@ def run_eval(
         _save(state_path, state)
     registered_id = state["runId"]
     if registered_id is None:
-        registered_id = run_api.register(request, key=state["registrationKey"])["runId"]
+        registration = run_api.register(request, key=state["registrationKey"])
+        registered_id = registration["runId"]
+        state["deadlineAt"] = registration["deadlineAt"]
     run_id = str(UUID(registered_id))
     receipt = os.environ.get("NEATLOGS_EVAL_RESULT_FILE")
     if receipt:
@@ -287,6 +298,11 @@ def run_eval(
     if state["runId"] is None:
         state["runId"] = run_id
         _save(state_path, state)
+    if not state.get("deadlineAt"):
+        state["deadlineAt"] = run_api.status(run_id)["deadlineAt"]
+        _save(state_path, state)
+    from ..replay.cli import _remaining
+
     for case in cases:
         for trial in range(1, trials + 1):
             key = f"{case['caseId']}:{trial}"
@@ -298,15 +314,32 @@ def run_eval(
                     "Task execution may have started without a saved output. Inspect the task before starting a new run"
                 )
             if slot is None:
+                if _remaining(state) <= 0:
+                    raise RuntimeError(
+                        "Run deadline reached; no further tasks were executed. Resume only to reconcile saved outputs"
+                    )
+                if (
+                    state_path is not None
+                    and len(json.dumps(state, allow_nan=False, separators=(",", ":")).encode())
+                    + 400 * 1024
+                    > MAX_RECORDING_BYTES
+                ):
+                    raise RuntimeError(
+                        "Run state has no room for another output; no further tasks were executed"
+                    )
                 slot = {"executing": True, "key": str(uuid4())}
                 state["slots"][key] = slot
                 _save(state_path, state)
                 context = EvalContext(
-                    case.get("expected"), case.get("metadata", {}), trial, params or {}
+                    copy.deepcopy(case.get("expected")),
+                    copy.deepcopy(case.get("metadata", {})),
+                    trial,
+                    copy.deepcopy(params or {}),
                 )
                 started = time.monotonic()
                 body = {"caseId": case["caseId"], "trial": trial}
                 try:
+                    task_input = copy.deepcopy(case["input"])
                     with trace(
                         label,
                         kind="WORKFLOW",
@@ -318,8 +351,7 @@ def run_eval(
                         },
                     ) as span:
                         span.set_attribute("input.value", json.dumps(case["input"]))
-                        output = task(case["input"], context)
-                        encode_json({"output": output})
+                        output = copy.deepcopy(task(task_input, context))
                         span.set_attribute("output.value", json.dumps(output))
                     body.update(
                         output=output,
@@ -328,10 +360,31 @@ def run_eval(
                             "latencyMs": (time.monotonic() - started) * 1000,
                         },
                     )
+                    metrics = body["metrics"]
+                    if any(
+                        type(key) is not str
+                        or len(key.encode("utf-16-le")) > 200
+                        or type(value) not in (int, float)
+                        or not math.isfinite(value)
+                        for key, value in metrics.items()
+                    ):
+                        raise ValueError(
+                            "Task metrics must have finite numeric values and names up to 100 UTF-16 units"
+                        )
+                    if len(ecmascript_json(body)) > 64 * 1024:
+                        raise ValueError("Complete task output request exceeds 64 KiB")
                 except Exception as error:
-                    body["error"] = {
-                        "code": type(error).__name__[:100],
-                        "message": str(error)[:1000],
+                    body = {
+                        "caseId": case["caseId"],
+                        "trial": trial,
+                        "error": {
+                            "code": type(error)
+                            .__name__.encode("utf-16-le", errors="replace")[:200]
+                            .decode("utf-16-le", errors="ignore"),
+                            "message": str(error)
+                            .encode("utf-16-le", errors="replace")[:2000]
+                            .decode("utf-16-le", errors="ignore"),
+                        },
                     }
                 slot.update(executing=False, body=body)
                 _save(state_path, state)
@@ -401,7 +454,7 @@ def run_eval(
                 batch["accepted"] = True
                 _save(state_path, state)
     while True:
-        comparison = run_api.request("GET", f"/runs/{run_id}/comparison", limit=17 * 1024 * 1024)
+        comparison = run_api.comparison(run_id)
         if (
             comparison.get("state") in {"ready", "failed", "incomplete"}
             or time.monotonic() >= deadline

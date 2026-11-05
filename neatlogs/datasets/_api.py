@@ -77,6 +77,8 @@ class DatasetApi:
 
     def request(self, method, path, *, content=None, key=None):
         headers = {"Authorization": "Bearer " + self._token, "x-project-id": self.project_id}
+        if method == "GET" and path.split("?")[0] == "/datasets":
+            headers["Prefer"] = "pagination=cursor"
         if key is not None:
             headers["Idempotency-Key"] = key
         if content is not None:

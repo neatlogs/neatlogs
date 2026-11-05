@@ -45,12 +45,14 @@ def ecmascript_json(value):
                     for key in item
                     if key.isascii()
                     and key.isdigit()
+                    and len(key) <= 10
                     and str(int(key)) == key
                     and int(key) < 2**32 - 1
                 ),
                 key=int,
             )
-            keys = indexes + [key for key in item if key not in indexes]
+            indexed = set(indexes)
+            keys = indexes + [key for key in item if key not in indexed]
             return (
                 b"{" + b",".join(rfc8785.dumps(key) + b":" + emit(item[key]) for key in keys) + b"}"
             )
@@ -70,12 +72,22 @@ def safe_body(value):
             raise ReplayError("Provider capture exceeds its traversal limit.")
         if type(item) is dict:
             for key, child in item.items():
-                if _TRANSPORT.fullmatch(key) or key in {"__proto__", "prototype", "constructor"}:
+                if _TRANSPORT.fullmatch(key) or key in {
+                    "__proto__",
+                    "prototype",
+                    "constructor",
+                    "neatlogs_capture_unavailable",
+                }:
                     raise ReplayError("Provider transport data cannot be captured.")
                 inspect(child, depth + 1)
         elif type(item) is list:
             for child in item:
                 inspect(child, depth + 1)
+        elif type(item) is str:
+            from ..core.capture import CAPTURE_TRUNCATION_MARKER
+
+            if CAPTURE_TRUNCATION_MARKER in item:
+                raise ReplayError("Truncated capture cannot be losslessly replayed.")
 
     inspect(body, 0)
     if media_references(body, "replay", store=None) or canonical_json(

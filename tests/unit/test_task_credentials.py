@@ -87,6 +87,42 @@ def test_bridge_cannot_renew_for_other_host_or_project(monkeypatch):
         task_credential_refresh(token="old-token", project_id=PROJECT, base_url=HOST)
 
 
+def test_run_rate_limit_and_server_retry_preserve_renewed_credentials(monkeypatch):
+    calls, refreshes = [], []
+    statuses = iter([429, 401, 503, 200])
+
+    @contextmanager
+    def stream(method, url, **kwargs):
+        calls.append((method, url, dict(kwargs["headers"]), kwargs["content"]))
+        status = next(statuses)
+        yield httpx.Response(
+            status,
+            headers={"Retry-After": "0"},
+            json={"success": status == 200, "data": {}},
+        )
+
+    def refresh(rejected):
+        refreshes.append(rejected)
+        return TOKEN
+
+    monkeypatch.setattr(httpx, "stream", stream)
+    monkeypatch.setattr("neatlogs.replay.api.time.sleep", lambda _: None)
+    api = LocalRunApi(
+        project_id=PROJECT, token="old-token", base_url=HOST, refresh_access_token=refresh
+    )
+    key = str(uuid4())
+    assert api.request("POST", f"/runs/{RUN}/outputs", {"caseId": CASE}, key=key) == {}
+    assert refreshes == ["old-token"]
+    assert [call[2]["Authorization"] for call in calls] == [
+        "Bearer old-token",
+        "Bearer old-token",
+        "Bearer " + TOKEN,
+        "Bearer " + TOKEN,
+    ]
+    assert len({call[2]["Idempotency-Key"] for call in calls}) == 1
+    assert len({call[3] for call in calls}) == 1
+
+
 def test_delayed_concurrent_rejection_reuses_already_refreshed_token(monkeypatch):
     import threading
     import time

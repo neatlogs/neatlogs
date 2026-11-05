@@ -214,3 +214,75 @@ def test_tampered_selection_and_lock_are_rejected(setup, capsys):
         with pytest.raises(ReplayError, match="locked"):
             with state_lock(path):
                 pass
+
+
+def test_whole_dataset_checkpoint_is_rejected_before_state_or_registration(setup):
+    path, options, calls = setup
+    api = Api(2)
+    with pytest.raises(ReplayError, match="belongs to one recording"):
+        start_whole_dataset(
+            path, api=api, **{**options, "replay": {"mode": "until_span", "untilSpan": "tool"}}
+        )
+    assert not path.exists() and not calls and not api.registrations
+
+
+def test_terminal_child_failure_seals_server_batch_without_rerun(setup, monkeypatch, capsys):
+    from neatlogs.replay import all_command
+
+    path, options, calls = setup
+    api = Api(1)
+    requests = []
+    original = api.request
+
+    def request(method, path, **kwargs):
+        requests.append((method, path, kwargs))
+        return original(method, path, **kwargs)
+
+    api.request = request
+
+    def failed(**kwargs):
+        calls.append(kwargs)
+        return {
+            "exitCode": 1,
+            "stdout": "",
+            "stderr": "failed",
+            "status": {
+                "sourceTraceId": kwargs["recording"].source_trace_id,
+                "mode": "tools_only",
+                "hits": 0,
+                "liveCalls": 0,
+                "switchedToLive": False,
+                "reason": None,
+                "firstMiss": None,
+                "traceIds": [],
+            },
+        }
+
+    monkeypatch.setattr(all_command, "run_local_command", failed)
+    assert start_whole_dataset(path, api=api, **options) == 1
+    capsys.readouterr()
+    complete = [
+        (method, path, args) for method, path, args in requests if path.endswith("/complete")
+    ]
+    assert len(complete) == 1 and complete[0][0] == "POST"
+    assert resume_whole_dataset(path, api=api, as_json=True) == 1
+    capsys.readouterr()
+    retried = [
+        (method, path, args) for method, path, args in requests if path.endswith("/complete")
+    ]
+    assert len(calls) == 1 and retried[0][2]["key"] == retried[1][2]["key"]
+
+
+def test_expired_receipt_reconciliation_keeps_bounded_wait_and_never_runs_agent(setup, capsys):
+    path, options, calls = setup
+    api = Api(1)
+    api.fail_upload = True
+    assert start_whole_dataset(path, api=api, **options) == 1
+    capsys.readouterr()
+    state = read_state(path)
+    state["batches"][0]["run"]["deadlineAt"] = "2000-01-01T00:00:00Z"
+    save_state(path, state)
+    assert resume_whole_dataset(path, api=api, as_json=True) == 0
+    capsys.readouterr()
+    assert len(calls) == 1 and api.uploads[-1][1]["wait_millis"] == 60000
+    assert api.uploads[0][1]["key"] == api.uploads[1][1]["key"]

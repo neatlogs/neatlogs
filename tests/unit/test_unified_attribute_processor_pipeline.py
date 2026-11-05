@@ -277,3 +277,17 @@ def test_process_drops_vectordb_embedding_model_on_non_embedding_spans() -> None
     out = proc.process(span)
     assert out["neatlogs.span.kind"] == "llm"
     assert "neatlogs.vectordb.embedding_model" not in out
+
+
+def test_lossy_self_field_removal_is_marked_unreplayable():
+    proc = UnifiedAttributeProcessor(mapping_config=_load_mapping(), debug=False)
+    span = _mk_span(
+        kind=SpanKind.INTERNAL,
+        attributes={
+            "openinference.span.kind": "TOOL",
+            "output.value": '{"self": "important result", "answer": 1}',
+        },
+    )
+    out = proc.process(span)
+    assert out["neatlogs.capture_fidelity"] == "lossy"
+    assert json.loads(out["neatlogs.tool.output"]) == {"answer": 1}

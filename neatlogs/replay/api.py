@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import re
 import time
-from datetime import datetime
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
+from urllib.parse import urlencode
 from uuid import uuid4
 
 import httpx
@@ -51,7 +53,8 @@ class LocalRunApi:
             headers["Idempotency-Key"] = uuid(key)
         deadline = time.monotonic() + timeout
         renewed = False
-        for attempt in range(3):
+        attempt = 0
+        while time.monotonic() < deadline:
             sent_token = self._token
             headers = {**headers, "Authorization": "Bearer " + sent_token}
             try:
@@ -68,10 +71,29 @@ class LocalRunApi:
                 ):
                     if response.status_code == 401 and not renewed and self._refresh_access_token:
                         self._token = self._refresh_access_token(sent_token)
-                        headers["Authorization"] = "Bearer " + self._token
                         renewed = True
                         continue
+                    if response.status_code == 429:
+                        retry = response.headers.get("Retry-After", "1")
+                        try:
+                            delay = float(retry)
+                        except ValueError:
+                            try:
+                                delay = (
+                                    parsedate_to_datetime(retry) - datetime.now(timezone.utc)
+                                ).total_seconds()
+                            except (ValueError, TypeError):
+                                delay = 1
+                        remaining = deadline - time.monotonic()
+                        if not 0 <= delay < remaining:
+                            raise LocalRunApiError(
+                                "Local replay API rate limit exceeds the request deadline.",
+                                status=429,
+                            )
+                        time.sleep(max(0.05, delay))
+                        continue
                     if attempt == 0 and response.status_code in {500, 502, 503, 504}:
+                        attempt += 1
                         continue
                     data = bytearray()
                     for chunk in response.iter_bytes():
@@ -102,6 +124,7 @@ class LocalRunApi:
                     return raw["data"]
             except httpx.TransportError:
                 if attempt == 0 and time.monotonic() < deadline:
+                    attempt += 1
                     continue
                 raise LocalRunApiError("Local replay API request failed or timed out.") from None
         raise LocalRunApiError("Local replay API request failed.")
@@ -111,6 +134,30 @@ class LocalRunApi:
             "GET",
             f"/datasets/{uuid(dataset_id)}/cases/{uuid(case_id)}?versionId={uuid(version_id)}",
             limit=17 * 1024 * 1024,
+        )
+
+    def comparison(self, run_id, *, baseline=None, after=None, limit=None, new_failures_only=None):
+        """Read one answer page; coverage/metrics describe the full comparison, not this page."""
+        query = {}
+        if baseline is not None:
+            if type(baseline) is not str or not 1 <= len(baseline) <= 200:
+                raise ReplayError("Use a baseline name or UUID up to 200 characters.")
+            query["baseline"] = baseline
+        if after is not None:
+            if type(after) is not str or not 1 <= len(after) <= 1000:
+                raise ReplayError("Use a comparison continuation cursor up to 1000 characters.")
+            query["after"] = after
+        if limit is not None:
+            if type(limit) is not int or not 1 <= limit <= 100:
+                raise ReplayError("Comparison page size must be from 1 to 100.")
+            query["limit"] = limit
+        if new_failures_only is not None:
+            if type(new_failures_only) is not bool:
+                raise ReplayError("new_failures_only must be a boolean.")
+            query["newFailuresOnly"] = str(new_failures_only).lower()
+        suffix = "?" + urlencode(query) if query else ""
+        return self.request(
+            "GET", f"/runs/{uuid(run_id)}/comparison{suffix}", limit=17 * 1024 * 1024
         )
 
     def register(self, input, *, key=None):

@@ -623,10 +623,20 @@ def test_round_identity_is_pinned_across_resume(server, tmp_path):
     state, config = server
     local = {"experimentId": str(uuid4()), "roundId": str(uuid4()), "variant": "B", "attempt": 2}
     calls = []
+
     def task(*_):
         calls.append(1)
         return "answer"
-    options = dict(grading=GRADING, dataset=DATASET, task=task, label="round B retry", local=local, state_path=str(tmp_path / "round.json"), **config)
+
+    options = dict(
+        grading=GRADING,
+        dataset=DATASET,
+        task=task,
+        label="round B retry",
+        local=local,
+        state_path=str(tmp_path / "round.json"),
+        **config,
+    )
     run_eval(**options)
     assert state["registration"]["local"] == local
     run_eval(**options, resume=True)

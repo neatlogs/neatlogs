@@ -29,7 +29,11 @@ def test_task_renewal_is_bounded_and_keeps_request_identity(monkeypatch, kind, s
             refreshes.append(kwargs["json"])
             return httpx.Response(200, json={"token": TOKEN})
         calls.append((method, url, dict(kwargs["headers"]), kwargs.get("content")))
-        code = status if status != 200 else (200 if kwargs["headers"]["Authorization"] == "Bearer " + TOKEN else 401)
+        code = (
+            status
+            if status != 200
+            else (200 if kwargs["headers"]["Authorization"] == "Bearer " + TOKEN else 401)
+        )
         data = {"outputId": str(uuid4()), "state": "succeeded"}
         return httpx.Response(code, json={"success": code == 200, "data": data})
 
@@ -43,7 +47,13 @@ def test_task_renewal_is_bounded_and_keeps_request_identity(monkeypatch, kind, s
     config["refresh_access_token"] = task_credential_refresh(**config)
     api = DatasetApi(**config) if kind == "dataset" else LocalRunApi(**config)
     key = str(uuid4())
-    run = lambda: api.request("POST", "/datasets", content=b'{}', key=key) if kind == "dataset" else api.request("POST", f"/runs/{RUN}/outputs", {"caseId": CASE, "trial": 1, "output": "saved"}, key=key)
+    run = lambda: (
+        api.request("POST", "/datasets", content=b"{}", key=key)
+        if kind == "dataset"
+        else api.request(
+            "POST", f"/runs/{RUN}/outputs", {"caseId": CASE, "trial": 1, "output": "saved"}, key=key
+        )
+    )
     if status == 200:
         run()
     else:
@@ -63,20 +73,32 @@ def test_bridge_cannot_renew_for_other_host_or_project(monkeypatch):
     monkeypatch.setenv("NEATLOGS_PROJECT_ID", PROJECT)
     monkeypatch.setenv("NEATLOGS_CREDENTIAL_BRIDGE_URL", HOST + "/refresh")
     monkeypatch.setenv("NEATLOGS_CREDENTIAL_BRIDGE_KEY", "private-capability")
-    assert task_credential_refresh(token="old-token", project_id=str(uuid4()), base_url=HOST) is None
-    assert task_credential_refresh(token="old-token", project_id=PROJECT, base_url="https://other.example") is None
+    assert (
+        task_credential_refresh(token="old-token", project_id=str(uuid4()), base_url=HOST) is None
+    )
+    assert (
+        task_credential_refresh(
+            token="old-token", project_id=PROJECT, base_url="https://other.example"
+        )
+        is None
+    )
     monkeypatch.setenv("NEATLOGS_CREDENTIAL_BRIDGE_URL", "https://external.example/refresh")
     with pytest.raises(ValueError, match="Invalid CLI credential bridge"):
         task_credential_refresh(token="old-token", project_id=PROJECT, base_url=HOST)
 
 
 def test_delayed_concurrent_rejection_reuses_already_refreshed_token(monkeypatch):
-    from concurrent.futures import ThreadPoolExecutor
     import threading
     import time
+    from concurrent.futures import ThreadPoolExecutor
 
-    for name, value in {"NEATLOGS_TOKEN": "old-token", "NEATLOGS_HOST": HOST, "NEATLOGS_PROJECT_ID": PROJECT,
-        "NEATLOGS_CREDENTIAL_BRIDGE_URL": HOST + "/refresh", "NEATLOGS_CREDENTIAL_BRIDGE_KEY": "private"}.items():
+    for name, value in {
+        "NEATLOGS_TOKEN": "old-token",
+        "NEATLOGS_HOST": HOST,
+        "NEATLOGS_PROJECT_ID": PROJECT,
+        "NEATLOGS_CREDENTIAL_BRIDGE_URL": HOST + "/refresh",
+        "NEATLOGS_CREDENTIAL_BRIDGE_KEY": "private",
+    }.items():
         monkeypatch.setenv(name, value)
     barrier = threading.Barrier(2)
     lock = threading.Lock()

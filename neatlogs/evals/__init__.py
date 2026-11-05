@@ -211,13 +211,22 @@ def run_eval(
             raise ValueError("Select between 1 and 100 unique cases")
     version_id, cases = _resolve(dataset_api, dataset, selected)
     if local is not None:
-        if not isinstance(local, dict) or set(local) != {"experimentId", "roundId", "variant", "attempt"}:
+        if not isinstance(local, dict) or set(local) != {
+            "experimentId",
+            "roundId",
+            "variant",
+            "attempt",
+        }:
             raise ValueError("Use experimentId, roundId, variant and attempt for a local round")
         for field in ("experimentId", "roundId"):
             if not isinstance(local[field], str):
                 raise ValueError("Local experiment and round IDs must be UUID strings")
             UUID(local[field])
-        if local["variant"] not in {"A", "B"} or type(local["attempt"]) is not int or not 1 <= local["attempt"] <= 100:
+        if (
+            local["variant"] not in {"A", "B"}
+            or type(local["attempt"]) is not int
+            or not 1 <= local["attempt"] <= 100
+        ):
             raise ValueError("Use variant A or B and an attempt between 1 and 100")
     request = {
         "datasetVersionId": version_id,

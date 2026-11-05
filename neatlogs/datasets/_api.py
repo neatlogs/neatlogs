@@ -51,7 +51,7 @@ def publication(data, dataset_id=None):
 
 
 class DatasetApi:
-    def __init__(self, *, project_id, token, base_url):
+    def __init__(self, *, project_id, token, base_url, refresh_access_token=None):
         self.project_id = str(UUID(project_id))
         if not isinstance(token, str) or not token.strip() or "\n" in token or "\r" in token:
             raise ValueError("An explicit public API user/service-account token is required")
@@ -73,6 +73,7 @@ class DatasetApi:
             raise ValueError("base_url must be an HTTPS origin; HTTP is allowed on loopback")
         self.base_url = base_url.rstrip("/") + "/api/v1/public"
         self._token = token.strip()
+        self._refresh_access_token = refresh_access_token
 
     def request(self, method, path, *, content=None, key=None):
         headers = {"Authorization": "Bearer " + self._token, "x-project-id": self.project_id}
@@ -80,7 +81,10 @@ class DatasetApi:
             headers["Idempotency-Key"] = key
         if content is not None:
             headers["Content-Type"] = "application/json"
-        for attempt in range(3):
+        renewed = False
+        for attempt in range(4):
+            sent_token = self._token
+            headers = {**headers, "Authorization": "Bearer " + sent_token}
             try:
                 with suppress_instrumentation():
                     response = httpx.request(
@@ -101,6 +105,11 @@ class DatasetApi:
                 ) from None
             if (response.status_code == 429 or response.status_code >= 500) and attempt < 2:
                 time.sleep(0.2 * (attempt + 1))
+                continue
+            if response.status_code == 401 and not renewed and self._refresh_access_token:
+                self._token = self._refresh_access_token(sent_token)
+                headers["Authorization"] = "Bearer " + self._token
+                renewed = True
                 continue
             if not response.is_success:
                 raise DatasetError(

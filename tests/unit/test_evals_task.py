@@ -174,6 +174,14 @@ def server():
     http.server_close()
 
 
+def test_descriptive_run_has_no_quality_gate(server):
+    state, config = server
+    result = run_eval(dataset=DATASET, label="descriptive", task=lambda *_: "answer", **config)
+    assert result.exit_code == 0
+    assert result.gate is None
+    assert state["gate_keys"] == []
+
+
 def test_runs_real_http_task_trials_and_returns_failed_gate_exit(server):
     state, config = server
     state["verdict"] = "fail"
@@ -221,6 +229,7 @@ def test_cli_reports_saved_run_id_when_eval_fails(
                 grading=GRADING,
                 dataset={"name": DATASET, "versionId": VERSION},
                 label="candidate",
+                gates=["error_rate <= 0"],
             )
         ),
     )
@@ -271,6 +280,7 @@ def test_resumes_uncertain_gate_with_original_key(server, tmp_path):
         dataset=DATASET,
         task=task,
         label="retry gate",
+        gates=["error_rate <= 0"],
         state_path=tmp_path / "gate.json",
         **config,
     )
@@ -607,3 +617,20 @@ def test_rejects_incomplete_dataset_catalog(server, repeated):
             dataset="same", task=lambda *_: "answer", label="catalog", grading=GRADING, **config
         )
     assert len(state["requests"]) == (2 if repeated else 1)
+
+
+def test_round_identity_is_pinned_across_resume(server, tmp_path):
+    state, config = server
+    local = {"experimentId": str(uuid4()), "roundId": str(uuid4()), "variant": "B", "attempt": 2}
+    calls = []
+    def task(*_):
+        calls.append(1)
+        return "answer"
+    options = dict(grading=GRADING, dataset=DATASET, task=task, label="round B retry", local=local, state_path=str(tmp_path / "round.json"), **config)
+    run_eval(**options)
+    assert state["registration"]["local"] == local
+    run_eval(**options, resume=True)
+    assert len(calls) == 1
+    options["local"] = {**local, "variant": "A"}
+    with pytest.raises(ValueError, match="same"):
+        run_eval(**options, resume=True)

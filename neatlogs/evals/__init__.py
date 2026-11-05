@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Callable
 from uuid import UUID, uuid4
 
+from .._task_credentials import task_credential_refresh
 from ..core.context import trace
 from ..datasets._api import DatasetApi, encode_json
 from ..replay.api import LocalRunApi
@@ -157,6 +158,7 @@ def run_eval(
     baseline=None,
     gates=None,
     git=None,
+    local=None,
     checks=None,
     project_id=None,
     token=None,
@@ -197,6 +199,7 @@ def run_eval(
         token=token or os.getenv("NEATLOGS_TOKEN", ""),
         base_url=base_url or os.getenv("NEATLOGS_HOST", "https://app.neatlogs.com"),
     )
+    config["refresh_access_token"] = task_credential_refresh(**config)
     dataset_api, run_api = DatasetApi(**config), LocalRunApi(**config)
     saved_state = json.loads(Path(state_path).read_text()) if resume else None
     if saved_state is not None:
@@ -207,6 +210,15 @@ def run_eval(
         if not selected or len(selected) > 100 or len(set(selected)) != len(selected):
             raise ValueError("Select between 1 and 100 unique cases")
     version_id, cases = _resolve(dataset_api, dataset, selected)
+    if local is not None:
+        if not isinstance(local, dict) or set(local) != {"experimentId", "roundId", "variant", "attempt"}:
+            raise ValueError("Use experimentId, roundId, variant and attempt for a local round")
+        for field in ("experimentId", "roundId"):
+            if not isinstance(local[field], str):
+                raise ValueError("Local experiment and round IDs must be UUID strings")
+            UUID(local[field])
+        if local["variant"] not in {"A", "B"} or type(local["attempt"]) is not int or not 1 <= local["attempt"] <= 100:
+            raise ValueError("Use variant A or B and an attempt between 1 and 100")
     request = {
         "datasetVersionId": version_id,
         "caseIds": [case["caseId"] for case in cases],
@@ -216,6 +228,7 @@ def run_eval(
         "deadlineSeconds": 900,
     }
     for key, value in [
+        ("local", local),
         ("grading", grading),
         ("baseline", baseline),
         ("gates", gates),
@@ -390,6 +403,8 @@ def run_eval(
         "complete"
     ):
         return EvalResult(run_id, comparison, None, errors, 4)
+    if not gates:
+        return EvalResult(run_id, comparison, None, errors, 0)
     gate_key = state.setdefault("gateKey", str(uuid4()))
     _save(state_path, state)
     gate = run_api.request("POST", f"/runs/{run_id}/gate", {}, key=gate_key)

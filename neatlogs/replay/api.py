@@ -23,11 +23,12 @@ class LocalRunApiError(ReplayError):
 
 
 class LocalRunApi:
-    def __init__(self, *, project_id, token, base_url):
+    def __init__(self, *, project_id, token, base_url, refresh_access_token=None):
         validated = DatasetApi(project_id=project_id, token=token, base_url=base_url)
         self.project_id = validated.project_id
         self.base_url = validated.base_url
         self._token = token.strip()
+        self._refresh_access_token = refresh_access_token
 
     def request(self, method, path, body=None, *, key=None, limit=64 * 1024, timeout=30):
         evaluation_dispatch = re.fullmatch(r"/evaluations/[0-9a-fA-F-]{36}/ai-dispatches", path)
@@ -49,7 +50,10 @@ class LocalRunApi:
         if key is not None:
             headers["Idempotency-Key"] = uuid(key)
         deadline = time.monotonic() + timeout
-        for attempt in range(2):
+        renewed = False
+        for attempt in range(3):
+            sent_token = self._token
+            headers = {**headers, "Authorization": "Bearer " + sent_token}
             try:
                 with (
                     suppress_instrumentation(),
@@ -62,6 +66,11 @@ class LocalRunApi:
                         follow_redirects=False,
                     ) as response,
                 ):
+                    if response.status_code == 401 and not renewed and self._refresh_access_token:
+                        self._token = self._refresh_access_token(sent_token)
+                        headers["Authorization"] = "Bearer " + self._token
+                        renewed = True
+                        continue
                     if attempt == 0 and response.status_code in {500, 502, 503, 504}:
                         continue
                     data = bytearray()

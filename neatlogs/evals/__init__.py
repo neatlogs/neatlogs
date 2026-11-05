@@ -70,18 +70,52 @@ def _save(path, state):
     os.replace(temporary, target)
 
 
+def _validate_grading(grading):
+    message = "Select valid grading with a formVersionId and 1–20 evaluatorIds"
+    if not isinstance(grading, dict) or set(grading) != {"formVersionId", "evaluatorIds"}:
+        raise ValueError(message)
+    evaluators = grading["evaluatorIds"]
+    if not isinstance(evaluators, list) or not 1 <= len(evaluators) <= 20:
+        raise ValueError(message)
+    try:
+        for value in [grading["formVersionId"], *evaluators]:
+            if not isinstance(value, str):
+                raise ValueError(message)
+            parsed = UUID(value)
+            if str(parsed) != value.lower() or (
+                parsed.int not in {0, (1 << 128) - 1} and parsed.version not in range(1, 9)
+            ):
+                raise ValueError(message)
+    except ValueError:
+        raise ValueError(message) from None
+
+
 def _resolve(api, dataset, selected=None):
     try:
         dataset_id = str(UUID(dataset.name))
     except ValueError:
-        matches = [
-            item
-            for item in api.request("GET", "/datasets")["datasets"]
-            if item["name"] == dataset.name
-        ]
-        if len(matches) != 1:
-            raise ValueError("Use a dataset UUID or one unambiguous dataset name") from None
-        dataset_id = str(UUID(matches[0]["id"]))
+        matches, seen = set(), set()
+        cursor = None
+        while True:
+            page = api.request("GET", "/datasets" + (f"?before={cursor}" if cursor else ""))
+            entries = page["datasets"]
+            if not isinstance(entries, list) or len(entries) > 500:
+                raise ValueError("Dataset catalog page is invalid")
+            matches.update(
+                str(UUID(item["id"])) for item in entries if item["name"] == dataset.name
+            )
+            if len(matches) > 1:
+                raise ValueError("Use a dataset UUID or one unambiguous dataset name")
+            cursor = page.get("nextCursor")
+            if ("nextCursor" not in page and len(entries) == 500) or (cursor and cursor in seen):
+                raise ValueError("Dataset catalog pagination is incomplete; use a dataset UUID")
+            if cursor is None:
+                break
+            cursor = str(UUID(cursor))
+            seen.add(cursor)
+        if not matches:
+            raise ValueError("Use a dataset UUID or one unambiguous dataset name")
+        dataset_id = next(iter(matches))
     suffix = "?versionId=" + str(UUID(dataset.version_id)) if dataset.version_id else ""
     overview = api.request("GET", f"/datasets/{dataset_id}{suffix}")
     version_id = str(UUID(overview["version"]["id"]))
@@ -117,11 +151,11 @@ def run_eval(
     dataset: Dataset | str,
     task: Callable,
     label: str,
+    grading: dict,
     params=None,
     trials=1,
     baseline=None,
     gates=None,
-    grading=None,
     git=None,
     checks=None,
     project_id=None,
@@ -140,6 +174,7 @@ def run_eval(
     belong to the dataset's eval form and run in the existing isolated runner.
     ``exit_code`` is 0 for pass, 1 for failed gate, and 4 for incomplete runs.
     """
+    _validate_grading(grading)
     dataset = Dataset(dataset) if isinstance(dataset, str) else dataset
     if (
         not isinstance(dataset, Dataset)

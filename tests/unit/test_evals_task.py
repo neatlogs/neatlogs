@@ -12,12 +12,14 @@ from neatlogs.replay.api import LocalRunApi, LocalRunApiError
 from neatlogs.replay.contracts import ReplayError
 
 PROJECT, DATASET, VERSION, CASE, REVISION, RUN = [str(uuid4()) for _ in range(6)]
+GRADING = {"formVersionId": str(uuid4()), "evaluatorIds": [str(uuid4())]}
 
 
 def test_rejects_case_outside_dataset_before_running(server):
     _, config = server
     with pytest.raises(ValueError, match="belong to the pinned dataset"):
         run_eval(
+            grading=GRADING,
             dataset=DATASET,
             case_ids=[str(uuid4())],
             task=lambda *_: "answer",
@@ -30,6 +32,7 @@ def test_rejects_case_outside_dataset_before_running(server):
 def server():
     state = {
         "outputs": [],
+        "dataset_pages": [],
         "fail_upload": False,
         "verdict": "pass",
         "requests": [],
@@ -52,7 +55,11 @@ def server():
 
         def do_GET(self):
             state["requests"].append(self.path)
-            if "/comparison" in self.path:
+            if urlsplit(self.path).path == "/api/v1/public/datasets":
+                cursor = parse_qs(urlsplit(self.path).query).get("before", [None])[0]
+                index = 1 if cursor else 0
+                data = state["dataset_pages"][index]
+            elif "/comparison" in self.path:
                 state["comparison_calls"] += 1
                 if state["comparison_pending"]:
                     state["comparison_pending"] -= 1
@@ -69,6 +76,8 @@ def server():
                 }
                 if state["grading_handoff_state"] is not None:
                     data["gradingHandoffState"] = state["grading_handoff_state"]
+                elif state["grading"] is None:
+                    data["gradingHandoffState"] = "ready"
             elif "/cases/" in self.path:
                 case_id = self.path.split("/cases/")[1].split("?")[0]
                 data = {
@@ -175,6 +184,7 @@ def test_runs_real_http_task_trials_and_returns_failed_gate_exit(server):
         return {"answer": value["message"], "trial": context.trial}
 
     result = run_eval(
+        grading=GRADING,
         dataset=Dataset(DATASET, version_id=VERSION),
         task=task,
         label="candidate",
@@ -187,7 +197,7 @@ def test_runs_real_http_task_trials_and_returns_failed_gate_exit(server):
     assert [value[1] for value in seen] == [1, 2]
     assert seen[0][2:] == ({"value": "hello"}, "small")
     assert len(state["outputs"]) == 2
-    assert "grading" not in state["registration"]
+    assert state["registration"]["grading"] == GRADING
     assert f"/api/v1/public/datasets/{DATASET}?versionId={VERSION}" in state["requests"]
 
 
@@ -206,7 +216,12 @@ def test_cli_reports_saved_run_id_when_eval_fails(
     monkeypatch.setenv(
         "NEATLOGS_EVAL_OPTIONS",
         json.dumps(
-            dict(config, dataset={"name": DATASET, "versionId": VERSION}, label="candidate")
+            dict(
+                config,
+                grading=GRADING,
+                dataset={"name": DATASET, "versionId": VERSION},
+                label="candidate",
+            )
         ),
     )
     assert run_eval_cli() == expected_exit
@@ -228,6 +243,7 @@ def test_resumes_uncertain_completion_with_original_key(server, tmp_path):
         return "answer"
 
     options = dict(
+        grading=GRADING,
         dataset=DATASET,
         task=task,
         label="retry completion",
@@ -251,6 +267,7 @@ def test_resumes_uncertain_gate_with_original_key(server, tmp_path):
         return "answer"
 
     options = dict(
+        grading=GRADING,
         dataset=DATASET,
         task=task,
         label="retry gate",
@@ -357,6 +374,7 @@ def test_selects_case_from_later_dataset_page(server):
     state, config = server
     state["cases"] = [str(uuid4()) for _ in range(101)]
     result = run_eval(
+        grading=GRADING,
         dataset=DATASET,
         case_ids=[state["cases"][-1]],
         task=lambda *_: "answer",
@@ -378,12 +396,27 @@ def test_resume_retries_saved_upload_without_reexecuting_task(server, tmp_path):
         return "saved answer"
 
     with pytest.raises(LocalRunApiError):
-        run_eval(dataset=DATASET, task=task, label="retry", trials=2, state_path=path, **config)
+        run_eval(
+            grading=GRADING,
+            dataset=DATASET,
+            task=task,
+            label="retry",
+            trials=2,
+            state_path=path,
+            **config,
+        )
     assert calls == [1]
     assert path.stat().st_mode & 0o077 == 0
     state["fail_upload"] = False
     result = run_eval(
-        dataset=DATASET, task=task, label="retry", trials=2, state_path=path, resume=True, **config
+        grading=GRADING,
+        dataset=DATASET,
+        task=task,
+        label="retry",
+        trials=2,
+        state_path=path,
+        resume=True,
+        **config,
     )
     assert result.exit_code == 0 and calls == [1, 2]
     assert len(state["outputs"]) == 2
@@ -395,7 +428,7 @@ def test_task_error_is_uploaded_and_returns_incomplete(server):
     def task(value, context):
         raise ValueError("task failed")
 
-    result = run_eval(dataset=DATASET, task=task, label="error", **config)
+    result = run_eval(grading=GRADING, dataset=DATASET, task=task, label="error", **config)
     assert result.exit_code == 4 and result.errors == 1
     assert state["outputs"][0]["error"] == {"code": "ValueError", "message": "task failed"}
 
@@ -412,11 +445,24 @@ def test_resume_rejects_changed_task_code(server, tmp_path):
         return "changed"
 
     with pytest.raises(LocalRunApiError):
-        run_eval(dataset=DATASET, task=original, label="resume", state_path=path, **config)
+        run_eval(
+            grading=GRADING,
+            dataset=DATASET,
+            task=original,
+            label="resume",
+            state_path=path,
+            **config,
+        )
     state["fail_upload"] = False
     with pytest.raises(ValueError, match="same project"):
         run_eval(
-            dataset=DATASET, task=changed, label="resume", state_path=path, resume=True, **config
+            grading=GRADING,
+            dataset=DATASET,
+            task=changed,
+            label="resume",
+            state_path=path,
+            resume=True,
+            **config,
         )
     assert state["outputs"] == []
 
@@ -432,7 +478,9 @@ def test_refuses_concurrent_owner_of_eval_state(server, tmp_path):
         return "answer"
 
     with pytest.raises(ReplayError, match="locked"):
-        run_eval(dataset=DATASET, task=task, label="locked", state_path=path, **config)
+        run_eval(
+            grading=GRADING, dataset=DATASET, task=task, label="locked", state_path=path, **config
+        )
     assert executions == []
     assert state["requests"] == []
 
@@ -460,5 +508,102 @@ def test_status_accepts_canonical_equivalent_run_id(server, monkeypatch):
 def test_dataset_and_run_api_use_same_trimmed_token(server):
     _, config = server
     config = {**config, "token": "  task-token  "}
-    result = run_eval(dataset=DATASET, task=lambda *_: "answer", label="auth", **config)
+    result = run_eval(
+        grading=GRADING, dataset=DATASET, task=lambda *_: "answer", label="auth", **config
+    )
     assert result.exit_code == 0
+
+
+@pytest.mark.parametrize(
+    "grading",
+    [
+        None,
+        {},
+        {"formVersionId": VERSION, "evaluatorIds": []},
+        *[
+            {"formVersionId": value, "evaluatorIds": GRADING["evaluatorIds"]}
+            for value in [
+                VERSION.replace("-", ""),
+                "urn:uuid:" + VERSION,
+                "{" + VERSION + "}",
+                "10000000-0000-0000-8000-000000000001",
+                "10000000-0000-4000-0000-000000000001",
+            ]
+        ],
+    ],
+)
+def test_grading_is_required_before_network_or_task(server, grading):
+    state, config = server
+    calls = []
+    with pytest.raises(ValueError, match="grading"):
+        run_eval(
+            dataset=DATASET,
+            task=lambda *_: calls.append(1),
+            label="required",
+            grading=grading,
+            **config,
+        )
+    assert state["requests"] == []
+    assert calls == []
+
+
+def test_cli_rejects_missing_grading_before_importing_task(tmp_path, monkeypatch, capsys):
+    task = tmp_path / "task.py"
+    marker = tmp_path / "imported"
+    task.write_text(f"from pathlib import Path\nPath({str(marker)!r}).write_text('imported')\n")
+    monkeypatch.setattr("sys.argv", ["neatlogs.evals.cli", str(task)])
+    monkeypatch.setenv(
+        "NEATLOGS_EVAL_OPTIONS", json.dumps({"dataset": {"name": DATASET}, "label": "required"})
+    )
+    assert run_eval_cli() == 2
+    assert "grading" in capsys.readouterr().err
+    assert not marker.exists()
+
+
+def test_resolves_dataset_name_after_first_500(server):
+    state, config = server
+    cursor = str(uuid4())
+    state["dataset_pages"] = [
+        {
+            "datasets": [{"id": str(uuid4()), "name": "other"} for _ in range(500)],
+            "nextCursor": cursor,
+        },
+        {"datasets": [{"id": DATASET, "name": "older"}], "nextCursor": None},
+    ]
+    result = run_eval(
+        dataset="older", task=lambda *_: "answer", label="older", grading=GRADING, **config
+    )
+    assert result.exit_code == 0
+    assert f"/api/v1/public/datasets?before={cursor}" in state["requests"]
+
+
+def test_rejects_duplicate_dataset_name_on_later_page(server):
+    state, config = server
+    state["dataset_pages"] = [
+        {"datasets": [{"id": DATASET, "name": "same"}], "nextCursor": str(uuid4())},
+        {"datasets": [{"id": str(uuid4()), "name": "same"}], "nextCursor": None},
+    ]
+    with pytest.raises(ValueError, match="unambiguous"):
+        run_eval(
+            dataset="same", task=lambda *_: "answer", label="duplicate", grading=GRADING, **config
+        )
+    assert len(state["requests"]) == 2
+    assert state["outputs"] == []
+
+
+@pytest.mark.parametrize("repeated", [False, True])
+def test_rejects_incomplete_dataset_catalog(server, repeated):
+    state, config = server
+    cursor = str(uuid4())
+    state["dataset_pages"] = [
+        {
+            "datasets": [{"id": DATASET, "name": "same"}] * 500,
+            **({"nextCursor": cursor} if repeated else {}),
+        },
+        {"datasets": [], "nextCursor": cursor},
+    ]
+    with pytest.raises(ValueError, match="pagination is incomplete"):
+        run_eval(
+            dataset="same", task=lambda *_: "answer", label="catalog", grading=GRADING, **config
+        )
+    assert len(state["requests"]) == (2 if repeated else 1)

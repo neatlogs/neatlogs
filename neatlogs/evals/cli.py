@@ -9,13 +9,14 @@ from pathlib import Path
 
 from ..datasets._api import DatasetError
 from ..replay.api import LocalRunApiError
-from . import Dataset, run_eval
+from . import Dataset, _validate_grading, run_eval
 
 
 def main():
     try:
         path = Path(sys.argv[1]).resolve(strict=True)
         options = json.loads(os.environ["NEATLOGS_EVAL_OPTIONS"])
+        _validate_grading(options.get("grading"))
         spec = importlib.util.spec_from_file_location("neatlogs_eval_task", path)
         if spec is None or spec.loader is None:
             raise ValueError("Use a Python task file exporting task(input, context)")

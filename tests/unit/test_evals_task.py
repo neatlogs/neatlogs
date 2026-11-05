@@ -176,7 +176,9 @@ def server():
 
 def test_descriptive_run_has_no_quality_gate(server):
     state, config = server
-    result = run_eval(dataset=DATASET, label="descriptive", task=lambda *_: "answer", **config)
+    result = run_eval(
+        grading=GRADING, dataset=DATASET, label="descriptive", task=lambda *_: "answer", **config
+    )
     assert result.exit_code == 0
     assert result.gate is None
     assert state["gate_keys"] == []

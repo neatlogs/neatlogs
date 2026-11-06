@@ -12,11 +12,16 @@ concurrency:
   group: weekly-python-release
   cancel-in-progress: false
 
+# plan runs daily without secrets. Only when a release is due does release wait
+# for approval in the `release` environment (main only, required reviewers),
+# which holds RELEASE_APP_PRIVATE_KEY. publish then waits in the `pypi`
+# environment, the only identity PyPI's trusted publisher accepts.
 jobs:
-  release:
+  plan:
+    name: Decide whether a release is due
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 10
     outputs:
       action: ${{ steps.plan.outputs.action }}
       version: ${{ steps.plan.outputs.version }}
@@ -30,15 +35,59 @@ jobs:
         with:
           python-version: '3.13'
 
-      - name: Decide whether a release is due
+      - name: Plan without changing the tree
         id: plan
         shell: bash
         run: |
           set -euo pipefail
+          python scripts/release/weekly.py > "$RUNNER_TEMP/release-plan.json"
+          cat "$RUNNER_TEMP/release-plan.json"
+          action=$(jq -r .action "$RUNNER_TEMP/release-plan.json")
+          version=$(jq -r .version "$RUNNER_TEMP/release-plan.json")
+          echo "action=$action" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [[ "$action" == publish ]]; then
+            echo "Release due: neatlogs ${version}. Approve the \`release\` deployment, then \`pypi\`." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  release:
+    name: Tag the approved release
+    needs: plan
+    if: needs.plan.outputs.action == 'publish'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: release
+    outputs:
+      action: ${{ steps.plan.outputs.action }}
+      version: ${{ steps.plan.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Apply the approved plan
+        id: plan
+        shell: bash
+        env:
+          APPROVED_ACTION: ${{ needs.plan.outputs.action }}
+          APPROVED_VERSION: ${{ needs.plan.outputs.version }}
+        run: |
+          set -euo pipefail
           python scripts/release/weekly.py --apply > "$RUNNER_TEMP/release-plan.json"
           cat "$RUNNER_TEMP/release-plan.json"
-          echo "action=$(jq -r .action "$RUNNER_TEMP/release-plan.json")" >> "$GITHUB_OUTPUT"
-          echo "version=$(jq -r .version "$RUNNER_TEMP/release-plan.json")" >> "$GITHUB_OUTPUT"
+          action=$(jq -r .action "$RUNNER_TEMP/release-plan.json")
+          version=$(jq -r .version "$RUNNER_TEMP/release-plan.json")
+          if [[ "$action" != "$APPROVED_ACTION" || "$version" != "$APPROVED_VERSION" ]]; then
+            echo "::error::The plan changed after approval (approved ${APPROVED_ACTION} ${APPROVED_VERSION}, now ${action} ${version}); rerun the workflow" >&2
+            exit 1
+          fi
+          echo "action=$action" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "commit=$(jq -r '.commit // false' "$RUNNER_TEMP/release-plan.json")" >> "$GITHUB_OUTPUT"
           echo "retry_tag=$(jq -r '.retry_tag // empty' "$RUNNER_TEMP/release-plan.json")" >> "$GITHUB_OUTPUT"
 
@@ -48,20 +97,16 @@ jobs:
           RETRY_TAG: ${{ steps.plan.outputs.retry_tag }}
         run: git checkout --detach "$RETRY_TAG"
 
-      - name: Check publishing credentials
-        if: steps.plan.outputs.action == 'publish'
+      - name: Check release App credentials
         shell: bash
         env:
           RELEASE_APP_ID: ${{ secrets.RELEASE_APP_ID }}
           RELEASE_APP_PRIVATE_KEY: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
-          PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
         run: |
           test -n "$RELEASE_APP_ID" || { echo 'RELEASE_APP_ID is missing' >&2; exit 1; }
           test -n "$RELEASE_APP_PRIVATE_KEY" || { echo 'RELEASE_APP_PRIVATE_KEY is missing' >&2; exit 1; }
-          test -n "$PYPI_API_TOKEN" || { echo 'PYPI_API_TOKEN is missing' >&2; exit 1; }
 
       - name: Build and test the wheel and source distribution
-        if: steps.plan.outputs.action == 'publish'
         shell: bash
         run: |
           set -euo pipefail
@@ -83,7 +128,6 @@ jobs:
           done
 
       - name: Create a repository-scoped release token
-        if: steps.plan.outputs.action == 'publish'
         id: release-token
         uses: actions/create-github-app-token@v2
         with:
@@ -92,7 +136,6 @@ jobs:
           permission-contents: write
 
       - name: Commit version and tag exact release source
-        if: steps.plan.outputs.action == 'publish'
         shell: bash
         env:
           RELEASE_TOKEN: ${{ steps.release-token.outputs.token }}
@@ -116,25 +159,60 @@ jobs:
               echo "Existing ${tag} points to another commit" >&2; exit 1;
             }
           else
+            if [[ "$RELEASE_COMMIT" != true ]]; then
+              # A new tag without a version commit has no fast-forward push
+              # guarding it, so check that main still points to the planned commit.
+              planned=$(git rev-parse HEAD)
+              remote_main=$(git ls-remote --exit-code origin refs/heads/main | awk '$2 == "refs/heads/main" { print $1 }')
+              if [[ "$remote_main" != "$planned" ]]; then
+                echo "::error::main moved to ${remote_main:-an unknown commit} after this release was planned at ${planned}; rerun the workflow" >&2
+                exit 1
+              fi
+            fi
             git tag -a "$tag" -m "Release ${RELEASE_VERSION}"
           fi
           git push origin "refs/tags/${tag}"
 
-      - name: Publish to PyPI
-        if: steps.plan.outputs.action == 'publish'
-        uses: pypa/gh-action-pypi-publish@release/v1
+      - name: Hand the tested distributions to the publish job
+        # actions/upload-artifact v4.6.2
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          password: ${{ secrets.PYPI_API_TOKEN }}
+          name: python-distributions
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish to PyPI
+    needs: release
+    if: needs.release.outputs.action == 'publish'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: pypi
+      url: https://pypi.org/project/neatlogs/${{ needs.release.outputs.version }}/
+    permissions:
+      id-token: write
+    steps:
+      - name: Download the tested distributions
+        # actions/download-artifact v4.3.0
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: python-distributions
+          path: dist
+
+      - name: Publish to PyPI through trusted publishing
+        # pypa/gh-action-pypi-publish v1.14.2 (release/v1)
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33
 
       - name: Verify the published version
-        if: steps.plan.outputs.action == 'publish'
         env:
-          RELEASE_VERSION: ${{ steps.plan.outputs.version }}
+          RELEASE_VERSION: ${{ needs.release.outputs.version }}
         shell: bash
         run: |
           set -euo pipefail
           for attempt in 1 2 3 4 5 6; do
-            if python - "$RELEASE_VERSION" <<'PY'
+            if python3 - "$RELEASE_VERSION" <<'PY'
           import json, sys, urllib.request
           with urllib.request.urlopen(f'https://pypi.org/pypi/neatlogs/{sys.argv[1]}/json', timeout=15) as response:
               data = json.load(response)
@@ -150,8 +228,8 @@ jobs:
 
   notify:
     name: Notify Slack after verified PyPI publication
-    needs: release
-    if: needs.release.result == 'success' && needs.release.outputs.action == 'publish'
+    needs: [release, publish]
+    if: needs.publish.result == 'success'
     runs-on: ubuntu-latest
     permissions: {}
     steps:

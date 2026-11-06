@@ -361,6 +361,9 @@ def init(
     global _initialized, _init_signature, _shutdown_worker
 
     _validate_instrumentations(instrumentations)
+    from .replay.environment import configure_replay_from_environment
+
+    configure_replay_from_environment()
     uploads_enabled_resolved = resolve_uploads_enabled(
         uploads_enabled, os.getenv("NEATLOGS_UPLOADS_ENABLED")
     )

@@ -217,6 +217,9 @@ class NeatlogsSpanProcessor(SpanProcessor):
                     or parent_id in self._active_spans
                 )
                 if owned and not is_completion_marker:
+                    from ..replay.session import stamp_replay_span
+
+                    stamp_replay_span(span)
                     self._active_spans[span.context.span_id] = span
                     self._owned_span_ids.add(span.context.span_id)
                     marker = _verification_marker_from_env()
@@ -376,6 +379,15 @@ class NeatlogsSpanProcessor(SpanProcessor):
 
             # 2. Process and normalize attributes
             unified_attrs = self.unified_processor.process(span)
+            if (
+                unified_attrs.get("neatlogs.replay.outcome") == "HIT"
+                and str(unified_attrs.get("neatlogs.span.kind", "")).lower() == "llm"
+            ):
+                for key in list(unified_attrs):
+                    if key.startswith(
+                        ("neatlogs.llm.token_count.", "neatlogs.llm.cost", "gen_ai.usage.")
+                    ):
+                        unified_attrs[key] = 0
 
             # 3. Filter large tokenized arrays for EMBEDDING/VECTOR_STORE spans
             nl_kind = unified_attrs.get("neatlogs.span.kind")

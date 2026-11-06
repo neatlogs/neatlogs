@@ -1266,7 +1266,10 @@ class UnifiedAttributeProcessor:
                         if "values" in config:
                             val = config["values"].get(val, val)
                         if src_key in ("input.value", "output.value"):
+                            original = val
                             val = self._sanitize_io_value(val)
+                            if val != original:
+                                target["neatlogs.capture_fidelity"] = "lossy"
                         target[target_key] = val
                         consumed.add(src_key)
                         break

@@ -74,6 +74,19 @@ from .prompt.client import (
     update_prompt,
 )
 from .prompt.template import PromptTemplate, SystemPromptTemplate, UserPromptTemplate
+from .replay import (
+    LocalRunApi,
+    LocalRunApiError,
+    ReplayEntry,
+    ReplayError,
+    ReplayRecording,
+    ReplayRunBinding,
+    ReplaySession,
+    get_replay_status,
+    parse_replay_recording,
+    replay_model,
+    replay_recording_from_case,
+)
 from .schema_v2 import (
     TELEMETRY_CONTRACT_VERSION,
     TELEMETRY_SCHEMA_SHA256,
@@ -314,6 +327,17 @@ __all__ = [
     "flush",
     "shutdown",
     "flush_all",
+    "LocalRunApi",
+    "LocalRunApiError",
+    "ReplayEntry",
+    "ReplayError",
+    "ReplayRecording",
+    "ReplayRunBinding",
+    "ReplaySession",
+    "get_replay_status",
+    "parse_replay_recording",
+    "replay_model",
+    "replay_recording_from_case",
     "NeatlogsError",
     "NeatlogsConfigurationError",
     "span",

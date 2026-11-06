@@ -425,6 +425,19 @@ class TypedMediaSpanExporter(SpanExporter):
         sanitized: list[tuple[ReadableSpan, dict[str, Any], list[dict[str, Any]]]] = []
         for span in spans:
             attributes = sanitize_media_attributes(span.attributes or {}, store=self._store)
+            for key, original in (span.attributes or {}).items():
+                if not key.endswith(("input", "output", "input.value", "output.value")):
+                    continue
+                sanitized_value = attributes.get(key)
+                if isinstance(original, str) and isinstance(sanitized_value, str):
+                    original_container = _json_container(original)
+                    sanitized_container = _json_container(sanitized_value)
+                    original = original if original_container is None else original_container
+                    sanitized_value = (
+                        sanitized_value if sanitized_container is None else sanitized_container
+                    )
+                if original != sanitized_value:
+                    attributes["neatlogs.capture_fidelity"] = "lossy"
             events = [
                 sanitize_media_attributes(event.attributes or {}, store=self._store)
                 for event in span.events

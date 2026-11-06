@@ -104,7 +104,16 @@ def _serialize_obj(obj: Any) -> Any:
     return str(obj)
 
 
-def _safe_json_dumps(value: Any) -> str:
+def _safe_json_dumps(value: Any, *, span=None) -> str:
+    if span is not None and (getattr(span, "attributes", None) or {}).get(
+        "openinference.span.kind"
+    ) in {"TOOL", "MCP_TOOL"}:
+        from ..replay.contracts import ReplayError, json_value
+
+        try:
+            json_value(value)
+        except ReplayError:
+            span.set_attribute("neatlogs.capture_fidelity", "lossy")
     try:
         # Use custom serializer that handles complex objects
         serialized = _serialize_obj(value)
@@ -490,7 +499,7 @@ def _decorate_span(
                             except Exception:
                                 pass
                         if cap_out:
-                            span.set_attribute("output.value", _safe_json_dumps(result))
+                            span.set_attribute("output.value", _safe_json_dumps(result, span=span))
                             span.set_attribute("output.mime_type", "application/json")
                         span.set_status(Status(StatusCode.OK))
                         return result
@@ -567,7 +576,7 @@ def _decorate_span(
                         except Exception:
                             pass
                     if cap_out:
-                        span.set_attribute("output.value", _safe_json_dumps(result))
+                        span.set_attribute("output.value", _safe_json_dumps(result, span=span))
                         span.set_attribute("output.mime_type", "application/json")
                     span.set_status(Status(StatusCode.OK))
                     return result

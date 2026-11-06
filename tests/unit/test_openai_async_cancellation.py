@@ -23,6 +23,9 @@ class _Span:
     def record_exception(self, exc):
         self.exceptions.append(exc)
 
+    def is_recording(self):
+        return not self.ended
+
     def end(self):
         self.ended = True
 

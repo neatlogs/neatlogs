@@ -1,0 +1,63 @@
+[project]
+name = "neatlogs-harbor"
+dynamic = ["version"]
+description = "Send Harbor agent-eval jobs to Neatlogs: datasets, runs, scores and full traces."
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Neatlogs", email = "hello@neatlogs.com" }]
+requires-python = ">=3.12"
+keywords = ["harbor", "evals", "agents", "neatlogs", "observability"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "harbor>=0.25.0",
+    "harbor-atif2otel>=0.1.1",
+    "httpx>=0.27.0",
+    "opentelemetry-proto>=1.35.0",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=8.0.0",
+]
+
+# Harbor discovers job plugins in this group: `harbor run ... --plugin neatlogs`.
+[project.entry-points."harbor.plugins"]
+neatlogs = "neatlogs_harbor.plugin:NeatlogsPlugin"
+
+# Standalone CLI. With the Neatlogs SDK installed, `neatlogs harbor ...` forwards here.
+[project.scripts]
+neatlogs-harbor = "neatlogs_harbor.cli:main"
+
+[project.urls]
+Homepage = "https://neatlogs.com"
+Repository = "https://github.com/neatlogs/neatlogs"
+Documentation = "https://docs.neatlogs.com/"
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.dynamic]
+version = { attr = "neatlogs_harbor.version.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.black]
+line-length = 100
+target-version = ["py312"]
+
+[tool.isort]
+profile = "black"
+line_length = 100

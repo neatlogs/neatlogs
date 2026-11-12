@@ -63,10 +63,6 @@ class Options:
     # "default" sends verifier summaries with each output; "none" sends none.
     attachments: str = "default"
     traces: bool = True
-    # Register runs at job start and send outputs as trials finish. When off,
-    # runs are registered and filled at job end (for jobs that run past the
-    # one-hour run window).
-    stream: bool = True
     timeout: float = 30.0
     retries: int = 4
 
@@ -106,7 +102,6 @@ class Options:
             redact=split_patterns(pick("redact", "NEATLOGS_HARBOR_REDACT")),
             attachments=str(pick("attachments", "NEATLOGS_HARBOR_ATTACHMENTS") or "default"),
             traces=_as_bool(pick("traces", "NEATLOGS_HARBOR_TRACES"), True),
-            stream=_as_bool(pick("stream", "NEATLOGS_HARBOR_STREAM"), True),
             timeout=_number(pick("timeout", "NEATLOGS_HARBOR_TIMEOUT"), 30.0),
             retries=int(_number(pick("retries", "NEATLOGS_HARBOR_RETRIES"), 4)),
         )

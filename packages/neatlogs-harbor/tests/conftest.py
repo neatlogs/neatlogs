@@ -48,7 +48,8 @@ def wire(fake: FakeNeatlogs, monkeypatch: pytest.MonkeyPatch) -> FakeNeatlogs:
         return NeatlogsClient(**kwargs)
 
     monkeypatch.setattr(syncer_module, "NeatlogsClient", build)
-    return fake
+    yield fake
+    assert fake.violations == [], "\n".join(fake.violations)
 
 
 def copy_job(tmp_path: Path, name: str) -> Path:

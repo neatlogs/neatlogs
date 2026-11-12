@@ -130,19 +130,21 @@ def _event(kind: TrialEvent, trial_dir: Path) -> TrialHookEvent:
     )
 
 
-def _run_plugin(job_dir: Path, max_retries: int = 0, **kwargs) -> NeatlogsPlugin:
+def _run_plugin(
+    job_dir: Path, max_retries: int = 0, before_job_end=None, **kwargs
+) -> NeatlogsPlugin:
     async def scenario() -> NeatlogsPlugin:
         job = _job(job_dir)
         job.config.retry.max_retries = max_retries
         plugin = NeatlogsPlugin(**kwargs)
         await plugin.on_job_start(job)
+        assert job.hooks["start"] == []  # only trial ends matter
         trial_dirs = sorted(d for d in job_dir.iterdir() if d.is_dir())
-        for trial_dir in trial_dirs:
-            for callback in job.hooks["start"]:
-                await callback(_event(TrialEvent.START, trial_dir))
         for trial_dir in reversed(trial_dirs):  # finish out of order
             for callback in job.hooks["end"]:
                 await callback(_event(TrialEvent.END, trial_dir))
+        if before_job_end is not None:
+            before_job_end()
         result = JobResult.model_validate_json((job_dir / "result.json").read_text())
         await plugin.on_job_end(result)
         return plugin
@@ -257,10 +259,18 @@ def test_cli_rejects_folders_that_are_not_jobs(tmp_path, capsys):
     assert "not a Harbor job folder" in capsys.readouterr().err
 
 
-def test_deferred_mode_registers_and_fills_runs_at_job_end(env, wire, mixed_job):
-    plugin = NeatlogsPlugin(stream="false")
-    assert plugin.options.stream is False
-    _run_plugin(mixed_job, stream="false")
+def test_traces_stream_during_the_job_and_runs_wait_for_its_end(env, wire, mixed_job):
+    during: dict = {}
+    _run_plugin(mixed_job, before_job_end=lambda: during.update(_snapshot(wire)))
+    # While trials run: the dataset and every trace, but no run yet, so the
+    # run's one-hour upload window does not start until the job is done.
+    assert during == {
+        "datasets": 1,
+        "runs": 0,
+        "outputs": 0,
+        "traces": 3,
+        "duplicate_spans": 0,
+    }
     assert _snapshot(wire) == {
         "datasets": 1,
         "runs": 1,
@@ -272,19 +282,19 @@ def test_deferred_mode_registers_and_fills_runs_at_job_end(env, wire, mixed_job)
     assert run["state"] == "completed"
 
 
-def test_trials_harbor_may_retry_are_sent_at_job_end(env, wire, mixed_job, monkeypatch):
-    sent_during_trials: list[str] = []
-    original = syncer_module.Syncer.send_trial
+def test_trials_harbor_may_retry_are_sent_at_job_end(env, wire, mixed_job):
+    during: dict = {}
+    _run_plugin(
+        mixed_job, max_retries=2, before_job_end=lambda: during.update(traces=set(wire.trace_ids))
+    )
+    # The sandbox failure is retryable: its trace waited for the final attempt.
+    from neatlogs_harbor import ids
+    from neatlogs_harbor.records import load_trial_dir
 
-    def spy(self, trial, attempt):
-        sent_during_trials.append(trial.trial_name)
-        return original(self, trial, attempt)
-
-    monkeypatch.setattr(syncer_module.Syncer, "send_trial", spy)
-    _run_plugin(mixed_job, max_retries=2)
-    # The sandbox failure is retryable, so the plugin waited for the final attempt.
-    assert sent_during_trials.index("hello-world__Csbx003") == len(sent_during_trials) - 1
-    assert _snapshot(wire)["outputs"] == 3
+    retryable = load_trial_dir(mixed_job / "hello-world__Csbx003")
+    assert ids.trace_id_hex(retryable.trial_uuid) not in during["traces"]
+    assert len(during["traces"]) == 2
+    assert _snapshot(wire)["traces"] == 3 and _snapshot(wire)["outputs"] == 3
 
 
 def test_run_stays_open_while_an_output_is_unsent(env, wire, mixed_job, capsys):

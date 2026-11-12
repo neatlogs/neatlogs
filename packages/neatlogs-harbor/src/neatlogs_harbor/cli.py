@@ -49,8 +49,6 @@ def _options(args: argparse.Namespace) -> Options:
     }
     if args.no_traces:
         kwargs["traces"] = False
-    # Import and sync run after the job: register and fill runs in one pass.
-    kwargs["stream"] = False
     return Options.from_kwargs({k: v for k, v in kwargs.items() if v is not None})
 
 

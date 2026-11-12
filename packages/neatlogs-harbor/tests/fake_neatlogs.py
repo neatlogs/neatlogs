@@ -23,6 +23,9 @@ from typing import Any
 import httpx
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
 
+from . import contract
+
+NOW = "2026-11-13T00:00:00.000Z"
 TOKEN = "nlsa_test_token_value_0123456789"
 INGEST_KEY = "projectingestkey0123456789abcdef"
 PROJECT_ID = "6f1c2c1e-5d0b-4d8a-9a51-0f4c1b2a3d4e"
@@ -47,6 +50,8 @@ class FakeNeatlogs:
         self.spans: Counter[tuple[str, str]] = Counter()
         self.trace_requests = 0
         self.requests: list[tuple[str, str]] = []
+        # Requests or responses that break the vendored public API contract.
+        self.violations: list[str] = []
 
     # ------------------------------------------------------------ helpers
 
@@ -66,7 +71,8 @@ class FakeNeatlogs:
 
     @staticmethod
     def _ok(data: Any, status: int = 200) -> httpx.Response:
-        return httpx.Response(status, json={"success": True, "data": data, "requestId": "req"})
+        request_id = "req_" + uuid.uuid4().hex
+        return httpx.Response(status, json={"success": True, "data": data, "requestId": request_id})
 
     @staticmethod
     def _problem(status: int, code: str, detail: str = "") -> httpx.Response:
@@ -88,9 +94,26 @@ class FakeNeatlogs:
         if request.headers.get("authorization") != f"Bearer {TOKEN}":
             return self._problem(401, "UNAUTHORIZED")
         if path == "/api/v1/public/projects":
-            return self._ok({"projects": [{"id": PROJECT_ID, "name": "Harbor"}]})
+            project = {
+                "id": PROJECT_ID,
+                "name": "Harbor",
+                "orgId": "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d",
+                "createdAt": NOW,
+                "updatedAt": NOW,
+                "isArchived": False,
+                "isDefault": True,
+                "tier": "pro",
+                "timezone": None,
+                "access": {"role": "project_admin"},
+            }
+            page = {"hasMore": False, "limit": 100, "nextCursor": None}
+            return self._ok({"projects": [project], "page": page})
         if request.headers.get("x-project-id") != PROJECT_ID:
             return self._problem(403, "FORBIDDEN", "select a project")
+        problems = contract.check_request(request)
+        if problems:
+            self.violations.extend(problems)
+            return self._problem(400, "INVALID_REQUEST", "; ".join(problems))
         body = json.loads(request.content) if request.content else None
         key = request.headers.get("idempotency-key")
         if request.method == "POST":
@@ -100,6 +123,12 @@ class FakeNeatlogs:
             if seen is not None and seen != _digest([path, body]):
                 return self._problem(409, "IDEMPOTENCY_KEY_CONFLICT")
         response = self._route(request, path, body)
+        if response.status_code < 300 and response.content:
+            self.violations.extend(
+                contract.check_response(
+                    request.method, path, response.status_code, json.loads(response.content)
+                )
+            )
         if request.method == "POST" and response.status_code < 300:
             # Like the real API, only successful results are kept for replay.
             self.header_keys[key] = _digest([path, body])
@@ -112,8 +141,10 @@ class FakeNeatlogs:
         if parts[0] == "runs":
             return self._runs(request, parts, body)
         if parts[0] == "traces" and request.method == "GET":
-            found = any(trace == parts[1] for trace, _ in self.spans)
-            return self._ok({"traceId": parts[1]}) if found else self._problem(404, "NOT_FOUND")
+            spans = sum(n for (trace, _), n in self.spans.items() if trace == parts[1])
+            if not spans:
+                return self._problem(404, "NOT_FOUND")
+            return self._ok(self._trace_summary(parts[1], spans))
         return self._problem(404, "NOT_FOUND", path)
 
     def _traces(self, request: httpx.Request) -> httpx.Response:
@@ -150,7 +181,12 @@ class FakeNeatlogs:
                 "name": body["name"],
                 "description": body.get("description"),
                 "cases": [
-                    {"caseId": str(uuid.uuid4()), "position": i, **case}
+                    {
+                        "caseId": str(uuid.uuid4()),
+                        "revisionId": str(uuid.uuid4()),
+                        "position": i,
+                        **case,
+                    }
                     for i, case in enumerate(body["cases"])
                 ],
             }
@@ -165,9 +201,13 @@ class FakeNeatlogs:
                             "name": d["name"],
                             "description": d["description"],
                             "latestVersionId": d["versionId"],
+                            "version": 1,
+                            "caseCount": len(d["cases"]),
+                            "createdAt": NOW,
                         }
                         for d in self.datasets.values()
-                    ]
+                    ],
+                    "nextCursor": None,
                 }
             )
         if request.method == "GET" and len(parts) == 3 and parts[2] == "cases":
@@ -180,8 +220,15 @@ class FakeNeatlogs:
                     "cases": [
                         {
                             "caseId": c["caseId"],
+                            "revisionId": c["revisionId"],
                             "position": c["position"],
                             "inputPreview": json.dumps(c["input"])[:80],
+                            "observedOutputPreview": "",
+                            "expectedStatus": None,
+                            "hasExpected": False,
+                            "criteriaStatus": None,
+                            "criteriaCount": 0,
+                            "source": {"kind": "import"},
                         }
                         for c in page
                     ],
@@ -245,7 +292,7 @@ class FakeNeatlogs:
                 filled = sum(1 for (rid, _, _) in self.outputs if rid == run["id"])
                 total = len(run["body"]["caseIds"]) * run["body"]["trials"]
                 run["state"] = "completed" if filled == total else "partial"
-            return self._ok({**self._receipt(run), "state": run["state"]})
+            return self._ok(self._status(run))
         if action == "comparison":
             baseline = request.url.params.get("baseline")
             if baseline and baseline.startswith("tag:"):
@@ -259,6 +306,41 @@ class FakeNeatlogs:
             self.tags[(run["datasetId"], body["tag"])] = run["id"]
             return self._ok({"runId": run["id"], "tag": body["tag"]})
         return self._problem(404, "NOT_FOUND")
+
+    def _status(self, run: dict[str, Any]) -> dict[str, Any]:
+        filled = sum(1 for (rid, _, _) in self.outputs if rid == run["id"])
+        total = len(run["body"]["caseIds"]) * run["body"]["trials"]
+        return {
+            **self._receipt(run),
+            "completedCount": filled,
+            "failedCount": total - filled if run["state"] != "queued" else 0,
+            "pendingCount": total - filled if run["state"] == "queued" else 0,
+            "gradingHandoffState": "pending",
+        }
+
+    @staticmethod
+    def _trace_summary(trace_id: str, spans: int) -> dict[str, Any]:
+        return {
+            "traceId": trace_id,
+            "traceName": "harbor.trial",
+            "workflowName": None,
+            "sessionId": "session",
+            "status": "success",
+            "finalizationStatus": "finalized",
+            "framework": None,
+            "startedAt": NOW,
+            "completedAt": NOW,
+            "ingestedAt": NOW,
+            "durationMs": 0,
+            "spansCount": spans,
+            "llmCallsCount": 0,
+            "toolCallsCount": 0,
+            "totalTokens": 0,
+            "totalCostUsd": 0,
+            "tags": [],
+            "metadataRevision": 0,
+            "metadataUpdatedAt": None,
+        }
 
     @staticmethod
     def _receipt(run: dict[str, Any]) -> dict[str, Any]:

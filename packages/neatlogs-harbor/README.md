@@ -7,6 +7,14 @@ uv tool install harbor --with neatlogs-harbor
 harbor run -d terminal-bench@2.0 -a codex -m openai/gpt-5.6-sol --plugin neatlogs
 ```
 
+When it runs:
+
+- **Job start:** the job's tasks are published as a dataset version.
+- **Each trial end:** the trial's trace is sent.
+- **Job end:** the runs are registered, every trial's output is uploaded, the runs are completed and compared with the previous run, and a summary is printed.
+
+Runs are registered at job end because a run accepts outputs for one hour after registration; registering late means the window covers the upload, not the whole job. The job end runs the same code as `neatlogs harbor import`.
+
 The plugin never fails a Harbor run. Anything it cannot send waits in `jobs/<job>/neatlogs-sync.json`, and `neatlogs harbor sync jobs/<job>` sends it later.
 
 ## Setup
@@ -39,7 +47,7 @@ Two credentials and a grading form are needed today because the public runs API 
 
 Traces carry `neatlogs.origin=simulation` and `deployment.environment=test`.
 
-When the job ends the plugin completes the runs, compares each with the previous Harbor run on the same dataset version (the one tagged `harbor-latest`), moves the tag forward, and prints a summary:
+At job end the plugin compares each run with the previous Harbor run on the same dataset version (the one tagged `harbor-latest`), moves the tag forward, and prints a summary:
 
 ```
 Neatlogs summary
@@ -79,15 +87,24 @@ Plugin kwargs (`--pk key=value`) win over environment variables.
 | `redact` | `NEATLOGS_HARBOR_REDACT` | none |
 | `attachments` | `NEATLOGS_HARBOR_ATTACHMENTS` | `default`; `none` sends no verifier files |
 | `traces` | `NEATLOGS_HARBOR_TRACES` | `true` |
-| `stream` | `NEATLOGS_HARBOR_STREAM` | `true`; `false` registers and fills runs at job end |
 | `api_key`, `token`, `project_id`, `host`, `endpoint`, `form_version_id`, `evaluator_ids` | as in Setup | |
 
 ## Current limits (Phase 1)
 
 These come from the public runs API as it is today:
 
-- A run accepts outputs for one hour after it is registered. For longer jobs use `--pk stream=false`, which registers the run at job end; traces still stream.
-- A run holds at most 100 tasks and 10 attempts per task. Larger jobs still send traces and the dataset; extra attempts are recorded as skipped.
+- A run accepts outputs for one hour after it is registered, which is why runs are registered at job end. A run with an output that failed to upload is left open, so `neatlogs harbor sync` can still fill it within that hour.
+- A run holds at most 100 tasks and 10 attempts per task, which fits benchmarks the size of Terminal-Bench. Larger jobs still send traces and the dataset; extra attempts are recorded as skipped.
 - Requests are capped at 64 KiB, so long task instructions are shortened in the dataset case. The full text is in each trial's trace.
 - Comparisons are computed from the grading form's evaluator grades. Rewards are stored as metrics but not yet compared; verifier scores as first-class scores are Phase 2.
 - The public API cannot add cases to an existing dataset, so a changed task set publishes a new dataset under the same name.
+
+## Development
+
+```bash
+cd packages/neatlogs-harbor
+python -m pip install -e ".[test]"
+python -m pytest -q
+```
+
+The tests run against an in-memory Neatlogs (`tests/fake_neatlogs.py`) that checks every request and response against `tests/fixtures/contracts/public-api.json`. That file is the part of the Neatlogs public OpenAPI document this package uses. Refresh it with `python tests/fixtures/contracts/extract.py <public-openapi.json>`.

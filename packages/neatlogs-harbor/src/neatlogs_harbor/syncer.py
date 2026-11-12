@@ -2,13 +2,19 @@
 
 Order of work for a job:
 
-1. ``prepare``: publish each dataset version (one per distinct task-digest
-   set) and, when streaming, register one run per (agent, model, dataset).
-2. ``send_trial`` for each finished trial: the trace over OTLP, then the run
-   output with rewards, tokens, cost, timings and the error class.
-3. ``finish``: send anything still pending from the job folder, complete the
-   runs, compare each with the previous Harbor run on the same dataset
-   version, and move the baseline tag forward.
+1. ``prepare`` (job start): publish each dataset version, one per distinct
+   task-digest set.
+2. ``send_trace`` (each trial end, plugin only): the trial's trace over OTLP,
+   which has no deadline.
+3. ``finish`` (job end, and all of ``import`` and ``sync``): register one run
+   per (agent, model, dataset), send every output (rewards, tokens, cost,
+   timings, error class) and any trace still missing from the job folder,
+   complete the runs, compare each with the previous Harbor run on the same
+   dataset version, and move the baseline tag forward.
+
+Runs are registered at job end because a run only accepts outputs for an hour
+after registration; registering late means that window covers the upload, not
+the whole job. The plugin, ``import`` and ``sync`` share step 3.
 
 No method raises for a Neatlogs failure: what could not be sent is marked
 pending in ``neatlogs-sync.json`` for ``neatlogs harbor sync``.
@@ -158,15 +164,12 @@ class Syncer:
     # ================================================================ prepare
 
     def prepare(self) -> None:
-        """Publish dataset versions and, when streaming, register the runs."""
+        """Publish the job's dataset versions."""
 
         if not self._public_api_ready():
             return
         for dataset in self.plan.datasets.values():
             self._ensure_dataset(dataset)
-        if self.options.stream:
-            for handle in self._runs.values():
-                self._ensure_run(handle)
 
     def _public_api_ready(self) -> bool:
         if not self.client.can_use_public_api:
@@ -373,8 +376,32 @@ class Syncer:
             reason=reason,
         )
 
+    def send_trace(self, trial: TrialRecord) -> None:
+        """Send a trial's trace as soon as it finishes; its output waits for job end."""
+
+        handle = self._runs.get(trial.run_key(self.plan))
+        previous = self.ledger.trial(trial.trial_name)
+        self.ledger.update_trial(
+            trial.trial_name,
+            trial_id=trial.trial_uuid,
+            task=trial.task_name,
+            run=handle.uuid if handle else None,
+        )
+        if previous.get("output") not in (SENT, SKIPPED):
+            self.ledger.update_trial(trial.trial_name, output=PENDING, reason="sent at job end")
+        if previous.get("trace") == SENT:
+            return
+        dataset = self.plan.datasets.get(trial.run_key(self.plan).dataset)
+        self._send_trace(
+            trial,
+            outcome_of(trial.result, trial.trial_dir),
+            read_trajectory(trial.trial_dir),
+            dataset,
+            ids.trace_id_hex(trial.trial_uuid),
+        )
+
     def send_trial(self, trial: TrialRecord, attempt: int) -> None:
-        """Send one finished trial: its trace, then its run output."""
+        """Send one finished trial: its trace if still missing, then its run output."""
 
         handle = self._runs.get(trial.run_key(self.plan))
         previous = self.ledger.trial(trial.trial_name)
@@ -399,10 +426,6 @@ class Syncer:
             return
         if handle is None or dataset is None:
             self.ledger.update_trial(trial.trial_name, output=SKIPPED, reason="not in the job plan")
-            return
-        if not self.options.stream and not self.ledger.run(handle.uuid).get("server_id"):
-            # Deferred mode: the job end registers the run and sends the outputs.
-            self.ledger.update_trial(trial.trial_name, output=PENDING, reason="sent at job end")
             return
         self._send_output(trial, outcome, trajectory, handle, dataset, attempt, trace_id)
 
@@ -537,9 +560,8 @@ class Syncer:
     def send_pending(self) -> None:
         """Send every finished trial in the job folder that has not reached Neatlogs."""
 
-        if not self.options.stream:
-            for handle in self._runs.values():
-                self._ensure_run(handle)
+        for handle in self._runs.values():
+            self._ensure_run(handle)
         trials = self.finished_trials_on_disk()
         attempts = self.attempts_for(trials)
         for trial in sorted(trials, key=lambda t: t.trial_name):

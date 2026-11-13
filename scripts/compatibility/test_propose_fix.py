@@ -13,6 +13,7 @@ from scripts.compatibility.propose_fix import (
     candidate_options,
     choose_candidate,
     deferred_candidates,
+    MAX_OUTPUT_TOKENS,
     generate,
     generated_test_path,
     no_sdk_patch_surface,
@@ -48,7 +49,7 @@ class ProposeFixTests(unittest.TestCase):
         self.assertEqual(send.call_count, 2)
         configs = [json.loads(call.args[0].data)["generationConfig"] for call in send.call_args_list]
         self.assertEqual([item["thinkingConfig"]["thinkingBudget"] for item in configs], [1024, 0])
-        self.assertTrue(all(item["maxOutputTokens"] == 8192 for item in configs))
+        self.assertTrue(all(item["maxOutputTokens"] == MAX_OUTPUT_TOKENS for item in configs))
 
     def test_flash_proposal_repeated_truncation_reports_failure(self):
         truncated = {"candidates": [{"finishReason": "MAX_TOKENS", "content": {"parts": []}}]}

@@ -70,3 +70,31 @@ def test_qdrant_uses_configured_openllmetry_instrumentor(monkeypatch):
 
     manager.uninstrument_all()
     assert calls[-1] == ("uninstrument", {})
+
+
+def test_langgraph_loads_langchain_instrumentor():
+    assert INSTRUMENTATION_REGISTRY["libraries"]["langgraph"]["auto_load"] == ["langchain"]
+
+    instrumented = []
+    manager = InstrumentationManager(TracerProvider())
+    manager._instrument_dual = instrumented.append
+
+    manager.instrument(libraries=["langgraph"])
+
+    assert sorted(instrumented) == ["langchain", "langgraph"]
+
+
+def test_langchain_install_check_uses_langchain_core(monkeypatch):
+    imported = []
+
+    def fake_import(name):
+        imported.append(name)
+        if name != "langchain_core":
+            raise ImportError(name)
+        return object()
+
+    monkeypatch.setattr(importlib, "import_module", fake_import)
+    manager = InstrumentationManager(TracerProvider())
+
+    assert manager._is_library_installed("langchain") is True
+    assert imported == ["langchain_core"]

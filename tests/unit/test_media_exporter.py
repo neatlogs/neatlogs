@@ -438,3 +438,17 @@ def test_flattened_image_generation_base64_fails_closed():
     rendered = repr(sink.get_finished_spans()[0].attributes)
     assert encoded[:100] not in rendered
     assert "backend_upload_contract_unavailable" in rendered
+
+
+@pytest.mark.parametrize("media", [False, True])
+def test_tool_media_transformation_is_marked_lossy_but_json_spacing_is_not(media):
+    sink, capture = InMemorySpanExporter(), InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(capture))
+    output = _large_image()[1] if media else {"answer": {}}
+    with provider.get_tracer("test").start_as_current_span("tool") as span:
+        span.set_attribute("neatlogs.tool.output", json.dumps(output))
+    TypedMediaSpanExporter(sink, authority=None, store=None).export(capture.get_finished_spans())
+    attributes = sink.get_finished_spans()[0].attributes
+    assert (attributes.get("neatlogs.capture_fidelity") == "lossy") is media
+    provider.shutdown()

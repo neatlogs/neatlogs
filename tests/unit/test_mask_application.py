@@ -83,6 +83,7 @@ def test_global_mask_applied_once_to_exported_clone():
     exported = inner.get_finished_spans()[0]
     assert exported.attributes["input.value"] == "[G#1]IN"
     assert exported.attributes["output.value"] == "[G#1]OUT"
+    assert exported.attributes["neatlogs.capture_fidelity"] == "masked"
 
 
 def test_per_span_mask_takes_precedence_and_internal_id_is_not_exported():

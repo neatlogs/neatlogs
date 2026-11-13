@@ -34,7 +34,7 @@ from .core.identity import identify
 from .core.llm_binder import bind_templates
 from .core.log import log
 from .core.masking_exporter import MaskContext
-from .core.propagation import extract_trace_context, inject_trace_context
+from .core.propagation import current_trace_id, extract_trace_context, inject_trace_context
 from .core.telemetry_v2 import (
     InMemoryDiagnosticSpanExporter,
     OwnershipV2,
@@ -74,6 +74,19 @@ from .prompt.client import (
     update_prompt,
 )
 from .prompt.template import PromptTemplate, SystemPromptTemplate, UserPromptTemplate
+from .replay import (
+    LocalRunApi,
+    LocalRunApiError,
+    ReplayEntry,
+    ReplayError,
+    ReplayRecording,
+    ReplayRunBinding,
+    ReplaySession,
+    get_replay_status,
+    parse_replay_recording,
+    replay_model,
+    replay_recording_from_case,
+)
 from .schema_v2 import (
     TELEMETRY_CONTRACT_VERSION,
     TELEMETRY_SCHEMA_SHA256,
@@ -279,6 +292,12 @@ def wrap(client, **workflow_attributes):
 
         return _finish(wrap_openrouter_client(client))
 
+    # Supermemory Python SDK — Supermemory / AsyncSupermemory client instances.
+    if cls_name in ("Supermemory", "AsyncSupermemory") or module.startswith("supermemory"):
+        from .supermemory import wrap_supermemory_client
+
+        return _finish(wrap_supermemory_client(client))
+
     # Claude Agent SDK (Anthropic): the agentic loop runs in a CLI SUBPROCESS and is consumed as an
     # async iterator of typed messages (query() / ClaudeSDKClient). There's no in-process LLM client
     # to wrap — we patch the streaming entry points and build spans from the message stream. Accept
@@ -308,6 +327,17 @@ __all__ = [
     "flush",
     "shutdown",
     "flush_all",
+    "LocalRunApi",
+    "LocalRunApiError",
+    "ReplayEntry",
+    "ReplayError",
+    "ReplayRecording",
+    "ReplayRunBinding",
+    "ReplaySession",
+    "get_replay_status",
+    "parse_replay_recording",
+    "replay_model",
+    "replay_recording_from_case",
     "NeatlogsError",
     "NeatlogsConfigurationError",
     "span",

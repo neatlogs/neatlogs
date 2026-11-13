@@ -72,8 +72,8 @@ async def test_async_stream_cancellation_ends_span_immediately(span_exporter):
 
     agent = Agent()
     agno._patch_agent(agent)
-    stream = await agent.arun("wait forever", stream=True)
-    task = asyncio.create_task(stream.__anext__())
+    stream = agent.arun("wait forever", stream=True)
+    task = asyncio.create_task(anext(stream))
     await asyncio.sleep(0)
     task.cancel()
 

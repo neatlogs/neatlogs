@@ -189,6 +189,8 @@ def span(
     tags: Optional[list[str]] = None,
     capture_input: Optional[bool] = None,
     capture_output: Optional[bool] = None,
+    input_mapper: Optional[Callable] = None,
+    output_mapper: Optional[Callable] = None,
     capture_stdout: bool = False,
     mask: Optional[Callable] = None,
     # Agent-specific
@@ -225,6 +227,9 @@ def span(
         tags: List of tags for filtering/grouping
         capture_input: Whether to capture function input (default: True)
         capture_output: Whether to capture function output (default: True)
+        input_mapper: Project bound arguments before input capture.
+        output_mapper: Project the result (or collected stream chunks) before output capture.
+              Mappers affect captured I/O only; failures omit the field and preserve execution.
 
         # Agent-specific parameters (when kind="AGENT"):
         role: Agent role description (also sets agent.name)
@@ -368,6 +373,8 @@ def span(
         attributes=extra,
         capture_input=capture_input,
         capture_output=capture_output,
+        input_mapper=input_mapper,
+        output_mapper=output_mapper,
         capture_stdout=capture_stdout,
         postprocess_result=postprocess_result,
         mask=mask,

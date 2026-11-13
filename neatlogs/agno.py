@@ -207,12 +207,20 @@ def _input_value(args, kwargs) -> str:
     return message if isinstance(message, str) else serialize(message)
 
 
-def _async_run_dispatch(entity: Any, run: Any) -> Any:
+def _async_run_is_stream(entity: Any, kwargs: dict, *, workflow: bool = False) -> bool:
+    stream = kwargs.get("stream")
+    if workflow and kwargs.get("background"):
+        # Workflow selects transport before applying its configured stream default.
+        # Background polling and WebSocket transport both return awaitables.
+        return bool(stream) and not bool(kwargs.get("websocket") or kwargs.get("enable_websocket"))
+    if stream is None:
+        stream = getattr(entity, "stream", False)
+    return bool(stream)
+
+
+def _async_run_dispatch(entity: Any, run: Any, *, workflow: bool = False) -> Any:
     def dispatch(*args, **kwargs):
-        stream = kwargs.get("stream")
-        if stream is None:
-            stream = getattr(entity, "stream", False)
-        if not stream:
+        if not _async_run_is_stream(entity, kwargs, workflow=workflow):
             return run(*args, **kwargs)
 
         async def iterate():
@@ -289,9 +297,7 @@ def _patch_agent(agent: Any) -> None:
             iv = _input_value(args, kwargs)
             if iv:
                 attrs["input.value"] = iv
-            is_stream = kwargs.get("stream")
-            if is_stream is None:
-                is_stream = getattr(agent, "stream", False)
+            is_stream = _async_run_is_stream(agent, kwargs)
             if is_stream:
                 attrs["neatlogs.llm.is_streaming"] = True
 
@@ -379,9 +385,7 @@ def _patch_workflow(workflow: Any) -> None:
             iv = _input_value(args, kwargs)
             if iv:
                 attrs["input.value"] = iv
-            is_stream = kwargs.get("stream")
-            if is_stream is None:
-                is_stream = getattr(workflow, "stream", False)
+            is_stream = _async_run_is_stream(workflow, kwargs, workflow=True)
             span = tracer.start_span(name="agno.workflow.arun", attributes=attrs)
             token = attach_as_current(span)
             start = time.perf_counter()
@@ -406,7 +410,7 @@ def _patch_workflow(workflow: Any) -> None:
             _finalize_workflow_span(span, result, (time.perf_counter() - start) * 1000)
             return result
 
-        workflow.arun = _async_run_dispatch(workflow, patched_arun)
+        workflow.arun = _async_run_dispatch(workflow, patched_arun, workflow=True)
 
 
 def _finalize_workflow_span(span: Any, result: Any, duration_ms: float) -> None:

@@ -137,14 +137,14 @@ async def test_trace_context_parents_custom_spans_and_restores_after_error(
     monkeypatch.setattr(utils, "_isolation_active", lambda: isolated)
     handler = integration.NeatlogsCallbackHandler()
 
-    @neatlogs.span(kind="EMBEDDING", name="embed")
-    def embed():
-        return [0.1]
+    @neatlogs.span(kind="TOOL", name="lookup")
+    def lookup():
+        return {"available": True}
 
     @neatlogs.span(kind="RETRIEVER", name="search")
     def search():
         with handler.trace_context():
-            return embed()
+            return lookup()
 
     workflow = tracer.start_span("workflow")
     token = utils.attach_as_current(workflow)
@@ -169,7 +169,7 @@ async def test_trace_context_parents_custom_spans_and_restores_after_error(
 
     spans = {span.name: span for span in in_memory_span_exporter.get_finished_spans()}
     assert spans["search"].parent.span_id == spans["node"].context.span_id
-    assert spans["embed"].parent.span_id == spans["search"].context.span_id
+    assert spans["lookup"].parent.span_id == spans["search"].context.span_id
 
 
 @pytest.mark.asyncio

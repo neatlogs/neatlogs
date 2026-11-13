@@ -253,6 +253,10 @@ Dataset requests are limited to 64 KiB of serialized JSON.
 
 ---
 
+## A/B assignment
+
+Pass `ab_test_keys=["your-test-key"]` to `neatlogs.init()` to load and refresh randomized test settings. Call `neatlogs.ab_test(key, unit=..., fallback=...)` inside a trace to select a cached version and queue its exposure. Finish sessions or users explicitly with `complete_ab_test_unit`; assignment itself never closes a unit. See the [A/B SDK guide](neatlogs/ab_test/README.md) for delivery, external feature flags, and control fallback behavior.
+
 ## Platform features
 
 - **[Traces](https://docs.neatlogs.com/features/traces)**: Full span trees — LLM calls, tools, retrievals, reranking, guardrails — with inputs, outputs, tokens, cost, and latency.
@@ -403,3 +407,7 @@ Runnable reference apps live in [`examples/sdk_examples/`](examples/sdk_examples
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+## Local replay
+
+Run your own Python agent with saved tool results, compare a pinned dataset, or resume a whole-dataset run. Native sync/async replay supports OpenAI Chat/Responses and Google generate_content when complete raw recordings are available. See [Local replay](LOCAL_REPLAY.md) for setup, supported forms and the Python CLI.

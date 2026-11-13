@@ -33,6 +33,7 @@ from ._wrap_utils import (
     SyncStreamWrapper,
     get_provider_tracer,
     is_suppressed,
+    message_as_dict,
     serialize,
 )
 from .core.choice_accumulator import ChoiceAccumulator, OpenAIStreamFinalizer
@@ -129,6 +130,7 @@ def _chat_start_span(model: Any, is_stream: bool) -> Any:
 def _set_chat_input(span: Any, kwargs: dict) -> None:
     messages = kwargs.get("messages", [])
     for i, msg in enumerate(messages):
+        msg = message_as_dict(msg)
         role = msg.get("role", "")
         content = msg.get("content", "")
         span.set_attribute(f"neatlogs.llm.input_messages.{i}.role", role)
@@ -157,6 +159,11 @@ def _set_chat_input(span: Any, kwargs: dict) -> None:
             span.set_attribute(f"neatlogs.llm.{param}", kwargs[param])
 
 
+def _usage_only_chunk(chunk: Any) -> bool:
+    """The trailing usage chunk the API adds for include_usage: no choices, usage set."""
+    return not getattr(chunk, "choices", None) and getattr(chunk, "usage", None) is not None
+
+
 def _patch_completions(completions: Any) -> None:
     if getattr(completions, "_neatlogs_azure_patched", False):
         return
@@ -171,10 +178,12 @@ def _patch_completions(completions: Any) -> None:
         is_stream = kwargs.get("stream", False)
 
         if is_stream:
-            opts = kwargs.get("stream_options") or {}
+            forced_usage_chunk = False
+            opts = dict(kwargs.get("stream_options") or {})
             if not opts.get("include_usage"):
                 opts["include_usage"] = True
                 kwargs["stream_options"] = opts
+                forced_usage_chunk = True
 
         span = _chat_start_span(model, is_stream)
         _set_chat_input(span, kwargs)
@@ -187,7 +196,12 @@ def _patch_completions(completions: Any) -> None:
             raise
 
         if is_stream:
-            return SyncStreamWrapper(response, span, OpenAIStreamFinalizer())
+            return SyncStreamWrapper(
+                response,
+                span,
+                OpenAIStreamFinalizer(),
+                skip_chunk=_usage_only_chunk if forced_usage_chunk else None,
+            )
 
         _finalize_response(span, response, (time.perf_counter() - start) * 1000)
         return response
@@ -210,10 +224,12 @@ def _patch_async_completions(completions: Any) -> None:
         is_stream = kwargs.get("stream", False)
 
         if is_stream:
-            opts = kwargs.get("stream_options") or {}
+            forced_usage_chunk = False
+            opts = dict(kwargs.get("stream_options") or {})
             if not opts.get("include_usage"):
                 opts["include_usage"] = True
                 kwargs["stream_options"] = opts
+                forced_usage_chunk = True
 
         span = _chat_start_span(model, is_stream)
         _set_chat_input(span, kwargs)
@@ -226,7 +242,12 @@ def _patch_async_completions(completions: Any) -> None:
             raise
 
         if is_stream:
-            return AsyncStreamWrapper(response, span, OpenAIStreamFinalizer())
+            return AsyncStreamWrapper(
+                response,
+                span,
+                OpenAIStreamFinalizer(),
+                skip_chunk=_usage_only_chunk if forced_usage_chunk else None,
+            )
 
         _finalize_response(span, response, (time.perf_counter() - start) * 1000)
         return response
@@ -461,6 +482,31 @@ def _finalize_stream(
     span.end()
 
 
+def _set_responses_usage(span: Any, usage: Any) -> None:
+    """Record Responses API token usage like the chat paths do: totals and details."""
+    if not usage:
+        return
+    input_tokens = getattr(usage, "input_tokens", None)
+    if input_tokens is not None:
+        span.set_attribute("neatlogs.llm.token_count.prompt", input_tokens)
+    output_tokens = getattr(usage, "output_tokens", None)
+    if output_tokens is not None:
+        span.set_attribute("neatlogs.llm.token_count.completion", output_tokens)
+    total_tokens = getattr(usage, "total_tokens", None)
+    if total_tokens is not None:
+        span.set_attribute("neatlogs.llm.token_count.total", total_tokens)
+    input_details = getattr(usage, "input_tokens_details", None)
+    cached = getattr(input_details, "cached_tokens", None) if input_details is not None else None
+    if cached is not None:
+        span.set_attribute("neatlogs.llm.token_count.cache_read", cached)
+    output_details = getattr(usage, "output_tokens_details", None)
+    reasoning = (
+        getattr(output_details, "reasoning_tokens", None) if output_details is not None else None
+    )
+    if reasoning is not None:
+        span.set_attribute("neatlogs.llm.token_count.reasoning", reasoning)
+
+
 def _finalize_responses_response(span: Any, response: Any, duration_ms: float) -> None:
     set_media_attributes(
         span,
@@ -472,17 +518,20 @@ def _finalize_responses_response(span: Any, response: Any, duration_ms: float) -
     if output_text:
         span.set_attribute("neatlogs.llm.output_messages.0.role", "assistant")
         span.set_attribute("neatlogs.llm.output_messages.0.content", output_text)
+    summaries = []
+    for item in getattr(response, "output", None) or []:
+        if getattr(item, "type", None) == "reasoning":
+            for part in getattr(item, "summary", None) or []:
+                text = getattr(part, "text", None)
+                if text:
+                    summaries.append(text)
+    if summaries:
+        span.set_attribute("neatlogs.llm.output_messages.0.role", "assistant")
+        span.set_attribute("neatlogs.llm.output_messages.0.thinking", "\n\n".join(summaries))
     model = getattr(response, "model", None)
     if model:
         span.set_attribute("neatlogs.llm.model_name", model)
-    usage = getattr(response, "usage", None)
-    if usage:
-        input_tokens = getattr(usage, "input_tokens", None)
-        output_tokens = getattr(usage, "output_tokens", None)
-        if input_tokens is not None:
-            span.set_attribute("neatlogs.llm.token_count.prompt", input_tokens)
-        if output_tokens is not None:
-            span.set_attribute("neatlogs.llm.token_count.completion", output_tokens)
+    _set_responses_usage(span, getattr(response, "usage", None))
     span.set_attribute("neatlogs.llm.metrics.duration_ms", round(duration_ms, 3))
     span.set_status(StatusCode.OK)
     span.end()
@@ -497,6 +546,8 @@ def _finalize_responses_stream(
     interrupted: bool = False,
 ) -> None:
     text_parts: List[str] = []
+    thinking_parts: List[str] = []
+    last_summary = None
     set_media_attributes(span, "neatlogs.llm.output_messages.0", chunks, "output")
     model = None
     usage = None
@@ -506,24 +557,29 @@ def _finalize_responses_stream(
             d = getattr(ev, "delta", None)
             if d:
                 text_parts.append(d)
+        elif ev_type == "response.reasoning_summary_text.delta":
+            d = getattr(ev, "delta", None)
+            if d:
+                key = (getattr(ev, "item_id", None), getattr(ev, "summary_index", None))
+                if last_summary is not None and key != last_summary:
+                    thinking_parts.append("\n\n")
+                last_summary = key
+                thinking_parts.append(d)
         resp = getattr(ev, "response", None)
         if resp is not None:
             if getattr(resp, "model", None):
                 model = resp.model
             if getattr(resp, "usage", None):
                 usage = resp.usage
-    if text_parts:
+    if text_parts or thinking_parts:
         span.set_attribute("neatlogs.llm.output_messages.0.role", "assistant")
+    if text_parts:
         span.set_attribute("neatlogs.llm.output_messages.0.content", "".join(text_parts)[:10000])
+    if thinking_parts:
+        span.set_attribute("neatlogs.llm.output_messages.0.thinking", "".join(thinking_parts))
     if model:
         span.set_attribute("neatlogs.llm.model_name", model)
-    if usage:
-        it = getattr(usage, "input_tokens", None)
-        ot_ = getattr(usage, "output_tokens", None)
-        if it is not None:
-            span.set_attribute("neatlogs.llm.token_count.prompt", it)
-        if ot_ is not None:
-            span.set_attribute("neatlogs.llm.token_count.completion", ot_)
+    _set_responses_usage(span, usage)
     span.set_attribute("neatlogs.llm.metrics.duration_ms", round(duration_ms, 3))
     if ttft_ms is not None:
         span.set_attribute("neatlogs.llm.metrics.ttft_ms", round(ttft_ms, 3))

@@ -18,8 +18,12 @@ from typing import Any, Dict, Iterator, Mapping, MutableMapping, Optional
 
 from opentelemetry import context as context_api
 from opentelemetry import trace as otel_trace
-from opentelemetry.propagate import extract, inject
 from opentelemetry.propagators.textmap import default_getter
+from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
+
+# Explicit W3C helpers must not depend on a host's global propagator or export
+# unrelated baggage. Keep both propagation directions private and deterministic.
+_W3C_PROPAGATOR = TraceContextTextMapPropagator()
 
 
 def _has_traceparent(carrier: Any) -> bool:
@@ -30,6 +34,34 @@ def _has_traceparent(carrier: Any) -> bool:
     except Exception:
         pass
     return False
+
+
+def current_trace_id() -> Optional[str]:
+    """Return the active Neatlogs trace id as a 32-char lowercase hex string,
+    or ``None`` when no Neatlogs span is active.
+
+    Works inside ``trace()`` blocks, ``@span``-decorated functions and wrapped
+    provider calls, in both provider modes. In ISOLATED mode
+    (``init(tracer_provider=...)``) the Neatlogs span is deliberately NOT the
+    OpenTelemetry current span, so a raw ``trace.get_current_span()`` reads
+    the host's span (or an invalid context) instead — this helper resolves the
+    Neatlogs span through the same private context key the SDK parents from.
+    """
+    try:
+        from .._wrap_utils import active_neatlogs_context
+
+        ctx = active_neatlogs_context()
+        if ctx is None:
+            return None
+        span = otel_trace.get_current_span(ctx)
+        if span is None:
+            return None
+        span_context = span.get_span_context()
+        if span_context is None or not span_context.is_valid:
+            return None
+        return format(span_context.trace_id, "032x")
+    except Exception:
+        return None
 
 
 def inject_trace_context(carrier: MutableMapping[str, str]) -> bool:
@@ -60,7 +92,7 @@ def inject_trace_context(carrier: MutableMapping[str, str]) -> bool:
         if ctx is None:
             return False
         before = len(carrier)
-        inject(carrier, context=ctx)
+        _W3C_PROPAGATOR.inject(carrier, context=ctx)
         # inject() writes traceparent (and optionally tracestate) when the context
         # carries a valid, sampled span context.
         return _has_traceparent(carrier) or len(carrier) > before
@@ -110,7 +142,9 @@ def extract_trace_context(
     tokens = []
     try:
         # Extract the remote span into a bare context (never the active one).
-        remote_ctx = extract(carrier, context=context_api.Context(), getter=default_getter)
+        remote_ctx = _W3C_PROPAGATOR.extract(
+            carrier, context=context_api.Context(), getter=default_getter
+        )
         remote_span = otel_trace.get_current_span(remote_ctx)
         sc = remote_span.get_span_context()
 

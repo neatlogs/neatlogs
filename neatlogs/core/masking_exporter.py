@@ -291,6 +291,9 @@ def _masked_span(span: ReadableSpan, snapshot: Mapping[str, Any]) -> ReadableSpa
 
     attributes = _attrs(snapshot.get("attributes"))
     attributes.pop("neatlogs.mask_id", None)
+    attributes.pop("neatlogs.replay.model_capture", None)
+    if attributes:
+        attributes["neatlogs.capture_fidelity"] = "masked"
     return ReadableSpan(
         name=str(snapshot.get("name") or span.name),
         context=span.context,

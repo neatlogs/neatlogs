@@ -23,6 +23,11 @@ from scripts.compatibility.analyze_upstream import compact_package
 
 MAX_EDIT_BYTES = 12_000
 
+# Gemini 2.5 Flash supports up to 65,536 output tokens. A fix proposal returns full
+# adapter edits plus a regression test in one JSON response, and real candidates have
+# exhausted an 8,192 token cap (finishReason MAX_TOKENS on both attempts).
+MAX_OUTPUT_TOKENS = 16_384
+
 
 def slug(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")[:48]
@@ -275,7 +280,7 @@ def request_proposal(candidate: dict[str, Any], evidence: dict[str, Any], api_ke
     for attempt in range(2 if flash else 1):
         generation_config: dict[str, Any] = {
             "responseMimeType": "application/json", "temperature": 0.1,
-            "maxOutputTokens": 8192,
+            "maxOutputTokens": MAX_OUTPUT_TOKENS,
         }
         if flash:
             # Gemini 2.5 Flash counts thinking against maxOutputTokens.

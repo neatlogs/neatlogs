@@ -281,6 +281,9 @@ def _finalize_chat(span: Any, response: Any, duration_ms: float) -> None:
     if choices:
         message = _get(choices[0], "message", None)
         if message is not None:
+            reasoning = _get(message, "reasoning", None)
+            if reasoning and not _get(message, "reasoning_content", None):
+                span.set_attribute("neatlogs.llm.output_messages.0.thinking", reasoning)
             content = _get(message, "content", None)
             if content:
                 span.set_attribute(
@@ -300,6 +303,7 @@ def _finalize_chat_stream(
     interrupted: bool = False,
 ) -> None:
     text_parts: List[str] = []
+    reasoning_parts: List[str] = []
     tool_calls_acc: dict = {}
     finish_reason = None
     model = None
@@ -319,6 +323,9 @@ def _finalize_chat_stream(
             content = _get(delta, "content", None)
             if content:
                 text_parts.append(content)
+            reasoning = _get(delta, "reasoning", None)
+            if reasoning:
+                reasoning_parts.append(reasoning)
             for tc in _get(delta, "tool_calls", None) or []:
                 idx = _get(tc, "index", 0) or 0
                 acc = tool_calls_acc.setdefault(idx, {"id": "", "name": "", "arguments": ""})
@@ -335,10 +342,14 @@ def _finalize_chat_stream(
             finish_reason = fr
 
     full_text = "".join(text_parts)
-    if full_text:
+    full_reasoning = "".join(reasoning_parts)
+    if full_text or full_reasoning:
         span.set_attribute("neatlogs.llm.output_messages.0.role", "assistant")
+    if full_text:
         span.set_attribute("neatlogs.llm.output_messages.0.content", full_text)
         span.set_attribute("output.value", full_text)
+    if full_reasoning:
+        span.set_attribute("neatlogs.llm.output_messages.0.thinking", full_reasoning)
     for j, tc in enumerate(tool_calls_acc.values()):
         span.set_attribute(f"neatlogs.llm.tool_calls.{j}.id", tc["id"])
         span.set_attribute(f"neatlogs.llm.tool_calls.{j}.name", tc["name"])

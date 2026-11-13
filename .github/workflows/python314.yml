@@ -1,0 +1,38 @@
+name: Python 3.14 core
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  core:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - name: Build and install current wheel
+        run: |
+          python -m pip install build
+          python -m build --wheel
+          python -m venv "$RUNNER_TEMP/python314"
+          "$RUNNER_TEMP/python314/bin/python" -m pip install dist/*.whl pytest pytest-asyncio jsonschema
+          "$RUNNER_TEMP/python314/bin/python" -m pip check
+      - name: Verify dependency markers and init from installed wheel
+        run: |
+          cd "$RUNNER_TEMP"
+          "$RUNNER_TEMP/python314/bin/python" "$GITHUB_WORKSPACE/tests/release/python314_smoke.py"
+          "$RUNNER_TEMP/python314/bin/python" "$GITHUB_WORKSPACE/tests/release/wheel_smoke.py"
+      - name: Run supported core tests against installed wheel
+        run: |
+          cp "$GITHUB_WORKSPACE/tests/conftest.py" "$RUNNER_TEMP/conftest.py"
+          cp "$GITHUB_WORKSPACE/tests/unit/test_telemetry_schema_v2.py" "$RUNNER_TEMP/"
+          cp "$GITHUB_WORKSPACE/tests/unit/test_decorator_streaming.py" "$RUNNER_TEMP/"
+          cp "$GITHUB_WORKSPACE/tests/unit/test_decorator_capture_policy.py" "$RUNNER_TEMP/"
+          cp "$GITHUB_WORKSPACE/tests/unit/test_propagation_isolation.py" "$RUNNER_TEMP/"
+          cd "$RUNNER_TEMP"
+          "$RUNNER_TEMP/python314/bin/python" -m pytest -p pytest_asyncio.plugin -q test_telemetry_schema_v2.py test_decorator_streaming.py test_decorator_capture_policy.py test_propagation_isolation.py

@@ -87,3 +87,58 @@ def bounded_call(
         return completed.get(timeout=remaining)
     except queue.Empty:
         return False, TimeoutError("Neatlogs shutdown deadline exceeded")
+
+
+class _FlushFlight:
+    def __init__(self) -> None:
+        self.done = threading.Event()
+        self.result: tuple[bool, Any] | None = None
+
+
+class FlushGate:
+    """Serialize flush passes without dropping a caller's flush barrier.
+
+    A timed-out exporter can keep its daemon worker alive. Later callers wait
+    for that worker to settle, then run their own pass within their original
+    deadline. Expired callers never enqueue another operation.
+    """
+
+    def __init__(self, name: str = "neatlogs-flush") -> None:
+        self._name = name
+        self._lock = threading.Lock()
+        self._flight: _FlushFlight | None = None
+
+    def call(self, operation: Callable[[], Any], deadline: float) -> tuple[bool, Any]:
+        while True:
+            with self._lock:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return False, TimeoutError("Neatlogs flush deadline exceeded")
+                flight = self._flight
+                own_flight = flight is None
+                if own_flight:
+                    flight = _FlushFlight()
+                    self._flight = flight
+                    threading.Thread(
+                        target=self._run,
+                        args=(flight, operation),
+                        name=self._name,
+                        daemon=True,
+                    ).start()
+            assert flight is not None
+            if not flight.done.wait(max(0, deadline - time.monotonic())):
+                return False, TimeoutError("Neatlogs flush deadline exceeded")
+            if own_flight:
+                assert flight.result is not None
+                return flight.result
+
+    def _run(self, flight: _FlushFlight, operation: Callable[[], Any]) -> None:
+        try:
+            result: tuple[bool, Any] = (True, operation())
+        except BaseException as exc:
+            result = (False, exc)
+        with self._lock:
+            flight.result = result
+            if self._flight is flight:
+                self._flight = None
+            flight.done.set()

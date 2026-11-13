@@ -171,6 +171,7 @@ INSTRUMENTATION_REGISTRY = {
         "langgraph": {
             "openllmetry": None,
             "openinference": None,
+            "auto_load": ["langchain"],
             "default_span_kind": "WORKFLOW",
         },
         "llamaindex": {

@@ -207,8 +207,8 @@ def _plain(obj: Any) -> Any:
 # ---------------------------------------------------------------------------
 
 
-def _chat_kwargs(kwargs: dict) -> dict:
-    for key in ("messages", "tools"):
+def _iterable_kwargs(kwargs: dict, keys) -> dict:
+    for key in keys:
         if isinstance(kwargs.get(key), Iterator):
             kwargs = {**kwargs, key: list(kwargs[key])}
     return kwargs
@@ -242,7 +242,7 @@ def _patch_chat(chat: Any) -> None:
         def patched_send(*args, **kwargs):
             if is_suppressed():
                 return orig_send(*args, **kwargs)
-            kwargs = _chat_kwargs(kwargs)
+            kwargs = _iterable_kwargs(kwargs, ("messages", "tools"))
             is_stream = bool(kwargs.get("stream", False))
             span = _start(kwargs, is_stream)
             start = time.perf_counter()
@@ -263,7 +263,7 @@ def _patch_chat(chat: Any) -> None:
         async def patched_send_async(*args, **kwargs):
             if is_suppressed():
                 return await orig_send_async(*args, **kwargs)
-            kwargs = _chat_kwargs(kwargs)
+            kwargs = _iterable_kwargs(kwargs, ("messages", "tools"))
             is_stream = bool(kwargs.get("stream", False))
             span = _start(kwargs, is_stream)
             start = time.perf_counter()
@@ -670,6 +670,7 @@ def _patch_rerank(rerank: Any) -> None:
     def patched(*args, **kwargs):
         if is_suppressed():
             return orig(*args, **kwargs)
+        kwargs = _iterable_kwargs(kwargs, ("documents",))
         documents = kwargs.get("documents", []) or []
         span = get_provider_tracer().start_span(
             name="openrouter.rerank.rerank",

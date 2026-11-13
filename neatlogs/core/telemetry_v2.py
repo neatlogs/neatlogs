@@ -331,7 +331,7 @@ def _llm_semantic(span: ReadableSpan, attrs: Mapping[str, Any]) -> dict[str, Any
                 "schema": _decode(
                     _first(record, "input_schema", "parameters", "schema", default=None)
                 ),
-                "configuration": _decode(record.get("definition")),
+                "configuration": _decode(_first(record, "configuration", "definition")),
             }
         )
 

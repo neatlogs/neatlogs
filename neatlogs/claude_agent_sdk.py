@@ -205,13 +205,22 @@ def _wrap_client_method(original, label: str):
         inner = original(self, *args, **kwargs)
         if is_suppressed() or _ACTIVE_RECEIVER.get() is self:
             return inner
-        tracer = get_tracer()
-        agent_span = tracer.start_span(
-            f"claude_agent.{label}",
-            attributes={"neatlogs.span.kind": "agent", "neatlogs.agent.framework": _PROVIDER},
-        )
-        agent_ctx = otel_trace.set_span_in_context(agent_span)
-        return _TracingQuery(inner, agent_span, agent_ctx, tracer, {"text": ""}, receiver=self)
+        agent_span = None
+        try:
+            tracer = get_tracer()
+            agent_span = tracer.start_span(
+                f"claude_agent.{label}",
+                attributes={"neatlogs.span.kind": "agent", "neatlogs.agent.framework": _PROVIDER},
+            )
+            agent_ctx = otel_trace.set_span_in_context(agent_span)
+            return _TracingQuery(inner, agent_span, agent_ctx, tracer, {"text": ""}, receiver=self)
+        except Exception:
+            if agent_span is not None:
+                try:
+                    agent_span.end()
+                except Exception:
+                    pass
+            return inner
 
     wrapper._neatlogs_wrapped = True  # type: ignore[attr-defined]
     return wrapper

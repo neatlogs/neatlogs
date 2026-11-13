@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "neatlogs"
-version = "1.4.27"
+version = "1.4.28"
 description = "A Python package for extracting and managing LLM logs to build a collaborative workspace"
 readme = "README.MD"
 license = {text = "MIT"}
@@ -22,12 +22,13 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Software Development :: Libraries :: Python Modules",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Topic :: System :: Logging",
     "Topic :: System :: Monitoring",
 ]
-requires-python = ">=3.10,<3.14"
+requires-python = ">=3.10,<3.15"
 dependencies = [
     "openinference-instrumentation>=0.1.27",
     "openinference-semantic-conventions>=0.1.13",
@@ -35,6 +36,8 @@ dependencies = [
     "opentelemetry-exporter-otlp-proto-http>=1.35.0",
     "opentelemetry-sdk>=1.35.0",
     "requests>=2.31.0",
+    "rfc8785==0.1.4",
+    "PyYAML>=6.0.3,<7",
     "agnost>=0.1.8,<0.2.0",
     "opentelemetry-instrumentation>=0.56b0",
     "opentelemetry-instrumentation-threading>=0.56b0",
@@ -53,7 +56,7 @@ dependencies = [
     "openinference-instrumentation-bedrock>=0.1.32",
     "openinference-instrumentation-vertexai>=0.1.11",
     "openinference-instrumentation-mistralai>=1.3.4",
-    "openinference-instrumentation-crewai>=0.1.17",
+    "openinference-instrumentation-crewai>=0.1.17; python_version < '3.14'",
     "openinference-instrumentation-dspy>=0.1.32",
     "openinference-instrumentation-agno>=0.1.25",
     "openinference-instrumentation-openai-agents>=1.4.0",
@@ -61,7 +64,7 @@ dependencies = [
     "openinference-instrumentation-smolagents>=0.1.21",
     "openinference-instrumentation-guardrails>=0.1.10",
     "openinference-instrumentation-haystack>=0.1.29",
-    "openinference-instrumentation-instructor>=0.1.12",
+    "openinference-instrumentation-instructor>=0.1.12; python_version < '3.14'",
     "openinference-instrumentation-mcp>=1.3.3",
     "openinference-instrumentation-portkey>=0.1.7",
     "openinference-instrumentation-google-adk>=0.1.8",

@@ -88,6 +88,9 @@ class ChoiceAccumulator:
             choice = self._choice(index)
             choice.role = str(_get(message, "role", None) or "assistant")
             content = _get(message, "content", None)
+            if content is None:
+                # A refusal arrives in its own field, with content left empty.
+                content = _get(message, "refusal", None)
             if content is not None:
                 choice.content.append(_string(content))
                 if not isinstance(content, str):
@@ -237,7 +240,7 @@ class ChoiceAccumulator:
             content = (
                 _string(_get(delta, "content", ""))
                 if _get(delta, "content", None) is not None
-                else ""
+                else _string(_get(delta, "refusal", None) or "")
             )
             reasoning = (
                 _string(_get(delta, "reasoning_content", ""))

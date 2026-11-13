@@ -201,12 +201,18 @@ def _finalize_converse(span: Any, response: dict, duration_ms: float) -> None:
     content = message.get("content", []) if isinstance(message, dict) else []
 
     text_parts: List[str] = []
+    thinking_parts: List[str] = []
     tool_idx = 0
     for block in content or []:
         if not isinstance(block, dict):
             continue
         if "text" in block:
             text_parts.append(str(block["text"]))
+        elif "reasoningContent" in block:
+            reasoning = block["reasoningContent"] or {}
+            thinking = (reasoning.get("reasoningText") or {}).get("text")
+            if thinking:
+                thinking_parts.append(str(thinking))
         elif "toolUse" in block:
             tu = block["toolUse"]
             span.set_attribute(
@@ -221,6 +227,8 @@ def _finalize_converse(span: Any, response: dict, duration_ms: float) -> None:
     if text_parts:
         span.set_attribute("neatlogs.llm.output_messages.0.role", "assistant")
         span.set_attribute("neatlogs.llm.output_messages.0.content", "".join(text_parts))
+    if thinking_parts:
+        span.set_attribute("neatlogs.llm.output_messages.0.thinking", "".join(thinking_parts))
     set_media_attributes(span, "neatlogs.llm.output_messages.0", content, "output")
 
     if response.get("stopReason"):
@@ -294,6 +302,7 @@ def _patch_converse_stream(client: Any) -> None:
 def _wrap_converse_stream(stream: Any, span: Any, start: float):
     """Generator that passes through Converse stream events while accumulating."""
     text_parts: List[str] = []
+    thinking_parts: List[str] = []
     tool_calls: dict = {}
     finish_reason = None
     usage = None
@@ -304,6 +313,8 @@ def _wrap_converse_stream(stream: Any, span: Any, start: float):
                 delta = event.get("contentBlockDelta", {}).get("delta", {})
                 if delta.get("text"):
                     text_parts.append(delta["text"])
+                if (delta.get("reasoningContent") or {}).get("text"):
+                    thinking_parts.append(delta["reasoningContent"]["text"])
                 if delta.get("toolUse", {}).get("input"):
                     blk = event["contentBlockDelta"].get("contentBlockIndex", 0)
                     tool_calls.setdefault(blk, {"name": "", "arguments": ""})
@@ -329,6 +340,10 @@ def _wrap_converse_stream(stream: Any, span: Any, start: float):
             if full:
                 span.set_attribute("neatlogs.llm.output_messages.0.role", "assistant")
                 span.set_attribute("neatlogs.llm.output_messages.0.content", full)
+            if thinking_parts:
+                span.set_attribute(
+                    "neatlogs.llm.output_messages.0.thinking", "".join(thinking_parts)
+                )
             for j, tc in enumerate(tool_calls.values()):
                 if tc.get("id"):
                     span.set_attribute(f"neatlogs.llm.tool_calls.{j}.id", tc["id"])

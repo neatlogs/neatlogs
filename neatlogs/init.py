@@ -20,19 +20,15 @@ from opentelemetry import trace as otel_trace
 from opentelemetry.exporter.otlp.proto.http import Compression
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk._logs import LoggerProvider
-from opentelemetry.sdk.environment_variables import (
-    OTEL_ATTRIBUTE_COUNT_LIMIT,
-    OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT,
-)
 from opentelemetry.sdk.resources import SERVICE_NAME, Resource
-from opentelemetry.sdk.trace import SpanLimits, TracerProvider
+from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.sampling import ParentBased, TraceIdRatioBased
 
 from ._wrap_utils import _normalize_traces_endpoint
 from .constants import DEFAULT_INGEST_ENDPOINT, export_queue_capacity
 from .core.byte_limited_exporter import ByteLimitedSpanExporter
 from .core.byte_limited_log_exporter import ByteLimitedLogExporter
-from .core.deadline import DeadlineWorker, bounded_call
+from .core.deadline import DeadlineWorker, FlushGate, bounded_call
 from .core.delivery import (
     DeliveryDiagnostics,
     ObservableBatchLogRecordProcessor,
@@ -42,6 +38,7 @@ from .core.filtering_exporter import HttpFilteringSpanExporter
 from .core.logger import get_logger
 from .core.media import PendingMediaStore, set_default_media_store
 from .core.media_exporter import TypedMediaLogExporter, TypedMediaSpanExporter
+from .core.pipeline import default_span_limits
 from .core.span_processor import CompletionMarkerSpanProcessor, NeatlogsSpanProcessor
 from .core.transport import build_otlp_session
 from .core.upload_authority import (
@@ -67,6 +64,7 @@ _owns_tracer_provider = False  # True only when neatlogs created the provider (s
 
 _log_provider = None
 _span_processor = None
+_quiet_run_hints: List[str] = []
 _transport_span_processors = []
 _completion_span_processor = None
 _instrumentation_manager = None
@@ -76,6 +74,7 @@ _upload_authority = None
 _media_store = None
 _signal_handlers = {}
 _signal_shutdown_in_progress = False
+_flush_gate = FlushGate("neatlogs-default-flush")
 _shutdown_condition = threading.Condition(threading.RLock())
 _shutdown_state = "idle"
 _shutdown_owner = None
@@ -191,9 +190,6 @@ def _register_shutdown_signal_handlers() -> None:
             logger.debug(f"Could not register shutdown handler for signal {signum}: {exc}")
 
 
-_DEFAULT_MAX_SPAN_ATTRIBUTES = 10_000
-
-
 def _resolve_workflow_name(workflow_name: Optional[str]) -> str:
     """Return non-empty workflow name; derive from script when omitted."""
     provided = (workflow_name or "").strip()
@@ -206,21 +202,6 @@ def _resolve_workflow_name(workflow_name: Optional[str]) -> str:
         return script_slug
 
     return "neatlogs-app"
-
-
-def _span_limits_for_capture_everything() -> SpanLimits:
-    """
-    OpenTelemetry defaults to 128 span attributes, which can silently drop semantic
-    attributes when instrumenting LLM apps (retrieval docs, tool IO, etc).
-
-    If the user explicitly sets OTel limits via env vars, respect that. Otherwise
-    default to a larger max-span-attributes value (matching OpenInference's approach).
-    """
-    span_limit = os.getenv(OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT, "")
-    general_limit = os.getenv(OTEL_ATTRIBUTE_COUNT_LIMIT, "")
-    if span_limit.strip() or general_limit.strip():
-        return SpanLimits()
-    return SpanLimits(max_span_attributes=_DEFAULT_MAX_SPAN_ATTRIBUTES)
 
 
 def _serialize_init(func):
@@ -380,6 +361,9 @@ def init(
     global _initialized, _init_signature, _shutdown_worker
 
     _validate_instrumentations(instrumentations)
+    from .replay.environment import configure_replay_from_environment
+
+    configure_replay_from_environment()
     uploads_enabled_resolved = resolve_uploads_enabled(
         uploads_enabled, os.getenv("NEATLOGS_UPLOADS_ENABLED")
     )
@@ -449,7 +433,13 @@ def init(
     else:
         resolved_key = (os.getenv("NEATLOGS_API_KEY") or "").strip()
 
+    _quiet_run_hints.clear()
     if not resolved_key:
+        if not disable_export_resolved:
+            _quiet_run_hints.append(
+                "no NEATLOGS_API_KEY was found, so nothing was sent (pass api_key= or export "
+                "NEATLOGS_API_KEY; a .env file is not loaded for you)"
+            )
         disable_export_resolved = True
         resolved_key = "disabled"
         if debug:
@@ -576,7 +566,7 @@ def init(
         provider = TracerProvider(
             resource=resource,
             sampler=sampler,
-            span_limits=_span_limits_for_capture_everything(),
+            span_limits=default_span_limits(),
         )
         _owns_tracer_provider = True
         if debug:
@@ -648,6 +638,7 @@ def init(
             otlp_exporter,
             diagnostics=_delivery_diagnostics,
             upload_authority=_upload_authority,
+            capture_owner=_span_processor,
         )
         limited_span_exporter = TypedMediaSpanExporter(
             limited_span_exporter,
@@ -772,12 +763,19 @@ def init(
 
     manager.instrument_threading()
 
+    if not instrumentations:
+        _quiet_run_hints.append(
+            "init() got no instrumentations, so library calls are not traced on their own "
+            "(pass instrumentations=[...] or create spans yourself)"
+        )
     if instrumentations:
         manager.instrument(libraries=instrumentations)
         if debug:
             logger.debug(f"Instrumented libraries: {manager.instrumented}")
 
     _shutdown_worker = DeadlineWorker("neatlogs-default-shutdown")
+    global _flush_gate
+    _flush_gate = FlushGate("neatlogs-default-flush")
     atexit.register(_atexit_shutdown)
     _init_signature = candidate_signature
     _initialized = True
@@ -794,25 +792,64 @@ def init(
         logger.info(f"Sample Rate: {sample_rate}")
 
 
+def _warn_if_run_was_quiet(processor: Any) -> None:
+    """Say once, at shutdown, why a run left nothing behind."""
+    hints = list(_quiet_run_hints)
+    _quiet_run_hints.clear()
+    stats = getattr(processor, "perf_stats", None) or {}
+    recorded = stats.get("spans_exported", 0)
+    missing_key = any("NEATLOGS_API_KEY" in hint for hint in hints)
+    if recorded and not missing_key:
+        return
+    if not recorded:
+        reasons = [hint for hint in hints if "instrumentations" in hint or "API_KEY" in hint]
+        logger.warning(
+            "Neatlogs recorded no spans in this run%s",
+            f": {'; '.join(reasons)}" if reasons else "",
+        )
+    elif missing_key:
+        logger.warning("Neatlogs spans were not sent: %s", hints[0])
+
+
 def flush(timeout_millis: int = 30000) -> bool:
-    """Flush the process-default Neatlogs pipeline only."""
-    global _tracer_provider
+    """Flush the process-default Neatlogs pipeline only.
+
+    Returns False if the flush did not finish within ``timeout_millis``. The
+    call itself never blocks longer than that, even when the collector is
+    unreachable and exporter retries are still running.
+    """
+    deadline = time.monotonic() + max(0, timeout_millis) / 1000
+    # Capture this generation's pipeline now: an abandoned worker must never
+    # reach into a pipeline created by a later shutdown()/init().
+    log_provider = _log_provider
+    processors = list(_transport_span_processors)
+    completed, result = _flush_gate.call(
+        lambda: _flush_pipeline(log_provider, processors, timeout_millis, deadline), deadline
+    )
+    return bool(result) if completed else False
+
+
+def _flush_pipeline(
+    log_provider: Any, processors: List[Any], timeout_millis: int, deadline: float
+) -> bool:
     success = True
 
     # Log provider must flush BEFORE tracer provider: the tracer batch includes
     # the neatlogs.trace.complete marker which triggers server-side finalization.
     # Flushing logs first guarantees LOG records reach ClickHouse before the
     # completion marker fires the trace-finalizer query.
-    if _log_provider:
+    if log_provider:
         try:
             logger.debug("Flushing log provider...")
-            _log_provider.force_flush(timeout_millis=timeout_millis)
+            log_provider.force_flush(timeout_millis=timeout_millis)
             logger.debug("Log provider flushed successfully")
         except Exception as e:
             logger.error(f"Error flushing logs: {e}", exc_info=True)
             success = False
 
-    for processor in _transport_span_processors:
+    for processor in processors:
+        if time.monotonic() >= deadline:
+            return False
         try:
             logger.debug("Flushing Neatlogs trace processor...")
             ok = processor.force_flush(timeout_millis=timeout_millis)
@@ -824,9 +861,11 @@ def flush(timeout_millis: int = 30000) -> bool:
     # A root is accepted only at the final post-mask export boundary. That
     # acceptance queues its completion marker, so drain the trace batch once
     # more to include the newly queued marker in this flush contract.
-    if _transport_span_processors:
+    if processors and time.monotonic() >= deadline:
+        return False
+    if processors:
         try:
-            ok = _transport_span_processors[0].force_flush(timeout_millis=timeout_millis)
+            ok = processors[0].force_flush(timeout_millis=timeout_millis)
             success = (ok is None or bool(ok)) and success
         except Exception as e:
             logger.error(f"Error flushing completion markers: {e}", exc_info=True)
@@ -982,7 +1021,7 @@ def _perform_shutdown(
     global _tracer_provider, _owns_tracer_provider, _log_provider, _span_processor, _initialized
     global _init_signature
     global _instrumentation_manager, _transport_span_processors, _completion_span_processor
-    global _debug_mode, _shutdown_worker
+    global _debug_mode, _shutdown_worker, _flush_gate
     global _upload_authority, _media_store
 
     try:
@@ -1251,8 +1290,10 @@ def _perform_shutdown(
     except Exception:
         success = False
 
+    _warn_if_run_was_quiet(_span_processor)
     _initialized = False
     _init_signature = None
+    _flush_gate = FlushGate("neatlogs-default-flush")
     _tracer_provider = None
     _owns_tracer_provider = False
     _log_provider = None

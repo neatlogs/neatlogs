@@ -252,6 +252,76 @@ def test_legacy_stream_keeps_terminal_usage_beyond_1024_small_events(
     assert "neatlogs.stream.chunks_dropped" not in finished.attributes
 
 
+def _responses_usage():
+    return SimpleNamespace(
+        input_tokens=11,
+        output_tokens=22,
+        total_tokens=33,
+        input_tokens_details=SimpleNamespace(cached_tokens=4),
+        output_tokens_details=SimpleNamespace(reasoning_tokens=7),
+    )
+
+
+def test_responses_usage_records_total_cached_and_reasoning_tokens(
+    tracer_provider, in_memory_span_exporter
+):
+    from neatlogs.openai import _finalize_responses_response
+
+    span = tracer_provider.get_tracer("neatlogs.test").start_span("responses")
+    response = SimpleNamespace(
+        output_text="ok",
+        output=[],
+        model="gpt-test",
+        usage=_responses_usage(),
+    )
+    _finalize_responses_response(span, response, 1.0)
+    attrs = in_memory_span_exporter.get_finished_spans()[0].attributes
+    assert attrs["neatlogs.llm.token_count.prompt"] == 11
+    assert attrs["neatlogs.llm.token_count.completion"] == 22
+    assert attrs["neatlogs.llm.token_count.total"] == 33
+    assert attrs["neatlogs.llm.token_count.cache_read"] == 4
+    assert attrs["neatlogs.llm.token_count.reasoning"] == 7
+
+
+def test_responses_stream_usage_records_total_cached_and_reasoning_tokens(
+    tracer_provider, in_memory_span_exporter
+):
+    events = [
+        SimpleNamespace(type="response.output_text.delta", delta="x", response=None),
+        SimpleNamespace(
+            type="response.completed",
+            delta=None,
+            response=SimpleNamespace(model="gpt-test", usage=_responses_usage(), output=[]),
+        ),
+    ]
+    span = tracer_provider.get_tracer("neatlogs.test").start_span("responses")
+    wrapper = SyncStreamWrapper(iter(events), span, _finalize_responses_stream)
+    list(wrapper)
+    attrs = in_memory_span_exporter.get_finished_spans()[0].attributes
+    assert attrs["neatlogs.llm.token_count.total"] == 33
+    assert attrs["neatlogs.llm.token_count.cache_read"] == 4
+    assert attrs["neatlogs.llm.token_count.reasoning"] == 7
+
+
+def test_azure_responses_usage_records_total_cached_and_reasoning_tokens(
+    tracer_provider, in_memory_span_exporter
+):
+    from neatlogs.azure_openai import _finalize_responses_response as finalize_azure
+
+    span = tracer_provider.get_tracer("neatlogs.test").start_span("responses")
+    response = SimpleNamespace(
+        output_text="ok",
+        output=[],
+        model="gpt-test",
+        usage=_responses_usage(),
+    )
+    finalize_azure(span, response, 1.0)
+    attrs = in_memory_span_exporter.get_finished_spans()[0].attributes
+    assert attrs["neatlogs.llm.token_count.total"] == 33
+    assert attrs["neatlogs.llm.token_count.cache_read"] == 4
+    assert attrs["neatlogs.llm.token_count.reasoning"] == 7
+
+
 def test_legacy_stream_huge_chunk_is_not_retained_or_marked_successful(
     tracer_provider, in_memory_span_exporter
 ):

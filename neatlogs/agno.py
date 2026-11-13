@@ -19,6 +19,7 @@ nest under whichever agent/team/workflow run is active — including tools and
 models added after wrap().
 """
 
+import asyncio
 import time
 from typing import Any
 
@@ -286,6 +287,9 @@ def _patch_agent(agent: Any) -> None:
 
             try:
                 result = await orig_arun(*args, **kwargs)
+            except asyncio.CancelledError:
+                _cancelled(span)
+                raise
             except Exception as e:
                 _err(span, e)
                 raise
@@ -366,6 +370,9 @@ def _patch_workflow(workflow: Any) -> None:
                 return _AgnoAsyncStreamIter(aiter, span, token, start, workflow=True)
             try:
                 result = await orig_arun(*args, **kwargs)
+            except asyncio.CancelledError:
+                _cancelled(span)
+                raise
             except Exception as e:
                 _err(span, e)
                 raise
@@ -462,18 +469,25 @@ class _AgnoAsyncStreamIter:
         except StopAsyncIteration:
             self._finalize()
             raise
+        except asyncio.CancelledError:
+            self._finalize(cancelled=True)
+            raise
         except Exception as e:
             self._finalize(error=e)
             raise
         self._last = ev
         return ev
 
-    def _finalize(self, error=None):
+    def _finalize(self, error=None, cancelled=False):
         if self._done:
             return
         self._done = True
         detach(self._token)
         duration_ms = (time.perf_counter() - self._start) * 1000
+        if cancelled:
+            self._span.set_attribute("neatlogs.llm.metrics.duration_ms", round(duration_ms, 3))
+            _cancelled(self._span)
+            return
         if error is not None:
             self._span.set_attribute("neatlogs.llm.metrics.duration_ms", round(duration_ms, 3))
             self._span.set_status(StatusCode.ERROR, str(error))
@@ -783,15 +797,22 @@ def _finalize_model_stream(span: Any, chunks: list) -> None:
                 if name and not any(x["name"] == name for x in tool_calls):
                     tool_calls.append({"name": name, "arguments": args})
 
+    reasoning = "".join(
+        r
+        for r in (getattr(ch, "reasoning_content", None) for ch in chunks or [])
+        if isinstance(r, str)
+    )
     out_text = "".join(text_parts)
     if not out_text and tool_calls:
         out_text = "\n".join(
             f"{c['name']}({c['arguments'] if isinstance(c['arguments'], str) else serialize(c['arguments'])})"
             for c in tool_calls
         )
-    if out_text or tool_calls:
+    if out_text or tool_calls or reasoning:
         span.set_attribute("neatlogs.llm.output_messages.0.role", "assistant")
         span.set_attribute("neatlogs.llm.output_messages.0.content", out_text)
+        if reasoning:
+            span.set_attribute("neatlogs.llm.output_messages.0.thinking", reasoning)
         out_blob = {"role": "assistant", "content": out_text}
         if tool_calls:
             out_blob["tool_calls"] = tool_calls
@@ -850,9 +871,13 @@ def _finalize_model(span: Any, result: Any) -> None:
             )
         else:
             out_text = ""
-        if out_text or collected_calls:
+        reasoning = getattr(result, "reasoning_content", None)
+        reasoning = reasoning if isinstance(reasoning, str) else ""
+        if out_text or collected_calls or reasoning:
             span.set_attribute("neatlogs.llm.output_messages.0.role", "assistant")
             span.set_attribute("neatlogs.llm.output_messages.0.content", out_text)
+            if reasoning:
+                span.set_attribute("neatlogs.llm.output_messages.0.thinking", reasoning)
             out_blob = {"role": "assistant", "content": out_text}
             if collected_calls:
                 out_blob["tool_calls"] = collected_calls
@@ -876,6 +901,13 @@ def _finalize_model(span: Any, result: Any) -> None:
             if v:
                 span.set_attribute(f"neatlogs.llm.token_count.{dst}", v)
     span.set_status(StatusCode.OK)
+    span.end()
+
+
+def _cancelled(span: Any) -> None:
+    """End a span for a cancelled task without recording it as an error."""
+    span.set_attribute("neatlogs.stream.cancelled", True)
+    span.set_status(StatusCode.UNSET)
     span.end()
 
 

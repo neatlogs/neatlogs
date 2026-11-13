@@ -167,3 +167,33 @@ def test_upstream_exporter_rejects_work_after_shutdown():
     )
     exporter.shutdown()
     assert exporter.export(()) is SpanExportResult.FAILURE
+
+
+@pytest.mark.parametrize("receipt", ["rejected", "warning", "malformed"])
+def test_upstream_exporter_requires_complete_trace_receipt(monkeypatch, receipt):
+    from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceResponse
+
+    body = ExportTraceServiceResponse()
+    body.partial_success.rejected_spans = 1 if receipt == "rejected" else 0
+    body.partial_success.error_message = "private receiver details"
+    calls = []
+
+    def request(self, method, url, **kwargs):
+        calls.append(url)
+        response = requests.Response()
+        response.status_code = 200
+        response._content = (
+            b"invalid-protobuf" if receipt == "malformed" else body.SerializeToString()
+        )
+        return response
+
+    monkeypatch.setattr(requests.Session, "request", request)
+    exporter = OTLPSpanExporter(
+        endpoint="https://ingest.example.com/v1/traces", session=build_otlp_session()
+    )
+    try:
+        expected = SpanExportResult.SUCCESS if receipt == "warning" else SpanExportResult.FAILURE
+        assert exporter.export(()) is expected
+        assert len(calls) == 1
+    finally:
+        exporter.shutdown()

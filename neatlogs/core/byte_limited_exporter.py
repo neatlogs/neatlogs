@@ -43,10 +43,12 @@ class ByteLimitedSpanExporter(SpanExporter):
         max_export_bytes: int = DEFAULT_MAX_EXPORT_BYTES,
         diagnostics: DeliveryDiagnostics | None = None,
         upload_authority: UploadAuthority | None = None,
+        capture_owner=None,
     ) -> None:
         if max_export_bytes <= 0:
             raise ValueError("max_export_bytes must be greater than zero")
         self._inner = inner
+        self._capture_owner = capture_owner
         self._max_export_bytes = max_export_bytes
         self._diagnostics = diagnostics
         self._upload_authority = upload_authority or DisabledUploadAuthority()
@@ -75,6 +77,8 @@ class ByteLimitedSpanExporter(SpanExporter):
             else:
                 bounded, truncations = limit_span_capture(span)
             bounded_spans.append(bounded)
+            if truncations:
+                self._capture_exported((span,), accepted=False)
             if truncations and self._diagnostics is not None:
                 self._diagnostics.record_capture_truncation("span", truncations)
 
@@ -197,6 +201,7 @@ class ByteLimitedSpanExporter(SpanExporter):
                     )
                     result = SpanExportResult.FAILURE
                 if isinstance(result, OverflowExportReceipt) and result.complete:
+                    self._capture_exported((overflow_span,), accepted=True)
                     if self._diagnostics is not None:
                         self._diagnostics.record_overflow("span", "exports")
                 else:
@@ -225,7 +230,15 @@ class ByteLimitedSpanExporter(SpanExporter):
                         ),
                     )
                 return SpanExportResult.FAILURE
+            self._capture_exported(batch, accepted=True)
         return SpanExportResult.FAILURE if overflow_failed else SpanExportResult.SUCCESS
+
+    def _capture_exported(self, spans, *, accepted):
+        if self._capture_owner is not None:
+            from ..datasets._recording import notify_export
+
+            for span in spans:
+                notify_export(self._capture_owner, span, accepted=accepted)
 
     def force_flush(self, timeout_millis: int = 30000) -> bool:
         result = self._inner.force_flush(timeout_millis)

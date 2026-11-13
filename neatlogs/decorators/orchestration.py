@@ -10,7 +10,7 @@ import functools
 import inspect
 import json
 import logging
-from typing import Any, Callable, Dict, Optional, TypeVar
+from typing import Any, Callable, Dict, Literal, Optional, TypeVar
 
 from opentelemetry import trace as otel_trace
 from opentelemetry.trace import Status, StatusCode
@@ -197,6 +197,7 @@ def span(
     # Tool-specific
     tool_name: Optional[str] = None,
     parameters: Optional[Dict[str, Any]] = None,
+    replay: bool | Literal["awaitable"] = False,
     # Session grouping (groups the traces of a conversation; set on the WORKFLOW root)
     session_id: Optional[str] = None,
     # End-user identity (one end-user per trace; usually set on the WORKFLOW root)
@@ -232,6 +233,8 @@ def span(
         # Tool-specific parameters (when kind="TOOL" or kind="MCP_TOOL"):
         tool_name: Tool identifier
         parameters: Tool parameter schema
+        replay: Opt in to JSON tool replay. "awaitable" requires an async def tool;
+              synchronous factories returning Tasks/coroutines cannot be captured losslessly.
 
         # End-user identity (typically only on the WORKFLOW root):
         end_user_id: Identifier of the END-USER this trace belongs to — the user
@@ -307,14 +310,29 @@ def span(
     if kind_upper not in valid_kinds:
         raise ValueError(f"Invalid span kind: {kind}. Must be one of {valid_kinds}")
 
+    if replay is not False and kind_upper not in {"TOOL", "MCP_TOOL"}:
+        raise ValueError("Tool replay is supported only for TOOL and MCP_TOOL spans")
+
     # MCP_TOOL requires special handling to match exact original logic
     # (needs access to raw args[0] before binding, special output wrapping)
     if kind_upper == "MCP_TOOL":
-        return _create_mcp_tool_decorator(
+        decorate = _create_mcp_tool_decorator(
             name=name,
             tool_name=tool_name,
             description=description,
         )
+        if replay is False:
+            return decorate
+
+        def replay_mcp(func):
+            from ..replay.contracts import ReplayError
+            from ..replay.tools import replay_tool
+
+            if replay == "awaitable" and not inspect.iscoroutinefunction(func):
+                raise ReplayError("Use async def for captured awaitable tool replay.")
+            return decorate(replay_tool(func, name=tool_name or func.__name__, result=replay))
+
+        return replay_mcp
 
     # Build attributes based on kind
     extra: Dict[str, Any] = {}
@@ -341,7 +359,7 @@ def span(
     if kind_upper == "RETRIEVER":
         postprocess_result = _retriever_postprocessor
 
-    return _decorate_span(
+    decorate = _decorate_span(
         openinference_kind=kind_upper,
         name=name,
         description=description if kind_upper not in ("TOOL", "MCP_TOOL") else None,
@@ -360,6 +378,21 @@ def span(
         end_user_id=end_user_id,
         end_user_metadata=end_user_metadata,
     )
+    if replay is False:
+        return decorate
+
+    def replay_decorator(func):
+        from ..replay.contracts import ReplayError
+        from ..replay.tools import replay_tool
+
+        if replay == "awaitable" and not inspect.iscoroutinefunction(func):
+            raise ReplayError("Use async def for captured awaitable tool replay.")
+        # Export the same default identity used by replay lookup.
+        if kind_upper == "TOOL" and not tool_name:
+            extra["tool.name"] = name or func.__name__
+        return decorate(replay_tool(func, name=tool_name or name or func.__name__, result=replay))
+
+    return replay_decorator
 
 
 def _retriever_postprocessor(span: Any, result: Any, bound_inputs: Dict[str, Any]) -> None:

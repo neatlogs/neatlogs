@@ -199,7 +199,7 @@ class InstrumentationManager:
         Instrument a library using priority order:
           1. Neatlogs custom instrumentor (if available)
           2. OpenInference (primary — rich semantic attributes, no duplicates)
-          3. Stop — no OpenLLMetry fallback for AI libraries
+          3. The explicitly supported Qdrant OpenLLMetry instrumentor
         """
         if library == "pydantic_ai" and library in self._prepared:
             self.instrumented.add(library)
@@ -294,6 +294,17 @@ class InstrumentationManager:
             except Exception as e:
                 if self.debug:
                     logger.warning(f"⚠️  {library} (OpenInference): {e}")
+
+        if library == "qdrant" and info.get("openllmetry"):
+            try:
+                self._instrument_library(library, convention="openllmetry")
+                self.instrumented.add(library)
+                if self.debug:
+                    logger.info("✅ qdrant (OpenLLMetry)")
+                return
+            except Exception as e:
+                if self.debug:
+                    logger.warning(f"⚠️  qdrant (OpenLLMetry): {e}")
 
         if self.debug:
             logger.info(f"⏭️  {library}: no instrumentor available (skipped)")

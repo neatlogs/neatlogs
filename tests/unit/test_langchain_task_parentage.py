@@ -170,3 +170,24 @@ async def test_trace_context_parents_custom_spans_and_restores_after_error(
     spans = {span.name: span for span in in_memory_span_exporter.get_finished_spans()}
     assert spans["search"].parent.span_id == spans["node"].context.span_id
     assert spans["embed"].parent.span_id == spans["search"].context.span_id
+
+
+@pytest.mark.asyncio
+async def test_sampler_dropped_node_does_not_break_callbacks(
+    monkeypatch, tracer_provider, in_memory_span_exporter
+):
+    from opentelemetry.sdk.trace.sampling import ALWAYS_OFF
+
+    integration = importlib.import_module("neatlogs.langchain")
+    monkeypatch.setattr(tracer_provider, "sampler", ALWAYS_OFF)
+    monkeypatch.setattr(
+        integration, "get_tracer", lambda: tracer_provider.get_tracer("neatlogs.test")
+    )
+    handler = integration.NeatlogsCallbackHandler()
+    node, model = uuid4(), uuid4()
+    await handler.on_chain_start({}, {}, run_id=node)
+    await handler.on_chat_model_start({}, [], run_id=model)
+    await handler.on_llm_error(ValueError("model failure"), run_id=model)
+    await handler.on_chain_end({}, run_id=node)
+    assert handler._active_chains.get() == ()
+    assert not in_memory_span_exporter.get_finished_spans()

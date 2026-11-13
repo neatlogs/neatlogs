@@ -281,7 +281,9 @@ class NeatlogsCallbackHandler(AsyncCallbackHandler, BaseCallbackHandler):
         if active_contexts:
             active_spans = [otel_trace.get_current_span(ctx) for ctx in active_contexts]
             ancestor_ids = {span.get_span_context().span_id for span in active_spans}
-            ancestor_ids.update(span.parent.span_id for span in active_spans if span.parent)
+            ancestor_ids.update(
+                getattr(getattr(span, "parent", None), "span_id", None) for span in active_spans
+            )
             ambient = otel_trace.get_current_span(base_ctx).get_span_context()
             # Keep newer manual spans; replace only the enclosing workflow/chain.
             if not ambient.is_valid or ambient.span_id in ancestor_ids:

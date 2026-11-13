@@ -149,7 +149,7 @@ def wrap(client, **workflow_attributes):
     AsyncAnthropic, google.genai.Client (Gemini + Vertex AI), boto3
     bedrock-runtime, CrewAI Crew, Pydantic AI Agent, DSPy modules, Agno
     Agent/Team/Workflow, Google ADK Runner, Strands Agent, Hermes AIAgent,
-    OpenRouter, LangChain OpenAIEmbeddings/AzureOpenAIEmbeddings.
+    OpenRouter.
 
         >>> import neatlogs, openai
         >>> client = neatlogs.wrap(openai.OpenAI())
@@ -203,23 +203,6 @@ def wrap(client, **workflow_attributes):
     # but `dspy.module` appears in a base class. Used as a fallback when the leaf
     # class's own module doesn't reveal the framework.
     mro_modules = " ".join((getattr(base, "__module__", "") or "") for base in type(client).__mro__)
-
-    embedding_type = next(
-        (
-            base.__name__
-            for base in type(client).__mro__
-            if (getattr(base, "__module__", "") or "").startswith("langchain_openai.")
-            and base.__name__ in ("OpenAIEmbeddings", "AzureOpenAIEmbeddings")
-        ),
-        None,
-    )
-    if embedding_type:
-        from ._embedding import patch_embeddings
-
-        provider = "azure" if embedding_type == "AzureOpenAIEmbeddings" else "openai"
-        patch_embeddings(getattr(client, "client", None), provider=provider, sync=True)
-        patch_embeddings(getattr(client, "async_client", None), provider=provider, sync=False)
-        return _finish(client)
 
     # Azure OpenAI must be checked before plain OpenAI: AzureOpenAI subclasses
     # OpenAI and its module ("openai.lib.azure") contains "openai".

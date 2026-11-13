@@ -820,9 +820,43 @@ def _patch_responses_parse(responses: Any, sync: bool = True) -> None:
 
 
 def _patch_embeddings(embeddings: Any, sync: bool = True) -> None:
-    from ._embedding import patch_embeddings
+    def start_attrs(kwargs):
+        inp = kwargs.get("input", "")
+        attrs = {
+            "neatlogs.span.kind": "embedding",
+            "neatlogs.embedding.model_name": kwargs.get("model", ""),
+        }
+        if isinstance(inp, str):
+            attrs["neatlogs.embedding.text"] = inp[:10000]
+        elif isinstance(inp, list):
+            attrs["neatlogs.embedding.text"] = serialize(inp[:20])[:10000]
+        return attrs
 
-    patch_embeddings(embeddings, provider="openai", sync=sync)
+    start_attrs.__name__ = "openai.embeddings.create"
+
+    def finalize(span, response, duration_ms):
+        usage = getattr(response, "usage", None)
+        if usage is not None:
+            if getattr(usage, "prompt_tokens", None) is not None:
+                span.set_attribute("neatlogs.llm.token_count.prompt", usage.prompt_tokens)
+            if getattr(usage, "total_tokens", None) is not None:
+                span.set_attribute("neatlogs.embedding.token_count", usage.total_tokens)
+        data = getattr(response, "data", None)
+        if data is not None:
+            try:
+                span.set_attribute("neatlogs.embedding.count", len(data))
+                if data and getattr(data[0], "embedding", None) is not None:
+                    span.set_attribute("neatlogs.embedding.dimensions", len(data[0].embedding))
+            except (TypeError, AttributeError):
+                pass
+        model = getattr(response, "model", None)
+        if model:
+            span.set_attribute("neatlogs.embedding.model_name", model)
+        _ok(span, duration_ms)
+
+    _patch_method(
+        embeddings, "create", "_neatlogs_patched", start_attrs, finalize, is_async=not sync
+    )
 
 
 # ---------------------------------------------------------------------------

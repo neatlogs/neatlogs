@@ -320,9 +320,76 @@ def _responses_start_span(kwargs: dict) -> Any:
 
 
 def _patch_embeddings(embeddings: Any, sync: bool = True) -> None:
-    from ._embedding import patch_embeddings
+    if getattr(embeddings, "_neatlogs_azure_patched", False):
+        return
+    orig = embeddings.create
 
-    patch_embeddings(embeddings, provider="azure", sync=sync)
+    def _start(kwargs):
+        inp = kwargs.get("input", "")
+        attrs = {
+            "neatlogs.span.kind": "embedding",
+            "neatlogs.embedding.model_name": kwargs.get("model", ""),
+            "neatlogs.llm.provider": _PROVIDER,
+        }
+        if isinstance(inp, str):
+            attrs["neatlogs.embedding.text"] = inp[:10000]
+        elif isinstance(inp, list):
+            attrs["neatlogs.embedding.text"] = serialize(inp[:20])[:10000]
+        return attrs
+
+    def _finalize(span, response, duration_ms):
+        usage = getattr(response, "usage", None)
+        if usage is not None:
+            if getattr(usage, "prompt_tokens", None) is not None:
+                span.set_attribute("neatlogs.llm.token_count.prompt", usage.prompt_tokens)
+            if getattr(usage, "total_tokens", None) is not None:
+                span.set_attribute("neatlogs.embedding.token_count", usage.total_tokens)
+        data = getattr(response, "data", None)
+        if data is not None:
+            try:
+                span.set_attribute("neatlogs.embedding.count", len(data))
+                if data and getattr(data[0], "embedding", None) is not None:
+                    span.set_attribute("neatlogs.embedding.dimensions", len(data[0].embedding))
+            except (TypeError, AttributeError):
+                pass
+        _ok(span, duration_ms)
+
+    if sync:
+
+        def patched(*args, **kwargs):
+            if is_suppressed():
+                return orig(*args, **kwargs)
+            span = get_provider_tracer().start_span(
+                name="azure_openai.embeddings.create", attributes=_start(kwargs)
+            )
+            start = time.perf_counter()
+            try:
+                response = orig(*args, **kwargs)
+            except Exception as e:
+                _err(span, e)
+                raise
+            _finalize(span, response, (time.perf_counter() - start) * 1000)
+            return response
+
+    else:
+
+        async def patched(*args, **kwargs):
+            if is_suppressed():
+                return await orig(*args, **kwargs)
+            span = get_provider_tracer().start_span(
+                name="azure_openai.embeddings.create", attributes=_start(kwargs)
+            )
+            start = time.perf_counter()
+            try:
+                response = await orig(*args, **kwargs)
+            except Exception as e:
+                _err(span, e)
+                raise
+            _finalize(span, response, (time.perf_counter() - start) * 1000)
+            return response
+
+    embeddings.create = patched
+    embeddings._neatlogs_azure_patched = True
 
 
 def _finalize_response(span: Any, response: Any, duration_ms: float) -> None:

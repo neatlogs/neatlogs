@@ -96,7 +96,10 @@ def _add_attrs(args: tuple, kwargs: dict) -> dict:
     return {
         "neatlogs.tool.name": "supermemory.add",
         "neatlogs.tool.parameters": serialize(
-            {"namespace": _namespace(args, kwargs), "content": kwargs.get("content", "")}
+            {
+                "namespace": _namespace(args, kwargs),
+                "content": kwargs.get("content", ""),
+            }
         ),
         "supermemory.namespace": _namespace(args, kwargs),
     }
@@ -123,31 +126,54 @@ def _patch(client: Any, method: str, kind: str, attrs_fn: Callable, result_fn: C
 
     def _finish(span: Any, response: Any, start: float) -> None:
         try:
-            result_fn(span, response)
+            try:
+                result_fn(span, response)
+            except Exception:
+                pass
+            span.set_attribute(
+                "neatlogs.duration_ms", round((time.perf_counter() - start) * 1000, 3)
+            )
+            span.set_status(StatusCode.OK)
         except Exception:
             pass
-        span.set_attribute("neatlogs.duration_ms", round((time.perf_counter() - start) * 1000, 3))
-        span.set_status(StatusCode.OK)
-        span.end()
+        finally:
+            _end(span)
+
+    def _end(span: Any) -> None:
+        try:
+            span.end()
+        except Exception:
+            pass
 
     def _fail(span: Any, exc: Exception) -> None:
-        span.set_status(StatusCode.ERROR, str(exc))
-        span.record_exception(exc)
-        span.end()
+        try:
+            span.set_status(StatusCode.ERROR, str(exc))
+            span.record_exception(exc)
+        except Exception:
+            pass
+        finally:
+            _end(span)
 
     if inspect.iscoroutinefunction(orig):
 
         async def patched_async(*args: Any, **kwargs: Any) -> Any:
             if is_suppressed():
                 return await orig(*args, **kwargs)
-            span = _start(args, kwargs)
+            try:
+                span = _start(args, kwargs)
+            except Exception:
+                return await orig(*args, **kwargs)
             start = time.perf_counter()
             try:
                 response = await orig(*args, **kwargs)
             except asyncio.CancelledError:
-                span.set_attribute("neatlogs.cancelled", True)
-                span.set_status(StatusCode.UNSET)
-                span.end()
+                try:
+                    span.set_attribute("neatlogs.cancelled", True)
+                    span.set_status(StatusCode.UNSET)
+                except Exception:
+                    pass
+                finally:
+                    _end(span)
                 raise
             except Exception as exc:
                 _fail(span, exc)
@@ -161,7 +187,10 @@ def _patch(client: Any, method: str, kind: str, attrs_fn: Callable, result_fn: C
         def patched(*args: Any, **kwargs: Any) -> Any:
             if is_suppressed():
                 return orig(*args, **kwargs)
-            span = _start(args, kwargs)
+            try:
+                span = _start(args, kwargs)
+            except Exception:
+                return orig(*args, **kwargs)
             start = time.perf_counter()
             try:
                 response = orig(*args, **kwargs)

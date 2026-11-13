@@ -15,13 +15,13 @@ def test_sdk_version_does_not_replace_application_version(monkeypatch, mode, app
     client = None
     try:
         if mode == "client":
-            client = neatlogs.Client(
-                api_key="test", workflow_name="versions", disable_export=True
-            )
+            client = neatlogs.Client(api_key="test", workflow_name="versions", disable_export=True)
             provider = client.tracer_provider
         else:
             neatlogs.init(
-                api_key="test", instrumentations=[], disable_export=True,
+                api_key="test",
+                instrumentations=[],
+                disable_export=True,
                 register_shutdown_handlers=False,
             )
             provider = get_neatlogs_provider()

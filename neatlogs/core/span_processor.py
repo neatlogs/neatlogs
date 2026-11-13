@@ -17,6 +17,7 @@ from opentelemetry.sdk.trace import ReadableSpan, Span, SpanProcessor
 from opentelemetry.trace import SpanKind
 
 from .attribute_processor import UnifiedAttributeProcessor
+from .error_sanitization import sanitize_error_snapshot
 from .logger import get_logger
 from .span_kind import SEMANTIC_SPAN_KINDS, resolve_explicit_span_kind
 
@@ -564,6 +565,7 @@ class NeatlogsSpanProcessor(SpanProcessor):
                         },
                         "events": self._serialize_span_events(span),
                     }
+                    sanitize_error_snapshot(span_data)
                     self._processed_log_file_handle.write(json.dumps(span_data) + "\n")
                     self._processed_log_file_handle.flush()
                 except Exception as e:
@@ -802,6 +804,7 @@ class NeatlogsSpanProcessor(SpanProcessor):
 
     def _safe_raw_span_json(self, span: ReadableSpan) -> str:
         payload = json.loads(span.to_json())
+        sanitize_error_snapshot(payload)
         attrs = payload.get("attributes") or {}
         if span.kind == SpanKind.CLIENT and self.unified_processor._looks_like_http(attrs):
             self.unified_processor._add_http_canonical_io(attrs)

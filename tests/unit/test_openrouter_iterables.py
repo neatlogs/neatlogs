@@ -120,3 +120,46 @@ def test_native_chat_keeps_iterable_input(
         else "neatlogs.llm.tools.0.name"
     )
     assert span.attributes[attr] == ("keep this prompt" if field == "messages" else "lookup")
+
+
+@pytest.mark.parametrize("shape", ["generator", "list", "tuple"])
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_native_rerank_keeps_iterable_documents(
+    monkeypatch, tracer_provider, in_memory_span_exporter, shape, wrapped
+):
+    sdk = pytest.importorskip("openrouter")
+    values = ["first document", "second document"]
+    requests = []
+    consumed = []
+
+    def once():
+        for value in values:
+            consumed.append(value)
+            yield value
+
+    supplied = once() if shape == "generator" else (tuple(values) if shape == "tuple" else values)
+
+    def respond(request):
+        requests.append(json.loads(request.content))
+        return httpx.Response(200, json={"model": "test/reranker", "results": []})
+
+    monkeypatch.setattr(
+        integration, "get_provider_tracer", lambda: tracer_provider.get_tracer("test")
+    )
+    with httpx.Client(transport=httpx.MockTransport(respond)) as transport:
+        client = sdk.OpenRouter(api_key="offline", client=transport)
+        if wrapped:
+            integration.wrap_openrouter_client(client)
+        result = client.rerank.rerank(model="test/reranker", query="first", documents=supplied)
+    assert result.results == []
+    assert len(requests) == 1
+    assert requests[0]["documents"] == values
+    if shape == "generator":
+        assert consumed == values
+    spans = in_memory_span_exporter.get_finished_spans()
+    if wrapped:
+        span = next(s for s in spans if s.name == "openrouter.rerank.rerank")
+        assert span.attributes["neatlogs.reranker.input_documents.0"] == values[0]
+        assert span.attributes["neatlogs.reranker.input_documents.1"] == values[1]
+    else:
+        assert spans == ()

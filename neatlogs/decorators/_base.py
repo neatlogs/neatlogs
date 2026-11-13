@@ -130,7 +130,18 @@ def _bind_call_args(
         sig = inspect.signature(func)
         bound = sig.bind_partial(*args, **kwargs)
         bound.apply_defaults()
-        return dict(bound.arguments)
+        arguments = dict(bound.arguments)
+        first_parameter = next(iter(sig.parameters), None)
+        if first_parameter in ("self", "cls") and first_parameter in arguments:
+            receiver = arguments[first_parameter]
+            owner = receiver if inspect.isclass(receiver) else type(receiver)
+            descriptor = inspect.getattr_static(owner, func.__name__, None)
+            if isinstance(descriptor, classmethod):
+                descriptor = descriptor.__func__
+            if not isinstance(descriptor, staticmethod) and callable(descriptor):
+                if inspect.unwrap(descriptor) is inspect.unwrap(func):
+                    arguments.pop(first_parameter, None)
+        return arguments
     except Exception:
         return {"args": list(args), "kwargs": kwargs}
 

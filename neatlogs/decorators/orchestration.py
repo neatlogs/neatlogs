@@ -414,6 +414,13 @@ def _retriever_postprocessor(span: Any, result: Any, bound_inputs: Dict[str, Any
 
     # Extract documents
     docs: Any = None
+    if (
+        isinstance(result, tuple)
+        and len(result) == 2
+        and isinstance(result[0], list)
+        and isinstance(result[1], dict)
+    ):
+        result = result[0]
     if isinstance(result, (list, tuple)):
         docs = list(result)
     elif isinstance(result, dict):
@@ -427,6 +434,16 @@ def _retriever_postprocessor(span: Any, result: Any, bound_inputs: Dict[str, Any
 
     # Set document attributes
     for i, doc in enumerate(docs):
+        score = None
+        if isinstance(doc, tuple) and len(doc) == 2:
+            doc, score = doc
+        if hasattr(doc, "page_content"):
+            doc = {
+                "id": getattr(doc, "id", None),
+                "content": doc.page_content,
+                "metadata": getattr(doc, "metadata", {}),
+                "score": score,
+            }
         if isinstance(doc, str):
             span.set_attribute(f"neatlogs.retriever.documents.{i}.content", doc)
             continue
@@ -434,7 +451,10 @@ def _retriever_postprocessor(span: Any, result: Any, bound_inputs: Dict[str, Any
         if isinstance(doc, dict):
             doc_id = doc.get("id") or doc.get("_id") or doc.get("doc_id")
             content = doc.get("content") or doc.get("document") or doc.get("text")
-            score = doc.get("score") or doc.get("_score") or doc.get("distance")
+            score = next(
+                (doc[key] for key in ("score", "_score", "distance") if doc.get(key) is not None),
+                score,
+            )
             metadata = doc.get("metadata") or {}
 
             if doc_id is not None:

@@ -157,7 +157,6 @@ def _set_common_span_attrs(
     attributes: Optional[Dict[str, Any]] = None,
 ) -> None:
     span.set_attribute("neatlogs.internal", True)
-    span.set_attribute("neatlogs.span.origin", "custom")
 
     span.set_attribute("openinference.span.kind", openinference_kind)
 

@@ -34,49 +34,5 @@ def test_tool_capture_keeps_falsy_values_under_one_workflow(
     assert root_kind.lower() == "workflow"
     operation_span = next(span for span in spans if span.name == "operation")
     assert operation_span.parent.span_id == roots[0].context.span_id
-    assert operation_span.attributes["neatlogs.span.origin"] == "custom"
     assert operation_span.attributes["input.value"] == json.dumps({"value": value})
     assert operation_span.attributes["output.value"] == json.dumps(value)
-
-
-@pytest.mark.parametrize("kind", ["CHAIN", "AGENT"])
-@pytest.mark.parametrize("value", [True, False, 0, {"status": "ok"}])
-def test_authored_roots_keep_kind_marker_and_io_with_child(
-    tracer_provider, in_memory_span_exporter, kind, value
-):
-    set_neatlogs_provider(tracer_provider)
-
-    @neatlogs.span(kind="TOOL", name="child")
-    def child():
-        return "done"
-
-    @neatlogs.span(kind=kind, name="authored")
-    def operation(value):
-        child()
-        return value
-
-    assert operation(value) is value
-    spans = {span.name: span for span in in_memory_span_exporter.get_finished_spans()}
-    root = spans["authored"]
-    assert root.parent is None
-    assert root.attributes["neatlogs.span.kind"] == kind.lower()
-    assert root.attributes["neatlogs.span.origin"] == "custom"
-    assert root.attributes["input.value"] == json.dumps({"value": value})
-    assert root.attributes["output.value"] == json.dumps(value)
-    assert spans["child"].parent.span_id == root.context.span_id
-
-
-@pytest.mark.parametrize("value", [True, False, 0, {"status": "ok"}])
-def test_manual_trace_marks_authored_root_without_changing_kind(
-    tracer_provider, in_memory_span_exporter, value
-):
-    set_neatlogs_provider(tracer_provider)
-    with neatlogs.trace("decision", kind="CHAIN") as span:
-        span.set_attribute("input.value", json.dumps({"value": value}))
-        span.set_attribute("output.value", json.dumps(value))
-    root = in_memory_span_exporter.get_finished_spans()[0]
-    assert root.parent is None
-    assert root.attributes["openinference.span.kind"] == "CHAIN"
-    assert root.attributes["neatlogs.span.origin"] == "custom"
-    assert root.attributes["input.value"] == json.dumps({"value": value})
-    assert root.attributes["output.value"] == json.dumps(value)

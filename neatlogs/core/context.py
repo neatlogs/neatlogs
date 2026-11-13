@@ -322,7 +322,6 @@ def _set_span_attributes(span, kind, template_string, prompt_variables, version,
     """Helper to set span attributes."""
 
     span.set_attribute("neatlogs.internal", True)
-    span.set_attribute("neatlogs.span.origin", "custom")
     span_kind = kind if kind else "CHAIN"
     span.set_attribute("openinference.span.kind", span_kind)
 

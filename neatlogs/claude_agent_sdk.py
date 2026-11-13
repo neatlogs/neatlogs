@@ -307,7 +307,7 @@ class _TracingQuery:
             except StopAsyncIteration:
                 self._finalize("ok")
                 raise
-            except Exception as e:
+            except BaseException as e:
                 self._finalize("error", e)
                 raise
         finally:

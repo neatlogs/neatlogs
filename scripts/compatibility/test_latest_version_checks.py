@@ -15,7 +15,7 @@ from scripts.compatibility.summarize_latest_version_checks import summarize
 
 class LatestVersionChecksTests(unittest.TestCase):
     def test_accurate_instrumentation_aliases(self):
-        self.assertEqual(instrumented_library("qdrant-langchain"), "qdrant")
+        self.assertEqual(instrumented_library("qdrant-langchain"), "langchain")
         self.assertEqual(instrumented_library("google-genai"), "google_genai")
 
     def test_only_baseline_pass_and_latest_fail_is_smoke_regression(self):

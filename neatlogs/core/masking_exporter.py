@@ -29,6 +29,7 @@ from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
 from opentelemetry.trace import Link, Status, StatusCode
 
 from .delivery import DeliveryDiagnostics
+from .error_sanitization import is_error_log, sanitize_error_snapshot
 from .mask import effective_mask
 
 logger = logging.getLogger(__name__)
@@ -256,7 +257,9 @@ def _span_snapshot(span: ReadableSpan) -> dict[str, Any]:
     }
 
 
-def _masked_span(span: ReadableSpan, snapshot: Mapping[str, Any]) -> ReadableSpan:
+def _masked_span(
+    span: ReadableSpan, snapshot: Mapping[str, Any], *, mask_metadata: bool = True
+) -> ReadableSpan:
     events = []
     for item in snapshot.get("events", ()):
         if not isinstance(item, Mapping):
@@ -290,10 +293,11 @@ def _masked_span(span: ReadableSpan, snapshot: Mapping[str, Any]) -> ReadableSpa
         status = Status(code, status_data.get("description"))
 
     attributes = _attrs(snapshot.get("attributes"))
-    attributes.pop("neatlogs.mask_id", None)
-    attributes.pop("neatlogs.replay.model_capture", None)
-    if attributes:
-        attributes["neatlogs.capture_fidelity"] = "masked"
+    if mask_metadata:
+        attributes.pop("neatlogs.mask_id", None)
+        attributes.pop("neatlogs.replay.model_capture", None)
+        if attributes:
+            attributes["neatlogs.capture_fidelity"] = "masked"
     return ReadableSpan(
         name=str(snapshot.get("name") or span.name),
         context=span.context,
@@ -337,9 +341,13 @@ class MaskingSpanExporter(SpanExporter):
         masked_indexes: list[int] = []
         for index, span in enumerate(spans):
             snapshot = _span_snapshot(span)
+            prepared[index] = (
+                _masked_span(span, snapshot, mask_metadata=False)
+                if sanitize_error_snapshot(snapshot)
+                else span
+            )
             mask = effective_mask(snapshot, self._global_mask)
             if mask is None:
-                prepared[index] = span
                 continue
             masked_inputs.append((mask, snapshot))
             masked_indexes.append(index)
@@ -354,8 +362,10 @@ class MaskingSpanExporter(SpanExporter):
                 masked,
             )
             if masked is not None:
-                prepared[index] = _masked_span(spans[index], masked)
+                sanitize_error_snapshot(masked)
+                prepared[index] = _masked_span(prepared[index], masked)
             else:
+                prepared[index] = None
                 if self._on_dropped is not None:
                     self._on_dropped(spans[index])
                 if self._diagnostics is not None:
@@ -401,6 +411,32 @@ def _log_snapshot(item: ReadableLogRecord) -> dict[str, Any]:
     }
 
 
+def _masked_log(item: ReadableLogRecord, snapshot: Mapping[str, Any]) -> ReadableLogRecord:
+    clone = copy.copy(item)
+    clone_record = copy.copy(item.log_record)
+    clone_record.body = snapshot.get("body")
+    clone_record.attributes = _attrs(snapshot.get("attributes"))
+    clone_record.severity_text = snapshot.get("severity_text")
+    clone_record.event_name = snapshot.get("event_name")
+    object.__setattr__(clone, "log_record", clone_record)
+    resource_data = snapshot.get("resource")
+    resource_attrs = (
+        _attrs(resource_data.get("attributes")) if isinstance(resource_data, Mapping) else {}
+    )
+    original_resource = getattr(item, "resource", None) or getattr(
+        item.log_record, "resource", None
+    )
+    masked_resource = Resource(
+        resource_attrs,
+        schema_url=original_resource.schema_url if original_resource else None,
+    )
+    if hasattr(clone, "resource"):
+        object.__setattr__(clone, "resource", masked_resource)
+    elif hasattr(clone_record, "resource"):
+        object.__setattr__(clone_record, "resource", masked_resource)
+    return clone
+
+
 class MaskingLogExporter(LogRecordExporter):
     """Apply the same global fail-closed mask contract to correlated logs."""
 
@@ -420,9 +456,20 @@ class MaskingLogExporter(LogRecordExporter):
 
     def export(self, batch: Sequence[ReadableLogRecord]) -> LogRecordExportResult:
         if self._mask is None:
-            return self._inner.export(batch)
+            prepared = None
+            for index, item in enumerate(batch):
+                if not is_error_log(item.log_record.severity_text, item.log_record.attributes):
+                    continue
+                snapshot = _log_snapshot(item)
+                if sanitize_error_snapshot(snapshot):
+                    if prepared is None:
+                        prepared = list(batch)
+                    prepared[index] = _masked_log(item, snapshot)
+            return self._inner.export(prepared if prepared is not None else batch)
         kept = []
         snapshots = [(self._mask, _log_snapshot(item)) for item in batch]
+        for _, snapshot in snapshots:
+            sanitize_error_snapshot(snapshot)
         masked_results = self._runner.apply_many(snapshots)
         from .media import current_media_store
         from .media_exporter import release_removed_media
@@ -433,31 +480,8 @@ class MaskingLogExporter(LogRecordExporter):
                 if self._diagnostics is not None:
                     self._diagnostics.record_masked_drop("log")
                 continue
-            clone = copy.copy(item)
-            clone_record = copy.copy(item.log_record)
-            clone_record.body = masked.get("body")
-            clone_record.attributes = _attrs(masked.get("attributes"))
-            clone_record.severity_text = masked.get("severity_text")
-            clone_record.event_name = masked.get("event_name")
-            object.__setattr__(clone, "log_record", clone_record)
-            resource_data = masked.get("resource")
-            resource_attrs = (
-                _attrs(resource_data.get("attributes"))
-                if isinstance(resource_data, Mapping)
-                else {}
-            )
-            original_resource = getattr(item, "resource", None) or getattr(
-                item.log_record, "resource", None
-            )
-            masked_resource = Resource(
-                resource_attrs,
-                schema_url=original_resource.schema_url if original_resource else None,
-            )
-            if hasattr(clone, "resource"):
-                object.__setattr__(clone, "resource", masked_resource)
-            elif hasattr(clone_record, "resource"):
-                object.__setattr__(clone_record, "resource", masked_resource)
-            kept.append(clone)
+            sanitize_error_snapshot(masked)
+            kept.append(_masked_log(item, masked))
         if not kept:
             return LogRecordExportResult.SUCCESS
         return self._inner.export(kept)

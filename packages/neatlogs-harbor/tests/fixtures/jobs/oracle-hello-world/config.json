@@ -1,0 +1,10 @@
+{
+    "job_name": "oracle-hello-world",
+    "n_attempts": 2,
+    "tasks": [
+        {
+            "name": "hello-world/hello-world",
+            "ref": "latest"
+        }
+    ]
+}

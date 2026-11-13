@@ -1,0 +1,4872 @@
+{
+ "components": {
+  "headers": {
+   "PublicApiLegacyRateLimitLimit": {
+    "description": "Effective request ceiling for the current window",
+    "schema": {
+     "minimum": 1,
+     "type": "integer"
+    }
+   },
+   "PublicApiLegacyRateLimitRemaining": {
+    "description": "Requests remaining in the current window",
+    "schema": {
+     "minimum": 0,
+     "type": "integer"
+    }
+   },
+   "PublicApiRateLimitDegraded": {
+    "description": "Whether bounded emergency enforcement is active",
+    "schema": {
+     "enum": [
+      "true",
+      "false"
+     ],
+     "type": "string"
+    }
+   },
+   "PublicApiRateLimitLimit": {
+    "description": "Effective request ceiling for the current window",
+    "schema": {
+     "minimum": 1,
+     "type": "integer"
+    }
+   },
+   "PublicApiRateLimitPolicy": {
+    "description": "Applied pre-authentication or authenticated rate class",
+    "schema": {
+     "type": "string"
+    }
+   },
+   "PublicApiRateLimitRemaining": {
+    "description": "Requests remaining in the current window",
+    "schema": {
+     "minimum": 0,
+     "type": "integer"
+    }
+   },
+   "PublicApiRateLimitReset": {
+    "description": "Unix timestamp in seconds when the current window resets",
+    "schema": {
+     "minimum": 0,
+     "type": "integer"
+    }
+   },
+   "PublicApiRateLimitResetAfter": {
+    "description": "Whole seconds until the current window resets",
+    "schema": {
+     "minimum": 1,
+     "type": "integer"
+    }
+   },
+   "PublicApiRateLimitVersion": {
+    "description": "NeatLogs rate-limit contract version",
+    "schema": {
+     "const": "1",
+     "type": "string"
+    }
+   },
+   "PublicApiRequestId": {
+    "description": "Server-owned request correlation identifier",
+    "schema": {
+     "pattern": "^req_[a-f0-9]{32}$",
+     "type": "string"
+    }
+   },
+   "PublicApiRetryAfter": {
+    "description": "Whole seconds until the client should retry",
+    "schema": {
+     "minimum": 1,
+     "type": "integer"
+    }
+   },
+   "PublicApiWwwAuthenticate": {
+    "description": "Bearer authentication challenge",
+    "schema": {
+     "type": "string"
+    }
+   }
+  },
+  "responses": {
+   "LocalTestingProblem400": {
+    "content": {
+     "application/problem+json": {
+      "schema": {
+       "allOf": [
+        {
+         "$ref": "#/components/schemas/PublicApiProblem"
+        },
+        {
+         "$ref": "#/components/schemas/PublicApiProblem400"
+        }
+       ]
+      }
+     }
+    },
+    "description": "Invalid public API request",
+    "headers": {
+     "X-Request-Id": {
+      "$ref": "#/components/headers/PublicApiRequestId"
+     }
+    }
+   },
+   "LocalTestingProblem401": {
+    "content": {
+     "application/problem+json": {
+      "schema": {
+       "$ref": "#/components/schemas/PublicApiProblemResponse401"
+      }
+     }
+    },
+    "description": "Missing or invalid public API credential",
+    "headers": {
+     "WWW-Authenticate": {
+      "$ref": "#/components/headers/PublicApiWwwAuthenticate"
+     },
+     "X-Request-Id": {
+      "$ref": "#/components/headers/PublicApiRequestId"
+     }
+    }
+   },
+   "LocalTestingProblem403": {
+    "content": {
+     "application/problem+json": {
+      "schema": {
+       "$ref": "#/components/schemas/PublicApiProblemResponse403"
+      }
+     }
+    },
+    "description": "Public API request is not authorized",
+    "headers": {
+     "X-Request-Id": {
+      "$ref": "#/components/headers/PublicApiRequestId"
+     }
+    }
+   },
+   "LocalTestingProblem404": {
+    "content": {
+     "application/problem+json": {
+      "schema": {
+       "$ref": "#/components/schemas/PublicApiProblemResponse404"
+      }
+     }
+    },
+    "description": "Run, example or trace not found",
+    "headers": {
+     "X-Request-Id": {
+      "$ref": "#/components/headers/PublicApiRequestId"
+     }
+    }
+   },
+   "LocalTestingProblem409": {
+    "content": {
+     "application/problem+json": {
+      "schema": {
+       "$ref": "#/components/schemas/PublicApiProblemResponse409"
+      }
+     }
+    },
+    "description": "Trace not yet ready, output conflict, or closed run",
+    "headers": {
+     "X-Request-Id": {
+      "$ref": "#/components/headers/PublicApiRequestId"
+     }
+    }
+   },
+   "LocalTestingProblem413": {
+    "content": {
+     "application/problem+json": {
+      "schema": {
+       "$ref": "#/components/schemas/PublicApiProblemResponse413"
+      }
+     }
+    },
+    "description": "Public API request body too large",
+    "headers": {
+     "X-Request-Id": {
+      "$ref": "#/components/headers/PublicApiRequestId"
+     }
+    }
+   },
+   "LocalTestingProblem415": {
+    "content": {
+     "application/problem+json": {
+      "schema": {
+       "$ref": "#/components/schemas/PublicApiProblemResponse415"
+      }
+     }
+    },
+    "description": "Unsupported public API request body",
+    "headers": {
+     "X-Request-Id": {
+      "$ref": "#/components/headers/PublicApiRequestId"
+     }
+    }
+   },
+   "LocalTestingProblem422": {
+    "content": {
+     "application/problem+json": {
+      "schema": {
+       "allOf": [
+        {
+         "$ref": "#/components/schemas/PublicApiProblem"
+        },
+        {
+         "$ref": "#/components/schemas/PublicApiProblem422"
+        }
+       ]
+      }
+     }
+    },
+    "description": "Trace does not belong to this local run",
+    "headers": {
+     "X-Request-Id": {
+      "$ref": "#/components/headers/PublicApiRequestId"
+     }
+    }
+   },
+   "LocalTestingProblem429": {
+    "content": {
+     "application/problem+json": {
+      "schema": {
+       "$ref": "#/components/schemas/PublicApiProblemResponse429"
+      }
+     }
+    },
+    "description": "Public API rate limit exceeded",
+    "headers": {
+     "RateLimit-Limit": {
+      "$ref": "#/components/headers/PublicApiRateLimitLimit"
+     },
+     "RateLimit-Remaining": {
+      "$ref": "#/components/headers/PublicApiRateLimitRemaining"
+     },
+     "RateLimit-Reset": {
+      "$ref": "#/components/headers/PublicApiRateLimitReset"
+     },
+     "Retry-After": {
+      "$ref": "#/components/headers/PublicApiRetryAfter"
+     },
+     "X-NeatLogs-RateLimit-Degraded": {
+      "$ref": "#/components/headers/PublicApiRateLimitDegraded"
+     },
+     "X-NeatLogs-RateLimit-Limit": {
+      "$ref": "#/components/headers/PublicApiLegacyRateLimitLimit"
+     },
+     "X-NeatLogs-RateLimit-Policy": {
+      "$ref": "#/components/headers/PublicApiRateLimitPolicy"
+     },
+     "X-NeatLogs-RateLimit-Remaining": {
+      "$ref": "#/components/headers/PublicApiLegacyRateLimitRemaining"
+     },
+     "X-NeatLogs-RateLimit-Reset-After": {
+      "$ref": "#/components/headers/PublicApiRateLimitResetAfter"
+     },
+     "X-NeatLogs-RateLimit-Version": {
+      "$ref": "#/components/headers/PublicApiRateLimitVersion"
+     },
+     "X-Request-Id": {
+      "$ref": "#/components/headers/PublicApiRequestId"
+     }
+    }
+   },
+   "LocalTestingProblem500": {
+    "content": {
+     "application/problem+json": {
+      "schema": {
+       "$ref": "#/components/schemas/PublicApiProblemResponse500"
+      }
+     }
+    },
+    "description": "Internal server error",
+    "headers": {
+     "X-Request-Id": {
+      "$ref": "#/components/headers/PublicApiRequestId"
+     }
+    }
+   },
+   "LocalTestingProblem503": {
+    "content": {
+     "application/json": {
+      "schema": {
+       "additionalProperties": false,
+       "properties": {
+        "error": {
+         "const": "Backend is draining",
+         "type": "string"
+        }
+       },
+       "required": [
+        "error"
+       ],
+       "type": "object"
+      }
+     },
+     "application/problem+json": {
+      "schema": {
+       "allOf": [
+        {
+         "$ref": "#/components/schemas/PublicApiProblem"
+        },
+        {
+         "$ref": "#/components/schemas/PublicApiProblem503"
+        }
+       ]
+      }
+     }
+    },
+    "description": "Public API credential, project context, or rate limiting unavailable. Backend is draining; retry after the Retry-After delay.",
+    "headers": {
+     "Retry-After": {
+      "$ref": "#/components/headers/PublicApiRetryAfter"
+     },
+     "X-Request-Id": {
+      "$ref": "#/components/headers/PublicApiRequestId"
+     }
+    }
+   }
+  },
+  "schemas": {
+   "PublicApiProblem": {
+    "additionalProperties": false,
+    "properties": {
+     "code": {
+      "maxLength": 96,
+      "pattern": "^[A-Z][A-Z0-9_]*$",
+      "type": "string"
+     },
+     "detail": {
+      "maxLength": 512,
+      "minLength": 1,
+      "type": "string"
+     },
+     "errors": {
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "code": {
+         "maxLength": 64,
+         "pattern": "^[a-z0-9_]+$",
+         "type": "string"
+        },
+        "message": {
+         "maxLength": 160,
+         "minLength": 1,
+         "type": "string"
+        },
+        "path": {
+         "maxLength": 160,
+         "type": "string"
+        }
+       },
+       "required": [
+        "code",
+        "message",
+        "path"
+       ],
+       "type": "object"
+      },
+      "maxItems": 20,
+      "type": "array"
+     },
+     "instance": {
+      "maxLength": 2048,
+      "pattern": "^\\/[aA][pP][iI]\\/[vV][0-9]+\\/[pP][uU][bB][lL][iI][cC](?:\\/[^?#\\r\\n]*)?$",
+      "type": "string"
+     },
+     "requestId": {
+      "pattern": "^req_[a-f0-9]{32}$",
+      "type": "string"
+     },
+     "retryable": {
+      "type": "boolean"
+     },
+     "status": {
+      "enum": [
+       400,
+       401,
+       403,
+       404,
+       409,
+       413,
+       415,
+       422,
+       429,
+       500,
+       503
+      ],
+      "type": "integer"
+     },
+     "title": {
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string"
+     },
+     "type": {
+      "pattern": "^urn:neatlogs:problem:[a-z0-9]+(?:-[a-z0-9]+)*$",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "detail",
+     "instance",
+     "requestId",
+     "retryable",
+     "status",
+     "title",
+     "type"
+    ],
+    "type": "object"
+   },
+   "PublicApiProblem400": {
+    "properties": {
+     "status": {
+      "const": 400,
+      "type": "number"
+     }
+    },
+    "required": [
+     "status"
+    ],
+    "type": "object"
+   },
+   "PublicApiProblem401": {
+    "properties": {
+     "status": {
+      "const": 401,
+      "type": "number"
+     }
+    },
+    "required": [
+     "status"
+    ],
+    "type": "object"
+   },
+   "PublicApiProblem403": {
+    "properties": {
+     "status": {
+      "const": 403,
+      "type": "number"
+     }
+    },
+    "required": [
+     "status"
+    ],
+    "type": "object"
+   },
+   "PublicApiProblem404": {
+    "properties": {
+     "status": {
+      "const": 404,
+      "type": "number"
+     }
+    },
+    "required": [
+     "status"
+    ],
+    "type": "object"
+   },
+   "PublicApiProblem409": {
+    "properties": {
+     "status": {
+      "const": 409,
+      "type": "number"
+     }
+    },
+    "required": [
+     "status"
+    ],
+    "type": "object"
+   },
+   "PublicApiProblem413": {
+    "properties": {
+     "status": {
+      "const": 413,
+      "type": "number"
+     }
+    },
+    "required": [
+     "status"
+    ],
+    "type": "object"
+   },
+   "PublicApiProblem415": {
+    "properties": {
+     "status": {
+      "const": 415,
+      "type": "number"
+     }
+    },
+    "required": [
+     "status"
+    ],
+    "type": "object"
+   },
+   "PublicApiProblem422": {
+    "properties": {
+     "status": {
+      "const": 422,
+      "type": "number"
+     }
+    },
+    "required": [
+     "status"
+    ],
+    "type": "object"
+   },
+   "PublicApiProblem429": {
+    "properties": {
+     "status": {
+      "const": 429,
+      "type": "number"
+     }
+    },
+    "required": [
+     "status"
+    ],
+    "type": "object"
+   },
+   "PublicApiProblem500": {
+    "properties": {
+     "status": {
+      "const": 500,
+      "type": "number"
+     }
+    },
+    "required": [
+     "status"
+    ],
+    "type": "object"
+   },
+   "PublicApiProblem503": {
+    "properties": {
+     "status": {
+      "const": 503,
+      "type": "number"
+     }
+    },
+    "required": [
+     "status"
+    ],
+    "type": "object"
+   },
+   "PublicApiProblemResponse401": {
+    "allOf": [
+     {
+      "$ref": "#/components/schemas/PublicApiProblem"
+     },
+     {
+      "$ref": "#/components/schemas/PublicApiProblem401"
+     }
+    ]
+   },
+   "PublicApiProblemResponse403": {
+    "allOf": [
+     {
+      "$ref": "#/components/schemas/PublicApiProblem"
+     },
+     {
+      "$ref": "#/components/schemas/PublicApiProblem403"
+     }
+    ]
+   },
+   "PublicApiProblemResponse404": {
+    "allOf": [
+     {
+      "$ref": "#/components/schemas/PublicApiProblem"
+     },
+     {
+      "$ref": "#/components/schemas/PublicApiProblem404"
+     }
+    ]
+   },
+   "PublicApiProblemResponse409": {
+    "allOf": [
+     {
+      "$ref": "#/components/schemas/PublicApiProblem"
+     },
+     {
+      "$ref": "#/components/schemas/PublicApiProblem409"
+     }
+    ]
+   },
+   "PublicApiProblemResponse413": {
+    "allOf": [
+     {
+      "$ref": "#/components/schemas/PublicApiProblem"
+     },
+     {
+      "$ref": "#/components/schemas/PublicApiProblem413"
+     }
+    ]
+   },
+   "PublicApiProblemResponse415": {
+    "allOf": [
+     {
+      "$ref": "#/components/schemas/PublicApiProblem"
+     },
+     {
+      "$ref": "#/components/schemas/PublicApiProblem415"
+     }
+    ]
+   },
+   "PublicApiProblemResponse429": {
+    "allOf": [
+     {
+      "$ref": "#/components/schemas/PublicApiProblem"
+     },
+     {
+      "$ref": "#/components/schemas/PublicApiProblem429"
+     }
+    ]
+   },
+   "PublicApiProblemResponse500": {
+    "allOf": [
+     {
+      "$ref": "#/components/schemas/PublicApiProblem"
+     },
+     {
+      "$ref": "#/components/schemas/PublicApiProblem500"
+     }
+    ]
+   },
+   "PublicLocalRunLink": {
+    "additionalProperties": false,
+    "properties": {
+     "attempt": {
+      "maximum": 100,
+      "minimum": 1,
+      "type": "integer"
+     },
+     "experimentId": {
+      "format": "uuid",
+      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+      "type": "string"
+     },
+     "roundId": {
+      "format": "uuid",
+      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+      "type": "string"
+     },
+     "variant": {
+      "enum": [
+       "A",
+       "B"
+      ],
+      "type": "string"
+     }
+    },
+    "required": [
+     "experimentId",
+     "roundId",
+     "variant",
+     "attempt"
+    ],
+    "type": "object"
+   },
+   "PublicOffsetTimestamp": {
+    "format": "date-time",
+    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+    "type": "string"
+   },
+   "PublicUtcTimestamp": {
+    "format": "date-time",
+    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+    "type": "string"
+   },
+   "PublicUuid": {
+    "format": "uuid",
+    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+    "type": "string"
+   }
+  }
+ },
+ "info": {
+  "description": "Filtered public API specification for customer-facing /api/v1/public/* endpoints only.",
+  "title": "Neatlogs Public API",
+  "version": "0.1.0",
+  "x-extracted-from": "neatlogs-app backend/public-openapi.json @ cf7bda83c6 (2026-11-09)"
+ },
+ "openapi": "3.1.0",
+ "paths": {
+  "/api/v1/public/datasets": {
+   "get": {
+    "description": "List or read public datasets.\n\n**Auth:** Requires a service-account or OAuth access Bearer token and explicit x-project-id; credential scope, current project role, tenant ownership, and entitlement are enforced.",
+    "operationId": "get_api_v1_public_datasets",
+    "parameters": [
+     {
+      "description": "before query parameter",
+      "in": "query",
+      "name": "before",
+      "required": false,
+      "schema": {
+       "$ref": "#/components/schemas/PublicUuid"
+      }
+     },
+     {
+      "description": "x-project-id header parameter",
+      "in": "header",
+      "name": "x-project-id",
+      "required": true,
+      "schema": {
+       "description": "Required service-account or OAuth project selection",
+       "format": "uuid",
+       "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+       "type": "string"
+      }
+     },
+     {
+      "description": "prefer header parameter",
+      "in": "header",
+      "name": "prefer",
+      "required": false,
+      "schema": {
+       "description": "Send pagination=cursor to receive nextCursor. Other preferences are ignored.",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "data": {
+           "additionalProperties": false,
+           "properties": {
+            "datasets": {
+             "items": {
+              "additionalProperties": false,
+              "properties": {
+               "caseCount": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+               },
+               "createdAt": {
+                "$ref": "#/components/schemas/PublicUtcTimestamp"
+               },
+               "description": {
+                "anyOf": [
+                 {
+                  "type": "string"
+                 },
+                 {
+                  "type": "null"
+                 }
+                ]
+               },
+               "id": {
+                "$ref": "#/components/schemas/PublicUuid"
+               },
+               "latestVersionId": {
+                "$ref": "#/components/schemas/PublicUuid"
+               },
+               "name": {
+                "type": "string"
+               },
+               "version": {
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991,
+                "type": "integer"
+               }
+              },
+              "required": [
+               "id",
+               "name",
+               "description",
+               "latestVersionId",
+               "version",
+               "caseCount",
+               "createdAt"
+              ],
+              "type": "object"
+             },
+             "type": "array"
+            },
+            "nextCursor": {
+             "anyOf": [
+              {
+               "$ref": "#/components/schemas/PublicUuid"
+              },
+              {
+               "type": "null"
+              }
+             ]
+            }
+           },
+           "required": [
+            "datasets"
+           ],
+           "type": "object"
+          },
+          "requestId": {
+           "pattern": "^req_[a-f0-9]{32}$",
+           "type": "string"
+          },
+          "success": {
+           "const": true,
+           "type": "boolean"
+          }
+         },
+         "required": [
+          "data",
+          "requestId",
+          "success"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Up to 500 published datasets, newest first. Send Prefer: pagination=cursor to receive nextCursor, then pass it as before to continue. Without negotiation, returns the legacy datasets-only response.",
+      "headers": {
+       "RateLimit-Limit": {
+        "$ref": "#/components/headers/PublicApiRateLimitLimit"
+       },
+       "RateLimit-Remaining": {
+        "$ref": "#/components/headers/PublicApiRateLimitRemaining"
+       },
+       "RateLimit-Reset": {
+        "$ref": "#/components/headers/PublicApiRateLimitReset"
+       },
+       "X-NeatLogs-RateLimit-Degraded": {
+        "$ref": "#/components/headers/PublicApiRateLimitDegraded"
+       },
+       "X-NeatLogs-RateLimit-Limit": {
+        "$ref": "#/components/headers/PublicApiLegacyRateLimitLimit"
+       },
+       "X-NeatLogs-RateLimit-Policy": {
+        "$ref": "#/components/headers/PublicApiRateLimitPolicy"
+       },
+       "X-NeatLogs-RateLimit-Remaining": {
+        "$ref": "#/components/headers/PublicApiLegacyRateLimitRemaining"
+       },
+       "X-NeatLogs-RateLimit-Reset-After": {
+        "$ref": "#/components/headers/PublicApiRateLimitResetAfter"
+       },
+       "X-NeatLogs-RateLimit-Version": {
+        "$ref": "#/components/headers/PublicApiRateLimitVersion"
+       },
+       "X-Request-Id": {
+        "$ref": "#/components/headers/PublicApiRequestId"
+       }
+      }
+     },
+     "400": {
+      "content": {
+       "application/problem+json": {
+        "schema": {
+         "allOf": [
+          {
+           "$ref": "#/components/schemas/PublicApiProblem"
+          },
+          {
+           "$ref": "#/components/schemas/PublicApiProblem400"
+          }
+         ]
+        }
+       }
+      },
+      "description": "Invalid public API request",
+      "headers": {
+       "X-Request-Id": {
+        "$ref": "#/components/headers/PublicApiRequestId"
+       }
+      }
+     },
+     "401": {
+      "content": {
+       "application/problem+json": {
+        "schema": {
+         "$ref": "#/components/schemas/PublicApiProblemResponse401"
+        }
+       }
+      },
+      "description": "Missing or invalid public API credential",
+      "headers": {
+       "WWW-Authenticate": {
+        "$ref": "#/components/headers/PublicApiWwwAuthenticate"
+       },
+       "X-Request-Id": {
+        "$ref": "#/components/headers/PublicApiRequestId"
+       }
+      }
+     },
+     "403": {
+      "content": {
+       "application/problem+json": {
+        "schema": {
+         "$ref": "#/components/schemas/PublicApiProblemResponse403"
+        }
+       }
+      },
+      "description": "Public API request is not authorized",
+      "headers": {
+       "X-Request-Id": {
+        "$ref": "#/components/headers/PublicApiRequestId"
+       }
+      }
+     },
+     "404": {
+      "content": {
+       "application/problem+json": {
+        "schema": {
+         "$ref": "#/components/schemas/PublicApiProblemResponse404"
+        }
+       }
+      },
+      "description": "Dataset, version, case, or capture job not found",
+      "headers": {
+       "X-Request-Id": {
+        "$ref": "#/components/headers/PublicApiRequestId"
+       }
+      }
+     },
+     "409": {
+      "content": {
+       "application/problem+json": {
+        "schema": {
+         "$ref": "#/components/schemas/PublicApiProblemResponse409"
+        }
+       }
+      },
+      "description": "Dataset capture is not published yet",
+      "headers": {
+       "X-Request-Id": {
+        "$ref": "#/components/headers/PublicApiRequestId"
+       }
+      }
+     },
+     "413": {
+      "content": {
+       "application/problem+json": {
+        "schema": {
+         "$ref": "#/components/schemas/PublicApiProblemResponse413"
+        }
+       }
+      },
+      "description": "Public API request body too large",
+      "headers": {
+       "X-Request-Id": {
+        "$ref": "#/components/headers/PublicApiRequestId"
+       }
+      }
+     },
+     "415": {
+      "content": {
+       "application/problem+json": {
+        "schema": {
+         "$ref": "#/components/schemas/PublicApiProblemResponse415"
+        }
+       }
+      },
+      "description": "Unsupported public API request body",
+      "headers": {
+       "X-Request-Id": {
+        "$ref": "#/components/headers/PublicApiRequestId"
+       }
+      }
+     },
+     "429": {
+      "content": {
+       "application/problem+json": {
+        "schema": {
+         "$ref": "#/components/schemas/PublicApiProblemResponse429"
+        }
+       }
+      },
+      "description": "Public API rate limit exceeded",
+      "headers": {
+       "RateLimit-Limit": {
+        "$ref": "#/components/headers/PublicApiRateLimitLimit"
+       },
+       "RateLimit-Remaining": {
+        "$ref": "#/components/headers/PublicApiRateLimitRemaining"
+       },
+       "RateLimit-Reset": {
+        "$ref": "#/components/headers/PublicApiRateLimitReset"
+       },
+       "Retry-After": {
+        "$ref": "#/components/headers/PublicApiRetryAfter"
+       },
+       "X-NeatLogs-RateLimit-Degraded": {
+        "$ref": "#/components/headers/PublicApiRateLimitDegraded"
+       },
+       "X-NeatLogs-RateLimit-Limit": {
+        "$ref": "#/components/headers/PublicApiLegacyRateLimitLimit"
+       },
+       "X-NeatLogs-RateLimit-Policy": {
+        "$ref": "#/components/headers/PublicApiRateLimitPolicy"
+       },
+       "X-NeatLogs-RateLimit-Remaining": {
+        "$ref": "#/components/headers/PublicApiLegacyRateLimitRemaining"
+       },
+       "X-NeatLogs-RateLimit-Reset-After": {
+        "$ref": "#/components/headers/PublicApiRateLimitResetAfter"
+       },
+       "X-NeatLogs-RateLimit-Version": {
+        "$ref": "#/components/headers/PublicApiRateLimitVersion"
+       },
+       "X-Request-Id": {
+        "$ref": "#/components/headers/PublicApiRequestId"
+       }
+      }
+     },
+     "500": {
+      "content": {
+       "application/problem+json": {
+        "schema": {
+         "$ref": "#/components/schemas/PublicApiProblemResponse500"
+        }
+       }
+      },
+      "description": "Internal server error",
+      "headers": {
+       "X-Request-Id": {
+        "$ref": "#/components/headers/PublicApiRequestId"
+       }
+      }
+     },
+     "503": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "error": {
+           "const": "Backend is draining",
+           "type": "string"
+          }
+         },
+         "required": [
+          "error"
+         ],
+         "type": "object"
+        }
+       },
+       "application/problem+json": {
+        "schema": {
+         "allOf": [
+          {
+           "$ref": "#/components/schemas/PublicApiProblem"
+          },
+          {
+           "$ref": "#/components/schemas/PublicApiProblem503"
+          }
+         ]
+        }
+       }
+      },
+      "description": "Public API credential, project context, or rate limiting unavailable. Backend is draining; retry after the Retry-After delay.",
+      "headers": {
+       "Retry-After": {
+        "$ref": "#/components/headers/PublicApiRetryAfter"
+       },
+       "X-Request-Id": {
+        "$ref": "#/components/headers/PublicApiRequestId"
+       }
+      }
+     }
+    },
+    "security": [
+     {
+      "ServiceAccountBearerAuth": []
+     },
+     {
+      "OAuth2": [
+       "evaluation:read"
+      ]
+     }
+    ],
+    "summary": "List one page of published datasets",
+    "tags": [
+     "public",
+     "datasets"
+    ],
+    "x-auth-gate": "public-api-key",
+    "x-auth-source": "global-gate",
+    "x-contract-coverage": "contracted",
+    "x-neatlogs-operation-gate": "always"
+   },
+   "post": {
+    "description": "Create or trigger public datasets.\n\n**Auth:** Requires a service-account or OAuth access Bearer token and explicit x-project-id; credential scope, current project role, tenant ownership, and entitlement are enforced.",
+    "operationId": "post_api_v1_public_datasets",
+    "parameters": [
+     {
+      "description": "idempotency-key header parameter",
+      "in": "header",
+      "name": "idempotency-key",
+      "required": true,
+      "schema": {
+       "description": "Required canonical UUIDv4 or high-entropy base64url idempotency key",
+       "maxLength": 43,
+       "minLength": 22,
+       "pattern": "^(?:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|[A-Za-z0-9_-]{21}[AQgw]|[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048])$",
+       "type": "string"
+      }
+     },
+     {
+      "description": "x-project-id header parameter",
+      "in": "header",
+      "name": "x-project-id",
+      "required": true,
+      "schema": {
+       "$ref": "#/components/schemas/PublicUuid"
+      }
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+         "cases": {
+          "default": [],
+          "items": {
+           "additionalProperties": false,
+           "properties": {
+            "acceptanceCriteria": {
+             "anyOf": [
+              {
+               "additionalProperties": false,
+               "properties": {
+                "generation": {
+                 "additionalProperties": false,
+                 "properties": {
+                  "caseRevisionId": {
+                   "$ref": "#/components/schemas/PublicUuid"
+                  },
+                  "evidenceHash": {
+                   "pattern": "^[a-f0-9]{64}$",
+                   "type": "string"
+                  },
+                  "generatedAt": {
+                   "$ref": "#/components/schemas/PublicUtcTimestamp"
+                  },
+                  "model": {
+                   "maxLength": 255,
+                   "minLength": 1,
+                   "type": "string"
+                  },
+                  "promptVersion": {
+                   "const": "dataset-criteria.v1",
+                   "type": "string"
+                  }
+                 },
+                 "required": [
+                  "model",
+                  "generatedAt",
+                  "caseRevisionId",
+                  "evidenceHash",
+                  "promptVersion"
+                 ],
+                 "type": "object"
+                },
+                "items": {
+                 "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                   "description": {
+                    "maxLength": 2000,
+                    "minLength": 1,
+                    "type": "string"
+                   },
+                   "id": {
+                    "$ref": "#/components/schemas/PublicUuid"
+                   }
+                  },
+                  "required": [
+                   "id",
+                   "description"
+                  ],
+                  "type": "object"
+                 },
+                 "maxItems": 50,
+                 "minItems": 1,
+                 "type": "array"
+                },
+                "source": {
+                 "enum": [
+                  "human",
+                  "ai",
+                  "import"
+                 ],
+                 "type": "string"
+                },
+                "status": {
+                 "enum": [
+                  "draft",
+                  "verified"
+                 ],
+                 "type": "string"
+                }
+               },
+               "required": [
+                "items",
+                "status",
+                "source"
+               ],
+               "type": "object"
+              },
+              {
+               "type": "null"
+              }
+             ],
+             "default": null
+            },
+            "caseId": {
+             "$ref": "#/components/schemas/PublicUuid"
+            },
+            "context": {
+             "default": null
+            },
+            "expected": {
+             "anyOf": [
+              {
+               "additionalProperties": false,
+               "properties": {
+                "answers": {
+                 "additionalProperties": {},
+                 "propertyNames": {
+                  "type": "string"
+                 },
+                 "type": "object"
+                },
+                "evaluationId": {
+                 "$ref": "#/components/schemas/PublicUuid"
+                },
+                "generation": {
+                 "additionalProperties": false,
+                 "properties": {
+                  "caseRevisionId": {
+                   "$ref": "#/components/schemas/PublicUuid"
+                  },
+                  "evidenceHash": {
+                   "pattern": "^[a-f0-9]{64}$",
+                   "type": "string"
+                  },
+                  "generatedAt": {
+                   "$ref": "#/components/schemas/PublicUtcTimestamp"
+                  },
+                  "model": {
+                   "maxLength": 255,
+                   "minLength": 1,
+                   "type": "string"
+                  },
+                  "promptVersion": {
+                   "const": "dataset-expected.v1",
+                   "type": "string"
+                  }
+                 },
+                 "required": [
+                  "model",
+                  "generatedAt",
+                  "caseRevisionId",
+                  "evidenceHash",
+                  "promptVersion"
+                 ],
+                 "type": "object"
+                },
+                "responseId": {
+                 "$ref": "#/components/schemas/PublicUuid"
+                },
+                "source": {
+                 "enum": [
+                  "human",
+                  "captured_output",
+                  "import",
+                  "ai",
+                  "eval",
+                  "golden_update"
+                 ],
+                 "type": "string"
+                },
+                "status": {
+                 "enum": [
+                  "draft",
+                  "verified"
+                 ],
+                 "type": "string"
+                },
+                "value": {},
+                "verifiedAt": {
+                 "$ref": "#/components/schemas/PublicUtcTimestamp"
+                },
+                "verifiedBy": {
+                 "maxLength": 320,
+                 "minLength": 1,
+                 "type": "string"
+                }
+               },
+               "required": [
+                "value",
+                "status",
+                "source"
+               ],
+               "type": "object"
+              },
+              {
+               "type": "null"
+              }
+             ],
+             "default": null
+            },
+            "input": {
+             "default": null
+            },
+            "metadata": {
+             "additionalProperties": {},
+             "default": {},
+             "propertyNames": {
+              "type": "string"
+             },
+             "type": "object"
+            },
+            "metrics": {
+             "additionalProperties": {},
+             "default": {},
+             "propertyNames": {
+              "type": "string"
+             },
+             "type": "object"
+            },
+            "observedOutput": {
+             "default": null
+            },
+            "revisionId": {
+             "$ref": "#/components/schemas/PublicUuid"
+            },
+            "source": {
+             "default": {
+              "kind": "import"
+             },
+             "oneOf": [
+              {
+               "additionalProperties": false,
+               "properties": {
+                "kind": {
+                 "const": "session",
+                 "type": "string"
+                },
+                "members": {
+                 "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                   "startedAt": {
+                    "$ref": "#/components/schemas/PublicUtcTimestamp"
+                   },
+                   "traceId": {
+                    "maxLength": 255,
+                    "minLength": 1,
+                    "type": "string"
+                   }
+                  },
+                  "required": [
+                   "traceId",
+                   "startedAt"
+                  ],
+                  "type": "object"
+                 },
+                 "maxItems": 100,
+                 "minItems": 1,
+                 "type": "array"
+                },
+                "membershipFrozenAt": {
+                 "$ref": "#/components/schemas/PublicUtcTimestamp"
+                },
+                "sessionId": {
+                 "maxLength": 255,
+                 "minLength": 1,
+                 "type": "string"
+                },
+                "window": {
+                 "additionalProperties": false,
+                 "properties": {
+                  "from": {
+                   "$ref": "#/components/schemas/PublicUtcTimestamp"
+                  },
+                  "to": {
+                   "$ref": "#/components/schemas/PublicUtcTimestamp"
+                  }
+                 },
+                 "type": "object"
+                }
+               },
+               "required": [
+                "kind",
+                "sessionId",
+                "membershipFrozenAt",
+                "members"
+               ],
+               "type": "object"
+              },
+              {
+               "additionalProperties": false,
+               "properties": {
+                "kind": {
+                 "const": "import",
+                 "type": "string"
+                }
+               },
+               "required": [
+                "kind"
+               ],
+               "type": "object"
+              },
+              {
+               "additionalProperties": false,
+               "properties": {
+                "kind": {
+                 "const": "trace",
+                 "type": "string"
+                },
+                "traceId": {
+                 "minLength": 1,
+                 "type": "string"
+                }
+               },
+               "required": [
+                "kind",
+                "traceId"
+               ],
+               "type": "object"
+              },
+              {
+               "additionalProperties": false,
+               "properties": {
+                "kind": {
+                 "const": "span",
+                 "type": "string"
+                },
+                "spanId": {
+                 "minLength": 1,
+                 "type": "string"
+                },
+                "traceId": {
+                 "minLength": 1,
+                 "type": "string"
+                }
+               },
+               "required": [
+                "kind",
+                "traceId",
+                "spanId"
+               ],
+               "type": "object"
+              }
+             ]
+            },
+            "tags": {
+             "default": [],
+             "items": {
+              "maxLength": 255,
+              "type": "string"
+             },
+             "maxItems": 100,
+             "type": "array"
+            }
+           },
+           "type": "object"
+          },
+          "maxItems": 500,
+          "type": "array"
+         },
+         "description": {
+          "anyOf": [
+           {
+            "maxLength": 2000,
+            "type": "string"
+           },
+           {
+            "type": "null"
+           }
+          ]
+         },
+         "idempotencyKey": {
+          "$ref": "#/components/schemas/PublicUuid"
+         },
+         "name": {
+          "maxLength": 255,
+          "minLength": 1,
+          "type": "string"
+         }
+        },
+        "required": [
+         "name",
+         "idempotencyKey"
+        ],
+        "type": "object"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "201": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "data": {
+           "additionalProperties": false,
+           "properties": {
+            "datasetId": {
+             "$ref": "#/components/schemas/PublicUuid"
+            },
+            "versionId": {
+             "$ref": "#/components/schemas/PublicUuid"
+            }
+           },
+           "required": [
+            "datasetId",
+            "versionId"
+           ],
+           "type": "object"
+          },
+          "requestId": {
+           "pattern": "^req_[a-f0-9]{32}$",
+           "type": "string"
+          },
+          "success": {
+           "const": true,
+           "type": "boolean"
+          }
+         },
+         "required": [
+          "data",
+          "requestId",
+          "success"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Published dataset and immutable version IDs",
+      "headers": {
+       "RateLimit-Limit": {
+        "$ref": "#/components/headers/PublicApiRateLimitLimit"
+       },
+       "RateLimit-Remaining": {
+        "$ref": "#/components/headers/PublicApiRateLimitRemaining"
+       },
+       "RateLimit-Reset": {
+        "$ref": "#/components/headers/PublicApiRateLimitReset"
+       },
+       "X-NeatLogs-RateLimit-Degraded": {
+        "$ref": "#/components/headers/PublicApiRateLimitDegraded"
+       },
+       "X-NeatLogs-RateLimit-Limit": {
+        "$ref": "#/components/headers/PublicApiLegacyRateLimitLimit"
+       },
+       "X-NeatLogs-RateLimit-Policy": {
+        "$ref": "#/components/headers/PublicApiRateLimitPolicy"
+       },
+       "X-NeatLogs-RateLimit-Remaining": {
+        "$ref": "#/components/headers/PublicApiLegacyRateLimitRemaining"
+       },
+       "X-NeatLogs-RateLimit-Reset-After": {
+        "$ref": "#/components/headers/PublicApiRateLimitResetAfter"
+       },
+       "X-NeatLogs-RateLimit-Version": {
+        "$ref": "#/components/headers/PublicApiRateLimitVersion"
+       },
+       "X-Request-Id": {
+        "$ref": "#/components/headers/PublicApiRequestId"
+       }
+      }
+     },
+     "400": {
+      "content": {
+       "application/problem+json": {
+        "schema": {
+         "allOf": [
+          {
+           "$ref": "#/components/schemas/PublicApiProblem"
+          },
+          {
+           "$ref": "#/components/schemas/PublicApiProblem400"
+          }
+         ]
+        }
+       }
+      },
+      "description": "Invalid public API request",
+      "headers": {
+       "X-Request-Id": {
+        "$ref": "#/components/headers/PublicApiRequestId"
+       }
+      }
+     },
+     "401": {
+      "content": {
+       "application/problem+json": {
+        "schema": {
+         "$ref": "#/components/schemas/PublicApiProblemResponse401"
+        }
+       }
+      },
+      "description": "Missing or invalid public API credential",
+      "headers": {
+       "WWW-Authenticate": {
+        "$ref": "#/components/headers/PublicApiWwwAuthenticate"
+       },
+       "X-Request-Id": {
+        "$ref": "#/components/headers/PublicApiRequestId"
+       }
+      }
+     },
+     "403": {
+      "content": {
+       "application/problem+json": {
+        "schema": {
+         "$ref": "#/components/schemas/PublicApiProblemResponse403"
+        }
+       }
+      },
+      "description": "Public API request is not authorized",
+      "headers": {
+       "X-Request-Id": {
+        "$ref": "#/components/headers/PublicApiRequestId"
+       }
+      }
+     },
+     "404": {
+      "content": {
+       "application/problem+json": {
+        "schema": {
+         "$ref": "#/components/schemas/PublicApiProblemResponse404"
+        }
+       }
+      },
+      "description": "Dataset, version, or case not found",
+      "headers": {
+       "X-Request-Id": {
+        "$ref": "#/components/headers/PublicApiRequestId"
+       }
+      }
+     },
+     "409": {
+      "content": {
+       "application/problem+json": {
+        "schema": {
+         "$ref": "#/components/schemas/PublicApiProblemResponse409"
+        }
+       }
+      },
+      "description": "Dataset version or idempotency conflict",
+      "headers": {
+       "X-Request-Id": {
+        "$ref": "#/components/headers/PublicApiRequestId"
+       }
+      }
+     },
+     "413": {
+      "content": {
+       "application/problem+json": {
+        "schema": {
+         "$ref": "#/components/schemas/PublicApiProblemResponse413"
+        }
+       }
+      },
+      "description": "Public API request body too large",
+      "headers": {
+       "X-Request-Id": {
+        "$ref": "#/components/headers/PublicApiRequestId"
+       }
+      }
+     },
+     "415": {
+      "content": {
+       "application/problem+json": {
+        "schema": {
+         "$ref": "#/components/schemas/PublicApiProblemResponse415"
+        }
+       }
+      },
+      "description": "Unsupported public API request body",
+      "headers": {
+       "X-Request-Id": {
+        "$ref": "#/components/headers/PublicApiRequestId"
+       }
+      }
+     },
+     "429": {
+      "content": {
+       "application/problem+json": {
+        "schema": {
+         "$ref": "#/components/schemas/PublicApiProblemResponse429"
+        }
+       }
+      },
+      "description": "Public API rate limit exceeded",
+      "headers": {
+       "RateLimit-Limit": {
+        "$ref": "#/components/headers/PublicApiRateLimitLimit"
+       },
+       "RateLimit-Remaining": {
+        "$ref": "#/components/headers/PublicApiRateLimitRemaining"
+       },
+       "RateLimit-Reset": {
+        "$ref": "#/components/headers/PublicApiRateLimitReset"
+       },
+       "Retry-After": {
+        "$ref": "#/components/headers/PublicApiRetryAfter"
+       },
+       "X-NeatLogs-RateLimit-Degraded": {
+        "$ref": "#/components/headers/PublicApiRateLimitDegraded"
+       },
+       "X-NeatLogs-RateLimit-Limit": {
+        "$ref": "#/components/headers/PublicApiLegacyRateLimitLimit"
+       },
+       "X-NeatLogs-RateLimit-Policy": {
+        "$ref": "#/components/headers/PublicApiRateLimitPolicy"
+       },
+       "X-NeatLogs-RateLimit-Remaining": {
+        "$ref": "#/components/headers/PublicApiLegacyRateLimitRemaining"
+       },
+       "X-NeatLogs-RateLimit-Reset-After": {
+        "$ref": "#/components/headers/PublicApiRateLimitResetAfter"
+       },
+       "X-NeatLogs-RateLimit-Version": {
+        "$ref": "#/components/headers/PublicApiRateLimitVersion"
+       },
+       "X-Request-Id": {
+        "$ref": "#/components/headers/PublicApiRequestId"
+       }
+      }
+     },
+     "500": {
+      "content": {
+       "application/problem+json": {
+        "schema": {
+         "$ref": "#/components/schemas/PublicApiProblemResponse500"
+        }
+       }
+      },
+      "description": "Internal server error",
+      "headers": {
+       "X-Request-Id": {
+        "$ref": "#/components/headers/PublicApiRequestId"
+       }
+      }
+     },
+     "503": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "error": {
+           "const": "Backend is draining",
+           "type": "string"
+          }
+         },
+         "required": [
+          "error"
+         ],
+         "type": "object"
+        }
+       },
+       "application/problem+json": {
+        "schema": {
+         "allOf": [
+          {
+           "$ref": "#/components/schemas/PublicApiProblem"
+          },
+          {
+           "$ref": "#/components/schemas/PublicApiProblem503"
+          }
+         ]
+        }
+       }
+      },
+      "description": "Public API credential, project context, or rate limiting unavailable. Backend is draining; retry after the Retry-After delay.",
+      "headers": {
+       "Retry-After": {
+        "$ref": "#/components/headers/PublicApiRetryAfter"
+       },
+       "X-Request-Id": {
+        "$ref": "#/components/headers/PublicApiRequestId"
+       }
+      }
+     }
+    },
+    "security": [
+     {
+      "ServiceAccountBearerAuth": []
+     },
+     {
+      "OAuth2": [
+       "evaluation:write"
+      ]
+     }
+    ],
+    "summary": "Create a dataset from imported cases (64 KiB request limit)",
+    "tags": [
+     "public",
+     "datasets"
+    ],
+    "x-auth-gate": "public-api-key",
+    "x-auth-source": "global-gate",
+    "x-contract-coverage": "contracted",
+    "x-neatlogs-operation-gate": "public-api-mutations"
+   }
+  },
+  "/api/v1/public/datasets/{datasetId}/cases": {
+   "get": {
+    "description": "Fetch a specific datasets cases.\n\n**Auth:** Requires a service-account or OAuth access Bearer token and explicit x-project-id; credential scope, current project role, tenant ownership, and entitlement are enforced.",
+    "operationId": "get_api_v1_public_datasets_datasetId_cases",
+    "parameters": [
+     {
+      "description": "datasetId path parameter",
+      "in": "path",
+      "name": "datasetId",
+      "required": true,
+      "schema": {
+       "$ref": "#/components/schemas/PublicUuid"
+      }
+     },
+     {
+      "description": "versionId query parameter",
+      "in": "query",
+      "name": "versionId",
+      "required": true,
+      "schema": {
+       "$ref": "#/components/schemas/PublicUuid"
+      }
+     },
+     {
+      "description": "offset query parameter",
+      "in": "query",
+      "name": "offset",
+      "required": false,
+      "schema": {
+       "default": 0,
+       "maximum": 2000,
+       "minimum": 0,
+       "type": "integer"
+      }
+     },
+     {
+      "description": "limit query parameter",
+      "in": "query",
+      "name": "limit",
+      "required": false,
+      "schema": {
+       "default": 25,
+       "maximum": 100,
+       "minimum": 1,
+       "type": "integer"
+      }
+     },
+     {
+      "description": "x-project-id header parameter",
+      "in": "header",
+      "name": "x-project-id",
+      "required": true,
+      "schema": {
+       "description": "Required service-account or OAuth project selection",
+       "format": "uuid",
+       "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "data": {
+           "additionalProperties": false,
+           "properties": {
+            "cases": {
+             "items": {
+              "additionalProperties": false,
+              "properties": {
+               "caseId": {
+                "$ref": "#/components/schemas/PublicUuid"
+               },
+               "criteriaCount": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+               },
+               "criteriaStatus": {
+                "anyOf": [
+                 {
+                  "enum": [
+                   "draft",
+                   "verified"
+                  ],
+                  "type": "string"
+                 },
+                 {
+                  "type": "null"
+                 }
+                ]
+               },
+               "expectedStatus": {
+                "anyOf": [
+                 {
+                  "enum": [
+                   "draft",
+                   "verified"
+                  ],
+                  "type": "string"
+                 },
+                 {
+                  "type": "null"
+                 }
+                ]
+               },
+               "hasExpected": {
+                "type": "boolean"
+               },
+               "inputPreview": {
+                "type": "string"
+               },
+               "observedOutputPreview": {
+                "type": "string"
+               },
+               "position": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+               },
+               "revisionId": {
+                "$ref": "#/components/schemas/PublicUuid"
+               },
+               "source": {
+                "oneOf": [
+                 {
+                  "additionalProperties": false,
+                  "properties": {
+                   "kind": {
+                    "const": "session",
+                    "type": "string"
+                   },
+                   "members": {
+                    "items": {
+                     "additionalProperties": false,
+                     "properties": {
+                      "startedAt": {
+                       "$ref": "#/components/schemas/PublicUtcTimestamp"
+                      },
+                      "traceId": {
+                       "maxLength": 255,
+                       "minLength": 1,
+                       "type": "string"
+                      }
+                     },
+                     "required": [
+                      "traceId",
+                      "startedAt"
+                     ],
+                     "type": "object"
+                    },
+                    "maxItems": 100,
+                    "minItems": 1,
+                    "type": "array"
+                   },
+                   "membershipFrozenAt": {
+                    "$ref": "#/components/schemas/PublicUtcTimestamp"
+                   },
+                   "sessionId": {
+                    "maxLength": 255,
+                    "minLength": 1,
+                    "type": "string"
+                   },
+                   "window": {
+                    "additionalProperties": false,
+                    "properties": {
+                     "from": {
+                      "$ref": "#/components/schemas/PublicUtcTimestamp"
+                     },
+                     "to": {
+                      "$ref": "#/components/schemas/PublicUtcTimestamp"
+                     }
+                    },
+                    "type": "object"
+                   }
+                  },
+                  "required": [
+                   "kind",
+                   "sessionId",
+                   "membershipFrozenAt",
+                   "members"
+                  ],
+                  "type": "object"
+                 },
+                 {
+                  "additionalProperties": false,
+                  "properties": {
+                   "kind": {
+                    "const": "import",
+                    "type": "string"
+                   }
+                  },
+                  "required": [
+                   "kind"
+                  ],
+                  "type": "object"
+                 },
+                 {
+                  "additionalProperties": false,
+                  "properties": {
+                   "kind": {
+                    "const": "trace",
+                    "type": "string"
+                   },
+                   "traceId": {
+                    "minLength": 1,
+                    "type": "string"
+                   }
+                  },
+                  "required": [
+                   "kind",
+                   "traceId"
+                  ],
+                  "type": "object"
+                 },
+                 {
+                  "additionalProperties": false,
+                  "properties": {
+                   "kind": {
+                    "const": "span",
+                    "type": "string"
+                   },
+                   "spanId": {
+                    "minLength": 1,
+                    "type": "string"
+                   },
+                   "traceId": {
+                    "minLength": 1,
+                    "type": "string"
+                   }
+                  },
+                  "required": [
+                   "kind",
+                   "traceId",
+                   "spanId"
+                  ],
+                  "type": "object"
+                 }
+                ]
+               }
+              },
+              "required": [
+               "caseId",
+               "revisionId",
+               "position",
+               "inputPreview",
+               "observedOutputPreview",
+               "expectedStatus",
+               "hasExpected",
+               "criteriaStatus",
+               "criteriaCount",
+               "source"
+              ],
+              "type": "object"
+             },
+             "type": "array"
+            },
+            "total": {
+             "maximum": 9007199254740991,
+             "minimum": 0,
+             "type": "integer"
+            }
+           },
+           "required": [
+            "cases",
+            "total"
+           ],
+           "type": "object"
+          },
+          "requestId": {
+           "pattern": "^req_[a-f0-9]{32}$",
+           "type": "string"
+          },
+          "success": {
+           "const": true,
+           "type": "boolean"
+          }
+         },
+         "required": [
+          "data",
+          "requestId",
+          "success"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Bounded case previews; versionId is required for stable pagination",
+      "headers": {
+       "RateLimit-Limit": {
+        "$ref": "#/components/headers/PublicApiRateLimitLimit"
+       },
+       "RateLimit-Remaining": {
+        "$ref": "#/components/headers/PublicApiRateLimitRemaining"
+       },
+       "RateLimit-Reset": {
+        "$ref": "#/components/headers/PublicApiRateLimitReset"
+       },
+       "X-NeatLogs-RateLimit-Degraded": {
+        "$ref": "#/components/headers/PublicApiRateLimitDegraded"
+       },
+       "X-NeatLogs-RateLimit-Limit": {
+        "$ref": "#/components/headers/PublicApiLegacyRateLimitLimit"
+       },
+       "X-NeatLogs-RateLimit-Policy": {
+        "$ref": "#/components/headers/PublicApiRateLimitPolicy"
+       },
+       "X-NeatLogs-RateLimit-Remaining": {
+        "$ref": "#/components/headers/PublicApiLegacyRateLimitRemaining"
+       },
+       "X-NeatLogs-RateLimit-Reset-After": {
+        "$ref": "#/components/headers/PublicApiRateLimitResetAfter"
+       },
+       "X-NeatLogs-RateLimit-Version": {
+        "$ref": "#/components/headers/PublicApiRateLimitVersion"
+       },
+       "X-Request-Id": {
+        "$ref": "#/components/headers/PublicApiRequestId"
+       }
+      }
+     },
+     "400": {
+      "content": {
+       "application/problem+json": {
+        "schema": {
+         "allOf": [
+          {
+           "$ref": "#/components/schemas/PublicApiProblem"
+          },
+          {
+           "$ref": "#/components/schemas/PublicApiProblem400"
+          }
+         ]
+        }
+       }
+      },
+      "description": "Invalid public API request",
+      "headers": {
+       "X-Request-Id": {
+        "$ref": "#/components/headers/PublicApiRequestId"
+       }
+      }
+     },
+     "401": {
+      "content": {
+       "application/problem+json": {
+        "schema": {
+         "$ref": "#/components/schemas/PublicApiProblemResponse401"
+        }
+       }
+      },
+      "description": "Missing or invalid public API credential",
+      "headers": {
+       "WWW-Authenticate": {
+        "$ref": "#/components/headers/PublicApiWwwAuthenticate"
+       },
+       "X-Request-Id": {
+        "$ref": "#/components/headers/PublicApiRequestId"
+       }
+      }
+     },
+     "403": {
+      "content": {
+       "application/problem+json": {
+        "schema": {
+         "$ref": "#/components/schemas/PublicApiProblemResponse403"
+        }
+       }
+      },
+      "description": "Public API request is not authorized",
+      "headers": {
+       "X-Request-Id": {
+        "$ref": "#/components/headers/PublicApiRequestId"
+       }
+      }
+     },
+     "404": {
+      "content": {
+       "application/problem+json": {
+        "schema": {
+         "$ref": "#/components/schemas/PublicApiProblemResponse404"
+        }
+       }
+      },
+      "description": "Dataset, version, case, or capture job not found",
+      "headers": {
+       "X-Request-Id": {
+        "$ref": "#/components/headers/PublicApiRequestId"
+       }
+      }
+     },
+     "409": {
+      "content": {
+       "application/problem+json": {
+        "schema": {
+         "$ref": "#/components/schemas/PublicApiProblemResponse409"
+        }
+       }
+      },
+      "description": "Dataset capture is not published yet",
+      "headers": {
+       "X-Request-Id": {
+        "$ref": "#/components/headers/PublicApiRequestId"
+       }
+      }
+     },
+     "413": {
+      "content": {
+       "application/problem+json": {
+        "schema": {
+         "$ref": "#/components/schemas/PublicApiProblemResponse413"
+        }
+       }
+      },
+      "description": "Public API request body too large",
+      "headers": {
+       "X-Request-Id": {
+        "$ref": "#/components/headers/PublicApiRequestId"
+       }
+      }
+     },
+     "415": {
+      "content": {
+       "application/problem+json": {
+        "schema": {
+         "$ref": "#/components/schemas/PublicApiProblemResponse415"
+        }
+       }
+      },
+      "description": "Unsupported public API request body",
+      "headers": {
+       "X-Request-Id": {
+        "$ref": "#/components/headers/PublicApiRequestId"
+       }
+      }
+     },
+     "429": {
+      "content": {
+       "application/problem+json": {
+        "schema": {
+         "$ref": "#/components/schemas/PublicApiProblemResponse429"
+        }
+       }
+      },
+      "description": "Public API rate limit exceeded",
+      "headers": {
+       "RateLimit-Limit": {
+        "$ref": "#/components/headers/PublicApiRateLimitLimit"
+       },
+       "RateLimit-Remaining": {
+        "$ref": "#/components/headers/PublicApiRateLimitRemaining"
+       },
+       "RateLimit-Reset": {
+        "$ref": "#/components/headers/PublicApiRateLimitReset"
+       },
+       "Retry-After": {
+        "$ref": "#/components/headers/PublicApiRetryAfter"
+       },
+       "X-NeatLogs-RateLimit-Degraded": {
+        "$ref": "#/components/headers/PublicApiRateLimitDegraded"
+       },
+       "X-NeatLogs-RateLimit-Limit": {
+        "$ref": "#/components/headers/PublicApiLegacyRateLimitLimit"
+       },
+       "X-NeatLogs-RateLimit-Policy": {
+        "$ref": "#/components/headers/PublicApiRateLimitPolicy"
+       },
+       "X-NeatLogs-RateLimit-Remaining": {
+        "$ref": "#/components/headers/PublicApiLegacyRateLimitRemaining"
+       },
+       "X-NeatLogs-RateLimit-Reset-After": {
+        "$ref": "#/components/headers/PublicApiRateLimitResetAfter"
+       },
+       "X-NeatLogs-RateLimit-Version": {
+        "$ref": "#/components/headers/PublicApiRateLimitVersion"
+       },
+       "X-Request-Id": {
+        "$ref": "#/components/headers/PublicApiRequestId"
+       }
+      }
+     },
+     "500": {
+      "content": {
+       "application/problem+json": {
+        "schema": {
+         "$ref": "#/components/schemas/PublicApiProblemResponse500"
+        }
+       }
+      },
+      "description": "Internal server error",
+      "headers": {
+       "X-Request-Id": {
+        "$ref": "#/components/headers/PublicApiRequestId"
+       }
+      }
+     },
+     "503": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "error": {
+           "const": "Backend is draining",
+           "type": "string"
+          }
+         },
+         "required": [
+          "error"
+         ],
+         "type": "object"
+        }
+       },
+       "application/problem+json": {
+        "schema": {
+         "allOf": [
+          {
+           "$ref": "#/components/schemas/PublicApiProblem"
+          },
+          {
+           "$ref": "#/components/schemas/PublicApiProblem503"
+          }
+         ]
+        }
+       }
+      },
+      "description": "Public API credential, project context, or rate limiting unavailable. Backend is draining; retry after the Retry-After delay.",
+      "headers": {
+       "Retry-After": {
+        "$ref": "#/components/headers/PublicApiRetryAfter"
+       },
+       "X-Request-Id": {
+        "$ref": "#/components/headers/PublicApiRequestId"
+       }
+      }
+     }
+    },
+    "security": [
+     {
+      "ServiceAccountBearerAuth": []
+     },
+     {
+      "OAuth2": [
+       "evaluation:read"
+      ]
+     }
+    ],
+    "summary": "Page through case previews in a pinned dataset version",
+    "tags": [
+     "public",
+     "datasets"
+    ],
+    "x-auth-gate": "public-api-key",
+    "x-auth-source": "global-gate",
+    "x-contract-coverage": "contracted",
+    "x-neatlogs-operation-gate": "always"
+   }
+  },
+  "/api/v1/public/projects": {
+   "get": {
+    "description": "List or read public projects.\n\n**Auth:** Requires a service-account or OAuth access Bearer token; credential scope, current bindings or memberships, tenant ownership, and entitlement are enforced without x-project-id.",
+    "operationId": "get_api_v1_public_projects",
+    "parameters": [
+     {
+      "description": "cursor query parameter",
+      "in": "query",
+      "name": "cursor",
+      "required": false,
+      "schema": {
+       "maxLength": 1024,
+       "minLength": 1,
+       "type": "string"
+      }
+     },
+     {
+      "description": "includeArchived query parameter",
+      "in": "query",
+      "name": "includeArchived",
+      "required": false,
+      "schema": {
+       "default": "false",
+       "enum": [
+        "true",
+        "false"
+       ],
+       "type": "string"
+      }
+     },
+     {
+      "description": "limit query parameter",
+      "in": "query",
+      "name": "limit",
+      "required": false,
+      "schema": {
+       "default": 50,
+       "maximum": 100,
+       "minimum": 1,
+       "type": "integer"
+      }
+     },
+     {
+      "description": "organizationId query parameter",
+      "in": "query",
+      "name": "organizationId",
+      "required": false,
+      "schema": {
+       "$ref": "#/components/schemas/PublicUuid"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "data": {
+           "additionalProperties": false,
+           "properties": {
+            "page": {
+             "additionalProperties": false,
+             "properties": {
+              "hasMore": {
+               "type": "boolean"
+              },
+              "limit": {
+               "maximum": 100,
+               "minimum": 1,
+               "type": "integer"
+              },
+              "nextCursor": {
+               "anyOf": [
+                {
+                 "maxLength": 1024,
+                 "minLength": 1,
+                 "type": "string"
+                },
+                {
+                 "type": "null"
+                }
+               ]
+              }
+             },
+             "required": [
+              "hasMore",
+              "limit",
+              "nextCursor"
+             ],
+             "type": "object"
+            },
+            "projects": {
+             "items": {
+              "additionalProperties": false,
+              "properties": {
+               "access": {
+                "additionalProperties": false,
+                "properties": {
+                 "role": {
+                  "enum": [
+                   "project_admin",
+                   "project_member",
+                   "project_viewer"
+                  ],
+                  "type": "string"
+                 }
+                },
+                "required": [
+                 "role"
+                ],
+                "type": "object"
+               },
+               "createdAt": {
+                "$ref": "#/components/schemas/PublicUtcTimestamp"
+               },
+               "id": {
+                "$ref": "#/components/schemas/PublicUuid"
+               },
+               "isArchived": {
+                "type": "boolean"
+               },
+               "isDefault": {
+                "type": "boolean"
+               },
+               "name": {
+                "maxLength": 255,
+                "type": "string"
+               },
+               "orgId": {
+                "$ref": "#/components/schemas/PublicUuid"
+               },
+               "tier": {
+                "maxLength": 50,
+                "type": "string"
+               },
+               "timezone": {
+                "anyOf": [
+                 {
+                  "maxLength": 50,
+                  "type": "string"
+                 },
+                 {
+                  "type": "null"
+                 }
+                ]
+               },
+               "updatedAt": {
+                "$ref": "#/components/schemas/PublicUtcTimestamp"
+               }
+              },
+              "required": [
+               "createdAt",
+               "id",
+               "isArchived",
+               "isDefault",
+               "name",
+               "orgId",
+               "tier",
+               "timezone",
+               "updatedAt",
+               "access"
+              ],
+              "type": "object"
+             },
+             "maxItems": 100,
+             "type": "array"
+            }
+           },
+           "required": [
+            "page",
+            "projects"
+           ],
+           "type": "object"
+          },
+          "requestId": {
+           "pattern": "^req_[a-f0-9]{32}$",
+           "type": "string"
+          },
+          "success": {
+           "const": true,
+           "type": "boolean"
+          }
+         },
+         "required": [
+          "data",
+          "requestId",
+          "success"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Bounded project page",
+      "headers": {
+       "RateLimit-Limit": {
+        "$ref": "#/components/headers/PublicApiRateLimitLimit"
+       },
+       "RateLimit-Remaining": {
+        "$ref": "#/components/headers/PublicApiRateLimitRemaining"
+       },
+       "RateLimit-Reset": {
+        "$ref": "#/components/headers/PublicApiRateLimitReset"
+       },
+       "X-NeatLogs-RateLimit-Degraded": {
+        "$ref": "#/components/headers/PublicApiRateLimitDegraded"
+       },
+       "X-NeatLogs-RateLimit-Limit": {
+        "$ref": "#/components/headers/PublicApiLegacyRateLimitLimit"
+       },
+       "X-NeatLogs-RateLimit-Policy": {
+        "$ref": "#/components/headers/PublicApiRateLimitPolicy"
+       },
+       "X-NeatLogs-RateLimit-Remaining": {
+        "$ref": "#/components/headers/PublicApiLegacyRateLimitRemaining"
+       },
+       "X-NeatLogs-RateLimit-Reset-After": {
+        "$ref": "#/components/headers/PublicApiRateLimitResetAfter"
+       },
+       "X-NeatLogs-RateLimit-Version": {
+        "$ref": "#/components/headers/PublicApiRateLimitVersion"
+       },
+       "X-Request-Id": {
+        "$ref": "#/components/headers/PublicApiRequestId"
+       }
+      }
+     },
+     "400": {
+      "content": {
+       "application/problem+json": {
+        "schema": {
+         "allOf": [
+          {
+           "$ref": "#/components/schemas/PublicApiProblem"
+          },
+          {
+           "$ref": "#/components/schemas/PublicApiProblem400"
+          }
+         ]
+        }
+       }
+      },
+      "description": "Invalid public API request",
+      "headers": {
+       "X-Request-Id": {
+        "$ref": "#/components/headers/PublicApiRequestId"
+       }
+      }
+     },
+     "401": {
+      "content": {
+       "application/problem+json": {
+        "schema": {
+         "$ref": "#/components/schemas/PublicApiProblemResponse401"
+        }
+       }
+      },
+      "description": "Missing or invalid public API credential",
+      "headers": {
+       "WWW-Authenticate": {
+        "$ref": "#/components/headers/PublicApiWwwAuthenticate"
+       },
+       "X-Request-Id": {
+        "$ref": "#/components/headers/PublicApiRequestId"
+       }
+      }
+     },
+     "403": {
+      "content": {
+       "application/problem+json": {
+        "schema": {
+         "$ref": "#/components/schemas/PublicApiProblemResponse403"
+        }
+       }
+      },
+      "description": "Public API request is not authorized",
+      "headers": {
+       "X-Request-Id": {
+        "$ref": "#/components/headers/PublicApiRequestId"
+       }
+      }
+     },
+     "404": {
+      "content": {
+       "application/problem+json": {
+        "schema": {
+         "$ref": "#/components/schemas/PublicApiProblemResponse404"
+        }
+       }
+      },
+      "description": "Public API resource not found",
+      "headers": {
+       "X-Request-Id": {
+        "$ref": "#/components/headers/PublicApiRequestId"
+       }
+      }
+     },
+     "409": {
+      "content": {
+       "application/problem+json": {
+        "schema": {
+         "$ref": "#/components/schemas/PublicApiProblemResponse409"
+        }
+       }
+      },
+      "description": "Public API request conflict",
+      "headers": {
+       "X-Request-Id": {
+        "$ref": "#/components/headers/PublicApiRequestId"
+       }
+      }
+     },
+     "413": {
+      "content": {
+       "application/problem+json": {
+        "schema": {
+         "$ref": "#/components/schemas/PublicApiProblemResponse413"
+        }
+       }
+      },
+      "description": "Public API request body too large",
+      "headers": {
+       "X-Request-Id": {
+        "$ref": "#/components/headers/PublicApiRequestId"
+       }
+      }
+     },
+     "415": {
+      "content": {
+       "application/problem+json": {
+        "schema": {
+         "$ref": "#/components/schemas/PublicApiProblemResponse415"
+        }
+       }
+      },
+      "description": "Unsupported public API request body",
+      "headers": {
+       "X-Request-Id": {
+        "$ref": "#/components/headers/PublicApiRequestId"
+       }
+      }
+     },
+     "429": {
+      "content": {
+       "application/problem+json": {
+        "schema": {
+         "$ref": "#/components/schemas/PublicApiProblemResponse429"
+        }
+       }
+      },
+      "description": "Public API rate limit exceeded",
+      "headers": {
+       "RateLimit-Limit": {
+        "$ref": "#/components/headers/PublicApiRateLimitLimit"
+       },
+       "RateLimit-Remaining": {
+        "$ref": "#/components/headers/PublicApiRateLimitRemaining"
+       },
+       "RateLimit-Reset": {
+        "$ref": "#/components/headers/PublicApiRateLimitReset"
+       },
+       "Retry-After": {
+        "$ref": "#/components/headers/PublicApiRetryAfter"
+       },
+       "X-NeatLogs-RateLimit-Degraded": {
+        "$ref": "#/components/headers/PublicApiRateLimitDegraded"
+       },
+       "X-NeatLogs-RateLimit-Limit": {
+        "$ref": "#/components/headers/PublicApiLegacyRateLimitLimit"
+       },
+       "X-NeatLogs-RateLimit-Policy": {
+        "$ref": "#/components/headers/PublicApiRateLimitPolicy"
+       },
+       "X-NeatLogs-RateLimit-Remaining": {
+        "$ref": "#/components/headers/PublicApiLegacyRateLimitRemaining"
+       },
+       "X-NeatLogs-RateLimit-Reset-After": {
+        "$ref": "#/components/headers/PublicApiRateLimitResetAfter"
+       },
+       "X-NeatLogs-RateLimit-Version": {
+        "$ref": "#/components/headers/PublicApiRateLimitVersion"
+       },
+       "X-Request-Id": {
+        "$ref": "#/components/headers/PublicApiRequestId"
+       }
+      }
+     },
+     "500": {
+      "content": {
+       "application/problem+json": {
+        "schema": {
+         "$ref": "#/components/schemas/PublicApiProblemResponse500"
+        }
+       }
+      },
+      "description": "Internal server error",
+      "headers": {
+       "X-Request-Id": {
+        "$ref": "#/components/headers/PublicApiRequestId"
+       }
+      }
+     },
+     "503": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "error": {
+           "const": "Backend is draining",
+           "type": "string"
+          }
+         },
+         "required": [
+          "error"
+         ],
+         "type": "object"
+        }
+       },
+       "application/problem+json": {
+        "schema": {
+         "allOf": [
+          {
+           "$ref": "#/components/schemas/PublicApiProblem"
+          },
+          {
+           "$ref": "#/components/schemas/PublicApiProblem503"
+          }
+         ]
+        }
+       }
+      },
+      "description": "Public API credential, project context, or rate limiting unavailable. Backend is draining; retry after the Retry-After delay.",
+      "headers": {
+       "Retry-After": {
+        "$ref": "#/components/headers/PublicApiRetryAfter"
+       },
+       "X-Request-Id": {
+        "$ref": "#/components/headers/PublicApiRequestId"
+       }
+      }
+     }
+    },
+    "security": [
+     {
+      "ServiceAccountBearerAuth": []
+     },
+     {
+      "OAuth2": [
+       "context:read"
+      ]
+     }
+    ],
+    "summary": "List projects",
+    "tags": [
+     "public",
+     "projects"
+    ],
+    "x-auth-gate": "public-api-key",
+    "x-auth-source": "global-gate",
+    "x-contract-coverage": "contracted",
+    "x-neatlogs-operation-gate": "always"
+   }
+  },
+  "/api/v1/public/runs": {
+   "post": {
+    "description": "Create or trigger public runs.\n\n**Auth:** Requires a service-account or OAuth access Bearer token and explicit x-project-id; credential scope, current project role, tenant ownership, and entitlement are enforced.",
+    "operationId": "post_api_v1_public_runs",
+    "parameters": [
+     {
+      "description": "idempotency-key header parameter",
+      "in": "header",
+      "name": "idempotency-key",
+      "required": true,
+      "schema": {
+       "description": "Required canonical UUIDv4 or high-entropy base64url idempotency key",
+       "maxLength": 43,
+       "minLength": 22,
+       "pattern": "^(?:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|[A-Za-z0-9_-]{21}[AQgw]|[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048])$",
+       "type": "string"
+      }
+     },
+     {
+      "description": "x-project-id header parameter",
+      "in": "header",
+      "name": "x-project-id",
+      "required": true,
+      "schema": {
+       "$ref": "#/components/schemas/PublicUuid"
+      }
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "additionalProperties": false,
+        "properties": {
+         "baseline": {
+          "maxLength": 200,
+          "minLength": 1,
+          "type": "string"
+         },
+         "caseIds": {
+          "items": {
+           "$ref": "#/components/schemas/PublicUuid"
+          },
+          "maxItems": 100,
+          "minItems": 1,
+          "type": "array"
+         },
+         "checks": {
+          "items": {
+           "$ref": "#/components/schemas/PublicUuid"
+          },
+          "maxItems": 20,
+          "type": "array"
+         },
+         "datasetVersionId": {
+          "$ref": "#/components/schemas/PublicUuid"
+         },
+         "deadlineSeconds": {
+          "default": 900,
+          "maximum": 3600,
+          "minimum": 60,
+          "type": "integer"
+         },
+         "gates": {
+          "items": {
+           "maxLength": 500,
+           "minLength": 1,
+           "type": "string"
+          },
+          "maxItems": 20,
+          "type": "array"
+         },
+         "git": {
+          "additionalProperties": false,
+          "properties": {
+           "branch": {
+            "maxLength": 200,
+            "minLength": 1,
+            "type": "string"
+           },
+           "sha": {
+            "maxLength": 64,
+            "type": "string"
+           }
+          },
+          "required": [
+           "branch"
+          ],
+          "type": "object"
+         },
+         "grading": {
+          "additionalProperties": false,
+          "properties": {
+           "evaluatorIds": {
+            "items": {
+             "$ref": "#/components/schemas/PublicUuid"
+            },
+            "maxItems": 20,
+            "minItems": 1,
+            "type": "array"
+           },
+           "formVersionId": {
+            "$ref": "#/components/schemas/PublicUuid"
+           }
+          },
+          "required": [
+           "formVersionId",
+           "evaluatorIds"
+          ],
+          "type": "object"
+         },
+         "label": {
+          "maxLength": 120,
+          "minLength": 1,
+          "type": "string"
+         },
+         "local": {
+          "$ref": "#/components/schemas/PublicLocalRunLink"
+         },
+         "params": {
+          "additionalProperties": {
+           "anyOf": [
+            {
+             "maxLength": 2000,
+             "type": "string"
+            },
+            {
+             "type": "number"
+            },
+            {
+             "type": "boolean"
+            },
+            {
+             "type": "null"
+            }
+           ]
+          },
+          "default": {},
+          "propertyNames": {
+           "maxLength": 100,
+           "minLength": 1,
+           "type": "string"
+          },
+          "type": "object"
+         },
+         "replay": {
+          "oneOf": [
+           {
+            "additionalProperties": false,
+            "properties": {
+             "mode": {
+              "const": "tools_only",
+              "type": "string"
+             }
+            },
+            "required": [
+             "mode"
+            ],
+            "type": "object"
+           },
+           {
+            "additionalProperties": false,
+            "properties": {
+             "mode": {
+              "const": "until_span",
+              "type": "string"
+             },
+             "untilSpan": {
+              "maxLength": 200,
+              "minLength": 1,
+              "type": "string"
+             }
+            },
+            "required": [
+             "mode",
+             "untilSpan"
+            ],
+            "type": "object"
+           }
+          ]
+         },
+         "selection": {
+          "additionalProperties": false,
+          "properties": {
+           "batchOffset": {
+            "maximum": 1999,
+            "minimum": 0,
+            "type": "integer"
+           },
+           "batchSize": {
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+           },
+           "datasetId": {
+            "$ref": "#/components/schemas/PublicUuid"
+           },
+           "digest": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+           },
+           "groupId": {
+            "$ref": "#/components/schemas/PublicUuid"
+           },
+           "kind": {
+            "const": "all",
+            "type": "string"
+           },
+           "totalCases": {
+            "maximum": 2000,
+            "minimum": 1,
+            "type": "integer"
+           }
+          },
+          "required": [
+           "kind",
+           "groupId",
+           "datasetId",
+           "digest",
+           "totalCases",
+           "batchOffset",
+           "batchSize"
+          ],
+          "type": "object"
+         },
+         "trials": {
+          "default": 1,
+          "maximum": 10,
+          "minimum": 1,
+          "type": "integer"
+         }
+        },
+        "required": [
+         "datasetVersionId",
+         "label",
+         "caseIds",
+         "grading"
+        ],
+        "type": "object"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "201": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "data": {
+           "additionalProperties": false,
+           "properties": {
+            "deadlineAt": {
+             "$ref": "#/components/schemas/PublicUtcTimestamp"
+            },
+            "itemCount": {
+             "maximum": 9007199254740991,
+             "minimum": 0,
+             "type": "integer"
+            },
+            "runId": {
+             "$ref": "#/components/schemas/PublicUuid"
+            },
+            "state": {
+             "type": "string"
+            }
+           },
+           "required": [
+            "runId",
+            "state",
+            "deadlineAt",
+            "itemCount"
+           ],
+           "type": "object"
+          },
+          "requestId": {
+           "pattern": "^req_[a-f0-9]{32}$",
+           "type": "string"
+          },
+          "success": {
+           "const": true,
+           "type": "boolean"
+          }
+         },
+         "required": [
+          "data",
+          "requestId",
+          "success"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Local run slots and deadline",
+      "headers": {
+       "RateLimit-Limit": {
+        "$ref": "#/components/headers/PublicApiRateLimitLimit"
+       },
+       "RateLimit-Remaining": {
+        "$ref": "#/components/headers/PublicApiRateLimitRemaining"
+       },
+       "RateLimit-Reset": {
+        "$ref": "#/components/headers/PublicApiRateLimitReset"
+       },
+       "X-NeatLogs-RateLimit-Degraded": {
+        "$ref": "#/components/headers/PublicApiRateLimitDegraded"
+       },
+       "X-NeatLogs-RateLimit-Limit": {
+        "$ref": "#/components/headers/PublicApiLegacyRateLimitLimit"
+       },
+       "X-NeatLogs-RateLimit-Policy": {
+        "$ref": "#/components/headers/PublicApiRateLimitPolicy"
+       },
+       "X-NeatLogs-RateLimit-Remaining": {
+        "$ref": "#/components/headers/PublicApiLegacyRateLimitRemaining"
+       },
+       "X-NeatLogs-RateLimit-Reset-After": {
+        "$ref": "#/components/headers/PublicApiRateLimitResetAfter"
+       },
+       "X-NeatLogs-RateLimit-Version": {
+        "$ref": "#/components/headers/PublicApiRateLimitVersion"
+       },
+       "X-Request-Id": {
+        "$ref": "#/components/headers/PublicApiRequestId"
+       }
+      }
+     },
+     "400": {
+      "$ref": "#/components/responses/LocalTestingProblem400"
+     },
+     "401": {
+      "$ref": "#/components/responses/LocalTestingProblem401"
+     },
+     "403": {
+      "$ref": "#/components/responses/LocalTestingProblem403"
+     },
+     "404": {
+      "$ref": "#/components/responses/LocalTestingProblem404"
+     },
+     "409": {
+      "$ref": "#/components/responses/LocalTestingProblem409"
+     },
+     "413": {
+      "$ref": "#/components/responses/LocalTestingProblem413"
+     },
+     "415": {
+      "$ref": "#/components/responses/LocalTestingProblem415"
+     },
+     "422": {
+      "$ref": "#/components/responses/LocalTestingProblem422"
+     },
+     "429": {
+      "$ref": "#/components/responses/LocalTestingProblem429"
+     },
+     "500": {
+      "$ref": "#/components/responses/LocalTestingProblem500"
+     },
+     "503": {
+      "$ref": "#/components/responses/LocalTestingProblem503"
+     }
+    },
+    "security": [
+     {
+      "ServiceAccountBearerAuth": []
+     },
+     {
+      "OAuth2": [
+       "evaluation:write"
+      ]
+     }
+    ],
+    "summary": "Register a local SDK run against frozen examples",
+    "tags": [
+     "public",
+     "runs"
+    ],
+    "x-auth-gate": "public-api-key",
+    "x-auth-source": "global-gate",
+    "x-contract-coverage": "contracted",
+    "x-neatlogs-operation-gate": "public-api-mutations"
+   }
+  },
+  "/api/v1/public/runs/{runId}": {
+   "get": {
+    "description": "Fetch a specific public runs.\n\n**Auth:** Requires a service-account or OAuth access Bearer token and explicit x-project-id; credential scope, current project role, tenant ownership, and entitlement are enforced.",
+    "operationId": "get_api_v1_public_runs_runId",
+    "parameters": [
+     {
+      "description": "runId path parameter",
+      "in": "path",
+      "name": "runId",
+      "required": true,
+      "schema": {
+       "$ref": "#/components/schemas/PublicUuid"
+      }
+     },
+     {
+      "description": "includeGrading query parameter",
+      "in": "query",
+      "name": "includeGrading",
+      "required": false,
+      "schema": {
+       "enum": [
+        "true",
+        "false"
+       ],
+       "type": "string"
+      }
+     },
+     {
+      "description": "x-project-id header parameter",
+      "in": "header",
+      "name": "x-project-id",
+      "required": true,
+      "schema": {
+       "description": "Required service-account or OAuth project selection",
+       "format": "uuid",
+       "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "data": {
+           "additionalProperties": false,
+           "properties": {
+            "completedCount": {
+             "maximum": 9007199254740991,
+             "minimum": 0,
+             "type": "integer"
+            },
+            "deadlineAt": {
+             "$ref": "#/components/schemas/PublicUtcTimestamp"
+            },
+            "failedCount": {
+             "maximum": 9007199254740991,
+             "minimum": 0,
+             "type": "integer"
+            },
+            "grading": {
+             "anyOf": [
+              {
+               "additionalProperties": false,
+               "properties": {
+                "candidateBatchId": {
+                 "$ref": "#/components/schemas/PublicUuid"
+                },
+                "evaluationId": {
+                 "$ref": "#/components/schemas/PublicUuid"
+                },
+                "recordedBatchId": {
+                 "$ref": "#/components/schemas/PublicUuid"
+                }
+               },
+               "required": [
+                "evaluationId",
+                "recordedBatchId",
+                "candidateBatchId"
+               ],
+               "type": "object"
+              },
+              {
+               "type": "null"
+              }
+             ]
+            },
+            "gradingHandoffState": {
+             "enum": [
+              "pending",
+              "ready",
+              "dispatched",
+              "failed"
+             ],
+             "type": "string"
+            },
+            "itemCount": {
+             "maximum": 9007199254740991,
+             "minimum": 0,
+             "type": "integer"
+            },
+            "pendingCount": {
+             "maximum": 9007199254740991,
+             "minimum": 0,
+             "type": "integer"
+            },
+            "runId": {
+             "$ref": "#/components/schemas/PublicUuid"
+            },
+            "state": {
+             "type": "string"
+            }
+           },
+           "required": [
+            "runId",
+            "state",
+            "deadlineAt",
+            "itemCount",
+            "completedCount",
+            "failedCount",
+            "pendingCount",
+            "gradingHandoffState"
+           ],
+           "type": "object"
+          },
+          "requestId": {
+           "pattern": "^req_[a-f0-9]{32}$",
+           "type": "string"
+          },
+          "success": {
+           "const": true,
+           "type": "boolean"
+          }
+         },
+         "required": [
+          "data",
+          "requestId",
+          "success"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Run progress without raw trace payloads",
+      "headers": {
+       "RateLimit-Limit": {
+        "$ref": "#/components/headers/PublicApiRateLimitLimit"
+       },
+       "RateLimit-Remaining": {
+        "$ref": "#/components/headers/PublicApiRateLimitRemaining"
+       },
+       "RateLimit-Reset": {
+        "$ref": "#/components/headers/PublicApiRateLimitReset"
+       },
+       "X-NeatLogs-RateLimit-Degraded": {
+        "$ref": "#/components/headers/PublicApiRateLimitDegraded"
+       },
+       "X-NeatLogs-RateLimit-Limit": {
+        "$ref": "#/components/headers/PublicApiLegacyRateLimitLimit"
+       },
+       "X-NeatLogs-RateLimit-Policy": {
+        "$ref": "#/components/headers/PublicApiRateLimitPolicy"
+       },
+       "X-NeatLogs-RateLimit-Remaining": {
+        "$ref": "#/components/headers/PublicApiLegacyRateLimitRemaining"
+       },
+       "X-NeatLogs-RateLimit-Reset-After": {
+        "$ref": "#/components/headers/PublicApiRateLimitResetAfter"
+       },
+       "X-NeatLogs-RateLimit-Version": {
+        "$ref": "#/components/headers/PublicApiRateLimitVersion"
+       },
+       "X-Request-Id": {
+        "$ref": "#/components/headers/PublicApiRequestId"
+       }
+      }
+     },
+     "400": {
+      "$ref": "#/components/responses/LocalTestingProblem400"
+     },
+     "401": {
+      "$ref": "#/components/responses/LocalTestingProblem401"
+     },
+     "403": {
+      "$ref": "#/components/responses/LocalTestingProblem403"
+     },
+     "404": {
+      "$ref": "#/components/responses/LocalTestingProblem404"
+     },
+     "409": {
+      "$ref": "#/components/responses/LocalTestingProblem409"
+     },
+     "413": {
+      "$ref": "#/components/responses/LocalTestingProblem413"
+     },
+     "415": {
+      "$ref": "#/components/responses/LocalTestingProblem415"
+     },
+     "422": {
+      "$ref": "#/components/responses/LocalTestingProblem422"
+     },
+     "429": {
+      "$ref": "#/components/responses/LocalTestingProblem429"
+     },
+     "500": {
+      "$ref": "#/components/responses/LocalTestingProblem500"
+     },
+     "503": {
+      "$ref": "#/components/responses/LocalTestingProblem503"
+     }
+    },
+    "security": [
+     {
+      "ServiceAccountBearerAuth": []
+     },
+     {
+      "OAuth2": [
+       "evaluation:read"
+      ]
+     }
+    ],
+    "summary": "Read local run and grading handoff progress",
+    "tags": [
+     "public",
+     "runs"
+    ],
+    "x-auth-gate": "public-api-key",
+    "x-auth-source": "global-gate",
+    "x-contract-coverage": "contracted",
+    "x-neatlogs-operation-gate": "always"
+   }
+  },
+  "/api/v1/public/runs/{runId}/comparison": {
+   "get": {
+    "description": "Fetch a specific runs comparison.\n\n**Auth:** Requires a service-account or OAuth access Bearer token and explicit x-project-id; credential scope, current project role, tenant ownership, and entitlement are enforced.",
+    "operationId": "get_api_v1_public_runs_runId_comparison",
+    "parameters": [
+     {
+      "description": "runId path parameter",
+      "in": "path",
+      "name": "runId",
+      "required": true,
+      "schema": {
+       "$ref": "#/components/schemas/PublicUuid"
+      }
+     },
+     {
+      "description": "baseline query parameter",
+      "in": "query",
+      "name": "baseline",
+      "required": false,
+      "schema": {
+       "maxLength": 200,
+       "type": "string"
+      }
+     },
+     {
+      "description": "newFailuresOnly query parameter",
+      "in": "query",
+      "name": "newFailuresOnly",
+      "required": false,
+      "schema": {
+       "enum": [
+        "true",
+        "false"
+       ],
+       "type": "string"
+      }
+     },
+     {
+      "description": "after query parameter",
+      "in": "query",
+      "name": "after",
+      "required": false,
+      "schema": {
+       "maxLength": 1000,
+       "type": "string"
+      }
+     },
+     {
+      "description": "limit query parameter",
+      "in": "query",
+      "name": "limit",
+      "required": false,
+      "schema": {
+       "default": 30,
+       "maximum": 100,
+       "minimum": 1,
+       "type": "integer"
+      }
+     },
+     {
+      "description": "x-project-id header parameter",
+      "in": "header",
+      "name": "x-project-id",
+      "required": true,
+      "schema": {
+       "description": "Required service-account or OAuth project selection",
+       "format": "uuid",
+       "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "data": {
+           "additionalProperties": {},
+           "propertyNames": {
+            "type": "string"
+           },
+           "type": "object"
+          },
+          "requestId": {
+           "pattern": "^req_[a-f0-9]{32}$",
+           "type": "string"
+          },
+          "success": {
+           "const": true,
+           "type": "boolean"
+          }
+         },
+         "required": [
+          "data",
+          "requestId",
+          "success"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Paired grades and full bounded question summaries",
+      "headers": {
+       "RateLimit-Limit": {
+        "$ref": "#/components/headers/PublicApiRateLimitLimit"
+       },
+       "RateLimit-Remaining": {
+        "$ref": "#/components/headers/PublicApiRateLimitRemaining"
+       },
+       "RateLimit-Reset": {
+        "$ref": "#/components/headers/PublicApiRateLimitReset"
+       },
+       "X-NeatLogs-RateLimit-Degraded": {
+        "$ref": "#/components/headers/PublicApiRateLimitDegraded"
+       },
+       "X-NeatLogs-RateLimit-Limit": {
+        "$ref": "#/components/headers/PublicApiLegacyRateLimitLimit"
+       },
+       "X-NeatLogs-RateLimit-Policy": {
+        "$ref": "#/components/headers/PublicApiRateLimitPolicy"
+       },
+       "X-NeatLogs-RateLimit-Remaining": {
+        "$ref": "#/components/headers/PublicApiLegacyRateLimitRemaining"
+       },
+       "X-NeatLogs-RateLimit-Reset-After": {
+        "$ref": "#/components/headers/PublicApiRateLimitResetAfter"
+       },
+       "X-NeatLogs-RateLimit-Version": {
+        "$ref": "#/components/headers/PublicApiRateLimitVersion"
+       },
+       "X-Request-Id": {
+        "$ref": "#/components/headers/PublicApiRequestId"
+       }
+      }
+     },
+     "400": {
+      "$ref": "#/components/responses/LocalTestingProblem400"
+     },
+     "401": {
+      "$ref": "#/components/responses/LocalTestingProblem401"
+     },
+     "403": {
+      "$ref": "#/components/responses/LocalTestingProblem403"
+     },
+     "404": {
+      "$ref": "#/components/responses/LocalTestingProblem404"
+     },
+     "409": {
+      "$ref": "#/components/responses/LocalTestingProblem409"
+     },
+     "413": {
+      "$ref": "#/components/responses/LocalTestingProblem413"
+     },
+     "415": {
+      "$ref": "#/components/responses/LocalTestingProblem415"
+     },
+     "422": {
+      "$ref": "#/components/responses/LocalTestingProblem422"
+     },
+     "429": {
+      "$ref": "#/components/responses/LocalTestingProblem429"
+     },
+     "500": {
+      "$ref": "#/components/responses/LocalTestingProblem500"
+     },
+     "503": {
+      "$ref": "#/components/responses/LocalTestingProblem503"
+     }
+    },
+    "security": [
+     {
+      "ServiceAccountBearerAuth": []
+     },
+     {
+      "OAuth2": [
+       "evaluation:read"
+      ]
+     }
+    ],
+    "summary": "Read paired run grades and pass-rule summaries",
+    "tags": [
+     "public",
+     "runs"
+    ],
+    "x-auth-gate": "public-api-key",
+    "x-auth-source": "global-gate",
+    "x-contract-coverage": "contracted",
+    "x-neatlogs-operation-gate": "always"
+   }
+  },
+  "/api/v1/public/runs/{runId}/complete": {
+   "post": {
+    "description": "Create or trigger runs complete.\n\n**Auth:** Requires a service-account or OAuth access Bearer token and explicit x-project-id; credential scope, current project role, tenant ownership, and entitlement are enforced.",
+    "operationId": "post_api_v1_public_runs_runId_complete",
+    "parameters": [
+     {
+      "description": "runId path parameter",
+      "in": "path",
+      "name": "runId",
+      "required": true,
+      "schema": {
+       "$ref": "#/components/schemas/PublicUuid"
+      }
+     },
+     {
+      "description": "idempotency-key header parameter",
+      "in": "header",
+      "name": "idempotency-key",
+      "required": true,
+      "schema": {
+       "description": "Required canonical UUIDv4 or high-entropy base64url idempotency key",
+       "maxLength": 43,
+       "minLength": 22,
+       "pattern": "^(?:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|[A-Za-z0-9_-]{21}[AQgw]|[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048])$",
+       "type": "string"
+      }
+     },
+     {
+      "description": "x-project-id header parameter",
+      "in": "header",
+      "name": "x-project-id",
+      "required": true,
+      "schema": {
+       "$ref": "#/components/schemas/PublicUuid"
+      }
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "data": {
+           "additionalProperties": false,
+           "properties": {
+            "completedCount": {
+             "maximum": 9007199254740991,
+             "minimum": 0,
+             "type": "integer"
+            },
+            "deadlineAt": {
+             "$ref": "#/components/schemas/PublicUtcTimestamp"
+            },
+            "failedCount": {
+             "maximum": 9007199254740991,
+             "minimum": 0,
+             "type": "integer"
+            },
+            "grading": {
+             "anyOf": [
+              {
+               "additionalProperties": false,
+               "properties": {
+                "candidateBatchId": {
+                 "$ref": "#/components/schemas/PublicUuid"
+                },
+                "evaluationId": {
+                 "$ref": "#/components/schemas/PublicUuid"
+                },
+                "recordedBatchId": {
+                 "$ref": "#/components/schemas/PublicUuid"
+                }
+               },
+               "required": [
+                "evaluationId",
+                "recordedBatchId",
+                "candidateBatchId"
+               ],
+               "type": "object"
+              },
+              {
+               "type": "null"
+              }
+             ]
+            },
+            "gradingHandoffState": {
+             "enum": [
+              "pending",
+              "ready",
+              "dispatched",
+              "failed"
+             ],
+             "type": "string"
+            },
+            "itemCount": {
+             "maximum": 9007199254740991,
+             "minimum": 0,
+             "type": "integer"
+            },
+            "pendingCount": {
+             "maximum": 9007199254740991,
+             "minimum": 0,
+             "type": "integer"
+            },
+            "runId": {
+             "$ref": "#/components/schemas/PublicUuid"
+            },
+            "state": {
+             "type": "string"
+            }
+           },
+           "required": [
+            "runId",
+            "state",
+            "deadlineAt",
+            "itemCount",
+            "completedCount",
+            "failedCount",
+            "pendingCount",
+            "gradingHandoffState"
+           ],
+           "type": "object"
+          },
+          "requestId": {
+           "pattern": "^req_[a-f0-9]{32}$",
+           "type": "string"
+          },
+          "success": {
+           "const": true,
+           "type": "boolean"
+          }
+         },
+         "required": [
+          "data",
+          "requestId",
+          "success"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Sealed run progress",
+      "headers": {
+       "RateLimit-Limit": {
+        "$ref": "#/components/headers/PublicApiRateLimitLimit"
+       },
+       "RateLimit-Remaining": {
+        "$ref": "#/components/headers/PublicApiRateLimitRemaining"
+       },
+       "RateLimit-Reset": {
+        "$ref": "#/components/headers/PublicApiRateLimitReset"
+       },
+       "X-NeatLogs-RateLimit-Degraded": {
+        "$ref": "#/components/headers/PublicApiRateLimitDegraded"
+       },
+       "X-NeatLogs-RateLimit-Limit": {
+        "$ref": "#/components/headers/PublicApiLegacyRateLimitLimit"
+       },
+       "X-NeatLogs-RateLimit-Policy": {
+        "$ref": "#/components/headers/PublicApiRateLimitPolicy"
+       },
+       "X-NeatLogs-RateLimit-Remaining": {
+        "$ref": "#/components/headers/PublicApiLegacyRateLimitRemaining"
+       },
+       "X-NeatLogs-RateLimit-Reset-After": {
+        "$ref": "#/components/headers/PublicApiRateLimitResetAfter"
+       },
+       "X-NeatLogs-RateLimit-Version": {
+        "$ref": "#/components/headers/PublicApiRateLimitVersion"
+       },
+       "X-Request-Id": {
+        "$ref": "#/components/headers/PublicApiRequestId"
+       }
+      }
+     },
+     "400": {
+      "$ref": "#/components/responses/LocalTestingProblem400"
+     },
+     "401": {
+      "$ref": "#/components/responses/LocalTestingProblem401"
+     },
+     "403": {
+      "$ref": "#/components/responses/LocalTestingProblem403"
+     },
+     "404": {
+      "$ref": "#/components/responses/LocalTestingProblem404"
+     },
+     "409": {
+      "$ref": "#/components/responses/LocalTestingProblem409"
+     },
+     "413": {
+      "$ref": "#/components/responses/LocalTestingProblem413"
+     },
+     "415": {
+      "$ref": "#/components/responses/LocalTestingProblem415"
+     },
+     "422": {
+      "$ref": "#/components/responses/LocalTestingProblem422"
+     },
+     "429": {
+      "$ref": "#/components/responses/LocalTestingProblem429"
+     },
+     "500": {
+      "$ref": "#/components/responses/LocalTestingProblem500"
+     },
+     "503": {
+      "$ref": "#/components/responses/LocalTestingProblem503"
+     }
+    },
+    "security": [
+     {
+      "ServiceAccountBearerAuth": []
+     },
+     {
+      "OAuth2": [
+       "evaluation:write"
+      ]
+     }
+    ],
+    "summary": "Finish output production and retain missing outputs as failures",
+    "tags": [
+     "public",
+     "runs"
+    ],
+    "x-auth-gate": "public-api-key",
+    "x-auth-source": "global-gate",
+    "x-contract-coverage": "contracted",
+    "x-neatlogs-operation-gate": "public-api-mutations"
+   }
+  },
+  "/api/v1/public/runs/{runId}/outputs": {
+   "post": {
+    "description": "Create or trigger runs outputs.\n\n**Auth:** Requires a service-account or OAuth access Bearer token and explicit x-project-id; credential scope, current project role, tenant ownership, and entitlement are enforced.",
+    "operationId": "post_api_v1_public_runs_runId_outputs",
+    "parameters": [
+     {
+      "description": "runId path parameter",
+      "in": "path",
+      "name": "runId",
+      "required": true,
+      "schema": {
+       "$ref": "#/components/schemas/PublicUuid"
+      }
+     },
+     {
+      "description": "idempotency-key header parameter",
+      "in": "header",
+      "name": "idempotency-key",
+      "required": true,
+      "schema": {
+       "description": "Required canonical UUIDv4 or high-entropy base64url idempotency key",
+       "maxLength": 43,
+       "minLength": 22,
+       "pattern": "^(?:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|[A-Za-z0-9_-]{21}[AQgw]|[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048])$",
+       "type": "string"
+      }
+     },
+     {
+      "description": "x-project-id header parameter",
+      "in": "header",
+      "name": "x-project-id",
+      "required": true,
+      "schema": {
+       "$ref": "#/components/schemas/PublicUuid"
+      }
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "anyOf": [
+         {
+          "additionalProperties": false,
+          "properties": {
+           "caseId": {
+            "$ref": "#/components/schemas/PublicUuid"
+           },
+           "traceId": {
+            "pattern": "^[a-f0-9]{32}$",
+            "type": "string"
+           },
+           "trial": {
+            "maximum": 10,
+            "minimum": 1,
+            "type": "integer"
+           }
+          },
+          "required": [
+           "caseId",
+           "trial",
+           "traceId"
+          ],
+          "type": "object"
+         },
+         {
+          "additionalProperties": false,
+          "properties": {
+           "caseId": {
+            "$ref": "#/components/schemas/PublicUuid"
+           },
+           "metrics": {
+            "additionalProperties": {},
+            "default": {},
+            "propertyNames": {
+             "type": "string"
+            },
+            "type": "object"
+           },
+           "output": {},
+           "trial": {
+            "maximum": 10,
+            "minimum": 1,
+            "type": "integer"
+           }
+          },
+          "required": [
+           "caseId",
+           "trial",
+           "output"
+          ],
+          "type": "object"
+         },
+         {
+          "additionalProperties": false,
+          "properties": {
+           "caseId": {
+            "$ref": "#/components/schemas/PublicUuid"
+           },
+           "error": {
+            "additionalProperties": false,
+            "properties": {
+             "code": {
+              "maxLength": 100,
+              "type": "string"
+             },
+             "message": {
+              "maxLength": 1000,
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "message"
+            ],
+            "type": "object"
+           },
+           "trial": {
+            "maximum": 10,
+            "minimum": 1,
+            "type": "integer"
+           }
+          },
+          "required": [
+           "caseId",
+           "trial",
+           "error"
+          ],
+          "type": "object"
+         }
+        ]
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "data": {
+           "additionalProperties": false,
+           "properties": {
+            "itemId": {
+             "$ref": "#/components/schemas/PublicUuid"
+            },
+            "outputId": {
+             "$ref": "#/components/schemas/PublicUuid"
+            },
+            "runId": {
+             "$ref": "#/components/schemas/PublicUuid"
+            },
+            "state": {
+             "enum": [
+              "succeeded",
+              "failed"
+             ],
+             "type": "string"
+            },
+            "traceId": {
+             "anyOf": [
+              {
+               "type": "string"
+              },
+              {
+               "type": "null"
+              }
+             ]
+            }
+           },
+           "required": [
+            "runId",
+            "itemId",
+            "outputId",
+            "traceId",
+            "state"
+           ],
+           "type": "object"
+          },
+          "requestId": {
+           "pattern": "^req_[a-f0-9]{32}$",
+           "type": "string"
+          },
+          "success": {
+           "const": true,
+           "type": "boolean"
+          }
+         },
+         "required": [
+          "data",
+          "requestId",
+          "success"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Immutable accepted output receipt",
+      "headers": {
+       "RateLimit-Limit": {
+        "$ref": "#/components/headers/PublicApiRateLimitLimit"
+       },
+       "RateLimit-Remaining": {
+        "$ref": "#/components/headers/PublicApiRateLimitRemaining"
+       },
+       "RateLimit-Reset": {
+        "$ref": "#/components/headers/PublicApiRateLimitReset"
+       },
+       "X-NeatLogs-RateLimit-Degraded": {
+        "$ref": "#/components/headers/PublicApiRateLimitDegraded"
+       },
+       "X-NeatLogs-RateLimit-Limit": {
+        "$ref": "#/components/headers/PublicApiLegacyRateLimitLimit"
+       },
+       "X-NeatLogs-RateLimit-Policy": {
+        "$ref": "#/components/headers/PublicApiRateLimitPolicy"
+       },
+       "X-NeatLogs-RateLimit-Remaining": {
+        "$ref": "#/components/headers/PublicApiLegacyRateLimitRemaining"
+       },
+       "X-NeatLogs-RateLimit-Reset-After": {
+        "$ref": "#/components/headers/PublicApiRateLimitResetAfter"
+       },
+       "X-NeatLogs-RateLimit-Version": {
+        "$ref": "#/components/headers/PublicApiRateLimitVersion"
+       },
+       "X-Request-Id": {
+        "$ref": "#/components/headers/PublicApiRequestId"
+       }
+      }
+     },
+     "400": {
+      "$ref": "#/components/responses/LocalTestingProblem400"
+     },
+     "401": {
+      "$ref": "#/components/responses/LocalTestingProblem401"
+     },
+     "403": {
+      "$ref": "#/components/responses/LocalTestingProblem403"
+     },
+     "404": {
+      "$ref": "#/components/responses/LocalTestingProblem404"
+     },
+     "409": {
+      "$ref": "#/components/responses/LocalTestingProblem409"
+     },
+     "413": {
+      "$ref": "#/components/responses/LocalTestingProblem413"
+     },
+     "415": {
+      "$ref": "#/components/responses/LocalTestingProblem415"
+     },
+     "422": {
+      "$ref": "#/components/responses/LocalTestingProblem422"
+     },
+     "429": {
+      "$ref": "#/components/responses/LocalTestingProblem429"
+     },
+     "500": {
+      "$ref": "#/components/responses/LocalTestingProblem500"
+     },
+     "503": {
+      "$ref": "#/components/responses/LocalTestingProblem503"
+     }
+    },
+    "security": [
+     {
+      "ServiceAccountBearerAuth": []
+     },
+     {
+      "OAuth2": [
+       "evaluation:write"
+      ]
+     }
+    ],
+    "summary": "Accept a task output, task error, or finalized replay trace for one pinned case and trial",
+    "tags": [
+     "public",
+     "runs"
+    ],
+    "x-auth-gate": "public-api-key",
+    "x-auth-source": "global-gate",
+    "x-contract-coverage": "contracted",
+    "x-neatlogs-operation-gate": "public-api-mutations"
+   }
+  },
+  "/api/v1/public/runs/{runId}/tags": {
+   "post": {
+    "description": "Create or trigger runs tags.\n\n**Auth:** Requires a service-account or OAuth access Bearer token and explicit x-project-id; credential scope, current project role, tenant ownership, and entitlement are enforced.",
+    "operationId": "post_api_v1_public_runs_runId_tags",
+    "parameters": [
+     {
+      "description": "runId path parameter",
+      "in": "path",
+      "name": "runId",
+      "required": true,
+      "schema": {
+       "$ref": "#/components/schemas/PublicUuid"
+      }
+     },
+     {
+      "description": "idempotency-key header parameter",
+      "in": "header",
+      "name": "idempotency-key",
+      "required": true,
+      "schema": {
+       "description": "Required canonical UUIDv4 or high-entropy base64url idempotency key",
+       "maxLength": 43,
+       "minLength": 22,
+       "pattern": "^(?:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|[A-Za-z0-9_-]{21}[AQgw]|[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048])$",
+       "type": "string"
+      }
+     },
+     {
+      "description": "x-project-id header parameter",
+      "in": "header",
+      "name": "x-project-id",
+      "required": true,
+      "schema": {
+       "$ref": "#/components/schemas/PublicUuid"
+      }
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "additionalProperties": false,
+        "properties": {
+         "tag": {
+          "pattern": "^[\\w.-]{1,64}$",
+          "type": "string"
+         }
+        },
+        "required": [
+         "tag"
+        ],
+        "type": "object"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "data": {
+           "additionalProperties": false,
+           "properties": {
+            "runId": {
+             "$ref": "#/components/schemas/PublicUuid"
+            },
+            "tag": {
+             "type": "string"
+            }
+           },
+           "required": [
+            "runId",
+            "tag"
+           ],
+           "type": "object"
+          },
+          "requestId": {
+           "pattern": "^req_[a-f0-9]{32}$",
+           "type": "string"
+          },
+          "success": {
+           "const": true,
+           "type": "boolean"
+          }
+         },
+         "required": [
+          "data",
+          "requestId",
+          "success"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Updated baseline tag",
+      "headers": {
+       "RateLimit-Limit": {
+        "$ref": "#/components/headers/PublicApiRateLimitLimit"
+       },
+       "RateLimit-Remaining": {
+        "$ref": "#/components/headers/PublicApiRateLimitRemaining"
+       },
+       "RateLimit-Reset": {
+        "$ref": "#/components/headers/PublicApiRateLimitReset"
+       },
+       "X-NeatLogs-RateLimit-Degraded": {
+        "$ref": "#/components/headers/PublicApiRateLimitDegraded"
+       },
+       "X-NeatLogs-RateLimit-Limit": {
+        "$ref": "#/components/headers/PublicApiLegacyRateLimitLimit"
+       },
+       "X-NeatLogs-RateLimit-Policy": {
+        "$ref": "#/components/headers/PublicApiRateLimitPolicy"
+       },
+       "X-NeatLogs-RateLimit-Remaining": {
+        "$ref": "#/components/headers/PublicApiLegacyRateLimitRemaining"
+       },
+       "X-NeatLogs-RateLimit-Reset-After": {
+        "$ref": "#/components/headers/PublicApiRateLimitResetAfter"
+       },
+       "X-NeatLogs-RateLimit-Version": {
+        "$ref": "#/components/headers/PublicApiRateLimitVersion"
+       },
+       "X-Request-Id": {
+        "$ref": "#/components/headers/PublicApiRequestId"
+       }
+      }
+     },
+     "400": {
+      "$ref": "#/components/responses/LocalTestingProblem400"
+     },
+     "401": {
+      "$ref": "#/components/responses/LocalTestingProblem401"
+     },
+     "403": {
+      "$ref": "#/components/responses/LocalTestingProblem403"
+     },
+     "404": {
+      "$ref": "#/components/responses/LocalTestingProblem404"
+     },
+     "409": {
+      "$ref": "#/components/responses/LocalTestingProblem409"
+     },
+     "413": {
+      "$ref": "#/components/responses/LocalTestingProblem413"
+     },
+     "415": {
+      "$ref": "#/components/responses/LocalTestingProblem415"
+     },
+     "422": {
+      "$ref": "#/components/responses/LocalTestingProblem422"
+     },
+     "429": {
+      "$ref": "#/components/responses/LocalTestingProblem429"
+     },
+     "500": {
+      "$ref": "#/components/responses/LocalTestingProblem500"
+     },
+     "503": {
+      "$ref": "#/components/responses/LocalTestingProblem503"
+     }
+    },
+    "security": [
+     {
+      "ServiceAccountBearerAuth": []
+     },
+     {
+      "OAuth2": [
+       "evaluation:write"
+      ]
+     }
+    ],
+    "summary": "Tag a completed run as a dataset baseline",
+    "tags": [
+     "public",
+     "runs"
+    ],
+    "x-auth-gate": "public-api-key",
+    "x-auth-source": "global-gate",
+    "x-contract-coverage": "contracted",
+    "x-neatlogs-operation-gate": "public-api-mutations"
+   }
+  },
+  "/api/v1/public/traces/{traceId}": {
+   "get": {
+    "description": "Fetch a specific public traces.\n\n**Auth:** Requires a legacy project-bound public API key, service-account Bearer token, or OAuth access Bearer token; each credential follows its own carrier and authorization policy.",
+    "operationId": "get_api_v1_public_traces_traceId",
+    "parameters": [
+     {
+      "description": "traceId path parameter",
+      "in": "path",
+      "name": "traceId",
+      "required": true,
+      "schema": {
+       "maxLength": 255,
+       "minLength": 1,
+       "type": "string"
+      }
+     },
+     {
+      "description": "x-project-id header parameter",
+      "in": "header",
+      "name": "x-project-id",
+      "required": false,
+      "schema": {
+       "$ref": "#/components/schemas/PublicUuid"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "data": {
+           "additionalProperties": false,
+           "properties": {
+            "completedAt": {
+             "anyOf": [
+              {
+               "$ref": "#/components/schemas/PublicOffsetTimestamp"
+              },
+              {
+               "type": "null"
+              }
+             ]
+            },
+            "durationMs": {
+             "maximum": 9007199254740991,
+             "minimum": 0,
+             "type": "number"
+            },
+            "finalizationStatus": {
+             "anyOf": [
+              {
+               "enum": [
+                "pending",
+                "finalized",
+                "dlq"
+               ],
+               "type": "string"
+              },
+              {
+               "type": "null"
+              }
+             ]
+            },
+            "framework": {
+             "anyOf": [
+              {
+               "maxLength": 50,
+               "type": "string"
+              },
+              {
+               "type": "null"
+              }
+             ]
+            },
+            "ingestedAt": {
+             "$ref": "#/components/schemas/PublicOffsetTimestamp"
+            },
+            "llmCallsCount": {
+             "maximum": 9007199254740991,
+             "minimum": 0,
+             "type": "integer"
+            },
+            "metadataRevision": {
+             "maximum": 9007199254740991,
+             "minimum": 0,
+             "type": "integer"
+            },
+            "metadataUpdatedAt": {
+             "anyOf": [
+              {
+               "$ref": "#/components/schemas/PublicOffsetTimestamp"
+              },
+              {
+               "type": "null"
+              }
+             ]
+            },
+            "sessionId": {
+             "maxLength": 255,
+             "minLength": 1,
+             "type": "string"
+            },
+            "spansCount": {
+             "maximum": 9007199254740991,
+             "minimum": 0,
+             "type": "integer"
+            },
+            "startedAt": {
+             "$ref": "#/components/schemas/PublicOffsetTimestamp"
+            },
+            "status": {
+             "maxLength": 20,
+             "minLength": 1,
+             "type": "string"
+            },
+            "tags": {
+             "items": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+             },
+             "maxItems": 10,
+             "type": "array"
+            },
+            "toolCallsCount": {
+             "maximum": 9007199254740991,
+             "minimum": 0,
+             "type": "integer"
+            },
+            "totalCostUsd": {
+             "maximum": 1000000000000,
+             "minimum": 0,
+             "type": "number"
+            },
+            "totalTokens": {
+             "maximum": 9007199254740991,
+             "minimum": 0,
+             "type": "integer"
+            },
+            "traceId": {
+             "maxLength": 255,
+             "minLength": 1,
+             "type": "string"
+            },
+            "traceName": {
+             "anyOf": [
+              {
+               "maxLength": 255,
+               "minLength": 1,
+               "type": "string"
+              },
+              {
+               "type": "null"
+              }
+             ]
+            },
+            "workflowName": {
+             "anyOf": [
+              {
+               "maxLength": 255,
+               "minLength": 1,
+               "type": "string"
+              },
+              {
+               "type": "null"
+              }
+             ]
+            }
+           },
+           "required": [
+            "completedAt",
+            "durationMs",
+            "finalizationStatus",
+            "framework",
+            "ingestedAt",
+            "llmCallsCount",
+            "sessionId",
+            "spansCount",
+            "startedAt",
+            "status",
+            "tags",
+            "toolCallsCount",
+            "totalCostUsd",
+            "totalTokens",
+            "traceId",
+            "traceName",
+            "workflowName",
+            "metadataRevision",
+            "metadataUpdatedAt"
+           ],
+           "type": "object"
+          },
+          "requestId": {
+           "pattern": "^req_[a-f0-9]{32}$",
+           "type": "string"
+          },
+          "success": {
+           "const": true,
+           "type": "boolean"
+          }
+         },
+         "required": [
+          "data",
+          "requestId",
+          "success"
+         ],
+         "type": "object"
+        }
+       }
+      },
+      "description": "Safe trace metadata",
+      "headers": {
+       "RateLimit-Limit": {
+        "$ref": "#/components/headers/PublicApiRateLimitLimit"
+       },
+       "RateLimit-Remaining": {
+        "$ref": "#/components/headers/PublicApiRateLimitRemaining"
+       },
+       "RateLimit-Reset": {
+        "$ref": "#/components/headers/PublicApiRateLimitReset"
+       },
+       "X-NeatLogs-RateLimit-Degraded": {
+        "$ref": "#/components/headers/PublicApiRateLimitDegraded"
+       },
+       "X-NeatLogs-RateLimit-Limit": {
+        "$ref": "#/components/headers/PublicApiLegacyRateLimitLimit"
+       },
+       "X-NeatLogs-RateLimit-Policy": {
+        "$ref": "#/components/headers/PublicApiRateLimitPolicy"
+       },
+       "X-NeatLogs-RateLimit-Remaining": {
+        "$ref": "#/components/headers/PublicApiLegacyRateLimitRemaining"
+       },
+       "X-NeatLogs-RateLimit-Reset-After": {
+        "$ref": "#/components/headers/PublicApiRateLimitResetAfter"
+       },
+       "X-NeatLogs-RateLimit-Version": {
+        "$ref": "#/components/headers/PublicApiRateLimitVersion"
+       },
+       "X-Request-Id": {
+        "$ref": "#/components/headers/PublicApiRequestId"
+       }
+      }
+     },
+     "400": {
+      "content": {
+       "application/problem+json": {
+        "schema": {
+         "allOf": [
+          {
+           "$ref": "#/components/schemas/PublicApiProblem"
+          },
+          {
+           "$ref": "#/components/schemas/PublicApiProblem400"
+          }
+         ]
+        }
+       }
+      },
+      "description": "Invalid public API request",
+      "headers": {
+       "X-Request-Id": {
+        "$ref": "#/components/headers/PublicApiRequestId"
+       }
+      }
+     },
+     "401": {
+      "content": {
+       "application/problem+json": {
+        "schema": {
+         "$ref": "#/components/schemas/PublicApiProblemResponse401"
+        }
+       }
+      },
+      "description": "Missing or invalid public API credential",
+      "headers": {
+       "WWW-Authenticate": {
+        "$ref": "#/components/headers/PublicApiWwwAuthenticate"
+       },
+       "X-Request-Id": {
+        "$ref": "#/components/headers/PublicApiRequestId"
+       }
+      }
+     },
+     "403": {
+      "content": {
+       "application/problem+json": {
+        "schema": {
+         "$ref": "#/components/schemas/PublicApiProblemResponse403"
+        }
+       }
+      },
+      "description": "Public API request is not authorized",
+      "headers": {
+       "X-Request-Id": {
+        "$ref": "#/components/headers/PublicApiRequestId"
+       }
+      }
+     },
+     "404": {
+      "content": {
+       "application/problem+json": {
+        "schema": {
+         "$ref": "#/components/schemas/PublicApiProblemResponse404"
+        }
+       }
+      },
+      "description": "Trace not found",
+      "headers": {
+       "X-Request-Id": {
+        "$ref": "#/components/headers/PublicApiRequestId"
+       }
+      }
+     },
+     "409": {
+      "content": {
+       "application/problem+json": {
+        "schema": {
+         "$ref": "#/components/schemas/PublicApiProblemResponse409"
+        }
+       }
+      },
+      "description": "Public API request conflict",
+      "headers": {
+       "X-Request-Id": {
+        "$ref": "#/components/headers/PublicApiRequestId"
+       }
+      }
+     },
+     "413": {
+      "content": {
+       "application/problem+json": {
+        "schema": {
+         "$ref": "#/components/schemas/PublicApiProblemResponse413"
+        }
+       }
+      },
+      "description": "Public API request body too large",
+      "headers": {
+       "X-Request-Id": {
+        "$ref": "#/components/headers/PublicApiRequestId"
+       }
+      }
+     },
+     "415": {
+      "content": {
+       "application/problem+json": {
+        "schema": {
+         "$ref": "#/components/schemas/PublicApiProblemResponse415"
+        }
+       }
+      },
+      "description": "Unsupported public API request body",
+      "headers": {
+       "X-Request-Id": {
+        "$ref": "#/components/headers/PublicApiRequestId"
+       }
+      }
+     },
+     "429": {
+      "content": {
+       "application/problem+json": {
+        "schema": {
+         "$ref": "#/components/schemas/PublicApiProblemResponse429"
+        }
+       }
+      },
+      "description": "Public API rate limit exceeded",
+      "headers": {
+       "RateLimit-Limit": {
+        "$ref": "#/components/headers/PublicApiRateLimitLimit"
+       },
+       "RateLimit-Remaining": {
+        "$ref": "#/components/headers/PublicApiRateLimitRemaining"
+       },
+       "RateLimit-Reset": {
+        "$ref": "#/components/headers/PublicApiRateLimitReset"
+       },
+       "Retry-After": {
+        "$ref": "#/components/headers/PublicApiRetryAfter"
+       },
+       "X-NeatLogs-RateLimit-Degraded": {
+        "$ref": "#/components/headers/PublicApiRateLimitDegraded"
+       },
+       "X-NeatLogs-RateLimit-Limit": {
+        "$ref": "#/components/headers/PublicApiLegacyRateLimitLimit"
+       },
+       "X-NeatLogs-RateLimit-Policy": {
+        "$ref": "#/components/headers/PublicApiRateLimitPolicy"
+       },
+       "X-NeatLogs-RateLimit-Remaining": {
+        "$ref": "#/components/headers/PublicApiLegacyRateLimitRemaining"
+       },
+       "X-NeatLogs-RateLimit-Reset-After": {
+        "$ref": "#/components/headers/PublicApiRateLimitResetAfter"
+       },
+       "X-NeatLogs-RateLimit-Version": {
+        "$ref": "#/components/headers/PublicApiRateLimitVersion"
+       },
+       "X-Request-Id": {
+        "$ref": "#/components/headers/PublicApiRequestId"
+       }
+      }
+     },
+     "500": {
+      "content": {
+       "application/problem+json": {
+        "schema": {
+         "$ref": "#/components/schemas/PublicApiProblemResponse500"
+        }
+       }
+      },
+      "description": "Internal server error",
+      "headers": {
+       "X-Request-Id": {
+        "$ref": "#/components/headers/PublicApiRequestId"
+       }
+      }
+     },
+     "503": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": false,
+         "properties": {
+          "error": {
+           "const": "Backend is draining",
+           "type": "string"
+          }
+         },
+         "required": [
+          "error"
+         ],
+         "type": "object"
+        }
+       },
+       "application/problem+json": {
+        "schema": {
+         "allOf": [
+          {
+           "$ref": "#/components/schemas/PublicApiProblem"
+          },
+          {
+           "$ref": "#/components/schemas/PublicApiProblem503"
+          }
+         ]
+        }
+       }
+      },
+      "description": "Public API credential, project context, or rate limiting unavailable. Backend is draining; retry after the Retry-After delay.",
+      "headers": {
+       "Retry-After": {
+        "$ref": "#/components/headers/PublicApiRetryAfter"
+       },
+       "X-Request-Id": {
+        "$ref": "#/components/headers/PublicApiRequestId"
+       }
+      }
+     }
+    },
+    "security": [
+     {
+      "PublicApiKeyAuth": []
+     },
+     {
+      "PublicApiLegacyBearerAuth": []
+     },
+     {
+      "ServiceAccountBearerAuth": []
+     },
+     {
+      "OAuth2": [
+       "observability:read"
+      ]
+     }
+    ],
+    "summary": "Get a trace",
+    "tags": [
+     "public",
+     "traces"
+    ],
+    "x-auth-gate": "public-api-key",
+    "x-auth-source": "global-gate",
+    "x-contract-coverage": "contracted",
+    "x-neatlogs-operation-gate": "always"
+   }
+  }
+ }
+}

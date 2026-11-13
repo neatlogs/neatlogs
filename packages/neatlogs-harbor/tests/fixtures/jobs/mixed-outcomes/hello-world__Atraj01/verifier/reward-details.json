@@ -1,0 +1,13 @@
+{
+  "criteria": [
+    {
+      "name": "file_exists",
+      "score": 1.0
+    },
+    {
+      "name": "contents",
+      "score": 1.0,
+      "reason": "exact match"
+    }
+  ]
+}

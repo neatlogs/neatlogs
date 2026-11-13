@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import json
 import re
+from contextvars import ContextVar
 from typing import Any, Dict, List, Optional
 
 from opentelemetry import context as otel_context
@@ -45,6 +46,7 @@ from ._wrap_utils import get_tracer, is_suppressed
 
 _PROVIDER = "claude_agent_sdk"
 _ROOT_SCOPE = "__root__"
+_ACTIVE_RECEIVER: ContextVar[Any] = ContextVar("neatlogs.claude_agent.receiver", default=None)
 
 
 # OpenAI ids arrive bare ("gpt-4o"), gateway-namespaced ("azure/gpt-4o", "openai.gpt-oss-120b") or as
@@ -201,15 +203,24 @@ def _wrap_query(original):
 def _wrap_client_method(original, label: str):
     def wrapper(self, *args: Any, **kwargs: Any):
         inner = original(self, *args, **kwargs)
-        if is_suppressed():
+        if is_suppressed() or _ACTIVE_RECEIVER.get() is self:
             return inner
-        tracer = get_tracer()
-        agent_span = tracer.start_span(
-            f"claude_agent.{label}",
-            attributes={"neatlogs.span.kind": "agent", "neatlogs.agent.framework": _PROVIDER},
-        )
-        agent_ctx = otel_trace.set_span_in_context(agent_span)
-        return _TracingQuery(inner, agent_span, agent_ctx, tracer, {"text": ""})
+        agent_span = None
+        try:
+            tracer = get_tracer()
+            agent_span = tracer.start_span(
+                f"claude_agent.{label}",
+                attributes={"neatlogs.span.kind": "agent", "neatlogs.agent.framework": _PROVIDER},
+            )
+            agent_ctx = otel_trace.set_span_in_context(agent_span)
+            return _TracingQuery(inner, agent_span, agent_ctx, tracer, {"text": ""}, receiver=self)
+        except Exception:
+            if agent_span is not None:
+                try:
+                    agent_span.end()
+                except Exception:
+                    pass
+            return inner
 
     wrapper._neatlogs_wrapped = True  # type: ignore[attr-defined]
     return wrapper
@@ -247,7 +258,8 @@ class _TracingQuery:
     """Wraps the SDK's async-iterable query object: instruments iteration while preserving its own
     methods (interrupt, set_model, ...). Owns the span tree built from the message stream."""
 
-    def __init__(self, query_obj, agent_span, agent_ctx, tracer, prompt_ref):
+    def __init__(self, query_obj, agent_span, agent_ctx, tracer, prompt_ref, receiver=None):
+        self._receiver = receiver
         self._q = query_obj
         self._tracer = tracer
         self._agent_span = agent_span
@@ -288,16 +300,18 @@ class _TracingQuery:
         # onto the global current-span in isolated mode, so foreign instrumentation
         # emitted while the SDK pulls the next message nests under the host, not us.
         token = attach_as_current(self._agent_span)
+        receiver_token = _ACTIVE_RECEIVER.set(self._receiver)
         try:
             try:
                 msg = await inner_iter.__anext__()
             except StopAsyncIteration:
                 self._finalize("ok")
                 raise
-            except Exception as e:
+            except BaseException as e:
                 self._finalize("error", e)
                 raise
         finally:
+            _ACTIVE_RECEIVER.reset(receiver_token)
             _nl_detach(token)
         try:
             self._handle_message(msg)

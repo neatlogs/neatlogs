@@ -4,6 +4,34 @@ import neatlogs
 from neatlogs.errors import NeatlogsConfigurationError
 
 
+@pytest.mark.parametrize("mode", ["default", "client"])
+@pytest.mark.parametrize("app_version", [None, "deepsolv-release"])
+def test_sdk_version_does_not_replace_application_version(monkeypatch, mode, app_version):
+    from neatlogs._wrap_utils import get_neatlogs_provider
+
+    monkeypatch.setenv(
+        "OTEL_RESOURCE_ATTRIBUTES", f"service.version={app_version}" if app_version else ""
+    )
+    client = None
+    try:
+        if mode == "client":
+            client = neatlogs.Client(
+                api_key="test", workflow_name="versions", disable_export=True
+            )
+            provider = client.tracer_provider
+        else:
+            neatlogs.init(
+                api_key="test", instrumentations=[], disable_export=True,
+                register_shutdown_handlers=False,
+            )
+            provider = get_neatlogs_provider()
+        assert provider.resource.attributes["neatlogs.sdk.version"] == neatlogs.__version__
+        assert provider.resource.attributes.get("service.version") == app_version
+    finally:
+        if client is not None:
+            client.shutdown()
+
+
 def test_identical_init_is_idempotent_but_conflicting_init_is_typed_error():
     neatlogs.init(
         api_key="key-a",

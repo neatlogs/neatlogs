@@ -207,6 +207,27 @@ def _input_value(args, kwargs) -> str:
     return message if isinstance(message, str) else serialize(message)
 
 
+def _async_run_dispatch(entity: Any, run: Any) -> Any:
+    def dispatch(*args, **kwargs):
+        stream = kwargs.get("stream")
+        if stream is None:
+            stream = getattr(entity, "stream", False)
+        if not stream:
+            return run(*args, **kwargs)
+
+        async def iterate():
+            events = await run(*args, **kwargs)
+            try:
+                async for event in events:
+                    yield event
+            finally:
+                await events.aclose()
+
+        return iterate()
+
+    return dispatch
+
+
 def _patch_agent(agent: Any) -> None:
     span_kind_name = type(agent).__name__.lower()
 
@@ -268,7 +289,9 @@ def _patch_agent(agent: Any) -> None:
             iv = _input_value(args, kwargs)
             if iv:
                 attrs["input.value"] = iv
-            is_stream = bool(kwargs.get("stream"))
+            is_stream = kwargs.get("stream")
+            if is_stream is None:
+                is_stream = getattr(agent, "stream", False)
             if is_stream:
                 attrs["neatlogs.llm.is_streaming"] = True
 
@@ -298,7 +321,7 @@ def _patch_agent(agent: Any) -> None:
             _finalize_agent_span(span, result, (time.perf_counter() - start) * 1000)
             return result
 
-        agent.arun = patched_arun
+        agent.arun = _async_run_dispatch(agent, patched_arun)
 
 
 # ---------------------------------------------------------------------------
@@ -356,7 +379,9 @@ def _patch_workflow(workflow: Any) -> None:
             iv = _input_value(args, kwargs)
             if iv:
                 attrs["input.value"] = iv
-            is_stream = bool(kwargs.get("stream"))
+            is_stream = kwargs.get("stream")
+            if is_stream is None:
+                is_stream = getattr(workflow, "stream", False)
             span = tracer.start_span(name="agno.workflow.arun", attributes=attrs)
             token = attach_as_current(span)
             start = time.perf_counter()
@@ -381,7 +406,7 @@ def _patch_workflow(workflow: Any) -> None:
             _finalize_workflow_span(span, result, (time.perf_counter() - start) * 1000)
             return result
 
-        workflow.arun = patched_arun
+        workflow.arun = _async_run_dispatch(workflow, patched_arun)
 
 
 def _finalize_workflow_span(span: Any, result: Any, duration_ms: float) -> None:
@@ -477,6 +502,14 @@ class _AgnoAsyncStreamIter:
             raise
         self._last = ev
         return ev
+
+    async def aclose(self):
+        try:
+            close = getattr(self._aiterable, "aclose", None)
+            if close is not None:
+                await close()
+        finally:
+            self._finalize()
 
     def _finalize(self, error=None, cancelled=False):
         if self._done:

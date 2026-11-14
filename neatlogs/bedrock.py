@@ -293,10 +293,44 @@ def _patch_converse_stream(client: Any) -> None:
         if stream is None:
             _ok(span, (time.perf_counter() - start) * 1000)
             return response
-        response["stream"] = _wrap_converse_stream(stream, span, start)
+        response["stream"] = _ClosableStream(
+            stream, _wrap_converse_stream(stream, span, start), span, start
+        )
         return response
 
     client.converse_stream = patched
+
+
+class _ClosableStream:
+    def __init__(self, source: Any, iterator: Any, span: Any, start: float):
+        self._source = source
+        self._iterator = iterator
+        self._span = span
+        self._start = start
+        self._started = False
+        self._closed = False
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if self._closed:
+            raise StopIteration
+        self._started = True
+        return next(self._iterator)
+
+    def close(self):
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            close = getattr(self._source, "close", None)
+            if callable(close):
+                close()
+        finally:
+            self._iterator.close()
+            if not self._started:
+                _ok(self._span, (time.perf_counter() - self._start) * 1000)
 
 
 def _wrap_converse_stream(stream: Any, span: Any, start: float):
@@ -607,7 +641,9 @@ def _patch_invoke_model_stream(client: Any) -> None:
         if body is None:
             _ok(span, (time.perf_counter() - start) * 1000)
             return response
-        response["body"] = _wrap_invoke_stream(body, span, vendor, start)
+        response["body"] = _ClosableStream(
+            body, _wrap_invoke_stream(body, span, vendor, start), span, start
+        )
         return response
 
     client.invoke_model_with_response_stream = patched

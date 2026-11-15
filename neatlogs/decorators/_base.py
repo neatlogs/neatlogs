@@ -130,18 +130,7 @@ def _bind_call_args(
         sig = inspect.signature(func)
         bound = sig.bind_partial(*args, **kwargs)
         bound.apply_defaults()
-        arguments = dict(bound.arguments)
-        first_parameter = next(iter(sig.parameters), None)
-        if first_parameter in ("self", "cls") and first_parameter in arguments:
-            receiver = arguments[first_parameter]
-            owner = receiver if inspect.isclass(receiver) else type(receiver)
-            descriptor = inspect.getattr_static(owner, func.__name__, None)
-            if isinstance(descriptor, classmethod):
-                descriptor = descriptor.__func__
-            if not isinstance(descriptor, staticmethod) and callable(descriptor):
-                if inspect.unwrap(descriptor) is inspect.unwrap(func):
-                    arguments.pop(first_parameter, None)
-        return arguments
+        return dict(bound.arguments)
     except Exception:
         return {"args": list(args), "kwargs": kwargs}
 
@@ -181,20 +170,6 @@ def _set_common_span_attrs(
                 span.set_attribute(k, str(v))
 
 
-def _capture_io(span, field: str, value: Any, mapper: Optional[Callable] = None) -> None:
-    try:
-        projected = mapper(value) if mapper is not None else value
-        span.set_attribute(
-            f"{field}.value", _safe_json_dumps(projected, span=span if field == "output" else None)
-        )
-        span.set_attribute(f"{field}.mime_type", "application/json")
-    except Exception:
-        try:
-            span.add_event("neatlogs.capture.error", {"field": field})
-        except Exception:
-            pass
-
-
 def _decorate_span(
     *,
     openinference_kind: str,
@@ -206,8 +181,6 @@ def _decorate_span(
     attributes: Optional[Dict[str, Any]] = None,
     capture_input: Optional[bool] = None,
     capture_output: Optional[bool] = None,
-    input_mapper: Optional[Callable] = None,
-    output_mapper: Optional[Callable] = None,
     capture_stdout: bool = False,
     postprocess_result: Optional[Callable[[Any, Any, Dict[str, Any]], None]] = None,
     mask: Optional[Callable] = None,
@@ -276,7 +249,8 @@ def _decorate_span(
                 span.set_attribute("neatlogs.description", description)
             bound = _bind_call_args(func, args, kwargs)
             if cap_in:
-                _capture_io(span, "input", bound, input_mapper)
+                span.set_attribute("input.value", _safe_json_dumps(bound))
+                span.set_attribute("input.mime_type", "application/json")
             return bound
 
         def _record_stream_chunk(span, index: int, value: Any) -> None:
@@ -315,7 +289,8 @@ def _decorate_span(
                 except Exception:
                     pass
             if cap_out:
-                _capture_io(span, "output", chunks, output_mapper)
+                span.set_attribute("output.value", _safe_json_dumps(chunks))
+                span.set_attribute("output.mime_type", "application/json")
             span.set_status(Status(StatusCode.OK))
 
         if inspect.isasyncgenfunction(func):
@@ -349,10 +324,9 @@ def _decorate_span(
                     try:
                         async for chunk in iterator:
                             chunks.append(chunk)
-                            if output_mapper is None:
-                                _record_stream_chunk(span, len(chunks) - 1, chunk)
+                            _record_stream_chunk(span, len(chunks) - 1, chunk)
                             _set_stream_counts(span, len(chunks))
-                            if cap_out and output_mapper is None:
+                            if cap_out:
                                 # Incremental, bounded: re-serializing the whole chunk list on
                                 # every chunk is O(n^2); the accumulator keeps a bounded prefix
                                 # plus a running digest, so partial output survives shutdown
@@ -372,12 +346,14 @@ def _decorate_span(
                         span.set_attribute("neatlogs.stream.cancelled", True)
                         _set_stream_counts(span, len(chunks))
                         if cap_out:
-                            _capture_io(span, "output", chunks, output_mapper)
+                            span.set_attribute("output.value", _safe_json_dumps(chunks))
+                            span.set_attribute("output.mime_type", "application/json")
                         raise
                     except Exception as exc:
                         _set_stream_counts(span, len(chunks))
                         if cap_out:
-                            _capture_io(span, "output", chunks, output_mapper)
+                            span.set_attribute("output.value", _safe_json_dumps(chunks))
+                            span.set_attribute("output.mime_type", "application/json")
                         span.record_exception(exc)
                         span.set_status(Status(StatusCode.ERROR, str(exc)))
                         raise
@@ -420,10 +396,9 @@ def _decorate_span(
                     try:
                         for chunk in func(*args, **kwargs):
                             chunks.append(chunk)
-                            if output_mapper is None:
-                                _record_stream_chunk(span, len(chunks) - 1, chunk)
+                            _record_stream_chunk(span, len(chunks) - 1, chunk)
                             _set_stream_counts(span, len(chunks))
-                            if cap_out and output_mapper is None:
+                            if cap_out:
                                 # Incremental, bounded: re-serializing the whole chunk list on
                                 # every chunk is O(n^2); the accumulator keeps a bounded prefix
                                 # plus a running digest, so partial output survives shutdown
@@ -443,12 +418,14 @@ def _decorate_span(
                         span.set_attribute("neatlogs.stream.cancelled", True)
                         _set_stream_counts(span, len(chunks))
                         if cap_out:
-                            _capture_io(span, "output", chunks, output_mapper)
+                            span.set_attribute("output.value", _safe_json_dumps(chunks))
+                            span.set_attribute("output.mime_type", "application/json")
                         raise
                     except Exception as exc:
                         _set_stream_counts(span, len(chunks))
                         if cap_out:
-                            _capture_io(span, "output", chunks, output_mapper)
+                            span.set_attribute("output.value", _safe_json_dumps(chunks))
+                            span.set_attribute("output.mime_type", "application/json")
                         span.record_exception(exc)
                         span.set_status(Status(StatusCode.ERROR, str(exc)))
                         raise
@@ -503,7 +480,8 @@ def _decorate_span(
                     if cap_in or postprocess_result is not None:
                         bound_inputs = _bind_call_args(func, args, kwargs)
                     if cap_in and bound_inputs is not None:
-                        _capture_io(span, "input", bound_inputs, input_mapper)
+                        span.set_attribute("input.value", _safe_json_dumps(bound_inputs))
+                        span.set_attribute("input.mime_type", "application/json")
 
                     try:
                         stdout_ctx = _CaptureStdoutContext() if capture_stdout else None
@@ -521,7 +499,8 @@ def _decorate_span(
                             except Exception:
                                 pass
                         if cap_out:
-                            _capture_io(span, "output", result, output_mapper)
+                            span.set_attribute("output.value", _safe_json_dumps(result, span=span))
+                            span.set_attribute("output.mime_type", "application/json")
                         span.set_status(Status(StatusCode.OK))
                         return result
                     except asyncio.CancelledError:
@@ -578,7 +557,8 @@ def _decorate_span(
                 if cap_in or postprocess_result is not None:
                     bound_inputs = _bind_call_args(func, args, kwargs)
                 if cap_in and bound_inputs is not None:
-                    _capture_io(span, "input", bound_inputs, input_mapper)
+                    span.set_attribute("input.value", _safe_json_dumps(bound_inputs))
+                    span.set_attribute("input.mime_type", "application/json")
 
                 try:
                     stdout_ctx = _CaptureStdoutContext() if capture_stdout else None
@@ -596,7 +576,8 @@ def _decorate_span(
                         except Exception:
                             pass
                     if cap_out:
-                        _capture_io(span, "output", result, output_mapper)
+                        span.set_attribute("output.value", _safe_json_dumps(result, span=span))
+                        span.set_attribute("output.mime_type", "application/json")
                     span.set_status(Status(StatusCode.OK))
                     return result
                 except Exception as e:

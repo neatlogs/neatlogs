@@ -141,7 +141,7 @@ class Client:
 
         resource_attrs: dict[str, Any] = {
             SERVICE_NAME: name,
-            "neatlogs.sdk.version": __version__,
+            "service.version": __version__,
             "neatlogs.workflow_name": name,
         }
         if tags:

@@ -189,6 +189,8 @@ def span(
     tags: Optional[list[str]] = None,
     capture_input: Optional[bool] = None,
     capture_output: Optional[bool] = None,
+    input_mapper: Optional[Callable] = None,
+    output_mapper: Optional[Callable] = None,
     capture_stdout: bool = False,
     mask: Optional[Callable] = None,
     # Agent-specific
@@ -225,6 +227,9 @@ def span(
         tags: List of tags for filtering/grouping
         capture_input: Whether to capture function input (default: True)
         capture_output: Whether to capture function output (default: True)
+        input_mapper: Project bound arguments before input capture.
+        output_mapper: Project the result (or collected stream chunks) before output capture.
+              Mappers affect captured I/O only; failures omit the field and preserve execution.
 
         # Agent-specific parameters (when kind="AGENT"):
         role: Agent role description (also sets agent.name)
@@ -368,6 +373,8 @@ def span(
         attributes=extra,
         capture_input=capture_input,
         capture_output=capture_output,
+        input_mapper=input_mapper,
+        output_mapper=output_mapper,
         capture_stdout=capture_stdout,
         postprocess_result=postprocess_result,
         mask=mask,
@@ -414,6 +421,13 @@ def _retriever_postprocessor(span: Any, result: Any, bound_inputs: Dict[str, Any
 
     # Extract documents
     docs: Any = None
+    if (
+        isinstance(result, tuple)
+        and len(result) == 2
+        and isinstance(result[0], list)
+        and isinstance(result[1], dict)
+    ):
+        result = result[0]
     if isinstance(result, (list, tuple)):
         docs = list(result)
     elif isinstance(result, dict):
@@ -427,6 +441,16 @@ def _retriever_postprocessor(span: Any, result: Any, bound_inputs: Dict[str, Any
 
     # Set document attributes
     for i, doc in enumerate(docs):
+        score = None
+        if isinstance(doc, tuple) and len(doc) == 2:
+            doc, score = doc
+        if hasattr(doc, "page_content"):
+            doc = {
+                "id": getattr(doc, "id", None),
+                "content": doc.page_content,
+                "metadata": getattr(doc, "metadata", {}),
+                "score": score,
+            }
         if isinstance(doc, str):
             span.set_attribute(f"neatlogs.retriever.documents.{i}.content", doc)
             continue
@@ -434,7 +458,10 @@ def _retriever_postprocessor(span: Any, result: Any, bound_inputs: Dict[str, Any
         if isinstance(doc, dict):
             doc_id = doc.get("id") or doc.get("_id") or doc.get("doc_id")
             content = doc.get("content") or doc.get("document") or doc.get("text")
-            score = doc.get("score") or doc.get("_score") or doc.get("distance")
+            score = next(
+                (doc[key] for key in ("score", "_score", "distance") if doc.get(key) is not None),
+                score,
+            )
             metadata = doc.get("metadata") or {}
 
             if doc_id is not None:

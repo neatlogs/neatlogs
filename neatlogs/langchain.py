@@ -10,8 +10,10 @@ Works with LangChain, LangGraph, and any framework using LangChain callbacks
 (e.g., Deep Agents).
 """
 
-from typing import Any, Dict, List, Optional
-from uuid import UUID
+from contextlib import contextmanager
+from contextvars import ContextVar
+from typing import Any, Dict, Iterator, List, Optional
+from uuid import UUID, uuid4
 
 from opentelemetry import context as otel_context
 from opentelemetry import trace as otel_trace
@@ -204,21 +206,39 @@ class NeatlogsCallbackHandler(AsyncCallbackHandler, BaseCallbackHandler):
         actually fire and spans nest correctly);
       - sync path: LangChain's CallbackManager collects the returned coroutine and
         runs it, so ``.invoke()`` still works.
-    Parenting uses the run_id-keyed ``_contexts`` dict (not OTel contextvars), so
-    it is independent of which thread/task the callback runs on.
+    Explicit callback parents take precedence; task-local ancestry also covers
+    nested async calls whose callback configuration omits ``parent_run_id``.
     """
+
+    run_inline = True
 
     def __init__(self, workflow_name: Optional[str] = None):
         super().__init__()
         self._spans: Dict[UUID, Any] = {}
         self._tokens: Dict[UUID, List[str]] = {}
         self._contexts: Dict[UUID, Any] = {}
+        self._active_chains: ContextVar[tuple[UUID, ...]] = ContextVar(
+            "neatlogs_langchain_active_chains", default=()
+        )
         # Auto-root spans keyed by the run_id of the child that triggered them.
         self._auto_roots: Dict[UUID, Any] = {}
-        # OTel context-detach tokens for node (chain) spans we made ambient, so
-        # manual neatlogs.trace()/@span/log() inside a node nest under the node.
-        self._ctx_detach: Dict[UUID, Any] = {}
         self._workflow_name = workflow_name
+
+    @contextmanager
+    def trace_context(self) -> Iterator[None]:
+        """Parent custom SDK spans to the current run for this scope."""
+        from ._wrap_utils import attach_as_current, detach
+
+        ctx = self._start_ctx(None, uuid4(), "chain")
+        parent = otel_trace.get_current_span(ctx)
+        if not parent.is_recording():
+            yield
+            return
+        token = attach_as_current(parent)
+        try:
+            yield
+        finally:
+            detach(token)
 
     # -- Self-rooting -----------------------------------------------------------
     #
@@ -245,17 +265,29 @@ class NeatlogsCallbackHandler(AsyncCallbackHandler, BaseCallbackHandler):
         neatlogs_parent_active = _is_recording(current)
         base_ctx = current if neatlogs_parent_active else otel_context.Context()
 
-        # ISOLATED mode: a surrounding neatlogs span (wrap()/@span/trace()) threads
-        # its parent on the private key rather than the global current-span, so a
-        # LangChain run nested inside it must root there — otherwise it fragments
-        # into its own trace. Only consult the key when no foreign/neatlogs span is
-        # the ambient parent (the global current-span already took precedence above).
         if not neatlogs_parent_active:
             from ._wrap_utils import _current_neatlogs_parent
 
             nl_parent = _current_neatlogs_parent()
             if nl_parent is not None:
-                return _span_in_ctx(nl_parent, otel_context.Context())
+                base_ctx = _span_in_ctx(nl_parent, base_ctx)
+                neatlogs_parent_active = True
+
+        active_contexts = [
+            self._contexts[active_run_id]
+            for active_run_id in self._active_chains.get()
+            if active_run_id in self._contexts
+        ]
+        if active_contexts:
+            active_spans = [otel_trace.get_current_span(ctx) for ctx in active_contexts]
+            ancestor_ids = {span.get_span_context().span_id for span in active_spans}
+            ancestor_ids.update(
+                getattr(getattr(span, "parent", None), "span_id", None) for span in active_spans
+            )
+            ambient = otel_trace.get_current_span(base_ctx).get_span_context()
+            # Keep newer manual spans; replace only the enclosing workflow/chain.
+            if not ambient.is_valid or ambient.span_id in ancestor_ids:
+                return active_contexts[-1]
 
         if _auto_root_enabled() and kind not in _ROOT_KINDS and not neatlogs_parent_active:
             root = get_tracer().start_span(
@@ -584,21 +616,11 @@ class NeatlogsCallbackHandler(AsyncCallbackHandler, BaseCallbackHandler):
         self._spans[run_id] = span
         span_ctx = _span_in_ctx(span, ctx)
         self._contexts[run_id] = span_ctx
-        # NOTE: we deliberately do NOT otel_context.attach() the node span as the
-        # ambient context. Under async LangGraph (app.ainvoke), on_chain_start and
-        # on_chain_end run in different asyncio contexts, so otel_context.detach()
-        # raises "Token was created in a different Context" AND leaves the ambient
-        # context corrupted — which drops/mis-parents every LLM span in the run.
-        # Node -> child (LLM/tool) nesting is carried by self._contexts[run_id]
-        # (a plain run_id-keyed dict, async-safe), resolved in _start_ctx via
-        # parent_run_id, so it works in both sync and async without touching
-        # contextvars.
+        self._active_chains.set((*self._active_chains.get(), run_id))
 
     def _detach_ctx(self, run_id: UUID) -> None:
-        """No-op retained for call-site compatibility. Ambient-context attach was
-        removed (see on_chain_start) because detach() is unsafe across the async
-        callback boundary; nothing to detach now."""
-        self._ctx_detach.pop(run_id, None)
+        """Remove task-local ancestry without resetting cross-context tokens."""
+        self._active_chains.set(tuple(run for run in self._active_chains.get() if run != run_id))
 
     async def on_chain_end(
         self,

@@ -12,6 +12,8 @@ import threading
 from collections import OrderedDict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from enum import Enum
+from itertools import islice
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
@@ -539,6 +541,10 @@ def sanitize_media_payload(
         depth: int,
     ) -> Any:
         if isinstance(node, Mapping):
+            node = {
+                key.value if isinstance(key, Enum) else key: item
+                for key, item in islice(node.items(), _MAX_MEDIA_TRAVERSAL_NODES - visited + 1)
+            }
             declared = str(node.get("type") or "")
             media_declared = declared if declared.lower() in _MEDIA_KINDS else inherited_declared
             mime_type = str(

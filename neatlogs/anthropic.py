@@ -15,6 +15,7 @@ Two usage patterns:
 """
 
 import time
+from collections.abc import Iterator
 from typing import Any, List, Optional
 
 from opentelemetry.trace import StatusCode
@@ -70,6 +71,13 @@ def wrap_async_anthropic_client(client: Any) -> Any:
     return client
 
 
+def _message_kwargs(kwargs: dict) -> dict:
+    for key in ("messages", "tools"):
+        if isinstance(kwargs.get(key), Iterator):
+            kwargs = {**kwargs, key: list(kwargs[key])}
+    return kwargs
+
+
 def _patch_messages(messages: Any) -> None:
     if getattr(messages, "_neatlogs_patched", False):
         return
@@ -81,6 +89,7 @@ def _patch_messages(messages: Any) -> None:
         if is_suppressed():
             return orig_create(*args, **kwargs)
 
+        kwargs = _message_kwargs(kwargs)
         model = kwargs.get("model", "")
         input_messages = kwargs.get("messages", [])
         system = kwargs.get("system")
@@ -125,6 +134,7 @@ def _patch_messages(messages: Any) -> None:
             if is_suppressed():
                 return orig_stream(*args, **kwargs)
 
+            kwargs = _message_kwargs(kwargs)
             model = kwargs.get("model", "")
             input_messages = kwargs.get("messages", [])
             system = kwargs.get("system")
@@ -162,6 +172,7 @@ def _patch_async_messages(messages: Any) -> None:
         if is_suppressed():
             return await orig_create(*args, **kwargs)
 
+        kwargs = _message_kwargs(kwargs)
         model = kwargs.get("model", "")
         input_messages = kwargs.get("messages", [])
         system = kwargs.get("system")
@@ -206,6 +217,7 @@ def _patch_async_messages(messages: Any) -> None:
             if is_suppressed():
                 return orig_stream(*args, **kwargs)
 
+            kwargs = _message_kwargs(kwargs)
             model = kwargs.get("model", "")
             input_messages = kwargs.get("messages", [])
             system = kwargs.get("system")

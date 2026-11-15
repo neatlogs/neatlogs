@@ -487,7 +487,7 @@ def init(
     # neatlogs.identify(). Only the operator user.id is process-global here.
     resource_attrs = {
         SERVICE_NAME: workflow_name or "neatlogs-app",
-        "service.version": __version__,
+        "neatlogs.sdk.version": __version__,
         "neatlogs.workflow_name": resolved_workflow_name,
     }
     if _doctor_probe:

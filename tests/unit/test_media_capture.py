@@ -2,6 +2,7 @@ import base64
 import hashlib
 import json
 from collections.abc import Mapping
+from enum import Enum
 
 import pytest
 
@@ -363,6 +364,58 @@ def test_hostile_mapping_and_string_hooks_cannot_escape_instrumentation():
     assert "traversal_error" in mapping_capture
     assert "hostile" not in string_capture
     assert "serialization_error" in string_capture
+
+
+def test_nested_enum_mapping_keys_preserve_pydantic_graph_state():
+    from pydantic import BaseModel
+
+    class Category(Enum):
+        QUERY = "GENERAL_INQUIRY"
+
+    class WorkflowConfig(BaseModel):
+        keyword_category_map: dict[Category, list[str]]
+
+    state = {"config": WorkflowConfig(keyword_category_map={Category.QUERY: ["details"]})}
+
+    assert json.loads(serialize(state)) == {
+        "config": {"keyword_category_map": {"GENERAL_INQUIRY": ["details"]}}
+    }
+
+
+def test_enum_media_keys_still_remove_locator_credentials():
+    class Field(Enum):
+        TYPE = "type"
+        IMAGE_URL = "image_url"
+
+    captured = serialize({
+        Field.TYPE: "image_url",
+        Field.IMAGE_URL: {"url": "https://user:password@example.test/image.png?token=secret"},
+    })
+
+    assert json.loads(captured)["image_url"]["url"] == "https://example.test/image.png"
+    assert "password" not in captured
+    assert "secret" not in captured
+
+
+def test_mapping_key_normalization_keeps_traversal_bounded():
+    class LargeMapping(Mapping):
+        reads = 0
+
+        def __iter__(self):
+            return (str(index) for index in range(1_000_000))
+
+        def __getitem__(self, key):
+            self.reads += 1
+            return key
+
+        def __len__(self):
+            return 1_000_000
+
+    payload = LargeMapping()
+    captured = serialize(payload, max_length=None)
+
+    assert payload.reads <= 10_000
+    assert "traversal_limit" in captured
 
 
 def test_media_walkers_are_bounded_and_provider_serializers_cannot_escape():

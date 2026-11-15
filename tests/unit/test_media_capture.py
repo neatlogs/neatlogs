@@ -387,10 +387,12 @@ def test_enum_media_keys_still_remove_locator_credentials():
         TYPE = "type"
         IMAGE_URL = "image_url"
 
-    captured = serialize({
-        Field.TYPE: "image_url",
-        Field.IMAGE_URL: {"url": "https://user:password@example.test/image.png?token=secret"},
-    })
+    captured = serialize(
+        {
+            Field.TYPE: "image_url",
+            Field.IMAGE_URL: {"url": "https://user:password@example.test/image.png?token=secret"},
+        }
+    )
 
     assert json.loads(captured)["image_url"]["url"] == "https://example.test/image.png"
     assert "password" not in captured

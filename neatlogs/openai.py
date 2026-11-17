@@ -16,6 +16,7 @@ Two usage patterns:
 
 import asyncio
 import time
+from collections.abc import Iterator
 from typing import Any, List, Optional
 
 from opentelemetry.trace import StatusCode
@@ -112,6 +113,13 @@ def _usage_only_chunk(chunk: Any) -> bool:
     return not getattr(chunk, "choices", None) and getattr(chunk, "usage", None) is not None
 
 
+def _chat_kwargs(kwargs: dict) -> dict:
+    for key in ("messages", "tools"):
+        if isinstance(kwargs.get(key), Iterator):
+            kwargs = {**kwargs, key: list(kwargs[key])}
+    return kwargs
+
+
 def _patch_completions(completions: Any) -> None:
     if getattr(completions, "_neatlogs_patched", False):
         return
@@ -122,6 +130,7 @@ def _patch_completions(completions: Any) -> None:
         if is_suppressed():
             return orig_create(*args, **kwargs)
 
+        kwargs = _chat_kwargs(kwargs)
         model = kwargs.get("model", "")
         messages = kwargs.get("messages", [])
         is_stream = kwargs.get("stream", False)
@@ -238,6 +247,7 @@ def _patch_async_completions(completions: Any) -> None:
         if is_suppressed():
             return await orig_create(*args, **kwargs)
 
+        kwargs = _chat_kwargs(kwargs)
         model = kwargs.get("model", "")
         messages = kwargs.get("messages", [])
         is_stream = kwargs.get("stream", False)

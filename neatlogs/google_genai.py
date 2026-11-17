@@ -28,6 +28,7 @@ from ._wrap_utils import (
     serialize,
 )
 from .core.choice_accumulator import ChoiceAccumulator, GoogleStreamFinalizer
+from .core.google_usage import google_completion_tokens
 from .core.media import set_media_attributes
 from .replay.provider import cached_model_span, prepare_provider_capture, provider_replay
 
@@ -426,7 +427,10 @@ def _set_usage_attributes(span: Any, usage: Any) -> None:
     if prompt_tokens is not None:
         span.set_attribute("neatlogs.llm.token_count.prompt", prompt_tokens)
 
-    completion_tokens = getattr(usage, "candidates_token_count", None)
+    completion_tokens = google_completion_tokens(
+        getattr(usage, "candidates_token_count", None),
+        getattr(usage, "thoughts_token_count", None),
+    )
     if completion_tokens is not None:
         span.set_attribute("neatlogs.llm.token_count.completion", completion_tokens)
 

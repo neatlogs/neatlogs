@@ -10,6 +10,7 @@ from typing import Any
 from opentelemetry.trace import StatusCode
 
 from .capture import BoundedTextAccumulator
+from .google_usage import google_completion_tokens
 from .media import current_media_store, media_references, sanitize_media_payload
 
 MAX_SEMANTIC_STREAM_EVENTS = 128
@@ -410,7 +411,10 @@ class ChoiceAccumulator:
         if usage is not None:
             self.usage = {
                 "prompt_tokens": _get(usage, "prompt_token_count", None),
-                "completion_tokens": _get(usage, "candidates_token_count", None),
+                "completion_tokens": google_completion_tokens(
+                    _get(usage, "candidates_token_count", None),
+                    _get(usage, "thoughts_token_count", None),
+                ),
                 "total_tokens": _get(usage, "total_token_count", None),
                 "prompt_tokens_details": {
                     "cached_tokens": _get(usage, "cached_content_token_count", None)

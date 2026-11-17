@@ -28,7 +28,7 @@ from ._wrap_utils import (
     serialize,
 )
 from .core.choice_accumulator import ChoiceAccumulator, GoogleStreamFinalizer
-from .core.google_usage import google_completion_tokens
+from .core.google_usage import google_completion_tokens, mark_completion_includes_reasoning
 from .core.media import set_media_attributes
 from .replay.provider import cached_model_span, prepare_provider_capture, provider_replay
 
@@ -433,6 +433,7 @@ def _set_usage_attributes(span: Any, usage: Any) -> None:
     )
     if completion_tokens is not None:
         span.set_attribute("neatlogs.llm.token_count.completion", completion_tokens)
+        mark_completion_includes_reasoning(span)
 
     total_tokens = getattr(usage, "total_token_count", None)
     if total_tokens is not None:

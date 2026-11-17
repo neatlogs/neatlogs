@@ -15,7 +15,6 @@ from typing import Any
 from opentelemetry.trace import StatusCode
 
 from ._wrap_utils import attach_as_current, detach, get_tracer, serialize
-from .core.google_usage import google_completion_tokens
 
 _ADK_BIND_LOCK = threading.RLock()
 _ADK_BOUND = False
@@ -182,10 +181,9 @@ def _collect_events(events) -> tuple:
                     input_t = getattr(usage, "prompt_token_count", None) or getattr(
                         usage, "input_tokens", 0
                     )
-                    output_t = google_completion_tokens(
-                        getattr(usage, "candidates_token_count", None),
-                        getattr(usage, "thoughts_token_count", None),
-                    ) or getattr(usage, "output_tokens", 0)
+                    output_t = getattr(usage, "candidates_token_count", None) or getattr(
+                        usage, "output_tokens", 0
+                    )
                     if input_t:
                         total_input_tokens += input_t
                     if output_t:
@@ -265,10 +263,9 @@ async def _collect_events_async(events) -> tuple:
                     input_t = getattr(usage, "prompt_token_count", None) or getattr(
                         usage, "input_tokens", 0
                     )
-                    output_t = google_completion_tokens(
-                        getattr(usage, "candidates_token_count", None),
-                        getattr(usage, "thoughts_token_count", None),
-                    ) or getattr(usage, "output_tokens", 0)
+                    output_t = getattr(usage, "candidates_token_count", None) or getattr(
+                        usage, "output_tokens", 0
+                    )
                     if input_t:
                         total_input_tokens += input_t
                     if output_t:

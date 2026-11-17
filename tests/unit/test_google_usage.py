@@ -3,7 +3,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from neatlogs.core.google_usage import google_completion_tokens
+from neatlogs.core.google_usage import COMPLETION_INCLUDES_REASONING, google_completion_tokens
 
 
 @pytest.mark.parametrize(
@@ -44,6 +44,7 @@ def test_vertex_usage_attributes_report_thinking_inside_completion():
     assert attributes["neatlogs.llm.token_count.completion"] == 4626
     assert attributes["neatlogs.llm.token_count.reasoning"] == 3981
     assert attributes["neatlogs.llm.token_count.total"] == 7760
+    assert attributes[COMPLETION_INCLUDES_REASONING] is True
     assert (
         attributes["neatlogs.llm.token_count.prompt"]
         + attributes["neatlogs.llm.token_count.completion"]
@@ -66,3 +67,40 @@ def test_google_genai_usage_attributes_report_thinking_inside_completion():
 
     attributes = {call.args[0]: call.args[1] for call in span.set_attribute.call_args_list}
     assert attributes["neatlogs.llm.token_count.completion"] == 25
+    assert attributes[COMPLETION_INCLUDES_REASONING] is True
+
+
+def test_tool_use_prompt_tokens_keep_the_marker_so_thinking_is_not_added_twice():
+    """Google's total also counts tool-use prompt tokens (review repro on #2346)."""
+    from neatlogs.google_genai import _set_usage_attributes
+
+    span = MagicMock()
+    usage = SimpleNamespace(
+        prompt_token_count=10,
+        candidates_token_count=5,
+        total_token_count=55,  # 10 prompt + 20 tool-use prompt + 20 thinking + 5 answer
+        cached_content_token_count=None,
+        thoughts_token_count=20,
+    )
+    _set_usage_attributes(span, usage)
+
+    attributes = {call.args[0]: call.args[1] for call in span.set_attribute.call_args_list}
+    assert attributes["neatlogs.llm.token_count.completion"] == 25
+    assert attributes[COMPLETION_INCLUDES_REASONING] is True
+
+
+def test_no_marker_without_a_completion_count():
+    from neatlogs.google_genai import _set_usage_attributes
+
+    span = MagicMock()
+    usage = SimpleNamespace(
+        prompt_token_count=10,
+        candidates_token_count=None,
+        total_token_count=10,
+        cached_content_token_count=None,
+        thoughts_token_count=None,
+    )
+    _set_usage_attributes(span, usage)
+
+    attributes = {call.args[0]: call.args[1] for call in span.set_attribute.call_args_list}
+    assert COMPLETION_INCLUDES_REASONING not in attributes

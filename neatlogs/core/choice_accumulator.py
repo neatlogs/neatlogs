@@ -10,7 +10,7 @@ from typing import Any
 from opentelemetry.trace import StatusCode
 
 from .capture import BoundedTextAccumulator
-from .google_usage import google_completion_tokens
+from .google_usage import google_completion_tokens, mark_completion_includes_reasoning
 from .media import current_media_store, media_references, sanitize_media_payload
 
 MAX_SEMANTIC_STREAM_EVENTS = 128
@@ -73,6 +73,7 @@ class ChoiceAccumulator:
         self.capture_fidelity = capture_fidelity
         self.choices: dict[int, _Choice] = {}
         self.usage: Any = None
+        self.google_usage = False
         self.model = ""
         self.response_id = ""
         self.chunk_count = 0
@@ -398,6 +399,7 @@ class ChoiceAccumulator:
     def _capture_envelope(self, value: Any) -> None:
         usage = _get(value, "usage", None)
         if usage is not None:
+            self.google_usage = False
             self.usage = usage
         model = _get(value, "model", None)
         if model:
@@ -409,6 +411,7 @@ class ChoiceAccumulator:
     def _capture_google_envelope(self, value: Any) -> None:
         usage = _get(value, "usage_metadata", None)
         if usage is not None:
+            self.google_usage = True
             self.usage = {
                 "prompt_tokens": _get(usage, "prompt_token_count", None),
                 "completion_tokens": google_completion_tokens(
@@ -443,6 +446,8 @@ class ChoiceAccumulator:
             value = _get(usage, source, None)
             if value is not None:
                 span.set_attribute(f"neatlogs.llm.token_count.{target}", value)
+        if self.google_usage and _get(usage, "completion_tokens", None) is not None:
+            mark_completion_includes_reasoning(span)
         prompt_details = _get(usage, "prompt_tokens_details", None)
         cached = _get(prompt_details, "cached_tokens", None)
         if cached is not None:

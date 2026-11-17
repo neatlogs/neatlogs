@@ -4,6 +4,11 @@ from __future__ import annotations
 
 from typing import Any
 
+# Span attribute telling the backend that ``neatlogs.llm.token_count.completion``
+# already includes thinking, so it must not add ``reasoning`` to it again.
+# Spans from older SDKs lack it; the backend recognizes those separately.
+COMPLETION_INCLUDES_REASONING = "neatlogs.llm.token_count.completion_includes_reasoning"
+
 
 def _count(value: Any) -> int | None:
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
@@ -28,3 +33,8 @@ def google_completion_tokens(candidates_tokens: Any, thoughts_tokens: Any) -> An
     if candidates is None and thoughts is None:
         return candidates_tokens
     return (candidates or 0) + (thoughts or 0)
+
+
+def mark_completion_includes_reasoning(span: Any) -> None:
+    """Record on ``span`` that its completion count already includes thinking."""
+    span.set_attribute(COMPLETION_INCLUDES_REASONING, True)

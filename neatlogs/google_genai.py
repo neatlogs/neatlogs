@@ -441,6 +441,8 @@ def _set_usage_attributes(span: Any, usage: Any) -> None:
     reasoning_tokens = getattr(usage, "thoughts_token_count", None)
     if reasoning_tokens is not None:
         span.set_attribute("neatlogs.llm.token_count.reasoning", reasoning_tokens)
+        if completion_tokens is not None:
+            span.set_attribute("neatlogs.llm.token_count.reasoning_is_separate", True)
 
 
 def _finalize_stream(

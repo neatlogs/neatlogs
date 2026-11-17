@@ -71,6 +71,7 @@ class ChoiceAccumulator:
             raise ValueError("unsupported capture fidelity")
         self.capture_fidelity = capture_fidelity
         self.choices: dict[int, _Choice] = {}
+        self._separate_reasoning = False
         self.usage: Any = None
         self.model = ""
         self.response_id = ""
@@ -397,6 +398,7 @@ class ChoiceAccumulator:
     def _capture_envelope(self, value: Any) -> None:
         usage = _get(value, "usage", None)
         if usage is not None:
+            self._separate_reasoning = False
             self.usage = usage
         model = _get(value, "model", None)
         if model:
@@ -408,16 +410,17 @@ class ChoiceAccumulator:
     def _capture_google_envelope(self, value: Any) -> None:
         usage = _get(value, "usage_metadata", None)
         if usage is not None:
+            completion = _get(usage, "candidates_token_count", None)
+            reasoning = _get(usage, "thoughts_token_count", None)
+            self._separate_reasoning = completion is not None and reasoning is not None
             self.usage = {
                 "prompt_tokens": _get(usage, "prompt_token_count", None),
-                "completion_tokens": _get(usage, "candidates_token_count", None),
+                "completion_tokens": completion,
                 "total_tokens": _get(usage, "total_token_count", None),
                 "prompt_tokens_details": {
                     "cached_tokens": _get(usage, "cached_content_token_count", None)
                 },
-                "completion_tokens_details": {
-                    "reasoning_tokens": _get(usage, "thoughts_token_count", None)
-                },
+                "completion_tokens_details": {"reasoning_tokens": reasoning},
             }
         model = _get(value, "model_version", None) or _get(value, "model", None)
         if model:
@@ -447,6 +450,8 @@ class ChoiceAccumulator:
         reasoning = _get(completion_details, "reasoning_tokens", None)
         if reasoning is not None:
             span.set_attribute("neatlogs.llm.token_count.reasoning", reasoning)
+            if self._separate_reasoning:
+                span.set_attribute("neatlogs.llm.token_count.reasoning_is_separate", True)
 
 
 class OpenAIStreamFinalizer:

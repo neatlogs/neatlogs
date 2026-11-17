@@ -32,6 +32,11 @@ def test_rejects_case_outside_dataset_before_running(server):
 def server():
     state = {
         "outputs": [],
+        "starts": [],
+        "drop_outputs": 0,
+        "legacy_app": False,
+        "run_state": "running",
+        "completion_keys": [],
         "dataset_pages": [],
         "catalog_preferences": [],
         "fail_upload": False,
@@ -47,7 +52,6 @@ def server():
         "comparison_pending": 0,
         "comparison_calls": 0,
         "dispatch_failures": 0,
-        "completion_keys": [],
         "completion_failures": 0,
         "gate_keys": [],
         "gate_failures": 0,
@@ -72,14 +76,25 @@ def server():
                     data = {"state": "pending", "coverage": {"complete": False}}
                 else:
                     data = {"state": "ready", "coverage": {"complete": True}}
-            elif "/runs/" in self.path and "includeGrading=true" in self.path:
+            elif "/runs/" in self.path:
+                negotiate = "includeCaseOutputProtocol" in parse_qs(urlsplit(self.path).query)
+                if negotiate and state["legacy_app"]:
+                    error = b'{"code":"VALIDATION_ERROR"}'
+                    self.send_response(400)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(error)))
+                    self.end_headers()
+                    self.wfile.write(error)
+                    return
                 data = {
                     "runId": RUN,
-                    "state": "completed",
+                    "state": state["run_state"],
                     "deadlineAt": state["deadline_at"],
                     "itemCount": 1,
                     "grading": state["grading"],
                 }
+                if negotiate:
+                    data["caseOutputProtocol"] = 2
                 if state["grading_handoff_state"] is not None:
                     data["gradingHandoffState"] = state["grading_handoff_state"]
                 elif state["grading"] is None:
@@ -128,8 +143,18 @@ def server():
                     "batchId": body["batchId"],
                     "dispatchStatus": "accepted",
                 }
+            elif self.path.endswith("/outputs/started"):
+                state["starts"].append(body)
+                data = {"itemId": str(uuid4()), "startedAt": body["startedAt"]}
             elif self.path.endswith("/outputs"):
                 state["upload_requests"].append((self.headers["Idempotency-Key"], body))
+                if state["drop_outputs"]:
+                    state["drop_outputs"] -= 1
+                    if state["run_state"] != "completed":
+                        state["outputs"].append(body)
+                        state["run_state"] = "completed"
+                    self.close_connection = True
+                    return
                 if state["reject_evidence"] and "output" in body:
                     self.send_response(413)
                     self.send_header("Content-Type", "application/json")
@@ -154,6 +179,7 @@ def server():
                     state["completion_failures"] -= 1
                     self.respond(503, {})
                     return
+                state["run_state"] = "completed"
                 data = {}
             else:
                 state["registration"] = body
@@ -189,7 +215,11 @@ def server():
 
 def test_metrics_preserve_app_json_types_and_reject_nested_nonfinite(server):
     state, config = server
-    metrics = {"cache_hit": True, "source": "docs", "details": {"scores": [1, None, False]}}
+    metrics = {
+        "cache_hit": True,
+        "source": "docs",
+        "details": {"scores": [1, None, False]},
+    }
 
     def task(value, context):
         context.metrics.update(metrics)
@@ -250,7 +280,12 @@ def test_other_413_does_not_replace_original_body_or_idempotency_key(server, tmp
         return "private output"
 
     options = dict(
-        grading=GRADING, dataset=DATASET, label="other limit", task=task, state_path=path, **config
+        grading=GRADING,
+        dataset=DATASET,
+        label="other limit",
+        task=task,
+        state_path=path,
+        **config,
     )
     for resume in (False, True):
         with pytest.raises(LocalRunApiError):
@@ -264,7 +299,11 @@ def test_other_413_does_not_replace_original_body_or_idempotency_key(server, tmp
 def test_descriptive_run_has_no_quality_gate(server):
     state, config = server
     result = run_eval(
-        grading=GRADING, dataset=DATASET, label="descriptive", task=lambda *_: "answer", **config
+        grading=GRADING,
+        dataset=DATASET,
+        label="descriptive",
+        task=lambda *_: "answer",
+        **config,
     )
     assert result.exit_code == 0
     assert result.gate is None
@@ -529,7 +568,10 @@ def test_task_error_is_uploaded_and_returns_incomplete(server):
 
     result = run_eval(grading=GRADING, dataset=DATASET, task=task, label="error", **config)
     assert result.exit_code == 4 and result.errors == 1
-    assert state["outputs"][0]["error"] == {"code": "ValueError", "message": "task failed"}
+    assert state["outputs"][0]["error"] == {
+        "code": "ValueError",
+        "message": "task failed",
+    }
 
 
 def test_resume_rejects_changed_task_code(server, tmp_path):
@@ -578,7 +620,12 @@ def test_refuses_concurrent_owner_of_eval_state(server, tmp_path):
 
     with pytest.raises(ReplayError, match="locked"):
         run_eval(
-            grading=GRADING, dataset=DATASET, task=task, label="locked", state_path=path, **config
+            grading=GRADING,
+            dataset=DATASET,
+            task=task,
+            label="locked",
+            state_path=path,
+            **config,
         )
     assert executions == []
     assert state["requests"] == []
@@ -595,7 +642,7 @@ def test_status_accepts_canonical_equivalent_run_id(server, monkeypatch):
     }
     seen = []
 
-    def request(method, path):
+    def request(method, path, **_):
         seen.append((method, path))
         return receipt
 
@@ -608,7 +655,11 @@ def test_dataset_and_run_api_use_same_trimmed_token(server):
     _, config = server
     config = {**config, "token": "  task-token  "}
     result = run_eval(
-        grading=GRADING, dataset=DATASET, task=lambda *_: "answer", label="auth", **config
+        grading=GRADING,
+        dataset=DATASET,
+        task=lambda *_: "answer",
+        label="auth",
+        **config,
     )
     assert result.exit_code == 0
 
@@ -652,7 +703,8 @@ def test_cli_rejects_missing_grading_before_importing_task(tmp_path, monkeypatch
     task.write_text(f"from pathlib import Path\nPath({str(marker)!r}).write_text('imported')\n")
     monkeypatch.setattr("sys.argv", ["neatlogs.evals.cli", str(task)])
     monkeypatch.setenv(
-        "NEATLOGS_EVAL_OPTIONS", json.dumps({"dataset": {"name": DATASET}, "label": "required"})
+        "NEATLOGS_EVAL_OPTIONS",
+        json.dumps({"dataset": {"name": DATASET}, "label": "required"}),
     )
     assert run_eval_cli() == 2
     assert "grading" in capsys.readouterr().err
@@ -670,7 +722,11 @@ def test_resolves_dataset_name_after_first_500(server):
         {"datasets": [{"id": DATASET, "name": "older"}], "nextCursor": None},
     ]
     result = run_eval(
-        dataset="older", task=lambda *_: "answer", label="older", grading=GRADING, **config
+        dataset="older",
+        task=lambda *_: "answer",
+        label="older",
+        grading=GRADING,
+        **config,
     )
     assert result.exit_code == 0
     assert f"/api/v1/public/datasets?before={cursor}" in state["requests"]
@@ -685,7 +741,11 @@ def test_rejects_duplicate_dataset_name_on_later_page(server):
     ]
     with pytest.raises(ValueError, match="unambiguous"):
         run_eval(
-            dataset="same", task=lambda *_: "answer", label="duplicate", grading=GRADING, **config
+            dataset="same",
+            task=lambda *_: "answer",
+            label="duplicate",
+            grading=GRADING,
+            **config,
         )
     assert len(state["requests"]) == 2
     assert state["outputs"] == []
@@ -704,14 +764,23 @@ def test_rejects_incomplete_dataset_catalog(server, repeated):
     ]
     with pytest.raises(ValueError, match="pagination is incomplete"):
         run_eval(
-            dataset="same", task=lambda *_: "answer", label="catalog", grading=GRADING, **config
+            dataset="same",
+            task=lambda *_: "answer",
+            label="catalog",
+            grading=GRADING,
+            **config,
         )
     assert len(state["requests"]) == (2 if repeated else 1)
 
 
 def test_round_identity_is_pinned_across_resume(server, tmp_path):
     state, config = server
-    local = {"experimentId": str(uuid4()), "roundId": str(uuid4()), "variant": "B", "attempt": 2}
+    local = {
+        "experimentId": str(uuid4()),
+        "roundId": str(uuid4()),
+        "variant": "B",
+        "attempt": 2,
+    }
     calls = []
 
     def task(*_):
@@ -729,11 +798,64 @@ def test_round_identity_is_pinned_across_resume(server, tmp_path):
     )
     run_eval(**options)
     assert state["registration"]["local"] == local
+    assert state["starts"][0]["caseId"] == CASE
+    assert state["outputs"][0]["startedAt"] <= state["outputs"][0]["endedAt"]
     run_eval(**options, resume=True)
     assert len(calls) == 1
     options["local"] = {**local, "variant": "A"}
     with pytest.raises(ValueError, match="same"):
         run_eval(**options, resume=True)
+
+
+def test_local_round_uses_legacy_fields_when_app_lacks_case_details(server):
+    state, config = server
+    state["legacy_app"] = True
+    local = {
+        "experimentId": str(uuid4()),
+        "roundId": str(uuid4()),
+        "variant": "A",
+        "attempt": 1,
+    }
+    result = run_eval(
+        grading=GRADING,
+        dataset=DATASET,
+        task=lambda *_: "saved value",
+        label="legacy case",
+        local=local,
+        **config,
+    )
+    assert result.exit_code == 0
+    assert not state["starts"]
+    assert state["outputs"][0]["output"] == "saved value"
+    assert set(state["outputs"][0]) == {"caseId", "trial", "output", "metrics"}
+    assert f"/api/v1/public/runs/{RUN}?includeCaseOutputProtocol=true" in state["requests"]
+    assert f"/api/v1/public/runs/{RUN}" in state["requests"]
+
+
+def test_reconciles_a_saved_output_with_a_lost_response(server, tmp_path):
+    state, config = server
+    state["drop_outputs"] = 2
+    invoked = []
+
+    def task(*_):
+        invoked.append(1)
+        return {"answer": "saved value"}
+
+    result = run_eval(
+        grading=GRADING,
+        dataset=DATASET,
+        task=task,
+        label="uncertain upload",
+        state_path=tmp_path / "uncertain.json",
+        **config,
+    )
+    assert result.run_id == RUN and result.run_state == "completed" and result.exit_code == 0
+    assert len(invoked) == 1
+    assert len(state["outputs"]) == 1
+    assert state["outputs"][0]["output"] == {"answer": "saved value"}
+    assert len({key for key, _ in state["upload_requests"]}) == 1
+    assert not state["completion_keys"]
+    assert f"/api/v1/public/runs/{RUN}" in state["requests"]
 
 
 def test_trials_copy_nested_case_and_context_values(server):
@@ -757,7 +879,13 @@ def test_trials_copy_nested_case_and_context_values(server):
         return value
 
     result = run_eval(
-        grading=GRADING, dataset=DATASET, task=task, label="copy", trials=2, params=params, **config
+        grading=GRADING,
+        dataset=DATASET,
+        task=task,
+        label="copy",
+        trials=2,
+        params=params,
+        **config,
     )
     assert result.exit_code == 0
     assert seen == [("hello", "hello", "en", "original")] * 2
@@ -781,7 +909,12 @@ def test_invalid_results_save_sendable_failure_without_repeating_callback(server
 
     path = tmp_path / "state.json"
     options = dict(
-        grading=GRADING, dataset=DATASET, task=task, label="bounded", state_path=path, **config
+        grading=GRADING,
+        dataset=DATASET,
+        task=task,
+        label="bounded",
+        state_path=path,
+        **config,
     )
     with pytest.raises(LocalRunApiError):
         run_eval(**options)
@@ -854,7 +987,14 @@ def test_expiry_between_trials_preserves_accepted_output_without_next_callback(s
         return value
 
     with pytest.raises(RuntimeError, match="deadline reached"):
-        run_eval(grading=GRADING, dataset=DATASET, task=task, label="expires", trials=2, **config)
+        run_eval(
+            grading=GRADING,
+            dataset=DATASET,
+            task=task,
+            label="expires",
+            trials=2,
+            **config,
+        )
     assert calls == [1] and len(state["outputs"]) == 1
 
 
@@ -862,7 +1002,11 @@ def test_legacy_small_catalog_without_cursor_still_resolves(server):
     state, config = server
     state["dataset_pages"] = [{"datasets": [{"id": DATASET, "name": "legacy"}]}]
     result = run_eval(
-        dataset="legacy", task=lambda *_: "answer", label="legacy", grading=GRADING, **config
+        dataset="legacy",
+        task=lambda *_: "answer",
+        label="legacy",
+        grading=GRADING,
+        **config,
     )
     assert result.exit_code == 0
     assert state["catalog_preferences"] == ["pagination=cursor"]

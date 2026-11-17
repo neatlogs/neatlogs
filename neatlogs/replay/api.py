@@ -18,10 +18,35 @@ from .provider import ecmascript_json
 
 
 class LocalRunApiError(ReplayError):
-    def __init__(self, message, *, status=None, code=None):
+    def __init__(self, message, *, status=None, code=None, details=None):
         super().__init__(message)
         self.status = status
         self.code = code
+        self.details = details
+
+
+def _local_attempt_conflict(raw):
+    if (
+        not isinstance(raw, dict)
+        or set(raw) != {"runId", "state", "attempt"}
+        or raw["state"]
+        not in (
+            "queued",
+            "running",
+            "completed",
+            "partial",
+            "failed",
+            "cancelled",
+            "timed_out",
+        )
+        or type(raw["attempt"]) is not int
+        or not 1 <= raw["attempt"] <= 100
+    ):
+        return None
+    try:
+        return {**raw, "runId": uuid(raw["runId"])}
+    except ReplayError:
+        return None
 
 
 class LocalRunApi:
@@ -46,7 +71,10 @@ class LocalRunApi:
         content = ecmascript_json(body) if body is not None else None
         if content is not None and len(content) > 64 * 1024:
             raise ReplayError("Local run request exceeds 64 KiB.")
-        headers = {"Authorization": "Bearer " + self._token, "x-project-id": self.project_id}
+        headers = {
+            "Authorization": "Bearer " + self._token,
+            "x-project-id": self.project_id,
+        }
         if content is not None:
             headers["Content-Type"] = "application/json"
         if key is not None:
@@ -98,7 +126,10 @@ class LocalRunApi:
                     data = bytearray()
                     for chunk in response.iter_bytes():
                         if time.monotonic() >= deadline:
-                            raise LocalRunApiError("Local replay API request timed out.")
+                            raise LocalRunApiError(
+                                "Local replay API request timed out.",
+                                code="RUN_API_TRANSPORT_FAILURE",
+                            )
                         data.extend(chunk)
                         if len(data) > limit:
                             raise LocalRunApiError(
@@ -110,6 +141,19 @@ class LocalRunApi:
                         if type(raw) is dict and type(raw.get("error")) is dict:
                             code = raw["error"].get("code", code)
                         code = code if type(code) is str and len(code) <= 100 else None
+                        details = (
+                            _local_attempt_conflict(raw.get("details"))
+                            if response.status_code == 409 and code == "LOCAL_ROUND_CONFLICT"
+                            else None
+                        )
+                        if details:
+                            raise LocalRunApiError(
+                                f"Attempt {details['attempt']} already has run {details['runId']} "
+                                f"({details['state']}). Use --resume --state with the original private state file.",
+                                status=409,
+                                code=code,
+                                details=details,
+                            )
                         raise LocalRunApiError(
                             f"Local replay API request failed with HTTP {response.status_code}.",
                             status=response.status_code,
@@ -126,8 +170,11 @@ class LocalRunApi:
                 if attempt == 0 and time.monotonic() < deadline:
                     attempt += 1
                     continue
-                raise LocalRunApiError("Local replay API request failed or timed out.") from None
-        raise LocalRunApiError("Local replay API request failed.")
+                raise LocalRunApiError(
+                    "Local replay API request failed or timed out.",
+                    code="RUN_API_TRANSPORT_FAILURE",
+                ) from None
+        raise LocalRunApiError("Local replay API request failed.", code="RUN_API_TRANSPORT_FAILURE")
 
     def frozen_case(self, dataset_id, version_id, case_id):
         return self.request(
@@ -136,7 +183,16 @@ class LocalRunApi:
             limit=17 * 1024 * 1024,
         )
 
-    def comparison(self, run_id, *, baseline=None, after=None, limit=None, new_failures_only=None):
+    def comparison(
+        self,
+        run_id,
+        *,
+        baseline=None,
+        after=None,
+        limit=None,
+        new_failures_only=None,
+        timeout=30,
+    ):
         """Read one answer page; coverage/metrics describe the full comparison, not this page."""
         query = {}
         if baseline is not None:
@@ -157,17 +213,54 @@ class LocalRunApi:
             query["newFailuresOnly"] = str(new_failures_only).lower()
         suffix = "?" + urlencode(query) if query else ""
         return self.request(
-            "GET", f"/runs/{uuid(run_id)}/comparison{suffix}", limit=17 * 1024 * 1024
+            "GET",
+            f"/runs/{uuid(run_id)}/comparison{suffix}",
+            limit=17 * 1024 * 1024,
+            timeout=timeout,
         )
 
-    def register(self, input, *, key=None):
-        receipt = self.request("POST", "/runs", input, key=key or str(uuid4()))
+    def register(self, input, *, key=None, timeout=30):
+        receipt = self.request("POST", "/runs", input, key=key or str(uuid4()), timeout=timeout)
         self._receipt(receipt)
         return receipt
 
-    def status(self, run_id):
+    def status(
+        self,
+        run_id,
+        *,
+        include_grading=False,
+        timeout=30,
+        include_case_output_protocol=False,
+    ):
         run_id = uuid(run_id)
-        receipt = self.request("GET", f"/runs/{run_id}")
+        query = {}
+        if include_grading:
+            query["includeGrading"] = "true"
+        if include_case_output_protocol:
+            query["includeCaseOutputProtocol"] = "true"
+
+        deadline = time.monotonic() + timeout
+
+        def read():
+            suffix = "?" + urlencode(query) if query else ""
+            return self.request(
+                "GET",
+                f"/runs/{run_id}{suffix}",
+                timeout=max(0.001, deadline - time.monotonic()),
+            )
+
+        try:
+            receipt = read()
+        except LocalRunApiError as error:
+            if (
+                not include_case_output_protocol
+                or error.status != 400
+                or error.code != "VALIDATION_ERROR"
+            ):
+                raise
+            # Older Apps validate the status query strictly.
+            query.pop("includeCaseOutputProtocol")
+            receipt = read()
         self._receipt(receipt)
         if receipt["runId"] != run_id:
             raise LocalRunApiError("Local run status belongs to a different run.")

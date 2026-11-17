@@ -13,6 +13,7 @@ import json
 import os
 import sys
 import time
+from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Any, Callable, Dict, List, Mapping, Optional
 from urllib.parse import urlparse
@@ -597,6 +598,22 @@ def _bootstrap_from_env(api_key: str) -> None:
     _bootstrap_media_store = media_store
     set_neatlogs_provider(provider)
     logger.debug(f"neatlogs wrapper: auto-bootstrapped private TracerProvider → {endpoint}")
+
+
+@contextmanager
+def fresh_neatlogs_context():
+    """Start a new Neatlogs root while preserving foreign context."""
+    fresh = context_api.set_value(_NEATLOGS_PARENT_KEY, None)
+    fresh = context_api.set_value(_NEATLOGS_ACTIVE_KEY, False, fresh)
+    if _is_neatlogs_span(otel_trace.get_current_span(fresh)):
+        fresh = otel_trace.set_span_in_context(otel_trace.INVALID_SPAN, fresh)
+    owned = _active_owned_span.set(None)
+    token = context_api.attach(fresh)
+    try:
+        yield
+    finally:
+        context_api.detach(token)
+        _active_owned_span.reset(owned)
 
 
 def set_neatlogs_span_in_context(

@@ -17,8 +17,9 @@ from typing import Any, Callable
 from uuid import UUID, uuid4
 
 from .._task_credentials import task_credential_refresh
-from .._wrap_utils import fresh_neatlogs_context, get_active_client
+from .._wrap_utils import fresh_neatlogs_context, get_active_client, get_bootstrap_provider
 from ..core.context import trace
+from ..core.deadline import bounded_call
 from ..datasets._api import DatasetApi, encode_json
 from ..init import flush
 from ..replay.api import LocalRunApi, LocalRunApiError
@@ -158,16 +159,32 @@ def _utc_case_time():
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
-def _flush_case_trace():
+def _flush_case_trace(timeout_millis=10_000):
     client = get_active_client()
-    (client.flush if client else flush)(timeout_millis=10_000)
+    if client:
+        return client.flush(timeout_millis=timeout_millis)
+    provider = get_bootstrap_provider()
+    if provider is None:
+        return flush(timeout_millis=timeout_millis)
+    completed, result = bounded_call(
+        lambda: provider.force_flush(timeout_millis=timeout_millis),
+        time.monotonic() + timeout_millis / 1000,
+    )
+    return bool(result) if completed else False
 
 
 def _upload_case_output(run_api, run_id, slot, deadline, save_state):
+    # Reserve a final value-upload/reconciliation window before the run closes.
+    trace_deadline = min(deadline - 5, time.monotonic() + 60)
     if slot["body"].get("traceId"):
-        _flush_case_trace()
-    trace_deadline = min(deadline, time.monotonic() + 60)
+        remaining = min(10, trace_deadline - time.monotonic())
+        if remaining > 0:
+            _flush_case_trace(timeout_millis=max(1, int(remaining * 1000)))
     while True:
+        if slot["body"].get("traceId") and time.monotonic() >= trace_deadline:
+            slot["body"].pop("traceId")
+            (slot.get("rejection") or slot)["key"] = str(uuid4())
+            save_state()
         rejection = slot.get("rejection")
         body = slot["body"]
         key = slot["key"]
@@ -178,14 +195,18 @@ def _upload_case_output(run_api, run_id, slot, deadline, save_state):
             body["error"] = rejection["error"]
             key = rejection["key"]
         try:
+
+            def deliver(timeout):
+                evidence_remaining = trace_deadline - time.monotonic()
+                # Reconciliation after an ambiguous write keeps the original body/key.
+                if body.get("traceId") and evidence_remaining > 0:
+                    timeout = min(timeout, evidence_remaining)
+                return run_api.request(
+                    "POST", f"/runs/{run_id}/outputs", body, key=key, timeout=timeout
+                )
+
             _, stopped = recover(
-                lambda timeout, body=body, key=key: run_api.request(
-                    "POST",
-                    f"/runs/{run_id}/outputs",
-                    body,
-                    key=key,
-                    timeout=timeout,
-                ),
+                deliver,
                 deadline,
                 run_api=run_api,
                 run_id=run_id,
@@ -641,16 +662,21 @@ def run_eval(
                         raise ValueError("Grading receipt belongs to a different batch")
                     batch["accepted"] = True
                     _save(state_path, state)
-        while True:
+        # Preserve one receipt read even when handoff waiting used the poll budget.
+        comparison, _ = recover(
+            lambda timeout: run_api.comparison(run_id, timeout=timeout),
+            max(deadline, time.monotonic() + 5),
+        )
+        while comparison.get("state") not in {"ready", "failed", "incomplete"}:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            time.sleep(min(1, remaining))
+            if time.monotonic() >= deadline:
+                break
             comparison, _ = recover(
                 lambda timeout: run_api.comparison(run_id, timeout=timeout), deadline
             )
-            if (
-                comparison.get("state") in {"ready", "failed", "incomplete"}
-                or time.monotonic() >= deadline
-            ):
-                break
-            time.sleep(min(1, max(0, deadline - time.monotonic())))
         if errors / (len(cases) * trials) > max_error_rate or not comparison.get(
             "coverage", {}
         ).get("complete"):

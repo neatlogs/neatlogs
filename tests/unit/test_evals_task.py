@@ -1,5 +1,6 @@
 import json
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 from uuid import uuid4
@@ -51,6 +52,7 @@ def server():
         "dispatches": [],
         "comparison_pending": 0,
         "comparison_calls": 0,
+        "comparison_latency": 0,
         "dispatch_failures": 0,
         "completion_failures": 0,
         "gate_keys": [],
@@ -70,6 +72,7 @@ def server():
                 index = 1 if cursor else 0
                 data = state["dataset_pages"][index]
             elif "/comparison" in self.path:
+                time.sleep(state["comparison_latency"])
                 state["comparison_calls"] += 1
                 if state["comparison_pending"]:
                     state["comparison_pending"] -= 1
@@ -1038,3 +1041,20 @@ def test_dataset_cursor_preference_is_fixed_and_catalog_get_only(
     api = DatasetApi(project_id=PROJECT, token="fixture", base_url="http://localhost:3181")
     api.request(method, path)
     assert requests[0]["headers"].get("Prefer") == ("pagination=cursor" if preferred else None)
+
+
+def test_pending_comparison_timeout_keeps_receipt_with_real_network_latency(server):
+    state, config = server
+    state["comparison_pending"] = 100
+    state["comparison_latency"] = 0.03
+    result = run_eval(
+        grading=GRADING,
+        dataset=DATASET,
+        task=lambda *_: "answer",
+        label="pending comparison",
+        wait_timeout=0.5,
+        **config,
+    )
+    assert result.exit_code == 4
+    assert result.comparison["state"] == "pending"
+    assert state["comparison_calls"] == 1

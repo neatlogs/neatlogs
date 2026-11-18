@@ -75,6 +75,11 @@ def get_neatlogs_provider() -> Optional[TracerProvider]:
     return _neatlogs_provider
 
 
+def get_bootstrap_provider() -> Optional[TracerProvider]:
+    """The wrapper-only provider currently producing Neatlogs spans."""
+    return _bootstrap_provider if _bootstrap_provider is get_neatlogs_provider() else None
+
+
 def take_bootstrap_resources() -> tuple[Optional[TracerProvider], Any, Any]:
     """Detach resources owned by wrapper-only auto bootstrap for bounded shutdown."""
 

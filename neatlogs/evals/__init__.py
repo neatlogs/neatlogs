@@ -685,6 +685,7 @@ def run_eval(
             return EvalResult(run_id, comparison, None, errors, 0, status.get("state"))
         gate_key = state.setdefault("gateKey", str(uuid4()))
         _save(state_path, state)
+        gate_deadline = max(deadline, time.monotonic() + 5)
         gate, _ = recover(
             lambda timeout: run_api.request(
                 "POST",
@@ -693,7 +694,7 @@ def run_eval(
                 key=gate_key,
                 timeout=timeout,
             ),
-            deadline,
+            gate_deadline,
         )
         code = {"pass": 0, "fail": 1, "incomplete": 4}[gate["verdict"]]
         return EvalResult(run_id, comparison, gate, errors, code, status.get("state"))

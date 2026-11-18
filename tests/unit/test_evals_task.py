@@ -57,6 +57,8 @@ def server():
         "completion_failures": 0,
         "gate_keys": [],
         "gate_failures": 0,
+        "gate_latency": 0,
+        "drop_gates": 0,
         "deadline_at": "2030-01-01T00:00:00Z",
     }
 
@@ -171,6 +173,11 @@ def server():
                 data = {"state": "succeeded", "outputId": str(uuid4())}
             elif self.path.endswith("/gate"):
                 state["gate_keys"].append(self.headers["Idempotency-Key"])
+                time.sleep(state["gate_latency"])
+                if state["drop_gates"]:
+                    state["drop_gates"] -= 1
+                    self.close_connection = True
+                    return
                 if state["gate_failures"]:
                     state["gate_failures"] -= 1
                     self.respond(503, {})
@@ -1058,3 +1065,32 @@ def test_pending_comparison_timeout_keeps_receipt_with_real_network_latency(serv
     assert result.exit_code == 4
     assert result.comparison["state"] == "pending"
     assert state["comparison_calls"] == 1
+
+
+@pytest.mark.parametrize(
+    "verdict,exit_code,dropped_replies",
+    [("pass", 0, 1), ("fail", 1, 0), ("incomplete", 4, 0)],
+)
+def test_gate_after_comparison_outlasts_poll_budget(
+    server, tmp_path, verdict, exit_code, dropped_replies
+):
+    state, config = server
+    state["comparison_latency"] = 0.7
+    state["gate_latency"] = 0.03
+    state["drop_gates"] = dropped_replies
+    state["verdict"] = verdict
+    result = run_eval(
+        grading=GRADING,
+        dataset=DATASET,
+        task=lambda *_: "answer",
+        label="late gate",
+        wait_timeout=0.5,
+        gates=["error_rate <= 0"],
+        state_path=tmp_path / "late-gate.json",
+        **config,
+    )
+    assert result.exit_code == exit_code
+    assert result.gate["verdict"] == verdict
+    assert len(state["gate_keys"]) == dropped_replies + 1
+    assert len(set(state["gate_keys"])) == 1
+    assert len(state["outputs"]) == 1

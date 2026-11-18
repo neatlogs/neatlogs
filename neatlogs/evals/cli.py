@@ -34,6 +34,7 @@ def main():
             json.dumps(
                 {
                     "runId": result.run_id,
+                    "runState": result.run_state,
                     "comparison": result.comparison,
                     "gate": result.gate,
                     "errors": result.errors,
@@ -44,7 +45,12 @@ def main():
         )
         return result.exit_code
     except (DatasetError, LocalRunApiError) as error:
-        print(json.dumps({"error": str(error)}), file=sys.stderr)
+        details = {"error": str(error)}
+        if isinstance(error, LocalRunApiError) and error.code:
+            details["code"] = error.code
+            if error.details is not None:
+                details["details"] = error.details
+        print(json.dumps(details), file=sys.stderr)
         status = getattr(error, "status", getattr(error, "status_code", None))
         return 2 if status in {400, 422} else 3
     except (ValueError, KeyError, OSError, TypeError) as error:

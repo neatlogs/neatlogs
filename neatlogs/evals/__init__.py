@@ -10,19 +10,24 @@ import os
 import time
 from contextlib import suppress
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from functools import wraps
 from pathlib import Path
 from typing import Any, Callable
 from uuid import UUID, uuid4
 
 from .._task_credentials import task_credential_refresh
+from .._wrap_utils import fresh_neatlogs_context, get_active_client, get_bootstrap_provider
 from ..core.context import trace
+from ..core.deadline import bounded_call
 from ..datasets._api import DatasetApi, encode_json
+from ..init import flush
 from ..replay.api import LocalRunApi, LocalRunApiError
 from ..replay.contracts import MAX_RECORDING_BYTES
 from ..replay.environment import write_private_json
 from ..replay.provider import ecmascript_json
 from ..replay.state import state_lock
+from ._recovery import is_uncertain, recover, terminal, uncertainty_message
 
 
 @dataclass(frozen=True)
@@ -50,6 +55,7 @@ class EvalResult:
     gate: dict | None
     errors: int
     exit_code: int
+    run_state: str | None = None
 
 
 def _with_state_lock(run):
@@ -72,7 +78,10 @@ def _save(path, state):
 
 def _validate_grading(grading):
     message = "Select valid grading with a formVersionId and 1–20 evaluatorIds"
-    if not isinstance(grading, dict) or set(grading) != {"formVersionId", "evaluatorIds"}:
+    if not isinstance(grading, dict) or set(grading) != {
+        "formVersionId",
+        "evaluatorIds",
+    }:
         raise ValueError(message)
     evaluators = grading["evaluatorIds"]
     if not isinstance(evaluators, list) or not 1 <= len(evaluators) <= 20:
@@ -127,7 +136,8 @@ def _resolve(api, dataset, selected=None):
     entries = []
     for offset in range(0, total, 100):
         page = api.request(
-            "GET", f"/datasets/{dataset_id}/cases?versionId={version_id}&offset={offset}&limit=100"
+            "GET",
+            f"/datasets/{dataset_id}/cases?versionId={version_id}&offset={offset}&limit=100",
         )
         if page["total"] != total or len(page["cases"]) != min(100, total - offset):
             raise ValueError("Dataset case enumeration is incomplete")
@@ -143,6 +153,95 @@ def _resolve(api, dataset, selected=None):
         if selected is None or item["caseId"] in selected
     ]
     return version_id, cases
+
+
+def _utc_case_time():
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def _flush_case_trace(timeout_millis=10_000):
+    client = get_active_client()
+    if client:
+        return client.flush(timeout_millis=timeout_millis)
+    provider = get_bootstrap_provider()
+    if provider is None:
+        return flush(timeout_millis=timeout_millis)
+    completed, result = bounded_call(
+        lambda: provider.force_flush(timeout_millis=timeout_millis),
+        time.monotonic() + timeout_millis / 1000,
+    )
+    return bool(result) if completed else False
+
+
+def _upload_case_output(run_api, run_id, slot, deadline, save_state):
+    # Reserve a final value-upload/reconciliation window before the run closes.
+    trace_deadline = min(deadline - 5, time.monotonic() + 60)
+    if slot["body"].get("traceId"):
+        remaining = min(10, trace_deadline - time.monotonic())
+        if remaining > 0:
+            _flush_case_trace(timeout_millis=max(1, int(remaining * 1000)))
+    while True:
+        if slot["body"].get("traceId") and time.monotonic() >= trace_deadline:
+            slot["body"].pop("traceId")
+            (slot.get("rejection") or slot)["key"] = str(uuid4())
+            save_state()
+        rejection = slot.get("rejection")
+        body = slot["body"]
+        key = slot["key"]
+        if rejection:
+            body = {
+                name: value for name, value in body.items() if name not in ("output", "metrics")
+            }
+            body["error"] = rejection["error"]
+            key = rejection["key"]
+        try:
+
+            def deliver(timeout):
+                evidence_remaining = trace_deadline - time.monotonic()
+                # Reconciliation after an ambiguous write keeps the original body/key.
+                if body.get("traceId") and evidence_remaining > 0:
+                    timeout = min(timeout, evidence_remaining)
+                return run_api.request(
+                    "POST", f"/runs/{run_id}/outputs", body, key=key, timeout=timeout
+                )
+
+            _, stopped = recover(
+                deliver,
+                deadline,
+                run_api=run_api,
+                run_id=run_id,
+            )
+            return stopped
+        except LocalRunApiError as error:
+            if (
+                body.get("traceId")
+                and error.code == "TRACE_NOT_READY"
+                and time.monotonic() < trace_deadline
+            ):
+                time.sleep(min(1, max(0, trace_deadline - time.monotonic())))
+                continue
+            if body.get("traceId") and error.code in (
+                "TRACE_NOT_READY",
+                "INVALID_TRACE_IDENTITY",
+            ):
+                slot["body"].pop("traceId")
+                (rejection or slot)["key"] = str(uuid4())
+            elif (
+                not rejection
+                and "output" in body
+                and error.status == 413
+                and error.code == "GRADING_EVIDENCE_LIMIT"
+            ):
+                slot["rejection"] = {
+                    "key": str(uuid4()),
+                    "error": {
+                        "code": "GRADING_EVIDENCE_LIMIT",
+                        "message": "Saved input and task output exceed the grading evidence limit.",
+                    },
+                }
+            else:
+                raise
+            save_state()
 
 
 @_with_state_lock
@@ -282,226 +381,327 @@ def run_eval(
             "slots": {},
         }
         _save(state_path, state)
-    registered_id = state["runId"]
-    if registered_id is None:
-        registration = run_api.register(request, key=state["registrationKey"])
-        registered_id = registration["runId"]
-        state["deadlineAt"] = registration["deadlineAt"]
-    run_id = str(UUID(registered_id))
-    receipt = os.environ.get("NEATLOGS_EVAL_RESULT_FILE")
-    if receipt:
-        with suppress(OSError):
-            fd = os.open(receipt, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-            with os.fdopen(fd, "w", encoding="utf-8") as file:
-                file.write(run_id)
-    if state["runId"] is None:
-        state["runId"] = run_id
-        _save(state_path, state)
-    if not state.get("deadlineAt"):
-        state["deadlineAt"] = run_api.status(run_id)["deadlineAt"]
-        _save(state_path, state)
-    from ..replay.cli import _remaining
-
-    for case in cases:
-        for trial in range(1, trials + 1):
-            key = f"{case['caseId']}:{trial}"
-            slot = state["slots"].get(key)
-            if slot and slot.get("accepted"):
-                continue
-            if slot and slot.get("executing"):
-                raise RuntimeError(
-                    "Task execution may have started without a saved output. Inspect the task before starting a new run"
-                )
-            if slot is None:
-                if _remaining(state) <= 0:
-                    raise RuntimeError(
-                        "Run deadline reached; no further tasks were executed. Resume only to reconcile saved outputs"
-                    )
-                if (
-                    state_path is not None
-                    and len(json.dumps(state, allow_nan=False, separators=(",", ":")).encode())
-                    + 400 * 1024
-                    > MAX_RECORDING_BYTES
-                ):
-                    raise RuntimeError(
-                        "Run state has no room for another output; no further tasks were executed"
-                    )
-                slot = {"executing": True, "key": str(uuid4())}
-                state["slots"][key] = slot
-                _save(state_path, state)
-                context = EvalContext(
-                    copy.deepcopy(case.get("expected")),
-                    copy.deepcopy(case.get("metadata", {})),
-                    trial,
-                    copy.deepcopy(params or {}),
-                )
-                started = time.monotonic()
-                body = {"caseId": case["caseId"], "trial": trial}
-                try:
-                    task_input = copy.deepcopy(case["input"])
-                    with trace(
-                        label,
-                        kind="WORKFLOW",
-                        **{
-                            "neatlogs.origin": "simulation",
-                            "neatlogs.replay.run_id": run_id,
-                            "neatlogs.replay.case_id": case["caseId"],
-                            "neatlogs.replay.trial": trial,
-                        },
-                    ) as span:
-                        span.set_attribute("input.value", json.dumps(case["input"]))
-                        output = copy.deepcopy(task(task_input, context))
-                        span.set_attribute("output.value", json.dumps(output))
-                    body.update(
-                        output=output,
-                        metrics={
-                            **context.metrics,
-                            "latencyMs": (time.monotonic() - started) * 1000,
-                        },
-                    )
-                    metrics = body["metrics"]
-                    if any(
-                        type(key) is not str or len(key.encode("utf-16-le")) > 200
-                        for key in metrics
-                    ):
-                        raise ValueError("Task metric names must have up to 100 UTF-16 units")
-                    if len(ecmascript_json(body)) > 64 * 1024:
-                        raise ValueError("Complete task output request exceeds 64 KiB")
-                except Exception as error:
-                    body = {
-                        "caseId": case["caseId"],
-                        "trial": trial,
-                        "error": {
-                            "code": type(error)
-                            .__name__.encode("utf-16-le", errors="replace")[:200]
-                            .decode("utf-16-le", errors="ignore"),
-                            "message": str(error)
-                            .encode("utf-16-le", errors="replace")[:2000]
-                            .decode("utf-16-le", errors="ignore"),
-                        },
-                    }
-                slot.update(executing=False, body=body)
-                _save(state_path, state)
-            rejection = slot.get("rejection")
-            upload_body = (
-                {"caseId": case["caseId"], "trial": trial, "error": rejection["error"]}
-                if rejection
-                else slot["body"]
+    try:
+        registered_id = state["runId"]
+        if registered_id is None:
+            registration, _ = recover(
+                lambda timeout: run_api.register(
+                    request, key=state["registrationKey"], timeout=timeout
+                ),
+                time.monotonic() + deadline_seconds,
             )
-            try:
-                run_api.request(
-                    "POST",
-                    f"/runs/{run_id}/outputs",
-                    upload_body,
-                    key=rejection["key"] if rejection else slot["key"],
-                )
-            except LocalRunApiError as error:
-                if (
-                    rejection
-                    or "output" not in slot["body"]
-                    or error.status != 413
-                    or error.code != "GRADING_EVIDENCE_LIMIT"
-                ):
-                    raise
-                slot["rejection"] = {
-                    "key": str(uuid4()),
-                    "error": {
-                        "code": "GRADING_EVIDENCE_LIMIT",
-                        "message": "Saved input and task output exceed the grading evidence limit.",
-                    },
-                }
-                _save(state_path, state)
-                run_api.request(
-                    "POST",
-                    f"/runs/{run_id}/outputs",
-                    {"caseId": case["caseId"], "trial": trial, "error": slot["rejection"]["error"]},
-                    key=slot["rejection"]["key"],
-                )
-            slot["accepted"] = True
+            registered_id = registration["runId"]
+            state["deadlineAt"] = registration["deadlineAt"]
+        run_id = str(UUID(registered_id))
+        receipt = os.environ.get("NEATLOGS_EVAL_RESULT_FILE")
+        if receipt:
+            with suppress(OSError):
+                fd = os.open(receipt, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                with os.fdopen(fd, "w", encoding="utf-8") as file:
+                    file.write(run_id)
+        if state["runId"] is None:
+            state["runId"] = run_id
             _save(state_path, state)
-    complete_key = state.setdefault("completeKey", str(uuid4()))
-    _save(state_path, state)
-    run_api.request("POST", f"/runs/{run_id}/complete", {}, key=complete_key)
-    _save(state_path, state)
-    errors = sum(
-        "error" in slot["body"] or bool(slot.get("rejection")) for slot in state["slots"].values()
-    )
-    deadline = time.monotonic() + wait_timeout
-    if grading:
-        status = run_api.request("GET", f"/runs/{run_id}?includeGrading=true")
-        if status.get("runId") != run_id:
-            raise ValueError("Grading status belongs to a different run")
-    if grading and "gradingHandoffState" not in status:
-        while True:
-            status = run_api.request("GET", f"/runs/{run_id}?includeGrading=true")
-            if status.get("runId") != run_id:
-                raise ValueError("Grading status belongs to a different run")
-            batches = status.get("grading")
-            if (
-                batches
-                or status.get("gradingHandoffState") == "failed"
-                or time.monotonic() >= deadline
-            ):
-                break
-            time.sleep(min(1, max(0, deadline - time.monotonic())))
-        if not isinstance(batches, dict):
-            raise RuntimeError(
-                "Grading batches are not ready. Resume after checking the grading worker."
+        from ..replay.cli import _remaining
+
+        terminal_run = None
+        case_output_details = False
+        if not state.get("deadlineAt") or resume or local:
+            current, _ = recover(
+                lambda timeout: run_api.status(
+                    run_id, timeout=timeout, include_case_output_protocol=bool(local)
+                ),
+                time.monotonic() + wait_timeout,
             )
-        evaluation_id = str(UUID(batches["evaluationId"]))
-        recorded_id = str(UUID(batches["recordedBatchId"]))
-        candidate_id = str(UUID(batches["candidateBatchId"]))
-        dispatch = state.setdefault(
-            "gradingDispatch",
-            {
-                "evaluationId": evaluation_id,
-                "recorded": {"batchId": recorded_id, "key": str(uuid4()), "accepted": False},
-                "candidate": {"batchId": candidate_id, "key": str(uuid4()), "accepted": False},
-            },
+            state["deadlineAt"] = current["deadlineAt"]
+            _save(state_path, state)
+            case_output_details = current.get("caseOutputProtocol") == 2
+            if terminal(current):
+                terminal_run = current
+        server_deadline = datetime.fromisoformat(state["deadlineAt"].replace("Z", "+00:00"))
+        deadline = time.monotonic() + max(
+            0, (server_deadline - datetime.now(timezone.utc)).total_seconds()
         )
-        _save(state_path, state)
-        if (
-            dispatch["evaluationId"],
-            dispatch["recorded"]["batchId"],
-            dispatch["candidate"]["batchId"],
-        ) != (evaluation_id, recorded_id, candidate_id):
-            raise ValueError("Saved grading batches do not match this run")
-        for batch in (dispatch["recorded"], dispatch["candidate"]):
-            if not batch["accepted"]:
-                result = run_api.request(
-                    "POST",
-                    f"/evaluations/{evaluation_id}/ai-dispatches",
-                    {"batchId": batch["batchId"]},
-                    key=batch["key"],
-                    timeout=120,
+        for case in cases:
+            if terminal_run:
+                break
+            for trial in range(1, trials + 1):
+                key = f"{case['caseId']}:{trial}"
+                slot = state["slots"].get(key)
+                if slot and slot.get("accepted"):
+                    continue
+                if slot and slot.get("executing"):
+                    raise RuntimeError(
+                        "Task execution may have started without a saved output. Inspect the task before starting a new run"
+                    )
+                if not slot or "body" not in slot:
+                    if slot is not None and not slot.get("start"):
+                        raise ValueError(
+                            "Saved output is missing. Inspect the private state file before resuming."
+                        )
+                    if _remaining(state) <= 0:
+                        raise RuntimeError(
+                            "Run deadline reached; no further tasks were executed. Resume only to reconcile saved outputs"
+                        )
+                    if (
+                        state_path is not None
+                        and len(json.dumps(state, allow_nan=False, separators=(",", ":")).encode())
+                        + 400 * 1024
+                        > MAX_RECORDING_BYTES
+                    ):
+                        raise RuntimeError(
+                            "Run state has no room for another output; no further tasks were executed"
+                        )
+                    if slot is None:
+                        slot = {"executing": False, "key": str(uuid4())}
+                        state["slots"][key] = slot
+                    if case_output_details:
+                        start = slot.setdefault(
+                            "start",
+                            {"key": str(uuid4()), "startedAt": _utc_case_time()},
+                        )
+                        _save(state_path, state)
+                        start_body = {
+                            "caseId": case["caseId"],
+                            "trial": trial,
+                            "startedAt": start["startedAt"],
+                        }
+                        _, terminal_run = recover(
+                            lambda timeout, body=start_body, key=start["key"]: (
+                                run_api.request(
+                                    "POST",
+                                    f"/runs/{run_id}/outputs/started",
+                                    body,
+                                    key=key,
+                                    timeout=timeout,
+                                )
+                            ),
+                            deadline,
+                            run_api=run_api,
+                            run_id=run_id,
+                        )
+                        if terminal_run:
+                            break
+                    slot["executing"] = True
+                    _save(state_path, state)
+                    context = EvalContext(
+                        copy.deepcopy(case.get("expected")),
+                        copy.deepcopy(case.get("metadata", {})),
+                        trial,
+                        copy.deepcopy(params or {}),
+                    )
+                    started_at = _utc_case_time()
+                    started = time.monotonic()
+                    trace_id = None
+                    body = {"caseId": case["caseId"], "trial": trial}
+                    try:
+                        task_input = copy.deepcopy(case["input"])
+                        with (
+                            fresh_neatlogs_context(),
+                            trace(
+                                label,
+                                kind="WORKFLOW",
+                                **{
+                                    "neatlogs.origin": "simulation",
+                                    "neatlogs.replay.run_id": run_id,
+                                    "neatlogs.replay.case_id": case["caseId"],
+                                    "neatlogs.replay.trial": trial,
+                                },
+                            ) as span,
+                        ):
+                            if case_output_details:
+                                span_context = span.get_span_context()
+                                if span_context.is_valid and span_context.trace_flags.sampled:
+                                    trace_id = f"{span_context.trace_id:032x}"
+                            span.set_attribute("input.value", json.dumps(case["input"]))
+                            output = copy.deepcopy(task(task_input, context))
+                            span.set_attribute("output.value", json.dumps(output))
+                        body.update(
+                            output=output,
+                            metrics={
+                                **context.metrics,
+                                "latencyMs": (time.monotonic() - started) * 1000,
+                            },
+                        )
+                        metrics = body["metrics"]
+                        if any(
+                            type(key) is not str or len(key.encode("utf-16-le")) > 200
+                            for key in metrics
+                        ):
+                            raise ValueError("Task metric names must have up to 100 UTF-16 units")
+                        if case_output_details:
+                            body.update(
+                                startedAt=started_at,
+                                endedAt=max(started_at, _utc_case_time()),
+                            )
+                            if trace_id:
+                                body["traceId"] = trace_id
+                        if len(ecmascript_json(body)) > 64 * 1024:
+                            raise ValueError("Complete task output request exceeds 64 KiB")
+                    except Exception as error:
+                        body = {
+                            "caseId": case["caseId"],
+                            "trial": trial,
+                            "error": {
+                                "code": type(error)
+                                .__name__.encode("utf-16-le", errors="replace")[:200]
+                                .decode("utf-16-le", errors="ignore"),
+                                "message": str(error)
+                                .encode("utf-16-le", errors="replace")[:2000]
+                                .decode("utf-16-le", errors="ignore"),
+                            },
+                        }
+                    if case_output_details and "error" in body:
+                        body.update(
+                            startedAt=started_at,
+                            endedAt=max(started_at, _utc_case_time()),
+                        )
+                        if trace_id:
+                            body["traceId"] = trace_id
+                    slot.update(executing=False, body=body)
+                    _save(state_path, state)
+                terminal_run = _upload_case_output(
+                    run_api,
+                    run_id,
+                    slot,
+                    deadline,
+                    lambda: _save(state_path, state),
                 )
-                if (
-                    result.get("evaluationId") != evaluation_id
-                    or result.get("batchId") != batch["batchId"]
-                    or result.get("dispatchStatus") != "accepted"
-                ):
-                    raise ValueError("Grading receipt belongs to a different batch")
-                batch["accepted"] = True
+                if terminal_run:
+                    break
+                slot["accepted"] = True
                 _save(state_path, state)
-    while True:
-        comparison = run_api.comparison(run_id)
-        if (
-            comparison.get("state") in {"ready", "failed", "incomplete"}
-            or time.monotonic() >= deadline
-        ):
-            break
-        time.sleep(min(1, max(0, deadline - time.monotonic())))
-    if errors / (len(cases) * trials) > max_error_rate or not comparison.get("coverage", {}).get(
-        "complete"
-    ):
-        return EvalResult(run_id, comparison, None, errors, 4)
-    if not gates:
-        return EvalResult(run_id, comparison, None, errors, 0)
-    gate_key = state.setdefault("gateKey", str(uuid4()))
-    _save(state_path, state)
-    gate = run_api.request("POST", f"/runs/{run_id}/gate", {}, key=gate_key)
-    code = {"pass": 0, "fail": 1, "incomplete": 4}[gate["verdict"]]
-    return EvalResult(run_id, comparison, gate, errors, code)
+        status = terminal_run
+        if not status:
+            complete_key = state.setdefault("completeKey", str(uuid4()))
+            _save(state_path, state)
+            completed, recovered = recover(
+                lambda timeout: run_api.request(
+                    "POST",
+                    f"/runs/{run_id}/complete",
+                    {},
+                    key=complete_key,
+                    timeout=timeout,
+                ),
+                deadline,
+                run_api=run_api,
+                run_id=run_id,
+            )
+            status = recovered or completed
+        errors = max(
+            (status or {}).get("failedCount", 0),
+            sum(
+                "error" in slot.get("body", {}) or bool(slot.get("rejection"))
+                for slot in state["slots"].values()
+            ),
+        )
+        deadline = time.monotonic() + wait_timeout
+        if grading:
+            status, _ = recover(
+                lambda timeout: run_api.status(run_id, include_grading=True, timeout=timeout),
+                deadline,
+            )
+        if grading and "gradingHandoffState" not in status:
+            while True:
+                status, _ = recover(
+                    lambda timeout: run_api.status(run_id, include_grading=True, timeout=timeout),
+                    deadline,
+                )
+                batches = status.get("grading")
+                if (
+                    batches
+                    or status.get("gradingHandoffState") == "failed"
+                    or time.monotonic() >= deadline
+                ):
+                    break
+                time.sleep(min(1, max(0, deadline - time.monotonic())))
+            if not isinstance(batches, dict):
+                raise RuntimeError(
+                    "Grading batches are not ready. Resume after checking the grading worker."
+                )
+            evaluation_id = str(UUID(batches["evaluationId"]))
+            recorded_id = str(UUID(batches["recordedBatchId"]))
+            candidate_id = str(UUID(batches["candidateBatchId"]))
+            dispatch = state.setdefault(
+                "gradingDispatch",
+                {
+                    "evaluationId": evaluation_id,
+                    "recorded": {
+                        "batchId": recorded_id,
+                        "key": str(uuid4()),
+                        "accepted": False,
+                    },
+                    "candidate": {
+                        "batchId": candidate_id,
+                        "key": str(uuid4()),
+                        "accepted": False,
+                    },
+                },
+            )
+            _save(state_path, state)
+            if (
+                dispatch["evaluationId"],
+                dispatch["recorded"]["batchId"],
+                dispatch["candidate"]["batchId"],
+            ) != (evaluation_id, recorded_id, candidate_id):
+                raise ValueError("Saved grading batches do not match this run")
+            for batch in (dispatch["recorded"], dispatch["candidate"]):
+                if not batch["accepted"]:
+                    result = run_api.request(
+                        "POST",
+                        f"/evaluations/{evaluation_id}/ai-dispatches",
+                        {"batchId": batch["batchId"]},
+                        key=batch["key"],
+                        timeout=120,
+                    )
+                    if (
+                        result.get("evaluationId") != evaluation_id
+                        or result.get("batchId") != batch["batchId"]
+                        or result.get("dispatchStatus") != "accepted"
+                    ):
+                        raise ValueError("Grading receipt belongs to a different batch")
+                    batch["accepted"] = True
+                    _save(state_path, state)
+        # Preserve one receipt read even when handoff waiting used the poll budget.
+        comparison, _ = recover(
+            lambda timeout: run_api.comparison(run_id, timeout=timeout),
+            max(deadline, time.monotonic() + 5),
+        )
+        while comparison.get("state") not in {"ready", "failed", "incomplete"}:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            time.sleep(min(1, remaining))
+            if time.monotonic() >= deadline:
+                break
+            comparison, _ = recover(
+                lambda timeout: run_api.comparison(run_id, timeout=timeout), deadline
+            )
+        if errors / (len(cases) * trials) > max_error_rate or not comparison.get(
+            "coverage", {}
+        ).get("complete"):
+            return EvalResult(run_id, comparison, None, errors, 4, status.get("state"))
+        if not gates:
+            return EvalResult(run_id, comparison, None, errors, 0, status.get("state"))
+        gate_key = state.setdefault("gateKey", str(uuid4()))
+        _save(state_path, state)
+        gate_deadline = max(deadline, time.monotonic() + 5)
+        gate, _ = recover(
+            lambda timeout: run_api.request(
+                "POST",
+                f"/runs/{run_id}/gate",
+                {},
+                key=gate_key,
+                timeout=timeout,
+            ),
+            gate_deadline,
+        )
+        code = {"pass": 0, "fail": 1, "incomplete": 4}[gate["verdict"]]
+        return EvalResult(run_id, comparison, gate, errors, code, status.get("state"))
+    except LocalRunApiError as error:
+        if is_uncertain(error):
+            raise uncertainty_message(state["runId"], state_path) from error
+        raise
 
 
 __all__ = ["Dataset", "EvalContext", "EvalResult", "run_eval"]

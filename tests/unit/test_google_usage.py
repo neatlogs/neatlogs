@@ -45,6 +45,7 @@ def test_vertex_usage_attributes_report_thinking_inside_completion():
     assert attributes["neatlogs.llm.token_count.reasoning"] == 3981
     assert attributes["neatlogs.llm.token_count.total"] == 7760
     assert attributes[COMPLETION_INCLUDES_REASONING] is True
+    assert "neatlogs.llm.token_count.reasoning_is_separate" not in attributes
     assert (
         attributes["neatlogs.llm.token_count.prompt"]
         + attributes["neatlogs.llm.token_count.completion"]
@@ -68,6 +69,7 @@ def test_google_genai_usage_attributes_report_thinking_inside_completion():
     attributes = {call.args[0]: call.args[1] for call in span.set_attribute.call_args_list}
     assert attributes["neatlogs.llm.token_count.completion"] == 25
     assert attributes[COMPLETION_INCLUDES_REASONING] is True
+    assert "neatlogs.llm.token_count.reasoning_is_separate" not in attributes
 
 
 def test_tool_use_prompt_tokens_keep_the_marker_so_thinking_is_not_added_twice():
@@ -87,6 +89,7 @@ def test_tool_use_prompt_tokens_keep_the_marker_so_thinking_is_not_added_twice()
     attributes = {call.args[0]: call.args[1] for call in span.set_attribute.call_args_list}
     assert attributes["neatlogs.llm.token_count.completion"] == 25
     assert attributes[COMPLETION_INCLUDES_REASONING] is True
+    assert "neatlogs.llm.token_count.reasoning_is_separate" not in attributes
 
 
 def test_no_marker_without_a_completion_count():

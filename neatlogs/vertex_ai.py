@@ -37,6 +37,7 @@ from ._wrap_utils import (
     serialize,
 )
 from .core.choice_accumulator import ChoiceAccumulator
+from .core.google_usage import google_completion_tokens, mark_completion_includes_reasoning
 from .core.media import set_media_attributes
 
 _PROVIDER = "vertex_ai"
@@ -358,9 +359,13 @@ def _set_usage_attributes(span: Any, usage: Any) -> None:
     if prompt_tokens is not None:
         span.set_attribute("neatlogs.llm.token_count.prompt", prompt_tokens)
 
-    completion_tokens = getattr(usage, "candidates_token_count", None)
+    completion_tokens = google_completion_tokens(
+        getattr(usage, "candidates_token_count", None),
+        getattr(usage, "thoughts_token_count", None),
+    )
     if completion_tokens is not None:
         span.set_attribute("neatlogs.llm.token_count.completion", completion_tokens)
+        mark_completion_includes_reasoning(span)
 
     total_tokens = getattr(usage, "total_token_count", None)
     if total_tokens is not None:
@@ -373,8 +378,6 @@ def _set_usage_attributes(span: Any, usage: Any) -> None:
     reasoning_tokens = getattr(usage, "thoughts_token_count", None)
     if reasoning_tokens is not None:
         span.set_attribute("neatlogs.llm.token_count.reasoning", reasoning_tokens)
-        if completion_tokens is not None:
-            span.set_attribute("neatlogs.llm.token_count.reasoning_is_separate", True)
 
 
 def _finalize_stream(

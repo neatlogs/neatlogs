@@ -433,7 +433,10 @@ def test_google_candidates_share_the_same_multi_choice_and_tool_schema(
     assert attributes["neatlogs.llm.tool_calls.0.name"] == "lookup"
     assert attributes["neatlogs.llm.token_count.total"] == 6
     assert attributes["neatlogs.llm.token_count.reasoning"] == 1
-    assert attributes["neatlogs.llm.token_count.reasoning_is_separate"] is True
+    # Gemini reports thinking outside candidates; completion includes it.
+    assert attributes["neatlogs.llm.token_count.completion"] == 3
+    assert attributes["neatlogs.llm.token_count.completion_includes_reasoning"] is True
+    assert "neatlogs.llm.token_count.reasoning_is_separate" not in attributes
 
 
 def test_single_choice_flattened_family_reports_limitation_without_inventing_choices(

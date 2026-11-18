@@ -10,6 +10,7 @@ from typing import Any
 from opentelemetry.trace import StatusCode
 
 from .capture import BoundedTextAccumulator
+from .google_usage import google_completion_tokens, mark_completion_includes_reasoning
 from .media import current_media_store, media_references, sanitize_media_payload
 
 MAX_SEMANTIC_STREAM_EVENTS = 128
@@ -71,8 +72,8 @@ class ChoiceAccumulator:
             raise ValueError("unsupported capture fidelity")
         self.capture_fidelity = capture_fidelity
         self.choices: dict[int, _Choice] = {}
-        self._separate_reasoning = False
         self.usage: Any = None
+        self.google_usage = False
         self.model = ""
         self.response_id = ""
         self.chunk_count = 0
@@ -398,7 +399,7 @@ class ChoiceAccumulator:
     def _capture_envelope(self, value: Any) -> None:
         usage = _get(value, "usage", None)
         if usage is not None:
-            self._separate_reasoning = False
+            self.google_usage = False
             self.usage = usage
         model = _get(value, "model", None)
         if model:
@@ -410,17 +411,20 @@ class ChoiceAccumulator:
     def _capture_google_envelope(self, value: Any) -> None:
         usage = _get(value, "usage_metadata", None)
         if usage is not None:
-            completion = _get(usage, "candidates_token_count", None)
-            reasoning = _get(usage, "thoughts_token_count", None)
-            self._separate_reasoning = completion is not None and reasoning is not None
+            self.google_usage = True
             self.usage = {
                 "prompt_tokens": _get(usage, "prompt_token_count", None),
-                "completion_tokens": completion,
+                "completion_tokens": google_completion_tokens(
+                    _get(usage, "candidates_token_count", None),
+                    _get(usage, "thoughts_token_count", None),
+                ),
                 "total_tokens": _get(usage, "total_token_count", None),
                 "prompt_tokens_details": {
                     "cached_tokens": _get(usage, "cached_content_token_count", None)
                 },
-                "completion_tokens_details": {"reasoning_tokens": reasoning},
+                "completion_tokens_details": {
+                    "reasoning_tokens": _get(usage, "thoughts_token_count", None)
+                },
             }
         model = _get(value, "model_version", None) or _get(value, "model", None)
         if model:
@@ -442,6 +446,8 @@ class ChoiceAccumulator:
             value = _get(usage, source, None)
             if value is not None:
                 span.set_attribute(f"neatlogs.llm.token_count.{target}", value)
+        if self.google_usage and _get(usage, "completion_tokens", None) is not None:
+            mark_completion_includes_reasoning(span)
         prompt_details = _get(usage, "prompt_tokens_details", None)
         cached = _get(prompt_details, "cached_tokens", None)
         if cached is not None:
@@ -450,8 +456,6 @@ class ChoiceAccumulator:
         reasoning = _get(completion_details, "reasoning_tokens", None)
         if reasoning is not None:
             span.set_attribute("neatlogs.llm.token_count.reasoning", reasoning)
-            if self._separate_reasoning:
-                span.set_attribute("neatlogs.llm.token_count.reasoning_is_separate", True)
 
 
 class OpenAIStreamFinalizer:

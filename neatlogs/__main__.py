@@ -141,6 +141,8 @@ def main(argv: list[str] | None = None) -> int:
         from .replay.cli import run_simulate_cli
 
         return run_simulate_cli(values)
+    if values[:1] == ["harbor"]:
+        return _run_harbor(values[1:])
     parser = _DoctorParser(prog="neatlogs")
     commands = parser.add_subparsers(dest="command", required=True)
     doctor_parser = commands.add_parser(
@@ -176,6 +178,21 @@ def main(argv: list[str] | None = None) -> int:
     if result["status"] == "warn":
         return 1
     return 3 if args.probe else 2
+
+
+def _run_harbor(argv: list[str]) -> int:
+    """``neatlogs harbor ...`` is provided by the separate neatlogs-harbor package."""
+
+    try:
+        from neatlogs_harbor.cli import main as harbor_main
+    except ImportError:
+        print(
+            "neatlogs harbor needs the neatlogs-harbor package (Python 3.12+): "
+            "pip install neatlogs-harbor",
+            file=sys.stderr,
+        )
+        return 4
+    return harbor_main(argv)
 
 
 def doctor_main(argv: list[str] | None = None) -> int:

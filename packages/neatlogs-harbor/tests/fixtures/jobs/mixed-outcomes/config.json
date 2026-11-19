@@ -1,0 +1,16 @@
+{
+    "job_name": "mixed-outcomes",
+    "n_attempts": 3,
+    "tasks": [
+        {
+            "name": "hello-world/hello-world",
+            "ref": "latest"
+        }
+    ],
+    "agents": [
+        {
+            "name": "terminus-2",
+            "model_name": "openai/gpt-5.6-sol"
+        }
+    ]
+}

@@ -1,0 +1,13 @@
+{
+    "task": {
+        "name": "hello-world/hello-world",
+        "ref": "latest"
+    },
+    "trial_name": "hello-world__Csbx003",
+    "trials_dir": "jobs/mixed-outcomes",
+    "job_id": "5b1d6c4e-2f0a-4c51-9a0e-6f2d1a7c9e01",
+    "agent": {
+        "name": "terminus-2",
+        "model_name": "openai/gpt-5.6-sol"
+    }
+}

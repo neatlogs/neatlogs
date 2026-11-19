@@ -16,10 +16,82 @@ from scripts.compatibility.validate_fix import (
     require_post_patch_smoke,
     require_reproduction,
     workspace_snapshot,
+    validate,
 )
 
 
+class ReachedWheelBuild(Exception):
+    pass
+
+
 class ValidateFixTests(unittest.TestCase):
+    def test_generated_async_test_reaches_wheel_build_with_or_without_autoload(self):
+        for disabled in (False, True):
+            with self.subTest(autoload_disabled=disabled), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                test = root / "test_generated.py"
+                adapter = root / "adapter.txt"
+                adapter.write_text("before")
+                proposal = {
+                    "baseSha": "base", "candidate": {},
+                    "edits": [{"path": "adapter.txt"}],
+                    "regressionTest": {
+                        "path": test.name,
+                        "content": (
+                            "import asyncio\nimport pathlib\nimport pytest\n"
+                            "@pytest.mark.asyncio\n"
+                            "async def test_adapter():\n"
+                            "    await asyncio.sleep(0)\n"
+                            "    assert pathlib.Path('adapter.txt').read_text() == 'after'\n"
+                        ),
+                    },
+                }
+                (root / "compatibility-fix-proposal.json").write_text(json.dumps(proposal))
+                (root / "compatibility-evidence.json").write_text("{}")
+                (root / ".compatibility").mkdir()
+                (root / ".compatibility/integrations.json").write_text("{}")
+                pytest_runs = []
+                original = {"adapter.txt": "before"}
+                patched = {"adapter.txt": "after", test.name: "test"}
+
+                def apply(*args):
+                    adapter.write_text("after")
+                    test.write_text(proposal["regressionTest"]["content"])
+                    return ["adapter.txt", test.name]
+
+                def run(command, timeout):
+                    if command[1:3] == ["-m", "pytest"]:
+                        result = subprocess.run(command, cwd=root, capture_output=True,
+                                                text=True, timeout=timeout)
+                        pytest_runs.append(result)
+                        return result
+                    if command[1:3] == ["-m", "build"]:
+                        raise ReachedWheelBuild()
+                    return subprocess.CompletedProcess(command, 0, "base", "")
+
+                previous = Path.cwd()
+                try:
+                    os.chdir(root)
+                    with patch.dict(os.environ, {}, clear=False):
+                        os.environ.pop("PYTEST_PLUGINS", None)
+                        os.environ.pop("PYTEST_ADDOPTS", None)
+                        os.environ.pop("PYTEST_DISABLE_PLUGIN_AUTOLOAD", None)
+                        if disabled:
+                            os.environ["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
+                        with patch("scripts.compatibility.validate_fix.ROOT", root), \
+                             patch("scripts.compatibility.validate_fix.validate_proposal"), \
+                             patch("scripts.compatibility.validate_fix.apply_proposal", side_effect=apply), \
+                             patch("scripts.compatibility.validate_fix.workspace_snapshot",
+                                   side_effect=[original, original, patched]), \
+                             patch("scripts.compatibility.validate_fix.run", side_effect=run):
+                            with self.assertRaises(ReachedWheelBuild):
+                                validate()
+                    self.assertEqual([result.returncode for result in pytest_runs], [1, 0])
+                    self.assertIn("1 failed", pytest_runs[0].stdout)
+                    self.assertIn("1 passed", pytest_runs[1].stdout)
+                finally:
+                    os.chdir(previous)
+
     def test_safe_candidate_rejection_is_not_a_failed_validation_job(self):
         with tempfile.TemporaryDirectory() as directory:
             previous = Path.cwd()

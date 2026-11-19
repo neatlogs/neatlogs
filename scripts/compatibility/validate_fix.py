@@ -137,7 +137,7 @@ def validate() -> dict[str, object]:
         test_path = ROOT / test["path"]
         test_path.write_text(test["content"])
         try:
-            red = run([sys.executable, "-m", "pytest", "-q", test["path"]], 120)
+            red = run([sys.executable, "-m", "pytest", "-p", "asyncio", "-q", test["path"]], 120)
             if red.returncode == 1:
                 red_green = "red-before-patch"
             elif red.returncode == 0:
@@ -169,7 +169,7 @@ def validate() -> dict[str, object]:
     if proposal.get("regressionTest"):
         focused.append(ROOT / proposal["regressionTest"]["path"])
     if focused:
-        tests = run([sys.executable, "-m", "pytest", "-p", "pytest_asyncio.plugin", "-q",
+        tests = run([sys.executable, "-m", "pytest", "-p", "asyncio", "-q",
                      *[str(path.relative_to(ROOT)) for path in focused]], 240)
         if tests.returncode != 0:
             failure = CandidateRejected if tests.returncode == 1 else RuntimeError

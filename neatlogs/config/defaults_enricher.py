@@ -5,7 +5,8 @@ Model defaults enricher for invocation parameters.
 import json
 import logging
 import os
-from typing import Any, Dict, Optional
+from collections.abc import Mapping
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -18,12 +19,79 @@ except ImportError:
         return attrs.get("llm.system", "").lower()
 
 
+# Operation keys declared by model_defaults.json. The mapping is intentionally
+# explicit: assuming "messages" for every non-OpenAI provider means Google,
+# Vertex AI and Cohere spans never find their defaults at all.
+_CHAT_OPERATION_BY_PROVIDER: Dict[str, str] = {
+    "openai": "chat.completions",
+    "azure": "chat.completions",
+    "azure_openai": "chat.completions",
+    "groq": "chat.completions",
+    "xai": "chat.completions",
+    "deepseek": "chat.completions",
+    "mistral": "chat.completions",
+    "mistralai": "chat.completions",
+    "anthropic": "messages",
+    "google": "generateContent",
+    "gemini": "generateContent",
+    "vertex_ai": "generateContent",
+    "vertexai": "generateContent",
+    "cohere": "chat",
+}
+
+# Canonical spellings for explicit operation names emitted by instrumentors.
+_EXPLICIT_OPERATIONS: Dict[str, str] = {
+    "chat": "chat",
+    "chat.completions": "chat.completions",
+    "chat_completions": "chat.completions",
+    "messages": "messages",
+    "generatecontent": "generateContent",
+    "generate_content": "generateContent",
+    "generate": "generate",
+    "embeddings": "embeddings",
+    "embedding": "embeddings",
+}
+
+_EMBEDDING_OPERATION = "embeddings"
+
+
+def resolve_default_operations(
+    provider: str, span_kind: str, attrs: Mapping[str, Any]
+) -> List[str]:
+    """Return candidate ``model_defaults.json`` operation keys in priority order.
+
+    An explicit operation reported by the instrumentor is tried first, but only
+    after it has been canonicalized to a key the defaults file can actually use.
+    The provider's conventional chat operation is always appended as a fallback,
+    so a misleading ``llm.request.type`` cannot suppress enrichment entirely.
+    """
+
+    if span_kind == "EMBEDDING":
+        return [_EMBEDDING_OPERATION]
+
+    candidates: List[str] = []
+    for key in ("gen_ai.operation.name", "llm.request.type"):
+        value = attrs.get(key)
+        if not isinstance(value, str):
+            continue
+        operation = _EXPLICIT_OPERATIONS.get(value.strip().lower())
+        if operation and operation not in candidates:
+            candidates.append(operation)
+
+    provider_key = str(provider or "").strip().lower()
+    fallback = _CHAT_OPERATION_BY_PROVIDER.get(provider_key, "chat.completions")
+    if fallback not in candidates:
+        candidates.append(fallback)
+    return candidates
+
+
 class DefaultsEnricher:
     """
     Enriches invocation parameters with model-specific defaults.
 
     Loads defaults from config/model_defaults.json and intelligently merges
-    them with explicitly set parameters.
+    them with explicitly captured parameters. Explicit parameters always take
+    precedence.
     """
 
     _defaults_data: Optional[Dict[str, Any]] = None
@@ -37,7 +105,7 @@ class DefaultsEnricher:
                 with open(defaults_file, "r") as f:
                     cls._defaults_data = json.load(f)
                 logger.debug(f"✓ Loaded model defaults from {defaults_file}")
-            except (FileNotFoundError, json.JSONDecodeError) as e:
+            except (FileNotFoundError, json.JSONDecodeError, OSError) as e:
                 logger.warning(f"Could not load model_defaults.json: {e}")
                 cls._defaults_data = {}
         return cls._defaults_data
@@ -55,25 +123,47 @@ class DefaultsEnricher:
         Returns:
             Dictionary of default parameters
         """
+
         defaults_data = cls._load_defaults()
-
-        provider_data = defaults_data.get(provider.lower(), {})
+        provider_data = defaults_data.get(str(provider or "").strip().lower(), {})
+        if not isinstance(provider_data, Mapping):
+            return {}
         operation_data = provider_data.get(operation, {})
-
-        if not operation_data:
+        if not isinstance(operation_data, Mapping) or not operation_data:
             return {}
 
-        if model in operation_data:
-            return operation_data[model].copy()
+        model_name = str(model or "").strip()
+        if not model_name:
+            return {}
+        lowered = model_name.lower()
 
+        # An exact match always wins, regardless of the casing used by the caller.
         for model_key, defaults in operation_data.items():
-            if model_key != "_default" and model.startswith(model_key):
-                logger.debug(f"Matched model '{model}' to defaults for '{model_key}'")
-                return defaults.copy()
+            key = str(model_key)
+            if key != "_default" and key.lower() == lowered and isinstance(defaults, Mapping):
+                logger.debug(f"Matched model '{model}' exactly to defaults for '{key}'")
+                return dict(defaults)
 
-        if "_default" in operation_data:
+        # Several configured keys can be prefixes of the same model id
+        # (e.g. "gpt-5" and "gpt-5-mini"). Return the longest match so the most
+        # specific family wins instead of whichever key was listed first.
+        matches = [
+            (len(str(model_key)), str(model_key), defaults)
+            for model_key, defaults in operation_data.items()
+            if model_key != "_default"
+            and isinstance(defaults, Mapping)
+            and lowered.startswith(str(model_key).lower())
+        ]
+        if matches:
+            matches.sort(key=lambda match: (-match[0], match[1]))
+            _, model_key, defaults = matches[0]
+            logger.debug(f"Matched model '{model}' to defaults for '{model_key}'")
+            return dict(defaults)
+
+        fallback = operation_data.get("_default")
+        if isinstance(fallback, Mapping):
             logger.debug(f"Using _default for {provider}/{operation}/{model}")
-            return operation_data["_default"].copy()
+            return dict(fallback)
 
         return {}
 
@@ -87,9 +177,9 @@ def enrich_invocation_parameters(
     Merges default parameters from model_defaults.json with explicitly captured
     parameters. Explicit parameters always take precedence.
 
-    Modifies merged_attrs in-place by adding/updating:
-    - llm.invocation_parameters.full: Complete params (explicit + defaults)
-    - llm.invocation_parameters.enriched: Flag indicating enrichment was applied
+    Modifies merged_attrs in-place by replacing:
+    - llm.invocation_parameters: explicit parameters plus any applicable defaults
+      that the caller did not set explicitly.
 
     Args:
         merged_attrs: Span attributes dictionary
@@ -98,14 +188,11 @@ def enrich_invocation_parameters(
     if not enable_enrichment:
         return
 
-    span_kind = merged_attrs.get("openinference.span.kind")
+    span_kind = str(merged_attrs.get("openinference.span.kind") or "").upper()
     if span_kind not in ("LLM", "EMBEDDING"):
         return
 
-    # Use the new provider detection that considers platform/framework
     provider = get_effective_provider_for_defaults(merged_attrs)
-
-    # For EMBEDDING spans, use embedding.model_name; for LLM spans, use llm.model_name
     if span_kind == "EMBEDDING":
         model = merged_attrs.get("embedding.model_name", "")
     else:
@@ -114,35 +201,30 @@ def enrich_invocation_parameters(
     if not provider or not model:
         return
 
-    operation = None
-    if span_kind == "LLM":
-        if "chat" in merged_attrs.get("llm.request.type", "").lower():
-            operation = "chat.completions" if provider == "openai" else "messages"
-        else:
-            operation = "chat.completions" if provider == "openai" else "messages"
-    elif span_kind == "EMBEDDING":
-        operation = "embeddings"
-
-    if not operation:
-        return
-
-    defaults = DefaultsEnricher.get_defaults(provider, operation, model)
+    defaults: Dict[str, Any] = {}
+    for operation in resolve_default_operations(provider, span_kind, merged_attrs):
+        defaults = DefaultsEnricher.get_defaults(provider, operation, model)
+        if defaults:
+            break
     if not defaults:
-        logger.debug(f"No defaults found for {provider}/{operation}/{model}")
+        logger.debug(f"No defaults found for {provider}/{model}")
         return
 
-    existing_params_str = merged_attrs.get("llm.invocation_parameters", "{}")
-    try:
-        existing_params = (
-            json.loads(existing_params_str)
-            if isinstance(existing_params_str, str)
-            else existing_params_str
-        )
-    except json.JSONDecodeError:
+    existing_params = merged_attrs.get("llm.invocation_parameters", "{}")
+    if isinstance(existing_params, str):
+        try:
+            existing_params = json.loads(existing_params)
+        except (TypeError, ValueError):
+            existing_params = {}
+    if not isinstance(existing_params, Mapping):
         existing_params = {}
 
-    enriched_params = {**defaults, **existing_params}
-
-    merged_attrs["llm.invocation_parameters"] = json.dumps(enriched_params)
+    enriched_params = {**defaults, **dict(existing_params)}
+    try:
+        merged_attrs["llm.invocation_parameters"] = json.dumps(enriched_params)
+    except (TypeError, ValueError):
+        # Never let a non-serializable caller value break the processing pipeline.
+        logger.debug("Could not serialize enriched invocation parameters")
+        return
 
     logger.debug(f"✓ Enriched params for {provider}/{model}: added {len(defaults)} defaults")

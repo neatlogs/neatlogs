@@ -111,7 +111,11 @@ class TestResolveDefaultOperations:
             ("openai", "chat.completions"),
             ("azure_openai", "chat.completions"),
             ("groq", "chat.completions"),
+            ("together", "chat.completions"),
             ("anthropic", "messages"),
+            ("bedrock", "messages"),
+            ("mistral", "chat"),
+            ("ollama", "chat"),
             ("google", "generateContent"),
             ("vertex_ai", "generateContent"),
             ("cohere", "chat"),
@@ -143,6 +147,10 @@ class TestEnrichInvocationParameters:
         [
             ("openai", "gpt-5", "temperature"),
             ("anthropic", "claude-sonnet-4-5-20250929", "temperature"),
+            ("bedrock", "anthropic.claude-sonnet-4-5", "temperature"),
+            ("mistral", "mistral-large-latest", "safe_prompt"),
+            ("ollama", "llama3.2", "num_predict"),
+            ("together", "togethercomputer/llama-2-70b", "max_tokens"),
             ("google", "gemini-2.5-pro", "top_k"),
             ("vertex_ai", "gemini-2.5-flash", "top_k"),
             ("cohere", "command-r-plus-08-2024", "temperature"),
@@ -168,6 +176,18 @@ class TestEnrichInvocationParameters:
         enrich_invocation_parameters(attrs)
         assert _params(attrs) == DefaultsEnricher.get_defaults(
             "google", "generateContent", "gemini-2.5-pro"
+        )
+
+    def test_bedrock_platform_uses_messages_defaults(self):
+        attrs = {
+            "openinference.span.kind": "LLM",
+            "neatlogs.platform": "bedrock",
+            "llm.model_name": "anthropic.claude-sonnet-4-5",
+            "llm.invocation_parameters": "{}",
+        }
+        enrich_invocation_parameters(attrs)
+        assert _params(attrs) == DefaultsEnricher.get_defaults(
+            "bedrock", "messages", "anthropic.claude-sonnet-4-5"
         )
 
     def test_explicit_parameters_take_precedence(self):

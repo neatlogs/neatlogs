@@ -144,6 +144,12 @@
             ],
             "arguments": [
               "llm.tool_calls.{i}.arguments"
+            ],
+            "choice_index": [
+              "llm.tool_calls.{i}.choice_index"
+            ],
+            "tool_call_index": [
+              "llm.tool_calls.{i}.tool_call_index"
             ]
           },
           "target": "neatlogs.llm.tool_calls.{i}",

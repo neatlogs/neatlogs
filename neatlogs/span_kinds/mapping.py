@@ -2,33 +2,25 @@ def infer_span_kind_from_name(span_name: str) -> str:
     """
     Infer OpenInference span kind from span name.
 
+    Specific operations are checked before generic provider/model keywords so a
+    span such as ``chat_history_retrieval`` is a RETRIEVER, not an LLM. Provider
+    names only decide the LLM kind when no more specific operation is present.
+
     Distinguishes RETRIEVER (read ops) vs VECTOR_STORE (write ops) for vector DBs.
     """
     name_lower = span_name.lower()
 
-    # LLM operations
-    if any(
-        keyword in name_lower
-        for keyword in [
-            "openai",
-            "anthropic",
-            "cohere",
-            "bedrock",
-            "chat",
-            "completion",
-            "llm",
-            "gemini",
-            "google_genai",
-        ]
-    ):
-        return "LLM"
+    # Rerankers often name both the ranking operation and the searched source
+    # (e.g. "rerank_search_results"), so this must precede generic retrieval.
+    if "rerank" in name_lower:
+        return "RERANKER"
 
-    # Embedding operations
-    elif "embed" in name_lower:
+    # Embedding operations may also mention retrieval targets ("embed_query").
+    if "embed" in name_lower:
         return "EMBEDDING"
 
     # Vector DB: Distinguish RETRIEVER (read) vs VECTOR_STORE (write)
-    elif any(
+    if any(
         db in name_lower
         for db in [
             "chroma",
@@ -40,7 +32,6 @@ def infer_span_kind_from_name(span_name: str) -> str:
             "marqo",
         ]
     ):
-        # Check if it's a READ operation (retrieval)
         retrieval_keywords = [
             "query",
             "search",
@@ -57,34 +48,40 @@ def infer_span_kind_from_name(span_name: str) -> str:
         ]
         if any(keyword in name_lower for keyword in retrieval_keywords):
             return "RETRIEVER"
-        else:
-            # WRITE operations (add, insert, upsert, update, delete, create, drop)
-            return "VECTOR_STORE"
+        return "VECTOR_STORE"
 
-    # Generic retrieval (for custom retrieval functions)
-    elif any(keyword in name_lower for keyword in ["retriev", "search", "query"]):
+    # Generic retrieval, tool, guardrail, evaluation and agent operations all
+    # outrank the generic LLM keywords below.
+    if any(keyword in name_lower for keyword in ["retriev", "search", "query"]):
         return "RETRIEVER"
 
-    # Reranker operations
-    elif "rerank" in name_lower:
-        return "RERANKER"
-
-    # Agent operations
-    elif "agent" in name_lower:
+    if "agent" in name_lower:
         return "AGENT"
 
-    # Tool/function operations
-    elif any(keyword in name_lower for keyword in ["tool", "function"]):
+    if any(keyword in name_lower for keyword in ["tool", "function"]):
         return "TOOL"
 
-    # Guardrail operations
-    elif any(keyword in name_lower for keyword in ["guardrail", "validate", "moderate", "safety"]):
+    if any(keyword in name_lower for keyword in ["guardrail", "validate", "moderate", "safety"]):
         return "GUARDRAIL"
 
-    # Evaluator operations
-    elif any(keyword in name_lower for keyword in ["evaluat", "score", "metric"]):
+    if any(keyword in name_lower for keyword in ["evaluat", "score", "metric"]):
         return "EVALUATOR"
 
-    # Default: CHAIN
-    else:
-        return "CHAIN"
+    # LLM operations, checked last so the specific operations above win.
+    if any(
+        keyword in name_lower
+        for keyword in [
+            "openai",
+            "anthropic",
+            "cohere",
+            "bedrock",
+            "chat",
+            "completion",
+            "llm",
+            "gemini",
+            "google_genai",
+        ]
+    ):
+        return "LLM"
+
+    return "CHAIN"

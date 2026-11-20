@@ -19,6 +19,9 @@ from .span_kind import normalize_explicit_span_kind, resolve_explicit_span_kind
 #   <MyClass object at 0x...>
 _PYTHON_REPR_RE = re.compile(r"^<[A-Za-z_].*?\bat\s+0x[0-9a-fA-F]+>$")
 
+# Bound indexed attribute fan-out while preserving gaps and long conversations.
+MAX_INDEXED_ITEMS = 128
+
 # Maps neatlogs.provider values → neatlogs.llm.system
 # System values are from OpenInferenceLLMSystemValues (openai/anthropic/cohere/mistralai/vertexai)
 # For providers not in OI's LLMSystemValues we use the provider name as the system value.
@@ -173,8 +176,11 @@ class UnifiedAttributeProcessor:
         self._add_reasoning_tokens_from_output_value(attrs)
         self._add_crewai_kickoff_telemetry(attrs)
 
-        # Extract tool calls from output messages (OpenInference format)
-        tool_calls: Dict[int, Dict[str, Any]] = {}
+        # Extract tool calls from output messages (OpenInference format).
+        # A tool call is identified by (message/choice index, call index). Keying
+        # only by the call index makes choice 0's call overwrite choice 1's call
+        # at the same position in multi-choice responses.
+        tool_calls: Dict[tuple[int, int], Dict[str, Any]] = {}
         oi_tool_re = re.compile(
             r"^llm\.output_messages\.(\d+)\.message\.tool_calls\.(\d+)\.tool_call\.function\.(name|arguments)$"
         )
@@ -187,29 +193,29 @@ class UnifiedAttributeProcessor:
             # OpenInference tool call function (name, arguments)
             m = oi_tool_re.match(k)
             if m:
-                _msg_idx, call_idx, field = m.groups()
-                idx = int(call_idx)
-                tool_calls.setdefault(idx, {})[field] = v
+                msg_idx, call_idx, field = m.groups()
+                tool_calls.setdefault((int(msg_idx), int(call_idx)), {})[field] = v
                 keys_to_remove.append(k)
                 continue
 
             # OpenInference tool call id (separate pattern)
             m = oi_tool_id_re.match(k)
             if m:
-                _msg_idx, call_idx = m.groups()
-                idx = int(call_idx)
-                tool_calls.setdefault(idx, {})["id"] = v
+                msg_idx, call_idx = m.groups()
+                tool_calls.setdefault((int(msg_idx), int(call_idx)), {})["id"] = v
                 keys_to_remove.append(k)
                 continue
 
-        for idx in sorted(tool_calls.keys()):
-            tc = tool_calls[idx]
+        for flat_index, (choice_index, tool_index) in enumerate(sorted(tool_calls)):
+            tc = tool_calls[(choice_index, tool_index)]
             if "id" in tc:
-                attrs[f"llm.tool_calls.{idx}.id"] = tc["id"]
+                attrs[f"llm.tool_calls.{flat_index}.id"] = tc["id"]
             if "name" in tc:
-                attrs[f"llm.tool_calls.{idx}.name"] = tc["name"]
+                attrs[f"llm.tool_calls.{flat_index}.name"] = tc["name"]
             if "arguments" in tc:
-                attrs[f"llm.tool_calls.{idx}.arguments"] = tc["arguments"]
+                attrs[f"llm.tool_calls.{flat_index}.arguments"] = tc["arguments"]
+            attrs[f"llm.tool_calls.{flat_index}.choice_index"] = choice_index
+            attrs[f"llm.tool_calls.{flat_index}.tool_call_index"] = tool_index
 
         for k in keys_to_remove:
             attrs.pop(k, None)
@@ -629,21 +635,12 @@ class UnifiedAttributeProcessor:
         and map them to OpenInference-style token keys:
           - llm.token_count.prompt / completion / total
           - llm.token_count.prompt_details.cache_read (best-effort)
-        Only applies when token_count fields are not already present.
+        Only fills fields that are not already present so an instrumentor's more
+        authoritative value is never overwritten.
         """
         # neatlogs.crew.token_usage: set by our OI CrewAI patch (_patch_openinference_crewai_crew_outputs)
         usage = attrs.get("neatlogs.crew.token_usage")
         if not isinstance(usage, str) or not usage:
-            return
-
-        if any(
-            k in attrs
-            for k in (
-                "llm.token_count.prompt",
-                "llm.token_count.completion",
-                "llm.token_count.total",
-            )
-        ):
             return
 
         parsed: Dict[str, int] = {}
@@ -653,16 +650,15 @@ class UnifiedAttributeProcessor:
             except Exception:
                 continue
 
-        if "prompt_tokens" in parsed:
-            attrs["llm.token_count.prompt"] = parsed["prompt_tokens"]
-        if "completion_tokens" in parsed:
-            attrs["llm.token_count.completion"] = parsed["completion_tokens"]
-        if "total_tokens" in parsed:
-            attrs["llm.token_count.total"] = parsed["total_tokens"]
-
-        # CrewAI reports cached_prompt_tokens; treat as cache-read input tokens.
-        if "cached_prompt_tokens" in parsed:
-            attrs["llm.token_count.prompt_details.cache_read"] = parsed["cached_prompt_tokens"]
+        for source_key, target_key in (
+            ("prompt_tokens", "llm.token_count.prompt"),
+            ("completion_tokens", "llm.token_count.completion"),
+            ("total_tokens", "llm.token_count.total"),
+            # CrewAI reports cached_prompt_tokens; treat as cache-read input tokens.
+            ("cached_prompt_tokens", "llm.token_count.prompt_details.cache_read"),
+        ):
+            if source_key in parsed and target_key not in attrs:
+                attrs[target_key] = parsed[source_key]
 
     def _add_reasoning_tokens_from_output_value(self, attrs: Dict[str, Any]) -> None:
         """
@@ -1181,6 +1177,22 @@ class UnifiedAttributeProcessor:
             return "deepseek"
         return ""
 
+    @staticmethod
+    def _resolve_kind_for_mapping(source: Dict[str, Any], target: Dict[str, Any]) -> str:
+        """Resolve the span kind used by ``neatlogs.{span_kind}.*`` templates.
+
+        The name-inference fallback in ``_apply_namespace_mapping`` runs after
+        attribute mapping, so without this helper a span whose kind is only
+        inferable from its name loses all kind-keyed input/output attributes.
+        """
+        resolved = target.get("neatlogs.span.kind") or source.get("openinference.span.kind")
+        span_name = str(source.get("_span_name") or "").strip()
+        if not resolved and span_name:
+            from ..span_kinds.mapping import infer_span_kind_from_name
+
+            resolved = infer_span_kind_from_name(span_name)
+        return str(resolved or "").strip().lower()
+
     def _map_recursive(
         self,
         mapping_tier: Dict[str, Any],
@@ -1232,14 +1244,10 @@ class UnifiedAttributeProcessor:
                 continue
 
             if isinstance(target_key, str) and "{span_kind}" in target_key:
-                resolved_kind = target.get("neatlogs.span.kind")
-                if not resolved_kind:
-                    resolved_kind = source.get("openinference.span.kind")
-                    if isinstance(resolved_kind, str):
-                        resolved_kind = resolved_kind.strip()
+                resolved_kind = self._resolve_kind_for_mapping(source, target)
                 if not resolved_kind:
                     continue
-                target_key = target_key.replace("{span_kind}", str(resolved_kind))
+                target_key = target_key.replace("{span_kind}", resolved_kind)
 
             if config.get("indexed"):
                 self._process_indexed_mapping(config, source, target, consumed)
@@ -1274,6 +1282,41 @@ class UnifiedAttributeProcessor:
                         consumed.add(src_key)
                         break
 
+    @staticmethod
+    def _indexed_item_indexes(config: Dict[str, Any], source: Dict[str, Any]) -> List[int]:
+        """Return the item indexes actually present in the source attributes.
+
+        Iterating a fixed ``range(20)`` and stopping at the first missing index
+        drops every item after a gap (a filtered message, a non-zero candidate)
+        and silently truncates long conversations and retrieval result sets.
+        """
+        sources_config = config.get("sources")
+        templates: List[str] = []
+        if isinstance(sources_config, list):
+            templates = [item for item in sources_config if isinstance(item, str)]
+        elif isinstance(sources_config, dict):
+            for sub_sources in sources_config.values():
+                if isinstance(sub_sources, list):
+                    templates.extend(item for item in sub_sources if isinstance(item, str))
+
+        indexes: set[int] = set()
+        for template in templates:
+            if "{i}" not in template:
+                if template in source:
+                    indexes.add(0)
+                continue
+            prefix, suffix = template.split("{i}", 1)
+            pattern = re.compile(r"^" + re.escape(prefix) + r"(\d+)" + re.escape(suffix) + r"$")
+            for key in source:
+                if not isinstance(key, str):
+                    continue
+                match = pattern.match(key)
+                if match:
+                    index = int(match.group(1))
+                    if 0 <= index < MAX_INDEXED_ITEMS:
+                        indexes.add(index)
+        return sorted(indexes)
+
     def _process_indexed_mapping(
         self,
         config: Dict[str, Any],
@@ -1285,9 +1328,7 @@ class UnifiedAttributeProcessor:
         target_content_template = config.get("target_content")
         sources_config = config.get("sources")
 
-        for i in range(20):
-            found_any = False
-
+        for i in self._indexed_item_indexes(config, source):
             if isinstance(sources_config, list):
                 if target_content_template:
                     role_val = None
@@ -1315,10 +1356,8 @@ class UnifiedAttributeProcessor:
 
                     if role_val is not None:
                         target[target_template.replace("{i}", str(i))] = role_val
-                        found_any = True
                     if content_val is not None:
                         target[target_content_template.replace("{i}", str(i))] = content_val
-                        found_any = True
                 else:
                     for src_template in sources_config:
                         src_key = src_template.replace("{i}", str(i))
@@ -1326,7 +1365,6 @@ class UnifiedAttributeProcessor:
                             target_key = target_template.replace("{i}", str(i))
                             target[target_key] = source[src_key]
                             consumed.add(src_key)
-                            found_any = True
                             break
 
             elif isinstance(sources_config, dict):
@@ -1337,16 +1375,11 @@ class UnifiedAttributeProcessor:
                         if src_key in source:
                             item_data[sub_key] = source[src_key]
                             consumed.add(src_key)
-                            found_any = True
                             break
 
-                if item_data:
-                    for sub_key, sub_val in item_data.items():
-                        target_key = f"{target_template.replace('{i}', str(i))}.{sub_key}"
-                        target[target_key] = sub_val
-
-            if not found_any:
-                break
+                for sub_key, sub_val in item_data.items():
+                    target_key = f"{target_template.replace('{i}', str(i))}.{sub_key}"
+                    target[target_key] = sub_val
 
     def _filter_embedding_vectors(self, attrs: Dict[str, Any]) -> Dict[str, Any]:
         """

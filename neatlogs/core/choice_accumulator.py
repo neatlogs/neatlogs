@@ -28,6 +28,26 @@ def _finish_reason(value: Any) -> str:
     return str(getattr(value, "value", value))
 
 
+def _index(value: Any, default: int) -> int:
+    """Coerce a choice/candidate/tool position to a non-negative int index.
+
+    OpenAI-compatible gateways sometimes serialize indices as numeric strings;
+    treating those as "missing" collapses every item in the stream into one.
+    """
+
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, int):
+        return value if value >= 0 else default
+    if isinstance(value, str):
+        try:
+            index = int(value.strip())
+        except ValueError:
+            return default
+        return index if index >= 0 else default
+    return default
+
+
 def _string(value: Any) -> str:
     if isinstance(value, str):
         return value
@@ -82,8 +102,7 @@ class ChoiceAccumulator:
     def add_response(self, response: Any) -> None:
         self._capture_envelope(response)
         for position, value in enumerate(_get(response, "choices", None) or []):
-            index = _get(value, "index", position)
-            index = index if isinstance(index, int) else position
+            index = _index(_get(value, "index", None), position)
             message = _get(value, "message", None)
             if message is None:
                 continue
@@ -142,8 +161,7 @@ class ChoiceAccumulator:
 
         self._capture_google_envelope(response)
         for position, candidate in enumerate(_get(response, "candidates", None) or []):
-            index = _get(candidate, "index", position)
-            index = index if isinstance(index, int) else position
+            index = _index(_get(candidate, "index", None), position)
             choice = self._choice(index)
             content = _get(candidate, "content", None)
             if content is not None:
@@ -230,8 +248,7 @@ class ChoiceAccumulator:
         self._capture_envelope(chunk)
         summary = []
         for position, value in enumerate(_get(chunk, "choices", None) or []):
-            index = _get(value, "index", position)
-            index = index if isinstance(index, int) else position
+            index = _index(_get(value, "index", None), position)
             delta = _get(value, "delta", None)
             if delta is None:
                 continue
@@ -377,8 +394,7 @@ class ChoiceAccumulator:
 
     def _add_tools(self, choice_index: int, fragments: Any) -> None:
         for position, fragment in enumerate(fragments or []):
-            index = _get(fragment, "index", position)
-            index = index if isinstance(index, int) else position
+            index = _index(_get(fragment, "index", None), position)
             tool = self._choice(choice_index).tool_calls.setdefault(index, _ToolCall())
             tool_id = _get(fragment, "id", None)
             tool_type = _get(fragment, "type", None)

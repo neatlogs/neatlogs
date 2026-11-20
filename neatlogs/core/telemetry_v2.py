@@ -391,10 +391,18 @@ def _llm_semantic(span: ReadableSpan, attrs: Mapping[str, Any]) -> dict[str, Any
         "provider_options": _decode(attrs.get("neatlogs.llm.invocation_parameters")),
     }
     stream_events = []
-    for sequence, event in enumerate(span.events):
+    for event_position, event in enumerate(span.events):
         if event.name != "neatlogs.stream.chunk":
             continue
         event_attrs = event.attributes or {}
+        recorded_index = event_attrs.get("neatlogs.stream.chunk.index")
+        sequence = (
+            recorded_index
+            if isinstance(recorded_index, int)
+            and not isinstance(recorded_index, bool)
+            and recorded_index >= 0
+            else event_position
+        )
         stream_events.append(
             {
                 "sequence": sequence,

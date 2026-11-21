@@ -263,8 +263,11 @@ skip = [".venv"]
 [tool.pytest.ini_options]
 # Provider/network suites are opt-in. A plain `pytest` is deterministic, needs
 # no credentials and never collects the executable examples under tests/manual.
-testpaths = ["tests/unit"]
+testpaths = ["tests/unit", "tests/bdd"]
 asyncio_mode = "strict"
+markers = [
+    "fault_injection: Deterministic fault-injection tests exempt from the fakes ratchet (Pilot Check 2).",
+]
 
 [tool.uv]
 # crewai and hermes-agent can never co-resolve: hermes-agent ships ~100 exact "==" pins,

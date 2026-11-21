@@ -14,13 +14,25 @@ import rfc8785
 from ..errors import NeatlogsError
 
 Json = Union[None, bool, int, float, str, list["Json"], dict[str, "Json"]]
-Kind = Literal["tool", "model"]
+Kind = Literal["tool", "model", "step"]
 MAX_RECORDING_BYTES = 16 * 1024 * 1024
 MAX_INPUT_BYTES = 1024 * 1024
 
 
 class ReplayError(NeatlogsError, ValueError):
     """Invalid local replay configuration; never includes recorded content or credentials."""
+
+
+class ReplayRecordedError(NeatlogsError, RuntimeError):
+    """Raised when replaying a historically failed span captured with include_errors=True."""
+
+    def __init__(self, error_type: str, message: str = "") -> None:
+        self.error_type = str(error_type or "RecordedError")
+        self.error_message = str(message or "")
+        detail = (
+            f"{self.error_type}: {self.error_message}" if self.error_message else self.error_type
+        )
+        super().__init__(detail)
 
 
 def json_value(value: object, *, limit: int = MAX_RECORDING_BYTES) -> Json:
@@ -102,15 +114,19 @@ class ReplayEntry:
     name: str
     input: Json
     output: Json
+    error: dict[str, Json] | None = None
 
     def to_dict(self):
-        return {
+        out = {
             "spanId": self.span_id,
             "kind": self.kind,
             "name": self.name,
             "input": self.input,
             "output": self.output,
         }
+        if self.error is not None:
+            out["error"] = self.error
+        return out
 
 
 @dataclass(frozen=True)
@@ -153,9 +169,18 @@ def parse_replay_recording(value: object) -> ReplayRecording:
         raise ReplayError("Replay recordings allow at most 5000 entries.")
     result = []
     for raw in entries:
-        item = object_fields(raw, {"spanId", "kind", "name", "input", "output"})
-        if item["kind"] not in ("tool", "model"):
+        item = object_fields(raw, {"spanId", "kind", "name", "input", "output"}, optional={"error"})
+        if item["kind"] not in ("tool", "model", "step"):
             raise ReplayError("Unsupported local replay entry kind.")
+        raw_error = item.get("error")
+        parsed_error = None
+        if raw_error is not None:
+            err_obj = object_fields(raw_error, {"message"}, optional={"type"})
+            if type(err_obj["message"]) is not str or (
+                "type" in err_obj and type(err_obj["type"]) is not str
+            ):
+                raise ReplayError("Replay entry error fields must be strings.")
+            parsed_error = dict(err_obj)
         result.append(
             ReplayEntry(
                 identifier(item["spanId"]),
@@ -163,6 +188,7 @@ def parse_replay_recording(value: object) -> ReplayRecording:
                 identifier(item["name"]),
                 item["input"],
                 item["output"],
+                parsed_error,
             )
         )
     if len({entry.span_id for entry in result}) != len(result):

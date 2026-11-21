@@ -4,6 +4,7 @@ from .api import LocalRunApi, LocalRunApiError
 from .contracts import (
     ReplayEntry,
     ReplayError,
+    ReplayRecordedError,
     ReplayRecording,
     ReplayRunBinding,
     parse_replay_recording,
@@ -16,6 +17,7 @@ __all__ = [
     "LocalRunApiError",
     "ReplayEntry",
     "ReplayError",
+    "ReplayRecordedError",
     "ReplayRecording",
     "ReplayRunBinding",
     "ReplaySession",

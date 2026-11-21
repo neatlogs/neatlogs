@@ -156,15 +156,38 @@ def main(argv: list[str] | None = None) -> int:
     trace_get = trace_commands.add_parser("get", help="fetch a trace and verify it")
     trace_get.add_argument("trace_id")
     trace_get.add_argument("--json", action="store_true")
+    trace_audit = trace_commands.add_parser(
+        "audit", help="grade a real trace for judge and replay readiness"
+    )
+    trace_audit.add_argument("trace_id", nargs="?")
+    trace_audit.add_argument("--file", dest="file_path")
+    trace_audit.add_argument("--expect-session", action="store_true")
+    trace_audit.add_argument("--expect-retriever", action="store_true")
+    trace_audit.add_argument("--json", action="store_true")
     try:
         args = parser.parse_args(argv)
     except _UsageError as exc:
         print(f"neatlogs: {exc}", file=sys.stderr)
         print("Usage: neatlogs doctor (--local | --probe) [--json]", file=sys.stderr)
         print("       neatlogs trace get <trace_id> [--json]", file=sys.stderr)
+        print(
+            "       neatlogs trace audit (<trace_id> | --file <path>) "
+            "[--expect-session] [--expect-retriever] [--json]",
+            file=sys.stderr,
+        )
         return 4
 
     if args.command == "trace":
+        if args.trace_command == "audit":
+            from .trace_audit import run_trace_audit
+
+            return run_trace_audit(
+                args.trace_id,
+                file_path=args.file_path,
+                as_json=args.json,
+                expect_session=args.expect_session,
+                expect_retriever=args.expect_retriever,
+            )
         from .trace_cli import run_trace_get
 
         return run_trace_get(args.trace_id, args.json)

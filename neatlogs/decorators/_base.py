@@ -104,10 +104,17 @@ def _serialize_obj(obj: Any) -> Any:
     return str(obj)
 
 
+_REPLAYABLE_SPAN_KINDS = frozenset(
+    {"TOOL", "MCP_TOOL", "RETRIEVER", "RERANKER", "VECTOR_STORE", "MEMORY", "GUARDRAIL"}
+)
+
+
 def _safe_json_dumps(value: Any, *, span=None) -> str:
-    if span is not None and (getattr(span, "attributes", None) or {}).get(
-        "openinference.span.kind"
-    ) in {"TOOL", "MCP_TOOL"}:
+    if (
+        span is not None
+        and (getattr(span, "attributes", None) or {}).get("openinference.span.kind")
+        in _REPLAYABLE_SPAN_KINDS
+    ):
         from ..replay.contracts import ReplayError, json_value
 
         try:

@@ -102,17 +102,15 @@ def usage() -> str:
     )
 
 
-def run_trace_get(
+def fetch_public_trace(
     trace_id: str,
-    as_json: bool,
     *,
     env: dict | None = None,
     fetch: Fetcher | None = None,
     timeout: float = 5.0,
-    out: Callable[[str], None] = print,
     err: Callable[[str], None] | None = None,
-) -> int:
-    # exit: 0 pass, 1 check failed, 2 not ready or not found, 3 credentials, 4 usage, 5 error
+) -> tuple[dict, list[dict]] | int:
+    """Fetch a trace and all paginated spans from the public API."""
     env = os.environ if env is None else env
     fetch = fetch or _default_fetch
     err = err or (lambda line: print(line, file=sys.stderr))
@@ -192,6 +190,24 @@ def run_trace_get(
                 "so the trace was not checked"
             )
             return EXIT_ERROR
+    return trace, spans
+
+
+def run_trace_get(
+    trace_id: str,
+    as_json: bool,
+    *,
+    env: dict | None = None,
+    fetch: Fetcher | None = None,
+    timeout: float = 5.0,
+    out: Callable[[str], None] = print,
+    err: Callable[[str], None] | None = None,
+) -> int:
+    # exit: 0 pass, 1 check failed, 2 not ready or not found, 3 credentials, 4 usage, 5 error
+    fetched = fetch_public_trace(trace_id, env=env, fetch=fetch, timeout=timeout, err=err)
+    if isinstance(fetched, int):
+        return fetched
+    trace, spans = fetched
     checks = check_trace(trace, spans)
     failed = [c for c in checks if c["status"] == "fail"]
     summary = {

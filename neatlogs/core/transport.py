@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import os
+import random
+import threading
 import time
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -12,6 +15,99 @@ from requests.adapters import HTTPAdapter
 
 _MAX_RATE_LIMIT_ATTEMPTS = 3
 _MAX_RETRY_AFTER_SECONDS = 5.0
+_DEFAULT_CIRCUIT_BREAKER_THRESHOLD = 5
+_DEFAULT_CIRCUIT_BREAKER_COOLDOWN_S = 30.0
+
+
+class CircuitOpenError(requests.exceptions.RequestException):
+    """Raised immediately while the fail-open OTLP circuit breaker is open.
+
+    Deliberately does NOT subclass ``ConnectionError`` so OTel's OTLP HTTP
+    exporters treat it as non-retryable and drop the batch in <0.1 ms without
+    sleeping through 6 exponential-backoff retries.
+    """
+
+
+class _CircuitBreaker:
+    """Thread-safe CLOSED -> OPEN -> HALF_OPEN fail-open breaker for OTLP export."""
+
+    def __init__(
+        self,
+        *,
+        threshold: int = _DEFAULT_CIRCUIT_BREAKER_THRESHOLD,
+        cooldown_s: float = _DEFAULT_CIRCUIT_BREAKER_COOLDOWN_S,
+        clock=time.monotonic,
+    ) -> None:
+        self._threshold = max(0, int(threshold))
+        self._cooldown_s = max(0.0, float(cooldown_s))
+        self._clock = clock
+        self._lock = threading.Lock()
+        self._consecutive_failures = 0
+        self._open_until = 0.0
+        self._half_open_probe = False
+
+    @property
+    def enabled(self) -> bool:
+        return self._threshold > 0
+
+    def state(self) -> str:
+        if not self.enabled:
+            return "closed"
+        with self._lock:
+            if self._open_until <= 0.0:
+                return "closed"
+            return "open" if self._clock() < self._open_until else "half_open"
+
+    def allow_request(self) -> bool:
+        if not self.enabled:
+            return True
+        with self._lock:
+            if self._open_until <= 0.0:
+                return True
+            now = self._clock()
+            if now < self._open_until:
+                return False
+            if self._half_open_probe:
+                return False
+            self._half_open_probe = True
+            return True
+
+    def record_success(self) -> None:
+        if not self.enabled:
+            return
+        with self._lock:
+            self._consecutive_failures = 0
+            self._open_until = 0.0
+            self._half_open_probe = False
+
+    def record_failure(self) -> None:
+        if not self.enabled:
+            return
+        with self._lock:
+            self._consecutive_failures += 1
+            if self._half_open_probe or self._consecutive_failures >= self._threshold:
+                self._open_until = self._clock() + self._cooldown_s
+                self._half_open_probe = False
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = (os.getenv(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = (os.getenv(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        return default
 
 
 def _retry_after_seconds(value: str | None, fallback: float) -> float:
@@ -64,25 +160,68 @@ class _OtlpSession(requests.Session):
     ``Retry`` constructor arguments.
     """
 
+    def __init__(
+        self,
+        *,
+        circuit_breaker_threshold: int | None = None,
+        circuit_breaker_cooldown_s: float | None = None,
+        clock=time.monotonic,
+    ) -> None:
+        super().__init__()
+        threshold = (
+            _env_int("NEATLOGS_CIRCUIT_BREAKER_THRESHOLD", _DEFAULT_CIRCUIT_BREAKER_THRESHOLD)
+            if circuit_breaker_threshold is None
+            else circuit_breaker_threshold
+        )
+        cooldown_s = (
+            _env_float("NEATLOGS_CIRCUIT_BREAKER_COOLDOWN_S", _DEFAULT_CIRCUIT_BREAKER_COOLDOWN_S)
+            if circuit_breaker_cooldown_s is None
+            else circuit_breaker_cooldown_s
+        )
+        self._circuit_breaker = _CircuitBreaker(
+            threshold=threshold,
+            cooldown_s=cooldown_s,
+            clock=clock,
+        )
+
+    @property
+    def circuit_breaker_state(self) -> str:
+        return self._circuit_breaker.state()
+
     def request(self, method, url, **kwargs):
         timeout = kwargs.get("timeout")
         if method.upper() != "POST" or not isinstance(timeout, (int, float)):
             return super().request(method, url, **kwargs)
 
+        if not self._circuit_breaker.allow_request():
+            raise CircuitOpenError("OTLP export circuit breaker is open")
+
         deadline = time.monotonic() + max(0.0, float(timeout))
         for attempt in range(_MAX_RATE_LIMIT_ATTEMPTS):
             remaining = deadline - time.monotonic()
             if remaining <= 0:
+                self._circuit_breaker.record_failure()
                 raise requests.exceptions.Timeout("OTLP export deadline exceeded")
             kwargs["timeout"] = remaining
-            response = super().request(method, url, **kwargs)
+            try:
+                response = super().request(method, url, **kwargs)
+            except requests.exceptions.RequestException:
+                self._circuit_breaker.record_failure()
+                raise
             if response.status_code != 429 or attempt + 1 == _MAX_RATE_LIMIT_ATTEMPTS:
-                return _trace_receipt(response, url)
+                checked = _trace_receipt(response, url)
+                if 200 <= checked.status_code < 300:
+                    self._circuit_breaker.record_success()
+                elif checked.status_code >= 500 or checked.status_code == 408:
+                    self._circuit_breaker.record_failure()
+                return checked
 
-            delay = min(
+            base_delay = min(
                 _MAX_RETRY_AFTER_SECONDS,
                 _retry_after_seconds(response.headers.get("Retry-After"), 0.1 * (2**attempt)),
             )
+            delay = base_delay * random.uniform(0.8, 1.2) if base_delay > 0 else 0.0
+            delay = min(_MAX_RETRY_AFTER_SECONDS, delay)
             if delay >= deadline - time.monotonic():
                 return response
             response.close()
@@ -91,9 +230,16 @@ class _OtlpSession(requests.Session):
         return response
 
 
-def build_otlp_session() -> requests.Session:
+def build_otlp_session(
+    *,
+    circuit_breaker_threshold: int | None = None,
+    circuit_breaker_cooldown_s: float | None = None,
+) -> requests.Session:
     """Build a dedicated OTLP session with no urllib3-level POST retries."""
-    session = _OtlpSession()
+    session = _OtlpSession(
+        circuit_breaker_threshold=circuit_breaker_threshold,
+        circuit_breaker_cooldown_s=circuit_breaker_cooldown_s,
+    )
     adapter = HTTPAdapter(max_retries=0)
     session.mount("https://", adapter)
     session.mount("http://", adapter)

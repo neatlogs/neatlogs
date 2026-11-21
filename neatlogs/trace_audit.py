@@ -1,0 +1,680 @@
+"""Real-trace Judge & Replay Readiness auditor. Standard library only."""
+
+from __future__ import annotations
+
+import json
+import os
+import sys
+import urllib.error
+from collections.abc import Callable, Sequence
+from pathlib import Path
+from typing import Any
+from urllib.parse import quote, urlparse
+
+from .trace_cli import (
+    EXIT_AUTH,
+    EXIT_CHECKS_FAILED,
+    EXIT_ERROR,
+    EXIT_NOT_READY,
+    EXIT_OK,
+    EXIT_USAGE,
+    Fetcher,
+    _default_fetch,
+    fetch_public_trace,
+)
+
+_FRESHNESS_KEYS = ("updated_at", "created_at", "timestamp", "last_modified", "date")
+_TRUNCATION_KEYS = ("neatlogs.payload.truncated", "neatlogs.capture.truncated")
+
+
+def _text(value: Any) -> str | None:
+    return value if isinstance(value, str) and value.strip() else None
+
+
+def _attrs(span: dict[str, Any]) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    meta = span.get("span_metadata")
+    if isinstance(meta, dict):
+        out.update(meta)
+    raw = span.get("attributes")
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except ValueError:
+            raw = None
+    if isinstance(raw, dict):
+        out.update(raw)
+    return out
+
+
+def _span_id(span: dict[str, Any]) -> str | None:
+    return _text(span.get("spanId")) or _text(span.get("span_id"))
+
+
+def _parent_id(span: dict[str, Any]) -> str | None:
+    return _text(span.get("parentSpanId")) or _text(span.get("parent_span_id"))
+
+
+def _span_name(span: dict[str, Any]) -> str | None:
+    return (
+        _text(span.get("spanName"))
+        or _text(span.get("span_name"))
+        or _text(span.get("node_name"))
+        or _text(span.get("name"))
+    )
+
+
+def _span_kind(span: dict[str, Any]) -> str:
+    attrs = _attrs(span)
+    semantic = span.get("semantic") if isinstance(span.get("semantic"), dict) else {}
+    raw = (
+        semantic.get("kind")
+        or span.get("spanType")
+        or span.get("span_type")
+        or span.get("node_type")
+        or span.get("kind")
+        or attrs.get("neatlogs.span.kind")
+        or attrs.get("openinference.span.kind")
+        or ""
+    )
+    normalized = str(raw).strip().upper()
+    if normalized == "TOOL_CALL":
+        return "TOOL"
+    return normalized
+
+
+def _is_completion_marker(span: dict[str, Any]) -> bool:
+    attrs = _attrs(span)
+    return (
+        _span_name(span) == "neatlogs.trace.complete"
+        or attrs.get("neatlogs.trace.complete") is True
+    )
+
+
+def _non_empty(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        stripped = value.strip()
+        return bool(stripped) and stripped not in {'""', "null", "None", "{}", "[]"}
+    if isinstance(value, (dict, list, tuple)):
+        return len(value) > 0
+    return True
+
+
+def _span_input(span: dict[str, Any]) -> Any:
+    attrs = _attrs(span)
+    data = span.get("data") if isinstance(span.get("data"), dict) else {}
+    kind = _span_kind(span).lower()
+    for candidate in (
+        span.get("input"),
+        span.get("inputValue"),
+        span.get("input_value"),
+        span.get("tool_input"),
+        data.get("input_value"),
+        data.get("input"),
+        attrs.get(f"neatlogs.{kind}.input") if kind else None,
+        attrs.get("neatlogs.tool.input"),
+        attrs.get("input.value"),
+    ):
+        if _non_empty(candidate):
+            return candidate
+    return None
+
+
+def _span_output(span: dict[str, Any]) -> Any:
+    attrs = _attrs(span)
+    data = span.get("data") if isinstance(span.get("data"), dict) else {}
+    kind = _span_kind(span).lower()
+    for candidate in (
+        span.get("output"),
+        span.get("outputValue"),
+        span.get("output_value"),
+        span.get("tool_output"),
+        data.get("output_value"),
+        data.get("output"),
+        attrs.get(f"neatlogs.{kind}.output") if kind else None,
+        attrs.get("neatlogs.tool.output"),
+        attrs.get("output.value"),
+    ):
+        if _non_empty(candidate):
+            return candidate
+    return None
+
+
+def _extract_docs_with_freshness(span: dict[str, Any]) -> tuple[int, int]:
+    """Return (doc_count, docs_with_freshness) from retriever attributes or output JSON."""
+    attrs = _attrs(span)
+    doc_indices: set[str] = set()
+    for key in attrs:
+        if key.startswith("neatlogs.retriever.documents."):
+            parts = key.split(".")
+            if len(parts) >= 4:
+                doc_indices.add(parts[3])
+    if doc_indices:
+        fresh = 0
+        for idx in doc_indices:
+            prefix = f"neatlogs.retriever.documents.{idx}."
+            if any(attrs.get(prefix + k) for k in _FRESHNESS_KEYS):
+                fresh += 1
+                continue
+            meta = attrs.get(prefix + "metadata")
+            if isinstance(meta, str):
+                try:
+                    meta = json.loads(meta)
+                except ValueError:
+                    meta = None
+            if isinstance(meta, dict) and any(meta.get(k) for k in _FRESHNESS_KEYS):
+                fresh += 1
+        return len(doc_indices), fresh
+
+    out = _span_output(span)
+    if isinstance(out, str):
+        try:
+            out = json.loads(out)
+        except ValueError:
+            return 0, 0
+    docs = None
+    if isinstance(out, list):
+        docs = out
+    elif isinstance(out, dict):
+        for key in ("documents", "docs", "results", "matches", "items"):
+            if isinstance(out.get(key), list):
+                docs = out[key]
+                break
+    if not docs:
+        return 0, 0
+    fresh = 0
+    for doc in docs:
+        if not isinstance(doc, dict):
+            continue
+        meta = doc.get("metadata") if isinstance(doc.get("metadata"), dict) else {}
+        if any(doc.get(k) for k in _FRESHNESS_KEYS) or any(meta.get(k) for k in _FRESHNESS_KEYS):
+            fresh += 1
+    return len(docs), fresh
+
+
+def readable_spans_to_audit_payload(
+    spans: Sequence[Any],
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Convert real OpenTelemetry ReadableSpans into (trace_dict, span_dicts) for auditing."""
+    converted: list[dict[str, Any]] = []
+    trace_id = ""
+    has_marker = False
+    session_id = None
+    for span in spans:
+        ctx = getattr(span, "context", None)
+        if ctx is not None and not trace_id:
+            trace_id = f"{ctx.trace_id:032x}"
+        attrs = dict(getattr(span, "attributes", None) or {})
+        parent = getattr(span, "parent", None)
+        if getattr(span, "name", "") == "neatlogs.trace.complete" or attrs.get(
+            "neatlogs.trace.complete"
+        ):
+            has_marker = True
+        if session_id is None:
+            session_id = _text(attrs.get("neatlogs.session.id")) or _text(attrs.get("session.id"))
+        converted.append(
+            {
+                "span_id": f"{ctx.span_id:016x}" if ctx is not None else "",
+                "parent_span_id": f"{parent.span_id:016x}" if parent is not None else None,
+                "name": getattr(span, "name", ""),
+                "span_type": attrs.get("neatlogs.span.kind")
+                or attrs.get("openinference.span.kind")
+                or "",
+                "start_time_unix_nano": getattr(span, "start_time", None),
+                "end_time_unix_nano": getattr(span, "end_time", None),
+                "attributes": attrs,
+                "status": getattr(getattr(span, "status", None), "status_code", None),
+            }
+        )
+    trace: dict[str, Any] = {
+        "trace_id": trace_id,
+        "finalizationStatus": "finalized" if has_marker else "pending",
+    }
+    if session_id:
+        trace["session_id"] = session_id
+    return trace, converted
+
+
+def audit_trace(
+    trace: dict[str, Any],
+    spans: list[dict[str, Any]],
+    *,
+    expect_session: bool = False,
+    expect_retriever: bool = False,
+) -> dict[str, Any]:
+    """Evaluate a real trace for Jev judge-readiness and ReplaySession backtrack-readiness."""
+    trace_id = (
+        _text(trace.get("traceId")) or _text(trace.get("trace_id")) or _text(trace.get("_id")) or ""
+    )
+    has_marker = any(_is_completion_marker(s) for s in spans)
+    work_spans = [s for s in spans if not _is_completion_marker(s)]
+
+    checks: list[dict[str, Any]] = []
+    recommendations: list[str] = []
+    score = 0
+
+    def record(name: str, status: str, weight: int, message: str, rec: str | None = None) -> None:
+        nonlocal score
+        checks.append({"name": name, "status": status, "weight": weight, "message": message})
+        if status == "pass":
+            score += weight
+        elif status == "warn":
+            score += weight // 2
+        if status != "pass" and rec:
+            recommendations.append(rec)
+
+    # 1. has_spans (15)
+    if work_spans:
+        record("has_spans", "pass", 15, f"{len(work_spans)} operational span(s) captured")
+    else:
+        record(
+            "has_spans",
+            "fail",
+            15,
+            "0 operational spans captured",
+            "Ensure neatlogs.init() runs before LLM imports and flush() before exit.",
+        )
+
+    # 2. single_workflow_root (15)
+    ids = {_span_id(s) for s in work_spans} - {None}
+    orphans = [s for s in work_spans if _parent_id(s) not in (None, *ids)]
+    roots = [s for s in work_spans if _parent_id(s) is None]
+    if len(roots) == 1 and not orphans:
+        record("single_workflow_root", "pass", 15, "Single root span with resolved parent links")
+    else:
+        record(
+            "single_workflow_root",
+            "fail",
+            15,
+            f"Found {len(roots)} root(s) and {len(orphans)} orphan span(s)",
+            "Wrap each user-facing entry point in one @neatlogs.span(kind='WORKFLOW') root.",
+        )
+
+    # 3. root_io_present (15)
+    root = roots[0] if roots else None
+    has_in = bool(root and _non_empty(_span_input(root)))
+    has_out = bool(root and _non_empty(_span_output(root)))
+    if has_in and has_out:
+        record("root_io_present", "pass", 15, "Root span has non-empty input and output")
+    else:
+        missing = [lbl for lbl, ok in (("input", has_in), ("output", has_out)) if not ok]
+        record(
+            "root_io_present",
+            "fail",
+            15,
+            f"Root span missing: {', '.join(missing)}",
+            "Capture clean user_request input and final_reply output on the WORKFLOW root.",
+        )
+
+    # 4. trace_finalized (10)
+    fin_status = trace.get("finalizationStatus") or trace.get("finalization_status")
+    v3_status = str(trace.get("status") or "").lower()
+    if has_marker or fin_status == "finalized" or v3_status in ("success", "error", "completed"):
+        record("trace_finalized", "pass", 10, "Trace finalized with completion marker")
+    else:
+        record(
+            "trace_finalized",
+            "fail",
+            10,
+            f"Trace not finalized (finalizationStatus={fin_status}, marker={has_marker})",
+            "End the root span cleanly and call neatlogs.flush() on script/worker exit.",
+        )
+
+    # 5. step_ordering_clean (10)
+    seq_entries: list[tuple[Any, int]] = []
+    for s in work_spans:
+        seq = _attrs(s).get("neatlogs.step.seq")
+        if isinstance(seq, int) and not isinstance(seq, bool):
+            ts = s.get("start_time_unix_nano") or s.get("start_time") or s.get("startTime")
+            seq_entries.append((ts, seq))
+    seqs = [seq for _, seq in seq_entries]
+    if seqs:
+        all_have_ts = all(ts is not None for ts, _ in seq_entries)
+        if all_have_ts:
+            # Real OTLP exports spans in child-first end order; validate unique positive
+            # sequences whose values never invert when start_time strictly advances.
+            unique_positive = min(seqs) >= 1 and len(set(seqs)) == len(seqs)
+            ordered = sorted(seq_entries, key=lambda pair: (pair[0], pair[1]))
+            strictly_inc = unique_positive
+            if strictly_inc:
+                prev_ts = ordered[0][0]
+                prev_max_seq = ordered[0][1]
+                cur_max_seq = ordered[0][1]
+                for ts, seq in ordered[1:]:
+                    if ts != prev_ts:
+                        if seq <= prev_max_seq:
+                            strictly_inc = False
+                            break
+                        prev_ts = ts
+                        prev_max_seq = cur_max_seq
+                    if seq > cur_max_seq:
+                        cur_max_seq = seq
+        else:
+            strictly_inc = all(a < b for a, b in zip(seqs, seqs[1:])) and seqs[0] >= 1
+        if strictly_inc:
+            record(
+                "step_ordering_clean", "pass", 10, f"Monotonic step sequence ({len(seqs)} steps)"
+            )
+        else:
+            record(
+                "step_ordering_clean",
+                "fail",
+                10,
+                f"Non-monotonic neatlogs.step.seq values: {seqs[:10]}",
+                "Check span creation order and upgrade to the latest neatlogs SDK.",
+            )
+    else:
+        record(
+            "step_ordering_clean",
+            "warn",
+            10,
+            "No neatlogs.step.seq attributes found (older SDK or external OTLP source)",
+            "Upgrade SDK to stamp monotonic neatlogs.step.seq for deterministic backtracking.",
+        )
+
+    # 6. tool_linkage_valid (10)
+    tool_spans = [s for s in work_spans if _span_kind(s) in {"TOOL", "MCP_TOOL"}]
+    bad_tools = [
+        s
+        for s in tool_spans
+        if not (_span_name(s) and (_non_empty(_span_input(s)) or _non_empty(_span_output(s))))
+    ]
+    if not bad_tools:
+        record(
+            "tool_linkage_valid",
+            "pass",
+            10,
+            f"{len(tool_spans)} tool span(s) have names and I/O",
+        )
+    else:
+        record(
+            "tool_linkage_valid",
+            "fail",
+            10,
+            f"{len(bad_tools)} tool span(s) missing name or I/O",
+            "Decorate custom tools with @neatlogs.span(kind='TOOL', tool_name='...', replay=True).",
+        )
+
+    # 7. retriever_freshness (10)
+    ret_spans = [s for s in work_spans if _span_kind(s) == "RETRIEVER"]
+    if not ret_spans:
+        if expect_retriever:
+            record(
+                "retriever_freshness",
+                "fail",
+                10,
+                "Expected RETRIEVER span(s) but found none",
+                "Wrap RAG/search lookups with @neatlogs.span(kind='RETRIEVER', replay=True).",
+            )
+        else:
+            record("retriever_freshness", "pass", 10, "No RETRIEVER spans in trace (not expected)")
+    else:
+        total_docs = fresh_docs = 0
+        for rs in ret_spans:
+            d, f = _extract_docs_with_freshness(rs)
+            total_docs += d
+            fresh_docs += f
+        if total_docs > 0 and fresh_docs == total_docs:
+            record(
+                "retriever_freshness",
+                "pass",
+                10,
+                f"{fresh_docs}/{total_docs} retrieved document(s) carry freshness timestamps",
+            )
+        elif total_docs > 0:
+            record(
+                "retriever_freshness",
+                "warn",
+                10,
+                f"Only {fresh_docs}/{total_docs} retrieved document(s) carry freshness timestamps",
+                "Include updated_at or timestamp on retrieved documents so stale retrieval is detectable.",
+            )
+        else:
+            record(
+                "retriever_freshness",
+                "fail",
+                10,
+                f"{len(ret_spans)} RETRIEVER span(s) recorded no parseable documents",
+                "Return structured document dicts with id, content, score, and updated_at.",
+            )
+
+    # 8. session_hygiene (10)
+    session_id = _text(trace.get("sessionId")) or _text(trace.get("session_id"))
+    if not session_id and root is not None:
+        r_attrs = _attrs(root)
+        session_id = _text(r_attrs.get("neatlogs.session.id")) or _text(r_attrs.get("session.id"))
+    if session_id:
+        if trace_id and session_id == trace_id:
+            record(
+                "session_hygiene",
+                "fail",
+                10,
+                "session_id equals trace_id (breaks multi-turn conversation grouping)",
+                "Pass a stable conversation/thread ID to identify(session_id=...), never trace_id.",
+            )
+        else:
+            record(
+                "session_hygiene", "pass", 10, f"Distinct session_id present ({session_id[:24]})"
+            )
+    elif expect_session:
+        record(
+            "session_hygiene",
+            "fail",
+            10,
+            "Expected session_id for multi-turn app, but none found",
+            "Bind session_id via neatlogs.identify(session_id=...) or @span(kind='WORKFLOW', session_id=...).",
+        )
+    else:
+        record("session_hygiene", "pass", 10, "Single-turn trace (session_id not required)")
+
+    # 9. provenance_and_replayability (5)
+    truncated = any(
+        _attrs(s).get(k) is True or _attrs(s).get("neatlogs.capture_fidelity") == "lossy"
+        for s in work_spans
+        for k in _TRUNCATION_KEYS
+    )
+    has_provenance = any(
+        _attrs(s).get("neatlogs.provenance.release")
+        or _attrs(s).get("neatlogs.prompt.version")
+        or _attrs(s).get("deployment.environment.name")
+        or _attrs(s).get("trace_catalog_environment")
+        for s in work_spans
+    )
+    if truncated:
+        record(
+            "provenance_and_replayability",
+            "fail",
+            5,
+            "One or more spans are truncated or lossy (blocks lossless ReplaySession)",
+            "Avoid lossy return types on replayable tools/retrievers or enable presigned overflow.",
+        )
+    elif not has_provenance:
+        record(
+            "provenance_and_replayability",
+            "warn",
+            5,
+            "No release/environment/prompt_version provenance attached",
+            "Pass environment= and release= to neatlogs.init() and prompt_version= on WORKFLOW/AGENT spans.",
+        )
+    else:
+        record(
+            "provenance_and_replayability",
+            "pass",
+            5,
+            "Lossless capture with deploy/prompt provenance present",
+        )
+
+    failed = {c["name"] for c in checks if c["status"] == "fail"}
+    jev_ready = not (
+        failed
+        & {
+            "has_spans",
+            "single_workflow_root",
+            "root_io_present",
+            "trace_finalized",
+            "session_hygiene",
+        }
+    )
+    replay_ready = not (
+        failed
+        & {
+            "has_spans",
+            "single_workflow_root",
+            "tool_linkage_valid",
+            "provenance_and_replayability",
+        }
+    )
+    grade = (
+        "ready"
+        if score >= 85 and not failed
+        else ("needs_attention" if score >= 60 else "incomplete")
+    )
+    return {
+        "trace_id": trace_id,
+        "score": score,
+        "grade": grade,
+        "jev_ready": jev_ready,
+        "replay_ready": replay_ready,
+        "span_count": len(work_spans),
+        "checks": checks,
+        "recommendations": recommendations,
+    }
+
+
+def audit_readable_spans(
+    spans: Sequence[Any],
+    *,
+    expect_session: bool = False,
+    expect_retriever: bool = False,
+) -> dict[str, Any]:
+    """Audit real in-process OpenTelemetry ReadableSpans directly."""
+    trace, span_dicts = readable_spans_to_audit_payload(spans)
+    return audit_trace(
+        trace,
+        span_dicts,
+        expect_session=expect_session,
+        expect_retriever=expect_retriever,
+    )
+
+
+def _load_trace_file(path: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    raw = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise ValueError("Trace file must contain a JSON object")
+    if isinstance(raw.get("trace"), dict) and isinstance(raw.get("spans"), list):
+        return raw["trace"], raw["spans"]
+    if isinstance(raw.get("context"), dict) and isinstance(raw["context"].get("spans"), list):
+        source = raw.get("source") if isinstance(raw.get("source"), dict) else {}
+        return {"trace_id": source.get("traceId", ""), "finalizationStatus": "finalized"}, raw[
+            "context"
+        ]["spans"]
+    if isinstance(raw.get("spans"), list):
+        return raw, raw["spans"]
+    raise ValueError("Trace file must contain 'spans' or a frozen case 'context.spans'")
+
+
+def _fetch_v3_trace_with_project_key(
+    trace_id: str,
+    *,
+    env: dict[str, str],
+    fetch: Fetcher | None,
+    timeout: float,
+    err: Callable[[str], None],
+) -> tuple[dict[str, Any], list[dict[str, Any]]] | int:
+    api_key = (env.get("NEATLOGS_API_KEY") or "").strip()
+    if not api_key:
+        err("Set NEATLOGS_TOKEN + NEATLOGS_PROJECT_ID (or NEATLOGS_API_KEY) to fetch a trace")
+        return EXIT_AUTH
+    endpoint = (
+        env.get("NEATLOGS_ENDPOINT") or env.get("NEATLOGS_HOST") or "https://ingest.neatlogs.com"
+    ).strip()
+    parsed = urlparse(endpoint)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        err("NEATLOGS_ENDPOINT must be an absolute http(s) URL")
+        return EXIT_USAGE
+    url = f"{parsed.scheme}://{parsed.netloc}/api/traces/v3/{quote(trace_id, safe='')}"
+    fetcher = fetch or _default_fetch
+    try:
+        status, body = fetcher(url, {"Authorization": f"Bearer {api_key}"}, timeout)
+    except (TimeoutError, urllib.error.URLError, OSError):
+        err("Could not reach /api/traces/v3")
+        return EXIT_ERROR
+    if status in (401, 403):
+        err(f"Trace read rejected the API key (HTTP {status})")
+        return EXIT_AUTH
+    if status in (404, 409):
+        err(f"Trace not ready or not found (HTTP {status})")
+        return EXIT_NOT_READY
+    if not 200 <= status < 300:
+        err(f"Trace read failed (HTTP {status})")
+        return EXIT_ERROR
+    try:
+        payload = json.loads(body)
+    except ValueError:
+        err("Trace read returned invalid JSON")
+        return EXIT_ERROR
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
+    if not isinstance(data, dict) or not isinstance(data.get("spans"), list):
+        err("Trace read response did not include spans")
+        return EXIT_ERROR
+    return data, data["spans"]
+
+
+def run_trace_audit(
+    trace_id: str | None,
+    *,
+    file_path: str | None = None,
+    as_json: bool = False,
+    expect_session: bool = False,
+    expect_retriever: bool = False,
+    env: dict | None = None,
+    fetch: Fetcher | None = None,
+    timeout: float = 5.0,
+    out: Callable[[str], None] = print,
+    err: Callable[[str], None] | None = None,
+) -> int:
+    err = err or (lambda line: print(line, file=sys.stderr))
+    if bool(trace_id) == bool(file_path):
+        err("Specify exactly one of <trace_id> or --file <path>")
+        return EXIT_USAGE
+    if file_path is not None:
+        try:
+            trace, spans = _load_trace_file(file_path)
+        except (OSError, ValueError) as exc:
+            err(f"Could not read trace file: {exc}")
+            return EXIT_ERROR
+    else:
+        effective_env = os.environ if env is None else env
+        if (effective_env.get("NEATLOGS_TOKEN") or "").strip():
+            fetched = fetch_public_trace(
+                str(trace_id), env=effective_env, fetch=fetch, timeout=timeout, err=err
+            )
+        else:
+            fetched = _fetch_v3_trace_with_project_key(
+                str(trace_id), env=effective_env, fetch=fetch, timeout=timeout, err=err
+            )
+        if isinstance(fetched, int):
+            return fetched
+        trace, spans = fetched
+
+    report = audit_trace(
+        trace,
+        spans,
+        expect_session=expect_session,
+        expect_retriever=expect_retriever,
+    )
+    if as_json:
+        out(json.dumps(report, indent=2, sort_keys=True))
+    else:
+        out(
+            f"trace {report['trace_id'] or '(file)'}: {report['grade'].upper()} "
+            f"(score={report['score']}/100, jev_ready={report['jev_ready']}, "
+            f"replay_ready={report['replay_ready']})"
+        )
+        for check in report["checks"]:
+            out(f"  {check['status'].upper():4s} {check['name']}: {check['message']}")
+        for rec in report["recommendations"]:
+            out(f"  tip: {rec}")
+    return EXIT_OK if report["grade"] == "ready" else EXIT_CHECKS_FAILED

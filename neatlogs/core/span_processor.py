@@ -17,6 +17,7 @@ from opentelemetry.sdk.trace import ReadableSpan, Span, SpanProcessor
 from opentelemetry.trace import SpanKind
 
 from .attribute_processor import UnifiedAttributeProcessor
+from .backtracking import StepSequenceTracker, apply_provenance_attributes
 from .error_sanitization import sanitize_error_snapshot
 from .logger import get_logger
 from .span_kind import SEMANTIC_SPAN_KINDS, resolve_explicit_span_kind
@@ -103,11 +104,16 @@ class NeatlogsSpanProcessor(SpanProcessor):
         mask: Optional[Callable[[Dict[str, Any]], Any]] = None,
         emit_completion_markers: bool = True,
         own_all_spans: bool = False,
+        environment: Optional[str] = None,
+        release: Optional[str] = None,
     ):
         self.debug = debug
         self.mask = mask
         self.emit_completion_markers = emit_completion_markers
         self.own_all_spans = own_all_spans
+        self.environment = environment
+        self.release = release
+        self._trace_step_seq = StepSequenceTracker()
 
         self._init_processor()
         self._init_file_logging()
@@ -221,6 +227,18 @@ class NeatlogsSpanProcessor(SpanProcessor):
                     from ..replay.session import stamp_replay_span
 
                     stamp_replay_span(span)
+                    if not is_http_span(span):
+                        try:
+                            seq = self._trace_step_seq.next_seq(span.context.trace_id)
+                            span.set_attribute("neatlogs.step.seq", seq)
+                        except Exception:
+                            pass
+                    apply_provenance_attributes(
+                        span,
+                        environment=self.environment,
+                        release=self.release,
+                        is_root=span.parent is None,
+                    )
                     self._active_spans[span.context.span_id] = span
                     self._owned_span_ids.add(span.context.span_id)
                     marker = _verification_marker_from_env()
@@ -327,6 +345,11 @@ class NeatlogsSpanProcessor(SpanProcessor):
     def on_end(self, span: ReadableSpan) -> None:
         with self._active_spans_lock:
             self._active_spans.pop(span.context.span_id, None)
+            if span.parent is None and not any(
+                active.context.trace_id == span.context.trace_id
+                for active in self._active_spans.values()
+            ):
+                self._trace_step_seq.release(span.context.trace_id)
             if self._completion_coordination_enabled:
                 self._downstream_pending.add(span.context.span_id)
         if self._closed:

@@ -172,22 +172,26 @@ def _collect_events(events) -> tuple:
         if event_author:
             author = event_author
 
-        # Token usage from event actions
+        # Token usage lives on the event itself (GenerateContentResponseUsageMetadata);
+        # EventActions carries no usage fields, so check it only as a fallback.
+        usage = getattr(event, "usage_metadata", None)
         actions = getattr(event, "actions", None)
-        if actions:
+        if usage is None and actions:
             for action in (actions if isinstance(actions, list) else [actions]):
                 usage = getattr(action, "usage_metadata", None) or getattr(action, "usage", None)
                 if usage:
-                    input_t = getattr(usage, "prompt_token_count", None) or getattr(
-                        usage, "input_tokens", 0
-                    )
-                    output_t = getattr(usage, "candidates_token_count", None) or getattr(
-                        usage, "output_tokens", 0
-                    )
-                    if input_t:
-                        total_input_tokens += input_t
-                    if output_t:
-                        total_output_tokens += output_t
+                    break
+        if usage:
+            input_t = getattr(usage, "prompt_token_count", None) or getattr(
+                usage, "input_tokens", 0
+            )
+            output_t = getattr(usage, "candidates_token_count", None) or getattr(
+                usage, "output_tokens", 0
+            )
+            if input_t:
+                total_input_tokens += input_t
+            if output_t:
+                total_output_tokens += output_t
 
         # Tool use from function calls
         parts = None
@@ -255,21 +259,26 @@ async def _collect_events_async(events) -> tuple:
         if event_author:
             author = event_author
 
+        # Token usage lives on the event itself (GenerateContentResponseUsageMetadata);
+        # EventActions carries no usage fields, so check it only as a fallback.
+        usage = getattr(event, "usage_metadata", None)
         actions = getattr(event, "actions", None)
-        if actions:
+        if usage is None and actions:
             for action in (actions if isinstance(actions, list) else [actions]):
                 usage = getattr(action, "usage_metadata", None) or getattr(action, "usage", None)
                 if usage:
-                    input_t = getattr(usage, "prompt_token_count", None) or getattr(
-                        usage, "input_tokens", 0
-                    )
-                    output_t = getattr(usage, "candidates_token_count", None) or getattr(
-                        usage, "output_tokens", 0
-                    )
-                    if input_t:
-                        total_input_tokens += input_t
-                    if output_t:
-                        total_output_tokens += output_t
+                    break
+        if usage:
+            input_t = getattr(usage, "prompt_token_count", None) or getattr(
+                usage, "input_tokens", 0
+            )
+            output_t = getattr(usage, "candidates_token_count", None) or getattr(
+                usage, "output_tokens", 0
+            )
+            if input_t:
+                total_input_tokens += input_t
+            if output_t:
+                total_output_tokens += output_t
 
         parts = None
         if content and hasattr(content, "parts"):

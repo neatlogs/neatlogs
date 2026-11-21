@@ -349,12 +349,19 @@ def _patch_run(runner: Any) -> None:
         span = tracer.start_span(name="google_adk.runner.run", attributes=attrs)
         token = attach_as_current(span)
         start = time.perf_counter()
-        event_attrs = {}
+        collected = []
         failure = None
 
         try:
-            events = orig_run(*args, **kwargs)
-            collected, event_attrs = _collect_events(events)
+            # Stream events through as they arrive (run() stays a lazy generator),
+            # buffering them so span attributes can be extracted at the end.
+            for event in orig_run(*args, **kwargs):
+                collected.append(event)
+                yield event
+        except GeneratorExit:
+            # The caller stopped consuming early: keep partial telemetry and end
+            # the span OK instead of recording a routine close as an error.
+            raise
         except BaseException as exc:
             failure = exc
             span.set_status(StatusCode.ERROR, str(exc))
@@ -363,14 +370,13 @@ def _patch_run(runner: Any) -> None:
         finally:
             detach(token)
             duration_ms = (time.perf_counter() - start) * 1000
+            _, event_attrs = _collect_events(iter(collected))
             for attr_name, value in event_attrs.items():
                 span.set_attribute(attr_name, value)
             span.set_attribute("neatlogs.llm.metrics.duration_ms", round(duration_ms, 3))
             if failure is None:
                 span.set_status(StatusCode.OK)
             span.end()
-
-        return iter(collected)
 
     runner.run = patched_run
     runner._neatlogs_patched = True

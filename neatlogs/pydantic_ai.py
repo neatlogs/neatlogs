@@ -276,6 +276,30 @@ def _patch_run_stream(agent: Any) -> None:
     agent._neatlogs_run_stream_patched = True
 
 
+async def _enter_context(cm, span, token, guard=None):
+    try:
+        return await cm.__aenter__()
+    except BaseException as exc:
+        if guard is not None:
+            _agent_span_active.reset(guard)
+        detach(token)
+        try:
+            if isinstance(exc, asyncio.CancelledError):
+                span.set_attribute("neatlogs.stream.cancelled", True)
+                span.set_status(StatusCode.UNSET)
+            else:
+                span.set_status(StatusCode.ERROR, str(exc))
+                span.record_exception(exc)
+        except Exception:
+            pass
+        finally:
+            try:
+                span.end()
+            except Exception:
+                pass
+        raise
+
+
 class _StreamCtxWrapper:
     """Wraps the async context manager returned by Agent.run_stream()."""
 
@@ -295,7 +319,7 @@ class _StreamCtxWrapper:
         self._token = attach_as_current(self._span)
         self._guard = _agent_span_active.set(True)
         self._start = time.perf_counter()
-        self._result = await self._cm.__aenter__()
+        self._result = await _enter_context(self._cm, self._span, self._token, self._guard)
         return self._result
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
@@ -364,7 +388,7 @@ class _IterCtxWrapper:
         self._token = attach_as_current(self._span)
         self._guard = _agent_span_active.set(True)
         self._start = time.perf_counter()
-        self._run = await self._cm.__aenter__()
+        self._run = await _enter_context(self._cm, self._span, self._token, self._guard)
         return self._run
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
@@ -613,7 +637,7 @@ class _ModelStreamCtx:
         )
         self._set_inputs(self._span, self._messages)
         self._token = attach_as_current(self._span)
-        self._streamed = await self._cm.__aenter__()
+        self._streamed = await _enter_context(self._cm, self._span, self._token)
         return self._streamed
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):

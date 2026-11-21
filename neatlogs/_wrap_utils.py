@@ -262,6 +262,28 @@ class _WrapContextProxy:
             return value
         return _WrapContextProxy(value, context)
 
+    def __enter__(self):
+        target = object.__getattribute__(self, "_neatlogs_target")
+        context = object.__getattribute__(self, "_neatlogs_context")
+        entered = _call_with_wrap_context(target.__enter__, context)
+        return self if entered is target else entered
+
+    def __exit__(self, exc_type, exc, tb):
+        target = object.__getattribute__(self, "_neatlogs_target")
+        context = object.__getattribute__(self, "_neatlogs_context")
+        return _call_with_wrap_context(target.__exit__, context, exc_type, exc, tb)
+
+    async def __aenter__(self):
+        target = object.__getattribute__(self, "_neatlogs_target")
+        context = object.__getattribute__(self, "_neatlogs_context")
+        entered = await _call_with_wrap_context(target.__aenter__, context)
+        return self if entered is target else entered
+
+    async def __aexit__(self, exc_type, exc, tb):
+        target = object.__getattribute__(self, "_neatlogs_target")
+        context = object.__getattribute__(self, "_neatlogs_context")
+        return await _call_with_wrap_context(target.__aexit__, context, exc_type, exc, tb)
+
     def __setattr__(self, name: str, value: Any) -> None:
         setattr(object.__getattribute__(self, "_neatlogs_target"), name, value)
 

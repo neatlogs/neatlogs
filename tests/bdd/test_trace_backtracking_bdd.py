@@ -159,7 +159,7 @@ def test_bdd_scenario_1_monotonic_step_seq_provenance_checkpoints_and_audit(
 ):
     """Given a real OTLP pipeline, When a multi-step RAG agent runs with checkpoints and diagnostics,
     Then OTLP protobuf spans carry monotonic step_seq, provenance, sanitized diagnostics,
-    retriever freshness metadata, and pass `neatlogs trace audit --file`."""
+    retriever freshness metadata, and pass `neatlogs doctor --file`."""
 
     @neatlogs.span(kind="RETRIEVER", name="fetch_policy", replay=True)
     def fetch_policy(query: str) -> list[dict[str, Any]]:
@@ -261,8 +261,7 @@ def test_bdd_scenario_1_monotonic_step_seq_provenance_checkpoints_and_audit(
             sys.executable,
             "-m",
             "neatlogs",
-            "trace",
-            "audit",
+            "doctor",
             "--file",
             str(trace_file),
             "--expect-session",
@@ -486,8 +485,7 @@ def test_bdd_scenario_5_broken_trace_audit_catches_all_defects(tmp_path: Path):
             sys.executable,
             "-m",
             "neatlogs",
-            "trace",
-            "audit",
+            "doctor",
             "--file",
             str(bad_file),
             "--expect-session",
@@ -509,6 +507,15 @@ def test_bdd_scenario_5_broken_trace_audit_catches_all_defects(tmp_path: Path):
     assert by_name["session_hygiene"] == "fail"
     assert by_name["retriever_freshness"] == "warn"
     assert len(report["recommendations"]) >= 4
+
+    # Separate `trace audit` subcommand is intentionally removed in favor of `doctor --trace/--file`
+    removed = subprocess.run(
+        [sys.executable, "-m", "neatlogs", "trace", "audit", "--file", str(bad_file)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert removed.returncode == 4
 
 
 def test_bdd_scenario_6_incremental_overhead_and_bounded_tracker():
@@ -563,5 +570,16 @@ def test_bdd_scenario_6_incremental_overhead_and_bounded_tracker():
         assert (
             incremental_ms < 1.0
         ), f"Incremental backtracking hook overhead too high: {incremental_ms:.3f}ms"
+
+        # Huge 5 MB workflow state must stop streaming early at MAX_STATE_DIGEST_BYTES
+        from neatlogs.core.backtracking import MAX_STATE_DIGEST_BYTES, _bounded_json_bytes
+
+        huge_state = {"items": [{"payload": "x" * 10_000} for _ in range(500)]}
+        t_huge = time.perf_counter()
+        raw, truncated = _bounded_json_bytes(huge_state, max_bytes=MAX_STATE_DIGEST_BYTES)
+        huge_ms = (time.perf_counter() - t_huge) * 1000.0
+        assert truncated is True
+        assert len(raw) == MAX_STATE_DIGEST_BYTES
+        assert huge_ms < 20.0, f"Streaming bounded serializer took too long: {huge_ms:.2f}ms"
     finally:
         neatlogs.shutdown()

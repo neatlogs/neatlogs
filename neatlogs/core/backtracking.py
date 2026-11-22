@@ -88,7 +88,7 @@ def _active_recording_span() -> Any:
 
 
 def _bounded_json_bytes(value: Any, *, max_bytes: int) -> tuple[bytes, bool]:
-    """Serialize arbitrary Python objects to deterministic UTF-8 JSON within max_bytes."""
+    """Stream-serialize arbitrary Python objects to UTF-8 JSON, stopping early at max_bytes."""
     seen: set[int] = set()
 
     def _safe_default(obj: Any) -> Any:
@@ -105,19 +105,29 @@ def _bounded_json_bytes(value: Any, *, max_bytes: int) -> tuple[bytes, bool]:
         except Exception:
             return f"<{type(obj).__name__}>"
 
+    encoder = json.JSONEncoder(
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        default=_safe_default,
+    )
+    buf = bytearray()
+    truncated = False
     try:
-        encoded = json.dumps(
-            value,
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=False,
-            default=_safe_default,
-        ).encode("utf-8")
+        for chunk in encoder.iterencode(value):
+            raw = chunk.encode("utf-8")
+            remaining = max_bytes - len(buf)
+            if len(raw) > remaining:
+                buf.extend(raw[:remaining])
+                truncated = True
+                break
+            buf.extend(raw)
     except (TypeError, ValueError, RecursionError):
-        encoded = json.dumps(repr(value), ensure_ascii=False).encode("utf-8")
-    if len(encoded) <= max_bytes:
-        return encoded, False
-    return encoded[:max_bytes], True
+        raw = json.dumps(repr(value)[:max_bytes], ensure_ascii=False).encode("utf-8")
+        if len(raw) > max_bytes:
+            return raw[:max_bytes], True
+        return raw, False
+    return bytes(buf), truncated
 
 
 def checkpoint(

@@ -60,12 +60,16 @@ async def test_azure_async_responses_cancel_ends_span():
 
     exporter = _init()
     responses = _t.SimpleNamespace()
+
     async def create(*a, **k):
         await asyncio.sleep(10)
+
     responses.create = create
     _patch_async_responses(responses)
     span = await _cancel_and_get_span(
-        exporter, responses, lambda: responses.create(model="gpt-4o", input="hi"),
+        exporter,
+        responses,
+        lambda: responses.create(model="gpt-4o", input="hi"),
         "azure_openai.responses.create",
     )
     assert span.status.status_code == StatusCode.UNSET
@@ -78,12 +82,15 @@ async def test_azure_async_embeddings_cancel_ends_span():
 
     exporter = _init()
     embeddings = _t.SimpleNamespace()
+
     async def create(*a, **k):
         await asyncio.sleep(10)
+
     embeddings.create = create
     _patch_embeddings(embeddings, sync=False)
     span = await _cancel_and_get_span(
-        exporter, embeddings,
+        exporter,
+        embeddings,
         lambda: embeddings.create(model="text-embedding-3-small", input="hi"),
         "azure_openai.embeddings.create",
     )
@@ -97,12 +104,16 @@ async def test_openai_async_images_cancel_ends_span():
 
     exporter = _init()
     images = _t.SimpleNamespace()
+
     async def generate(*a, **k):
         await asyncio.sleep(10)
+
     images.generate = generate
     _patch_images(images, sync=False)
     span = await _cancel_and_get_span(
-        exporter, images, lambda: images.generate(model="gpt-image-1", prompt="hi"),
+        exporter,
+        images,
+        lambda: images.generate(model="gpt-image-1", prompt="hi"),
         "openai.images.generate",
     )
     assert span.status.status_code == StatusCode.UNSET

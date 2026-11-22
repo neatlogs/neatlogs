@@ -154,6 +154,7 @@ def _wrap_query(original):
             return original(*args, **kwargs)
         # FAIL-OPEN: any error building the trace setup must fall back to the un-traced query — a
         # tracing failure can NEVER break the agent run.
+        agent_span = None
         try:
             # query(prompt=..., options=...) — prompt may be a string or an async-iterable.
             prompt = kwargs.get("prompt") if "prompt" in kwargs else (args[0] if args else None)
@@ -186,16 +187,36 @@ def _wrap_query(original):
             # the private key WITHOUT touching the global current-span, so co-tenant
             # instrumentation (openlit) keeps nesting under the host.
             token = attach_as_current(agent_span)
-            try:
-                query_obj = original(*args, **kwargs)
-            finally:
-                _nl_detach(token)
-            return _TracingQuery(query_obj, agent_span, agent_ctx, tracer, prompt_ref)
         except Exception:
-            # tracing setup failed — run the original un-traced (never break the run)
+            _end_query_setup_span(agent_span)
             return original(*args, **kwargs)
 
+        # A provider failure is not a tracing failure. Never retry the call.
+        try:
+            query_obj = original(*args, **kwargs)
+        except BaseException:
+            _end_query_setup_span(agent_span)
+            raise
+        finally:
+            try:
+                _nl_detach(token)
+            except Exception:
+                pass
+        try:
+            return _TracingQuery(query_obj, agent_span, agent_ctx, tracer, prompt_ref)
+        except Exception:
+            _end_query_setup_span(agent_span)
+            return query_obj
+
     return query_wrapper
+
+
+def _end_query_setup_span(span):
+    if span is not None:
+        try:
+            span.end()
+        except Exception:
+            pass
 
 
 def _wrap_client_method(original, label: str):

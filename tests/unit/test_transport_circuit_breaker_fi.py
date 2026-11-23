@@ -213,3 +213,116 @@ def test_fi_init_signature_provenance_parity_and_no_ambient_git_sha(monkeypatch)
         assert client._span_processor.release is None
     finally:
         client.shutdown()
+
+
+def _make_response(status: int, *, headers: dict[str, str] | None = None, content: bytes = b""):
+    import requests
+
+    resp = requests.Response()
+    resp.status_code = status
+    resp._content = content
+    resp._content_consumed = True
+    if headers:
+        resp.headers.update(headers)
+    return resp
+
+
+@pytest.mark.parametrize(
+    "probe_outcome",
+    [
+        "401",
+        "413",
+        "422_partial_rejection",
+        "429_early_return",
+        "429_exhausted",
+        "non_request_exception",
+    ],
+)
+def test_circuit_breaker_half_open_probe_never_wedges_and_recovers(monkeypatch, probe_outcome):
+    """Half-open probes ending in 4xx, 429 (early return or final), or non-RequestException
+    must always release _half_open_probe so the breaker can recover after cooldown."""
+    import requests
+
+    now = [100.0]
+    session = _OtlpSession(
+        circuit_breaker_threshold=2,
+        circuit_breaker_cooldown_s=10.0,
+        clock=lambda: now[0],
+    )
+    ok_body = ExportTraceServiceResponse().SerializeToString()
+    partial_body = ExportTraceServiceResponse()
+    partial_body.partial_success.rejected_spans = 1
+    partial_bytes = partial_body.SerializeToString()
+
+    script: list[object] = [
+        _make_response(503),
+        _make_response(503),
+    ]
+    if probe_outcome == "401":
+        script.append(_make_response(401))
+    elif probe_outcome == "413":
+        script.append(_make_response(413))
+    elif probe_outcome == "422_partial_rejection":
+        script.append(_make_response(200, content=partial_bytes))
+    elif probe_outcome == "429_early_return":
+        # Retry-After (30s) exceeds timeout (0.05s) -> triggers early return path
+        script.append(_make_response(429, headers={"Retry-After": "30"}))
+    elif probe_outcome == "429_exhausted":
+        script.extend(
+            [
+                _make_response(429, headers={"Retry-After": "0"}),
+                _make_response(429, headers={"Retry-After": "0"}),
+                _make_response(429, headers={"Retry-After": "0"}),
+            ]
+        )
+    elif probe_outcome == "non_request_exception":
+        script.append(RuntimeError("unexpected adapter failure"))
+    script.append(_make_response(200, content=ok_body))
+
+    def fake_request(self, method, url, **kwargs):
+        nxt = script.pop(0)
+        if isinstance(nxt, BaseException):
+            raise nxt
+        return nxt
+
+    monkeypatch.setattr(requests.Session, "request", fake_request)
+    url = "https://ingest.neatlogs.com/v1/traces"
+    try:
+        # 1. Trip breaker open with two 503s
+        assert session.post(url, data=b"", timeout=1.0).status_code == 503
+        assert session.post(url, data=b"", timeout=1.0).status_code == 503
+        assert session.circuit_breaker_state == "open"
+
+        # 2. Advance past cooldown -> half_open
+        now[0] += 11.0
+        assert session.circuit_breaker_state == "half_open"
+
+        # 3. Execute failing/non-2xx probe
+        if probe_outcome == "non_request_exception":
+            with pytest.raises(RuntimeError, match="unexpected adapter failure"):
+                session.post(url, data=b"", timeout=0.05)
+        else:
+            resp = session.post(url, data=b"", timeout=0.05)
+            expected_status = {
+                "401": 401,
+                "413": 413,
+                "422_partial_rejection": 422,
+                "429_early_return": 429,
+                "429_exhausted": 429,
+            }[probe_outcome]
+            assert resp.status_code == expected_status
+
+        # Breaker must have cleanly re-opened (NOT wedged with _half_open_probe=True)
+        assert session.circuit_breaker_state == "open"
+        assert session._circuit_breaker._half_open_probe is False
+        with pytest.raises(CircuitOpenError):
+            session.post(url, data=b"", timeout=1.0)
+
+        # 4. Advance past second cooldown -> next probe succeeds and closes breaker!
+        now[0] += 11.0
+        assert session.circuit_breaker_state == "half_open"
+        recovered = session.post(url, data=b"", timeout=1.0)
+        assert recovered.status_code == 200
+        assert session.circuit_breaker_state == "closed"
+    finally:
+        session.close()

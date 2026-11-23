@@ -194,6 +194,7 @@ def main(argv: list[str] | None = None) -> int:
         return run_trace_audit(
             args.trace_id,
             file_path=args.file_path,
+            endpoint=args.endpoint,
             as_json=args.json,
             expect_session=args.expect_session,
             expect_retriever=args.expect_retriever,

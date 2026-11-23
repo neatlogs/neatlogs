@@ -72,14 +72,23 @@ def apply_provenance_attributes(
 
 
 def _active_recording_span() -> Any:
-    """Resolve the active Neatlogs span across private/isolated and global providers."""
+    """Resolve the active Neatlogs-owned span across private/isolated and global providers.
+
+    Returns ``None`` when no Neatlogs-owned recording span is active so backtracking
+    helpers fail safe as a no-op and never leak attributes onto foreign OTel spans.
+    """
     try:
         from opentelemetry.trace import get_current_span
 
         from .._wrap_utils import active_neatlogs_context
 
         ctx = active_neatlogs_context()
-        span = get_current_span(ctx) if ctx is not None else get_current_span()
+        if ctx is None:
+            from .logger import get_logger
+
+            get_logger().debug("No active Neatlogs span; skipping backtracking attribute write")
+            return None
+        span = get_current_span(ctx)
         if span is not None and span.is_recording():
             return span
     except Exception:

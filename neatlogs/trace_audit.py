@@ -6,7 +6,9 @@ import json
 import os
 import sys
 import urllib.error
+import urllib.request
 from collections.abc import Callable, Sequence
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urlparse
@@ -19,12 +21,86 @@ from .trace_cli import (
     EXIT_OK,
     EXIT_USAGE,
     Fetcher,
-    _default_fetch,
+    _NoRedirect,
     fetch_public_trace,
 )
 
 _FRESHNESS_KEYS = ("updated_at", "created_at", "timestamp", "last_modified", "date")
 _TRUNCATION_KEYS = ("neatlogs.payload.truncated", "neatlogs.capture.truncated")
+MAX_V3_TRACE_BYTES = 16 * 1024 * 1024
+_KIND_ALIASES = {
+    "TOOL_CALL": "TOOL",
+    "MCP": "MCP_TOOL",
+    "RE_RANKER": "RERANKER",
+    "VECTOR": "VECTOR_STORE",
+    "AGENT_ACTION": "AGENT",
+}
+
+
+class _ResponseTooLargeError(ValueError):
+    """Raised when a trace read response exceeds the bounded size cap."""
+
+
+def _v3_default_fetch(url: str, headers: dict, timeout: float) -> tuple[int, bytes]:
+    request = urllib.request.Request(url, headers=headers, method="GET")
+    opener = urllib.request.build_opener(_NoRedirect)
+    try:
+        with opener.open(request, timeout=timeout) as response:
+            body = response.read(MAX_V3_TRACE_BYTES + 1)
+            if len(body) > MAX_V3_TRACE_BYTES:
+                raise _ResponseTooLargeError(
+                    f"Trace response exceeded {MAX_V3_TRACE_BYTES // (1024 * 1024)} MiB limit"
+                )
+            return response.status, body
+    except urllib.error.HTTPError as exc:
+        try:
+            body = exc.read(64 * 1024)
+        except Exception:
+            body = b""
+        return exc.code, body
+
+
+def _normalize_id(value: str | None) -> str:
+    return (value or "").strip().replace("-", "").lower()
+
+
+def _parse_ts_ns(span: dict[str, Any]) -> int | None:
+    raw = (
+        span.get("start_time_unix_nano")
+        or span.get("start_time")
+        or span.get("startTime")
+        or span.get("startedAt")
+        or span.get("createdAt")
+    )
+    if raw is None or isinstance(raw, bool):
+        return None
+    if isinstance(raw, int):
+        return raw
+    if isinstance(raw, float):
+        return int(raw)
+    if isinstance(raw, str):
+        text = raw.strip()
+        if not text:
+            return None
+        if text.isdigit():
+            return int(text)
+        try:
+            dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return int(dt.timestamp() * 1_000_000_000)
+        except ValueError:
+            return None
+    return None
+
+
+def _step_seq(span: dict[str, Any]) -> int | None:
+    raw = _attrs(span).get("neatlogs.step.seq")
+    if isinstance(raw, int) and not isinstance(raw, bool):
+        return raw
+    if isinstance(raw, str) and raw.strip().isdigit():
+        return int(raw.strip())
+    return None
 
 
 def _text(value: Any) -> str | None:
@@ -78,9 +154,7 @@ def _span_kind(span: dict[str, Any]) -> str:
         or ""
     )
     normalized = str(raw).strip().upper()
-    if normalized == "TOOL_CALL":
-        return "TOOL"
-    return normalized
+    return _KIND_ALIASES.get(normalized, normalized)
 
 
 def _is_completion_marker(span: dict[str, Any]) -> bool:
@@ -113,6 +187,9 @@ def _span_input(span: dict[str, Any]) -> Any:
         span.get("tool_input"),
         data.get("input_value"),
         data.get("input"),
+        data.get("tool_input"),
+        data.get("tool_arguments"),
+        data.get("user_input"),
         attrs.get(f"neatlogs.{kind}.input") if kind else None,
         attrs.get("neatlogs.tool.input"),
         attrs.get("input.value"),
@@ -133,6 +210,9 @@ def _span_output(span: dict[str, Any]) -> Any:
         span.get("tool_output"),
         data.get("output_value"),
         data.get("output"),
+        data.get("tool_output"),
+        data.get("tool_result"),
+        data.get("result"),
         attrs.get(f"neatlogs.{kind}.output") if kind else None,
         attrs.get("neatlogs.tool.output"),
         attrs.get("output.value"),
@@ -243,13 +323,23 @@ def audit_trace(
     *,
     expect_session: bool = False,
     expect_retriever: bool = False,
+    metadata_only: bool = False,
+    v3_session_fallback: bool = False,
 ) -> dict[str, Any]:
     """Evaluate a real trace for Jev judge-readiness and ReplaySession backtrack-readiness."""
+    safe_trace = trace if isinstance(trace, dict) else {}
+    raw_spans = spans if isinstance(spans, Sequence) and not isinstance(spans, (str, bytes)) else []
+    dict_spans = [s for s in raw_spans if isinstance(s, dict)]
+    malformed_spans = len(raw_spans) - len(dict_spans)
+
     trace_id = (
-        _text(trace.get("traceId")) or _text(trace.get("trace_id")) or _text(trace.get("_id")) or ""
+        _text(safe_trace.get("traceId"))
+        or _text(safe_trace.get("trace_id"))
+        or _text(safe_trace.get("_id"))
+        or ""
     )
-    has_marker = any(_is_completion_marker(s) for s in spans)
-    work_spans = [s for s in spans if not _is_completion_marker(s)]
+    has_marker = any(_is_completion_marker(s) for s in dict_spans)
+    work_spans = [s for s in dict_spans if not _is_completion_marker(s)]
 
     checks: list[dict[str, Any]] = []
     recommendations: list[str] = []
@@ -266,7 +356,15 @@ def audit_trace(
             recommendations.append(rec)
 
     # 1. has_spans (15)
-    if work_spans:
+    if malformed_spans > 0:
+        record(
+            "has_spans",
+            "fail",
+            15,
+            f"{len(work_spans)} operational span(s) captured, but {malformed_spans} malformed non-object span(s) found",
+            "Verify the trace payload contains only JSON span objects.",
+        )
+    elif work_spans:
         record("has_spans", "pass", 15, f"{len(work_spans)} operational span(s) captured")
     else:
         record(
@@ -296,7 +394,15 @@ def audit_trace(
     root = roots[0] if roots else None
     has_in = bool(root and _non_empty(_span_input(root)))
     has_out = bool(root and _non_empty(_span_output(root)))
-    if has_in and has_out:
+    if metadata_only and root is not None and not (has_in and has_out):
+        record(
+            "root_io_present",
+            "warn",
+            15,
+            "Public API spans are metadata-only (no input/output payloads returned)",
+            "Set NEATLOGS_API_KEY (for /api/traces/v3) or audit a local --file export to verify root I/O.",
+        )
+    elif has_in and has_out:
         record("root_io_present", "pass", 15, "Root span has non-empty input and output")
     else:
         missing = [lbl for lbl, ok in (("input", has_in), ("output", has_out)) if not ok]
@@ -309,8 +415,8 @@ def audit_trace(
         )
 
     # 4. trace_finalized (10)
-    fin_status = trace.get("finalizationStatus") or trace.get("finalization_status")
-    v3_status = str(trace.get("status") or "").lower()
+    fin_status = safe_trace.get("finalizationStatus") or safe_trace.get("finalization_status")
+    v3_status = str(safe_trace.get("status") or "").lower()
     if has_marker or fin_status == "finalized" or v3_status in ("success", "error", "completed"):
         record("trace_finalized", "pass", 10, "Trace finalized with completion marker")
     else:
@@ -323,11 +429,11 @@ def audit_trace(
         )
 
     # 5. step_ordering_clean (10)
-    seq_entries: list[tuple[Any, int]] = []
+    seq_entries: list[tuple[int | None, int]] = []
     for s in work_spans:
-        seq = _attrs(s).get("neatlogs.step.seq")
-        if isinstance(seq, int) and not isinstance(seq, bool):
-            ts = s.get("start_time_unix_nano") or s.get("start_time") or s.get("startTime")
+        seq = _step_seq(s)
+        if seq is not None:
+            ts = _parse_ts_ns(s)
             seq_entries.append((ts, seq))
     seqs = [seq for _, seq in seq_entries]
     if seqs:
@@ -340,15 +446,15 @@ def audit_trace(
             strictly_inc = unique_positive
             if strictly_inc:
                 prev_ts = ordered[0][0]
-                prev_max_seq = ordered[0][1]
+                prev_max_seq = 0
                 cur_max_seq = ordered[0][1]
                 for ts, seq in ordered[1:]:
                     if ts != prev_ts:
-                        if seq <= prev_max_seq:
-                            strictly_inc = False
-                            break
                         prev_ts = ts
                         prev_max_seq = cur_max_seq
+                    if seq <= prev_max_seq:
+                        strictly_inc = False
+                        break
                     if seq > cur_max_seq:
                         cur_max_seq = seq
         else:
@@ -365,6 +471,14 @@ def audit_trace(
                 f"Non-monotonic neatlogs.step.seq values: {seqs[:10]}",
                 "Check span creation order and upgrade to the latest neatlogs SDK.",
             )
+    elif metadata_only:
+        record(
+            "step_ordering_clean",
+            "warn",
+            10,
+            "Public API spans are metadata-only (no neatlogs.step.seq attributes returned)",
+            "Set NEATLOGS_API_KEY (for /api/traces/v3) or audit a local --file export to verify step ordering.",
+        )
     else:
         record(
             "step_ordering_clean",
@@ -376,26 +490,47 @@ def audit_trace(
 
     # 6. tool_linkage_valid (10)
     tool_spans = [s for s in work_spans if _span_kind(s) in {"TOOL", "MCP_TOOL"}]
-    bad_tools = [
-        s
-        for s in tool_spans
-        if not (_span_name(s) and (_non_empty(_span_input(s)) or _non_empty(_span_output(s))))
-    ]
-    if not bad_tools:
-        record(
-            "tool_linkage_valid",
-            "pass",
-            10,
-            f"{len(tool_spans)} tool span(s) have names and I/O",
-        )
+    if metadata_only:
+        unnamed_tools = [s for s in tool_spans if not _span_name(s)]
+        if unnamed_tools:
+            record(
+                "tool_linkage_valid",
+                "fail",
+                10,
+                f"{len(unnamed_tools)} tool span(s) missing name",
+                "Decorate custom tools with @neatlogs.span(kind='TOOL', tool_name='...', replay=True).",
+            )
+        elif tool_spans:
+            record(
+                "tool_linkage_valid",
+                "warn",
+                10,
+                f"{len(tool_spans)} tool span(s) named, but public API spans are metadata-only (I/O not returned)",
+                "Set NEATLOGS_API_KEY (for /api/traces/v3) or audit a local --file export to verify tool I/O.",
+            )
+        else:
+            record("tool_linkage_valid", "pass", 10, "0 tool span(s) have names and I/O")
     else:
-        record(
-            "tool_linkage_valid",
-            "fail",
-            10,
-            f"{len(bad_tools)} tool span(s) missing name or I/O",
-            "Decorate custom tools with @neatlogs.span(kind='TOOL', tool_name='...', replay=True).",
-        )
+        bad_tools = [
+            s
+            for s in tool_spans
+            if not (_span_name(s) and (_non_empty(_span_input(s)) or _non_empty(_span_output(s))))
+        ]
+        if not bad_tools:
+            record(
+                "tool_linkage_valid",
+                "pass",
+                10,
+                f"{len(tool_spans)} tool span(s) have names and I/O",
+            )
+        else:
+            record(
+                "tool_linkage_valid",
+                "fail",
+                10,
+                f"{len(bad_tools)} tool span(s) missing name or I/O",
+                "Decorate custom tools with @neatlogs.span(kind='TOOL', tool_name='...', replay=True).",
+            )
 
     # 7. retriever_freshness (10)
     ret_spans = [s for s in work_spans if _span_kind(s) == "RETRIEVER"]
@@ -410,6 +545,14 @@ def audit_trace(
             )
         else:
             record("retriever_freshness", "pass", 10, "No RETRIEVER spans in trace (not expected)")
+    elif metadata_only:
+        record(
+            "retriever_freshness",
+            "warn",
+            10,
+            f"{len(ret_spans)} RETRIEVER span(s) present, but public API spans are metadata-only (documents not returned)",
+            "Set NEATLOGS_API_KEY (for /api/traces/v3) or audit a local --file export to verify document freshness.",
+        )
     else:
         total_docs = fresh_docs = 0
         for rs in ret_spans:
@@ -441,12 +584,24 @@ def audit_trace(
             )
 
     # 8. session_hygiene (10)
-    session_id = _text(trace.get("sessionId")) or _text(trace.get("session_id"))
-    if not session_id and root is not None:
+    span_session_id = None
+    if root is not None:
         r_attrs = _attrs(root)
-        session_id = _text(r_attrs.get("neatlogs.session.id")) or _text(r_attrs.get("session.id"))
-    if session_id:
-        if trace_id and session_id == trace_id:
+        span_session_id = _text(r_attrs.get("neatlogs.session.id")) or _text(
+            r_attrs.get("session.id")
+        )
+    trace_session_id = _text(safe_trace.get("sessionId")) or _text(safe_trace.get("session_id"))
+    session_id = span_session_id or trace_session_id
+    norm_trace = _normalize_id(trace_id)
+    norm_session = _normalize_id(session_id)
+    is_backend_default_session = (
+        v3_session_fallback
+        and span_session_id is None
+        and bool(norm_trace)
+        and norm_session == norm_trace
+    )
+    if session_id and not is_backend_default_session:
+        if norm_trace and norm_session == norm_trace:
             record(
                 "session_hygiene",
                 "fail",
@@ -471,7 +626,10 @@ def audit_trace(
 
     # 9. provenance_and_replayability (5)
     truncated = any(
-        _attrs(s).get(k) is True or _attrs(s).get("neatlogs.capture_fidelity") == "lossy"
+        _attrs(s).get(k) is True
+        or _attrs(s).get("neatlogs.capture_fidelity") == "lossy"
+        or s.get("input_truncated") is True
+        or s.get("output_truncated") is True
         for s in work_spans
         for k in _TRUNCATION_KEYS
     )
@@ -489,6 +647,14 @@ def audit_trace(
             5,
             "One or more spans are truncated or lossy (blocks lossless ReplaySession)",
             "Avoid lossy return types on replayable tools/retrievers or enable presigned overflow.",
+        )
+    elif metadata_only and not has_provenance:
+        record(
+            "provenance_and_replayability",
+            "warn",
+            5,
+            "Public API spans are metadata-only (no provenance/truncation attributes returned)",
+            "Set NEATLOGS_API_KEY (for /api/traces/v3) or audit a local --file export to verify provenance.",
         )
     elif not has_provenance:
         record(
@@ -559,25 +725,33 @@ def audit_readable_spans(
     )
 
 
+def _validate_span_dicts(spans: list[Any], *, source: str) -> list[dict[str, Any]]:
+    if any(not isinstance(s, dict) for s in spans):
+        raise ValueError(f"{source} spans must all be JSON objects")
+    return spans
+
+
 def _load_trace_file(path: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     raw = json.loads(Path(path).read_text(encoding="utf-8"))
     if not isinstance(raw, dict):
         raise ValueError("Trace file must contain a JSON object")
     if isinstance(raw.get("trace"), dict) and isinstance(raw.get("spans"), list):
-        return raw["trace"], raw["spans"]
+        return raw["trace"], _validate_span_dicts(raw["spans"], source="Trace file")
     if isinstance(raw.get("context"), dict) and isinstance(raw["context"].get("spans"), list):
         source = raw.get("source") if isinstance(raw.get("source"), dict) else {}
-        return {"trace_id": source.get("traceId", ""), "finalizationStatus": "finalized"}, raw[
-            "context"
-        ]["spans"]
+        return {
+            "trace_id": source.get("traceId", ""),
+            "finalizationStatus": "finalized",
+        }, _validate_span_dicts(raw["context"]["spans"], source="Trace file")
     if isinstance(raw.get("spans"), list):
-        return raw, raw["spans"]
+        return raw, _validate_span_dicts(raw["spans"], source="Trace file")
     raise ValueError("Trace file must contain 'spans' or a frozen case 'context.spans'")
 
 
 def _fetch_v3_trace_with_project_key(
     trace_id: str,
     *,
+    endpoint: str | None = None,
     env: dict[str, str],
     fetch: Fetcher | None,
     timeout: float,
@@ -585,26 +759,50 @@ def _fetch_v3_trace_with_project_key(
 ) -> tuple[dict[str, Any], list[dict[str, Any]]] | int:
     api_key = (env.get("NEATLOGS_API_KEY") or "").strip()
     if not api_key:
-        err("Set NEATLOGS_TOKEN + NEATLOGS_PROJECT_ID (or NEATLOGS_API_KEY) to fetch a trace")
+        err(
+            "Set NEATLOGS_API_KEY (recommended) or NEATLOGS_TOKEN + NEATLOGS_PROJECT_ID to fetch a trace"
+        )
         return EXIT_AUTH
-    endpoint = (
-        env.get("NEATLOGS_ENDPOINT") or env.get("NEATLOGS_HOST") or "https://ingest.neatlogs.com"
+    resolved_endpoint = (
+        endpoint
+        or env.get("NEATLOGS_ENDPOINT")
+        or env.get("NEATLOGS_HOST")
+        or "https://ingest.neatlogs.com"
     ).strip()
-    parsed = urlparse(endpoint)
-    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+    parsed = urlparse(resolved_endpoint)
+    if (
+        parsed.scheme not in ("http", "https")
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+    ):
         err("NEATLOGS_ENDPOINT must be an absolute http(s) URL")
         return EXIT_USAGE
     url = f"{parsed.scheme}://{parsed.netloc}/api/traces/v3/{quote(trace_id, safe='')}"
-    fetcher = fetch or _default_fetch
+    fetcher = fetch or _v3_default_fetch
+    headers = {"Authorization": f"Bearer {api_key}", "x-api-key": api_key}
     try:
-        status, body = fetcher(url, {"Authorization": f"Bearer {api_key}"}, timeout)
+        status, body = fetcher(url, headers, timeout)
+    except _ResponseTooLargeError as exc:
+        err(str(exc))
+        return EXIT_ERROR
     except (TimeoutError, urllib.error.URLError, OSError):
         err("Could not reach /api/traces/v3")
         return EXIT_ERROR
     if status in (401, 403):
         err(f"Trace read rejected the API key (HTTP {status})")
         return EXIT_AUTH
-    if status in (404, 409):
+    if status == 409:
+        try:
+            err_payload = json.loads(body) if body else {}
+        except (TypeError, ValueError):
+            err_payload = {}
+        if isinstance(err_payload, dict) and err_payload.get("finalizationStatus") == "dlq":
+            err("Trace ingestion failed for good (finalizationStatus=dlq); retrying will not help")
+            return EXIT_ERROR
+        err("Trace not ready (HTTP 409)")
+        return EXIT_NOT_READY
+    if status in (202, 404):
         err(f"Trace not ready or not found (HTTP {status})")
         return EXIT_NOT_READY
     if not 200 <= status < 300:
@@ -612,12 +810,18 @@ def _fetch_v3_trace_with_project_key(
         return EXIT_ERROR
     try:
         payload = json.loads(body)
-    except ValueError:
+    except (TypeError, ValueError):
         err("Trace read returned invalid JSON")
+        return EXIT_ERROR
+    if not isinstance(payload, dict):
+        err("Trace read returned an unexpected response")
         return EXIT_ERROR
     data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
     if not isinstance(data, dict) or not isinstance(data.get("spans"), list):
         err("Trace read response did not include spans")
+        return EXIT_ERROR
+    if any(not isinstance(s, dict) for s in data["spans"]):
+        err("Trace read response contained malformed non-object spans")
         return EXIT_ERROR
     return data, data["spans"]
 
@@ -626,6 +830,7 @@ def run_trace_audit(
     trace_id: str | None,
     *,
     file_path: str | None = None,
+    endpoint: str | None = None,
     as_json: bool = False,
     expect_session: bool = False,
     expect_retriever: bool = False,
@@ -639,6 +844,8 @@ def run_trace_audit(
     if bool(trace_id) == bool(file_path):
         err("Specify exactly one of <trace_id> or --file <path>")
         return EXIT_USAGE
+    metadata_only = False
+    v3_session_fallback = False
     if file_path is not None:
         try:
             trace, spans = _load_trace_file(file_path)
@@ -647,14 +854,31 @@ def run_trace_audit(
             return EXIT_ERROR
     else:
         effective_env = os.environ if env is None else env
-        if (effective_env.get("NEATLOGS_TOKEN") or "").strip():
-            fetched = fetch_public_trace(
-                str(trace_id), env=effective_env, fetch=fetch, timeout=timeout, err=err
-            )
-        else:
+        if (effective_env.get("NEATLOGS_API_KEY") or "").strip():
             fetched = _fetch_v3_trace_with_project_key(
-                str(trace_id), env=effective_env, fetch=fetch, timeout=timeout, err=err
+                str(trace_id),
+                endpoint=endpoint,
+                env=effective_env,
+                fetch=fetch,
+                timeout=timeout,
+                err=err,
             )
+            v3_session_fallback = True
+        elif (effective_env.get("NEATLOGS_TOKEN") or "").strip():
+            public_env = dict(effective_env)
+            if endpoint:
+                public_env["NEATLOGS_HOST"] = endpoint
+            fetched = fetch_public_trace(
+                str(trace_id), env=public_env, fetch=fetch, timeout=timeout, err=err
+            )
+            metadata_only = True
+            v3_session_fallback = True
+        else:
+            err(
+                "Set NEATLOGS_API_KEY (recommended for full payload audit) or "
+                "NEATLOGS_TOKEN + NEATLOGS_PROJECT_ID to fetch a trace"
+            )
+            return EXIT_AUTH
         if isinstance(fetched, int):
             return fetched
         trace, spans = fetched
@@ -664,6 +888,8 @@ def run_trace_audit(
         spans,
         expect_session=expect_session,
         expect_retriever=expect_retriever,
+        metadata_only=metadata_only,
+        v3_session_fallback=v3_session_fallback,
     )
     if as_json:
         out(json.dumps(report, indent=2, sort_keys=True))

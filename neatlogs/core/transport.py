@@ -58,19 +58,23 @@ class _CircuitBreaker:
                 return "closed"
             return "open" if self._clock() < self._open_until else "half_open"
 
-    def allow_request(self) -> bool:
+    def _acquire(self) -> tuple[bool, bool]:
         if not self.enabled:
-            return True
+            return True, False
         with self._lock:
             if self._open_until <= 0.0:
-                return True
+                return True, False
             now = self._clock()
             if now < self._open_until:
-                return False
+                return False, False
             if self._half_open_probe:
-                return False
+                return False, False
             self._half_open_probe = True
-            return True
+            return True, True
+
+    def allow_request(self) -> bool:
+        allowed, _ = self._acquire()
+        return allowed
 
     def record_success(self) -> None:
         if not self.enabled:
@@ -86,8 +90,8 @@ class _CircuitBreaker:
         with self._lock:
             self._consecutive_failures += 1
             if self._half_open_probe or self._consecutive_failures >= self._threshold:
-                self._open_until = self._clock() + self._cooldown_s
                 self._half_open_probe = False
+                self._open_until = self._clock() + self._cooldown_s
 
 
 def _env_int(name: str, default: int) -> int:
@@ -193,41 +197,53 @@ class _OtlpSession(requests.Session):
         if method.upper() != "POST" or not isinstance(timeout, (int, float)):
             return super().request(method, url, **kwargs)
 
-        if not self._circuit_breaker.allow_request():
+        allowed, is_probe = self._circuit_breaker._acquire()
+        if not allowed:
             raise CircuitOpenError("OTLP export circuit breaker is open")
 
-        deadline = time.monotonic() + max(0.0, float(timeout))
-        for attempt in range(_MAX_RATE_LIMIT_ATTEMPTS):
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                self._circuit_breaker.record_failure()
-                raise requests.exceptions.Timeout("OTLP export deadline exceeded")
-            kwargs["timeout"] = remaining
-            try:
-                response = super().request(method, url, **kwargs)
-            except requests.exceptions.RequestException:
-                self._circuit_breaker.record_failure()
-                raise
-            if response.status_code != 429 or attempt + 1 == _MAX_RATE_LIMIT_ATTEMPTS:
-                checked = _trace_receipt(response, url)
-                if 200 <= checked.status_code < 300:
-                    self._circuit_breaker.record_success()
-                elif checked.status_code >= 500 or checked.status_code == 408:
+        settled = False
+        try:
+            deadline = time.monotonic() + max(0.0, float(timeout))
+            for attempt in range(_MAX_RATE_LIMIT_ATTEMPTS):
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
                     self._circuit_breaker.record_failure()
-                return checked
+                    settled = True
+                    raise requests.exceptions.Timeout("OTLP export deadline exceeded")
+                kwargs["timeout"] = remaining
+                try:
+                    response = super().request(method, url, **kwargs)
+                except requests.exceptions.RequestException:
+                    self._circuit_breaker.record_failure()
+                    settled = True
+                    raise
+                if response.status_code != 429 or attempt + 1 == _MAX_RATE_LIMIT_ATTEMPTS:
+                    checked = _trace_receipt(response, url)
+                    if 200 <= checked.status_code < 300:
+                        self._circuit_breaker.record_success()
+                        settled = True
+                    elif checked.status_code >= 500 or checked.status_code in (408, 429):
+                        self._circuit_breaker.record_failure()
+                        settled = True
+                    return checked
 
-            base_delay = min(
-                _MAX_RETRY_AFTER_SECONDS,
-                _retry_after_seconds(response.headers.get("Retry-After"), 0.1 * (2**attempt)),
-            )
-            delay = base_delay * random.uniform(0.8, 1.2) if base_delay > 0 else 0.0
-            delay = min(_MAX_RETRY_AFTER_SECONDS, delay)
-            if delay >= deadline - time.monotonic():
-                return response
-            response.close()
-            if delay:
-                time.sleep(delay)
-        return response
+                base_delay = min(
+                    _MAX_RETRY_AFTER_SECONDS,
+                    _retry_after_seconds(response.headers.get("Retry-After"), 0.1 * (2**attempt)),
+                )
+                delay = base_delay * random.uniform(0.8, 1.2) if base_delay > 0 else 0.0
+                delay = min(_MAX_RETRY_AFTER_SECONDS, delay)
+                if delay >= deadline - time.monotonic():
+                    self._circuit_breaker.record_failure()
+                    settled = True
+                    return response
+                response.close()
+                if delay:
+                    time.sleep(delay)
+            return response
+        finally:
+            if is_probe and not settled:
+                self._circuit_breaker.record_failure()
 
 
 def build_otlp_session(

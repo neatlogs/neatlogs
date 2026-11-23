@@ -13,7 +13,7 @@ from typing import Any
 
 LIBRARY_ALIASES = {
     "azure-ai-inference": "azure_ai_inference",
-    "qdrant-langchain": "qdrant",
+    "qdrant-langchain": "langchain",
     "llama-index": "llamaindex",
     "vertex-google-genai": "vertex_ai",
     "legacy-vertex-ai": "vertexai",

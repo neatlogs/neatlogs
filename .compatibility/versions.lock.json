@@ -22,6 +22,7 @@
     "langchain-community": "0.4.2",
     "langchain-core": "1.6.3",
     "langchain-openai": "1.6.2",
+    "langchain-qdrant": "1.1.0",
     "langgraph": "1.2.11",
     "litellm": "1.101.0",
     "llama-index": "0.14.24",
@@ -59,7 +60,7 @@
     "portkey-ai": "1.0.0",
     "pydantic-ai": "2.41.0",
     "pymilvus": "2.4.15",
-    "qdrant-client": "1.15.1",
+    "qdrant-client": "1.19.1",
     "smolagents": "1.0.0",
     "strands-agents": "1.56.0"
   }

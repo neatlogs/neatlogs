@@ -51,7 +51,7 @@ _KIND_ALIASES = {
 }
 _EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 _ISO_TS_RE = re.compile(
-    r"^(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2})(?:\.(\d+))?(Z|[+-]\d{2}:?\d{2})?$",
+    r"^(\d{4}-\d{2}-\d{2}[Tt ]\d{2}:\d{2}:\d{2})(?:\.(\d+))?([Zz]|[+-]\d{2}:?\d{2})?$",
     re.ASCII,
 )
 _FULL_CONTAINER_EVIDENCE_KEYS = ("attributes", "span_metadata", "data", "semantic")
@@ -81,8 +81,16 @@ def _span_has_full_capture_evidence(span: dict[str, Any]) -> bool:
             return True
         if isinstance(val, str):
             stripped = val.strip()
-            if stripped and stripped != "{}":
-                return True
+            if stripped:
+                try:
+                    parsed = json.loads(stripped)
+                except ValueError:
+                    return True
+                if isinstance(parsed, dict):
+                    if parsed:
+                        return True
+                elif parsed is not None:
+                    return True
     return any(span.get(key) is not None for key in _FULL_VALUE_EVIDENCE_KEYS)
 
 
@@ -148,7 +156,7 @@ def _parse_ts_ns(span: dict[str, Any]) -> int | None:
             base, frac, tz = match.groups()
             frac = frac or ""
             micro = frac[:6].ljust(6, "0") if frac else ""
-            tz_norm = "+00:00" if tz == "Z" else (tz or "+00:00")
+            tz_norm = "+00:00" if tz in ("Z", "z") else (tz or "+00:00")
             if len(tz_norm) == 5 and tz_norm[0] in "+-":
                 tz_norm = f"{tz_norm[:3]}:{tz_norm[3:]}"
             iso = f"{base}{'.' + micro if micro else ''}{tz_norm}"
@@ -157,15 +165,15 @@ def _parse_ts_ns(span: dict[str, Any]) -> int | None:
                 dt = datetime.fromisoformat(iso)
                 delta = dt.astimezone(timezone.utc) - _EPOCH
                 return (delta // timedelta(microseconds=1)) * 1_000 + extra_ns
-            except ValueError:
+            except (ValueError, OverflowError):
                 return None
         try:
-            dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+            dt = datetime.fromisoformat(text.replace("Z", "+00:00").replace("z", "+00:00"))
             if dt.tzinfo is None:
                 dt = dt.replace(tzinfo=timezone.utc)
             delta = dt.astimezone(timezone.utc) - _EPOCH
             return (delta // timedelta(microseconds=1)) * 1_000
-        except ValueError:
+        except (ValueError, OverflowError):
             return None
     return None
 
@@ -273,19 +281,22 @@ def _semantic(span: dict[str, Any]) -> dict[str, Any]:
 def _span_kind(span: dict[str, Any]) -> str:
     attrs = _attrs(span)
     semantic = _semantic(span)
-    raw = (
-        semantic.get("kind")
-        or span.get("spanType")
-        or span.get("span_type")
-        or span.get("node_type")
-        or span.get("kind")
-        or attrs.get("neatlogs.span.kind")
-        or attrs.get("openinference.span.kind")
-        or span.get("type")
-        or ""
-    )
-    normalized = str(raw).strip().upper()
-    return _KIND_ALIASES.get(normalized, normalized)
+    for candidate in (
+        semantic.get("kind"),
+        span.get("spanType"),
+        span.get("span_type"),
+        span.get("node_type"),
+        span.get("kind"),
+        attrs.get("neatlogs.span.kind"),
+        attrs.get("openinference.span.kind"),
+        span.get("type"),
+    ):
+        if isinstance(candidate, str):
+            stripped = candidate.strip()
+            if stripped:
+                normalized = stripped.upper()
+                return _KIND_ALIASES.get(normalized, normalized)
+    return ""
 
 
 def _is_completion_marker(span: dict[str, Any]) -> bool:

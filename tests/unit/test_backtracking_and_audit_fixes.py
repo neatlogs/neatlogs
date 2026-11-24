@@ -2195,3 +2195,109 @@ def test_huge_json_integer_raises_replay_error_instead_of_overflow_error():
                 ],
             }
         )
+
+
+def test_polish_explicit_none_output_plain_text_mime_iso_overflow_and_whitespace_attrs():
+    """Verify final edge-case polishes:
+    1. Explicit top-level `"output": None` is preserved (not skipped as missing).
+    2. `output.mime_type == "text/plain"` prevents JSON-decoding string `output.value`.
+    3. Lowercase `t`/`z` ISO timestamps and UTC-conversion OverflowError (`0001-01-01T00:00:00+01:00`)
+       are handled cleanly in both replay builder and Doctor.
+    4. Spaced JSON-string `attributes: "{ }"` stays metadata-only, and whitespace `semantic.kind: " "`
+       does not mask `span_type: "TOOL"`.
+    """
+    # 1 & 2: Explicit top-level output=None + text/plain mime_type on output.value
+    root = {
+        "span_id": "root-1",
+        "parent_span_id": None,
+        "name": "wf",
+        "span_type": "WORKFLOW",
+        "input": {"q": "go"},
+        "output": {"a": "done"},
+        "start_time": "2026-11-20t00:00:01.000000001z",
+        "attributes": {"neatlogs.step.seq": 1, "neatlogs.provenance.release": "v1"},
+    }
+    none_tool = {
+        "span_id": "t-none",
+        "parent_span_id": "root-1",
+        "name": "noop",
+        "span_type": "TOOL",
+        "input": {},
+        "output": None,
+        "start_time": "2026-11-20t00:00:01.000000002z",
+        "attributes": {"neatlogs.step.seq": 2},
+    }
+    plain_tool = {
+        "span_id": "t-plain",
+        "parent_span_id": "root-1",
+        "name": "plain_text_tool",
+        "span_type": "TOOL",
+        "start_time": "0001-01-01T00:00:00+01:00",  # UTC conversion OverflowError -> safely ignored
+        "attributes": {
+            "neatlogs.step.seq": 3,
+            "input.value": '{"q": 1}',
+            "output.value": "false",
+            "output.mime_type": "text/plain",
+        },
+    }
+    spans = [root, none_tool, plain_tool]
+    conv = replay_recording_from_case(
+        {"source": {"kind": "trace", "traceId": "t-polish"}, "context": {"spans": spans}}
+    )
+    assert conv["skippedTools"] == 0
+    by_id = {e.span_id: e for e in conv["recording"].entries}
+    assert by_id["t-none"].output is None
+    assert by_id["t-plain"].output == "false" and type(by_id["t-plain"].output) is str
+
+    audit = audit_trace({"trace_id": "t-polish", "finalizationStatus": "finalized"}, spans)
+    assert audit["replay_ready"] is True
+
+    # 3: Lowercase 't' + nanosecond inversion caught cleanly by Doctor
+    inv_lower_t = [
+        {
+            **root,
+            "start_time": "2026-11-20t00:00:01.000000001z",
+            "attributes": {"neatlogs.step.seq": 2},
+        },
+        {
+            **none_tool,
+            "start_time": "2026-11-20t00:00:01.000000002z",
+            "attributes": {"neatlogs.step.seq": 1},
+        },
+    ]
+    inv_audit = audit_trace(
+        {"trace_id": "t-lower-inv", "finalizationStatus": "finalized"}, inv_lower_t
+    )
+    assert {c["name"]: c["status"] for c in inv_audit["checks"]}["step_ordering_clean"] == "fail"
+    assert inv_audit["replay_ready"] is False
+
+    # 4a: JSON-string `attributes: "{ }"` with no payloads is still metadata-only
+    spaced_empty_report = audit_trace(
+        {"trace_id": "t-spaced-empty", "finalizationStatus": "finalized"},
+        [
+            {
+                "span_id": "s1",
+                "parent_span_id": None,
+                "name": "wf",
+                "type": "workflow",
+                "attributes": "{ }",
+            }
+        ],
+    )
+    assert spaced_empty_report["replay_ready"] is False
+    assert spaced_empty_report["replay_readiness_verified"] is False
+
+    # 4b: Whitespace `semantic.kind: " "` does NOT mask `span_type: "TOOL"`
+    ws_sem_tool = {
+        "span_id": "t-ws",
+        "parent_span_id": "root-1",
+        "name": "broken_tool",
+        "span_type": "TOOL",
+        "semantic": {"kind": "   "},
+        "attributes": {"neatlogs.step.seq": 2},
+    }
+    ws_audit = audit_trace(
+        {"trace_id": "t-ws-sem", "finalizationStatus": "finalized"}, [root, ws_sem_tool]
+    )
+    assert {c["name"]: c["status"] for c in ws_audit["checks"]}["tool_linkage_valid"] == "fail"
+    assert ws_audit["replay_ready"] is False

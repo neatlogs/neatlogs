@@ -28,7 +28,7 @@ _KIND_ALIASES = {
 }
 _EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 _ISO_TS_RE = re.compile(
-    r"^(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2})(?:\.(\d+))?(Z|[+-]\d{2}:?\d{2})?$",
+    r"^(\d{4}-\d{2}-\d{2}[Tt ]\d{2}:\d{2}:\d{2})(?:\.(\d+))?([Zz]|[+-]\d{2}:?\d{2})?$",
     re.ASCII,
 )
 _MISSING = object()
@@ -87,9 +87,9 @@ def _first(*values):
     )
 
 
-def _first_io(*candidates: tuple[object, bool]):
-    for value, decode_json_string in candidates:
-        if value is not None and value is not _MISSING:
+def _first_io(*candidates: tuple[object, bool, bool]):
+    for value, decode_json_string, allow_none in candidates:
+        if value is not _MISSING and (allow_none or value is not None):
             return value, decode_json_string
     return _MISSING, False
 
@@ -205,7 +205,7 @@ def _parse_start_ts_ns(span) -> int | None:
             base, frac, tz = match.groups()
             frac = frac or ""
             micro = frac[:6].ljust(6, "0") if frac else ""
-            tz_norm = "+00:00" if tz == "Z" else (tz or "+00:00")
+            tz_norm = "+00:00" if tz in ("Z", "z") else (tz or "+00:00")
             if len(tz_norm) == 5 and tz_norm[0] in "+-":
                 tz_norm = f"{tz_norm[:3]}:{tz_norm[3:]}"
             iso = f"{base}{'.' + micro if micro else ''}{tz_norm}"
@@ -214,15 +214,15 @@ def _parse_start_ts_ns(span) -> int | None:
                 dt = datetime.fromisoformat(iso)
                 delta = dt.astimezone(timezone.utc) - _EPOCH
                 return (delta // timedelta(microseconds=1)) * 1_000 + extra_ns
-            except ValueError:
+            except (ValueError, OverflowError):
                 return None
         try:
-            dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+            dt = datetime.fromisoformat(text.replace("Z", "+00:00").replace("z", "+00:00"))
             if dt.tzinfo is None:
                 dt = dt.replace(tzinfo=timezone.utc)
             delta = dt.astimezone(timezone.utc) - _EPOCH
             return (delta // timedelta(microseconds=1)) * 1_000
-        except ValueError:
+        except (ValueError, OverflowError):
             return None
     return None
 
@@ -330,32 +330,39 @@ def _extract_tool_entry(span, attributes, semantic, kind, span_id, *, error_reco
             span.get("spanName"),
             span.get("node_name"),
         )
+        input_is_plain = (
+            str(attributes.get("input.mime_type") or "").strip().lower() == "text/plain"
+        )
+        output_is_plain = (
+            str(attributes.get("output.mime_type") or "").strip().lower() == "text/plain"
+        )
         raw_in, decode_in = _first_io(
-            (attributes.get("neatlogs.tool.input"), True),
-            (attributes.get("neatlogs.raw.tool.input"), True),
-            (attributes.get("input.value"), True),
-            (span.get("tool_input"), True),
-            (span.get("input_value", _MISSING), True),
-            (span.get("inputValue", _MISSING), True),
-            (span.get("input", _MISSING), False),
-            (data.get("tool_input", _MISSING), True),
-            (data.get("tool_arguments", _MISSING), True),
-            (data.get("input_value", _MISSING), True),
-            (data.get("input", _MISSING), True),
+            (attributes.get("neatlogs.tool.input"), True, False),
+            (attributes.get("neatlogs.raw.tool.input"), True, False),
+            (attributes.get("input.value"), not input_is_plain, False),
+            (span.get("tool_input"), True, False),
+            (span.get("input_value", _MISSING), True, False),
+            (span.get("inputValue", _MISSING), True, False),
+            (span.get("input", _MISSING), False, False),
+            (data.get("tool_input", _MISSING), True, False),
+            (data.get("tool_arguments", _MISSING), True, False),
+            (data.get("input_value", _MISSING), True, False),
+            (data.get("input", _MISSING), True, False),
         )
         raw_out, decode_out = _first_io(
-            (attributes.get("neatlogs.tool.output"), True),
-            (attributes.get("neatlogs.raw.tool.output"), True),
-            (attributes.get("output.value"), True),
-            (span.get("tool_output"), True),
-            (span.get("output_value", _MISSING), True),
-            (span.get("outputValue", _MISSING), True),
-            (span.get("output", _MISSING), False),
-            (data.get("tool_output", _MISSING), True),
-            (data.get("tool_result", _MISSING), True),
-            (data.get("output_value", _MISSING), True),
-            (data.get("output", _MISSING), True),
-            (data.get("result", _MISSING), True),
+            (attributes.get("neatlogs.tool.output"), True, False),
+            (attributes.get("neatlogs.raw.tool.output"), True, False),
+            (attributes.get("output.value"), not output_is_plain, False),
+            (span.get("tool_output"), True, False),
+            (span.get("output_value", _MISSING), True, False),
+            (span.get("outputValue", _MISSING), True, False),
+            (span.get("output", _MISSING), False, False),
+            (data.get("tool_output", _MISSING), True, False),
+            (data.get("tool_result", _MISSING), True, False),
+            (data.get("output_value", _MISSING), True, False),
+            (data.get("output", _MISSING), True, False),
+            (data.get("result", _MISSING), True, False),
+            (span.get("output", _MISSING), False, True),
         )
         if raw_in is _MISSING or (raw_out is _MISSING and error_record is None):
             raise ReplayError("Saved tool replay entry is missing I/O.")
@@ -522,23 +529,30 @@ def replay_recording_from_case(value, *, include_steps: bool = False, include_er
                     span.get("spanName"),
                     span.get("node_name"),
                 )
+                input_is_plain = (
+                    str(attributes.get("input.mime_type") or "").strip().lower() == "text/plain"
+                )
+                output_is_plain = (
+                    str(attributes.get("output.mime_type") or "").strip().lower() == "text/plain"
+                )
                 raw_in, decode_in = _first_io(
-                    (attributes.get(f"neatlogs.{kind_lower}.input"), True),
-                    (attributes.get("input.value"), True),
-                    (span.get("input_value", _MISSING), True),
-                    (span.get("inputValue", _MISSING), True),
-                    (span.get("input", _MISSING), False),
-                    (data.get("input_value", _MISSING), True),
-                    (data.get("input", _MISSING), True),
+                    (attributes.get(f"neatlogs.{kind_lower}.input"), True, False),
+                    (attributes.get("input.value"), not input_is_plain, False),
+                    (span.get("input_value", _MISSING), True, False),
+                    (span.get("inputValue", _MISSING), True, False),
+                    (span.get("input", _MISSING), False, False),
+                    (data.get("input_value", _MISSING), True, False),
+                    (data.get("input", _MISSING), True, False),
                 )
                 raw_out, decode_out = _first_io(
-                    (attributes.get(f"neatlogs.{kind_lower}.output"), True),
-                    (attributes.get("output.value"), True),
-                    (span.get("output_value", _MISSING), True),
-                    (span.get("outputValue", _MISSING), True),
-                    (span.get("output", _MISSING), False),
-                    (data.get("output_value", _MISSING), True),
-                    (data.get("output", _MISSING), True),
+                    (attributes.get(f"neatlogs.{kind_lower}.output"), True, False),
+                    (attributes.get("output.value"), not output_is_plain, False),
+                    (span.get("output_value", _MISSING), True, False),
+                    (span.get("outputValue", _MISSING), True, False),
+                    (span.get("output", _MISSING), False, False),
+                    (data.get("output_value", _MISSING), True, False),
+                    (data.get("output", _MISSING), True, False),
+                    (span.get("output", _MISSING), False, True),
                 )
                 if raw_in is _MISSING or (raw_out is _MISSING and error_record is None):
                     raise ReplayError("Saved step replay entry is missing I/O.")

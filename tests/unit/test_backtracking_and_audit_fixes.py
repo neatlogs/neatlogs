@@ -2301,3 +2301,160 @@ def test_polish_explicit_none_output_plain_text_mime_iso_overflow_and_whitespace
     )
     assert {c["name"]: c["status"] for c in ws_audit["checks"]}["tool_linkage_valid"] == "fail"
     assert ws_audit["replay_ready"] is False
+
+
+def test_doctor_does_not_mark_model_only_trace_replay_ready_without_provider_capture():
+    """Review blocker P2: A completed model-only trace whose LLM span lacks a valid
+    neatlogs.replay.model_capture produces 0 replay entries in replay_recording_from_case
+    and MUST NOT be reported as replay-ready by Doctor. Valid provider capture enables
+    full replay readiness; valid tools + uncaptured LLM spans report tools_only."""
+    from neatlogs.replay.provider import MODEL_CAPTURE_ATTRIBUTE, capture_digest, ecmascript_json
+
+    root = {
+        "span_id": "root-1",
+        "parent_span_id": None,
+        "name": "chat_workflow",
+        "span_type": "WORKFLOW",
+        "input": {"prompt": "hello"},
+        "output": {"reply": "world"},
+        "start_time_unix_nano": 1000,
+        "attributes": {"neatlogs.step.seq": 1, "neatlogs.provenance.release": "v1"},
+    }
+    llm_missing_capture = {
+        "span_id": "llm-1",
+        "parent_span_id": "root-1",
+        "name": "openai.chat.completions.create",
+        "span_type": "LLM",
+        "input": {"messages": [{"role": "user", "content": "hello"}]},
+        "output": {"choices": [{"message": {"role": "assistant", "content": "world"}}]},
+        "start_time_unix_nano": 2000,
+        "attributes": {"neatlogs.step.seq": 2, "neatlogs.llm.model_name": "gpt-4o"},
+    }
+
+    # 1. Completed model-only trace with missing provider capture -> 0 entries, replay_ready=False
+    spans_missing = [root, llm_missing_capture]
+    converted_missing = replay_recording_from_case(
+        {
+            "source": {"kind": "trace", "traceId": "t-model-no-cap"},
+            "context": {"spans": spans_missing},
+        }
+    )
+    assert converted_missing["recording"].entries == ()
+    assert converted_missing["skippedTools"] == 0
+
+    report_missing = audit_trace(
+        {"trace_id": "t-model-no-cap", "finalizationStatus": "finalized"}, spans_missing
+    )
+    assert report_missing["jev_ready"] is True
+    assert report_missing["replay_ready"] is False
+    assert report_missing["model_replay_ready"] is False
+    assert report_missing["replay_scope"] == "none"
+    assert any("neatlogs.replay.model_capture" in rec for rec in report_missing["recommendations"])
+
+    # 2. Tampered/invalid provider capture on model-only trace -> 0 entries, replay_ready=False
+    op = "openai.chat.completions.create"
+    req = {"model": "gpt-4o", "messages": [{"role": "user", "content": "hello"}]}
+    resp = {
+        "id": "chat-1",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "gpt-4o",
+        "choices": [
+            {
+                "index": 0,
+                "finish_reason": "stop",
+                "message": {"role": "assistant", "content": "world"},
+            }
+        ],
+    }
+    bad_capture = ecmascript_json(
+        {"version": 1, "operation": op, "input": req, "output": resp, "digest": "bad-digest"}
+    ).decode()
+    llm_bad_capture = {
+        **llm_missing_capture,
+        "attributes": {**llm_missing_capture["attributes"], MODEL_CAPTURE_ATTRIBUTE: bad_capture},
+    }
+    assert (
+        replay_recording_from_case(
+            {
+                "source": {"kind": "trace", "traceId": "t-model-bad-cap"},
+                "context": {"spans": [root, llm_bad_capture]},
+            }
+        )["recording"].entries
+        == ()
+    )
+    report_bad = audit_trace(
+        {"trace_id": "t-model-bad-cap", "finalizationStatus": "finalized"},
+        [root, llm_bad_capture],
+    )
+    assert report_bad["replay_ready"] is False
+    assert report_bad["model_replay_ready"] is False
+    assert report_bad["replay_scope"] == "none"
+
+    # 3. Model-only trace WITH valid provider capture -> 1 model entry, full replay_ready=True
+    valid_capture = ecmascript_json(
+        {
+            "version": 1,
+            "operation": op,
+            "input": req,
+            "output": resp,
+            "digest": capture_digest(op, req, resp),
+        }
+    ).decode()
+    llm_valid_capture = {
+        **llm_missing_capture,
+        "attributes": {**llm_missing_capture["attributes"], MODEL_CAPTURE_ATTRIBUTE: valid_capture},
+    }
+    converted_valid = replay_recording_from_case(
+        {
+            "source": {"kind": "trace", "traceId": "t-model-ok-cap"},
+            "context": {"spans": [root, llm_valid_capture]},
+        }
+    )
+    assert [e.kind for e in converted_valid["recording"].entries] == ["model"]
+    report_valid = audit_trace(
+        {"trace_id": "t-model-ok-cap", "finalizationStatus": "finalized"},
+        [root, llm_valid_capture],
+    )
+    assert report_valid["replay_ready"] is True
+    assert report_valid["model_replay_ready"] is True
+    assert report_valid["replay_scope"] == "full"
+    assert report_valid["replay_readiness_verified"] is True
+
+    # 4. Valid tool + LLM span missing provider capture -> tools_only (NOT full)
+    valid_tool = {
+        "span_id": "tool-1",
+        "parent_span_id": "root-1",
+        "name": "lookup",
+        "span_type": "TOOL",
+        "tool_name": "lookup",
+        "tool_input": {"q": "hello"},
+        "tool_output": {"ok": True},
+        "start_time_unix_nano": 3000,
+        "attributes": {"neatlogs.step.seq": 3},
+    }
+    report_tools_only = audit_trace(
+        {"trace_id": "t-tools-only", "finalizationStatus": "finalized"},
+        [root, llm_missing_capture, valid_tool],
+    )
+    assert report_tools_only["replay_ready"] is True
+    assert report_tools_only["model_replay_ready"] is False
+    assert report_tools_only["replay_scope"] == "tools_only"
+    assert any(
+        "neatlogs.replay.model_capture" in rec for rec in report_tools_only["recommendations"]
+    )
+
+    # 5. Model-only trace with 1 valid + 1 uncaptured LLM span -> replay_ready=False
+    llm_second_missing = {
+        **llm_missing_capture,
+        "span_id": "llm-2",
+        "start_time_unix_nano": 3000,
+        "attributes": {"neatlogs.step.seq": 3},
+    }
+    report_partial = audit_trace(
+        {"trace_id": "t-model-partial", "finalizationStatus": "finalized"},
+        [root, llm_valid_capture, llm_second_missing],
+    )
+    assert report_partial["replay_ready"] is False
+    assert report_partial["model_replay_ready"] is False
+    assert report_partial["replay_scope"] == "none"

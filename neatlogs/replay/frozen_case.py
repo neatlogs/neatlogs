@@ -411,6 +411,23 @@ def validate_tool_span_for_replay(span: dict, span_id_counts: Counter) -> bool:
         return False
 
 
+def validate_model_span_for_replay(span: dict, span_id_counts: Counter) -> bool:
+    """Return True iff the replay builder would accept this LLM/model span."""
+    try:
+        semantic = _object(span.get("semantic"))
+        attributes = _merge_attributes(span)
+        kind = _resolve_span_kind(span, attributes, semantic)
+        if kind != "LLM":
+            return False
+        span_id = identifier(_span_id_value(span))
+        if span_id_counts[span_id] != 1 or not _complete(span, attributes, allow_error=False):
+            return False
+        read_provider_capture(attributes.get(MODEL_CAPTURE_ATTRIBUTE))
+        return True
+    except (ReplayError, ValueError, TypeError, KeyError):
+        return False
+
+
 def _span_error_record(span, attributes):
     status = span.get("status")
     status_desc = ""

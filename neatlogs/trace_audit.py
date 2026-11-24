@@ -268,6 +268,12 @@ def _tool_is_replay_acceptable(span: dict[str, Any], span_id_counts: Counter[str
     return validate_tool_span_for_replay(span, span_id_counts)
 
 
+def _model_is_replay_acceptable(span: dict[str, Any], span_id_counts: Counter[str]) -> bool:
+    from .replay.frozen_case import validate_model_span_for_replay
+
+    return validate_model_span_for_replay(span, span_id_counts)
+
+
 def _semantic(span: dict[str, Any]) -> dict[str, Any]:
     raw = span.get("semantic")
     if isinstance(raw, str):
@@ -827,7 +833,23 @@ def audit_trace(
             "session_hygiene",
         }
     )
-    replay_ready = (
+    llm_spans = [s for s in work_spans if _span_kind(s) == "LLM"]
+    bad_models = (
+        []
+        if metadata_only
+        else [s for s in llm_spans if not _model_is_replay_acceptable(s, span_id_counts)]
+    )
+    if not metadata_only and bad_models:
+        recommendations.append(
+            f"{len(bad_models)}/{len(llm_spans)} LLM span(s) lack valid neatlogs.replay.model_capture "
+            "(model replay unavailable; use supported non-streaming OpenAI/Google wrappers for model replay)."
+        )
+    valid_tool_count = (
+        0
+        if metadata_only
+        else sum(1 for s in tool_spans if _tool_is_replay_acceptable(s, span_id_counts))
+    )
+    base_replay_checks_ok = (
         not metadata_only
         and not exceeds_replay_span_limit
         and not (
@@ -841,6 +863,17 @@ def audit_trace(
             }
         )
     )
+    model_replay_ready = base_replay_checks_ok and bool(llm_spans) and not bad_models
+    has_replayable_tools = base_replay_checks_ok and valid_tool_count > 0
+    replay_ready = has_replayable_tools or model_replay_ready
+    if metadata_only:
+        replay_scope = "unverified"
+    elif model_replay_ready:
+        replay_scope = "full"
+    elif has_replayable_tools:
+        replay_scope = "tools_only"
+    else:
+        replay_scope = "none"
     grade = (
         "ready"
         if score >= 85 and not failed
@@ -852,6 +885,8 @@ def audit_trace(
         "grade": grade,
         "jev_ready": jev_ready,
         "replay_ready": replay_ready,
+        "model_replay_ready": model_replay_ready,
+        "replay_scope": replay_scope,
         "replay_readiness_verified": not metadata_only,
         "span_count": len(work_spans),
         "checks": checks,
@@ -1053,11 +1088,12 @@ def run_trace_audit(
     if as_json:
         out(json.dumps(report, indent=2, sort_keys=True))
     else:
-        replay_label = (
-            "False (unverified: metadata-only)"
-            if not report["replay_readiness_verified"]
-            else str(report["replay_ready"])
-        )
+        if not report["replay_readiness_verified"]:
+            replay_label = "False (unverified: metadata-only)"
+        elif report["replay_ready"]:
+            replay_label = f"True ({report['replay_scope']})"
+        else:
+            replay_label = "False"
         out(
             f"trace {report['trace_id'] or '(file)'}: {report['grade'].upper()} "
             f"(score={report['score']}/100, jev_ready={report['jev_ready']}, "

@@ -60,14 +60,21 @@ def json_value(
             raise ReplayError("Replay JSON exceeds its traversal limit.")
         if item is None or type(item) in (str, bool):
             return item
-        if type(item) in (int, float):
+        if type(item) is float:
             if not math.isfinite(item):
                 raise ReplayError("Replay JSON numbers must be finite.")
-            if type(item) is int and abs(item) > 2**53 - 1:
+            return item
+        if type(item) is int:
+            if abs(item) > 2**53 - 1:
                 if allow_int64 and -(2**63) <= item <= 2**64 - 1:
                     return item
-                number = float(item)
-                if int(number) != item:
+                try:
+                    number = float(item)
+                except OverflowError:
+                    raise ReplayError(
+                        "Replay JSON integers must be exactly representable."
+                    ) from None
+                if not math.isfinite(number) or int(number) != item:
                     raise ReplayError("Replay JSON integers must be exactly representable.")
                 return number
             return item

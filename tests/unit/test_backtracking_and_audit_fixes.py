@@ -1764,3 +1764,434 @@ def test_doctor_eu_endpoint_resolves_eu_app_host_for_token_and_respects_explicit
         err=lambda _: None,
     )
     assert urls_v3 == ["https://eu.ingest.neatlogs.com/api/traces/v3/t-eu"]
+
+
+# ---------------------------------------------------------------------------
+# PR #290 Codex second-pass P1/P2 regression tests
+# ---------------------------------------------------------------------------
+
+
+def test_frozen_case_extract_before_sort_and_all_sequenced_step_seq_precedence():
+    """Finding 1 (P1): Extract eligible replay entries BEFORE sorting so non-replayable
+    spans (e.g. unsequenced LLM without capture) cannot break all-sequenced ordering; when
+    every eligible entry has step.seq, step.seq takes precedence over skewed timestamps."""
+    # (a) All-sequenced with oppositely ordered/skewed timestamps -> sorted 1, 2
+    skewed_case = {
+        "source": {"kind": "trace", "traceId": "t-skew"},
+        "context": {
+            "spans": [
+                {
+                    "span_id": "step-2",
+                    "span_type": "TOOL",
+                    "tool_name": "lookup",
+                    "tool_input": {"q": "same"},
+                    "tool_output": {"order": 2},
+                    "start_time_unix_nano": 100,
+                    "attributes": {"neatlogs.step.seq": 2},
+                },
+                {
+                    "span_id": "step-1",
+                    "span_type": "TOOL",
+                    "tool_name": "lookup",
+                    "tool_input": {"q": "same"},
+                    "tool_output": {"order": 1},
+                    "start_time_unix_nano": 200,
+                    "attributes": {"neatlogs.step.seq": 1},
+                },
+            ]
+        },
+    }
+    skewed_rec = replay_recording_from_case(skewed_case)["recording"]
+    assert [e.span_id for e in skewed_rec.entries] == ["step-1", "step-2"]
+
+    # (b) Timestamp-free [tool seq=2, unsequenced non-replayable LLM, tool seq=1] -> sorted 1, 2
+    with_unsequenced_llm = {
+        "source": {"kind": "trace", "traceId": "t-llm-drop"},
+        "context": {
+            "spans": [
+                {
+                    "span_id": "tool-2",
+                    "span_type": "TOOL",
+                    "tool_name": "lookup",
+                    "tool_input": {"q": "same"},
+                    "tool_output": {"order": 2},
+                    "attributes": {"neatlogs.step.seq": 2},
+                },
+                {
+                    "span_id": "llm-no-capture",
+                    "span_type": "LLM",
+                    "name": "gpt-4o",
+                    "attributes": {},
+                },
+                {
+                    "span_id": "tool-1",
+                    "span_type": "TOOL",
+                    "tool_name": "lookup",
+                    "tool_input": {"q": "same"},
+                    "tool_output": {"order": 1},
+                    "attributes": {"neatlogs.step.seq": 1},
+                },
+            ]
+        },
+    }
+    dropped_rec = replay_recording_from_case(with_unsequenced_llm)["recording"]
+    assert [e.span_id for e in dropped_rec.entries] == ["tool-1", "tool-2"]
+
+    # (c) Mixed eligible [tool t=100 no seq, tool t=200 seq=2] -> chronological t=100, t=200
+    mixed_case = {
+        "source": {"kind": "trace", "traceId": "t-mixed-2"},
+        "context": {
+            "spans": [
+                {
+                    "span_id": "later-seq",
+                    "span_type": "TOOL",
+                    "tool_name": "lookup",
+                    "tool_input": {"q": "same"},
+                    "tool_output": {"order": 2},
+                    "start_time_unix_nano": 200,
+                    "attributes": {"neatlogs.step.seq": 2},
+                },
+                {
+                    "span_id": "earlier-unseq",
+                    "span_type": "TOOL",
+                    "tool_name": "lookup",
+                    "tool_input": {"q": "same"},
+                    "tool_output": {"order": 1},
+                    "start_time_unix_nano": 100,
+                    "attributes": {},
+                },
+            ]
+        },
+    }
+    mixed_rec = replay_recording_from_case(mixed_case)["recording"]
+    assert [e.span_id for e in mixed_rec.entries] == ["earlier-unseq", "later-seq"]
+
+
+def test_top_level_input_output_strings_are_not_double_json_decoded():
+    """Finding 2 (P1): Already-typed top-level span['output'] / span['input'] values such as
+    'false' or 'null' must NOT be JSON-decoded a second time into False / None, whereas
+    OTLP stringified attributes (output.value / input.value) still decode JSON."""
+    frozen_case = {
+        "source": {"kind": "trace", "traceId": "t-no-double-decode"},
+        "context": {
+            "spans": [
+                {
+                    "span_id": "t-false",
+                    "span_type": "TOOL",
+                    "name": "flag_tool",
+                    "input": "true",
+                    "output": "false",
+                    "attributes": {"neatlogs.step.seq": 1},
+                },
+                {
+                    "span_id": "t-null",
+                    "span_type": "TOOL",
+                    "name": "null_tool",
+                    "input": {},
+                    "output": "null",
+                    "attributes": {"neatlogs.step.seq": 2},
+                },
+                {
+                    "span_id": "r-step",
+                    "span_type": "RETRIEVER",
+                    "name": "step_tool",
+                    "input": "null",
+                    "output": "false",
+                    "attributes": {"neatlogs.step.seq": 3},
+                },
+                {
+                    "span_id": "t-otel-attr",
+                    "span_type": "TOOL",
+                    "name": "otel_tool",
+                    "attributes": {
+                        "neatlogs.step.seq": 4,
+                        "input.value": '{"x": 1}',
+                        "output.value": "false",
+                    },
+                },
+            ]
+        },
+    }
+    rec = replay_recording_from_case(frozen_case, include_steps=True)["recording"]
+    by_id = {e.span_id: e for e in rec.entries}
+    assert by_id["t-false"].input == "true" and type(by_id["t-false"].input) is str
+    assert by_id["t-false"].output == "false" and type(by_id["t-false"].output) is str
+    assert by_id["t-null"].output == "null" and type(by_id["t-null"].output) is str
+    assert by_id["r-step"].input == "null" and type(by_id["r-step"].input) is str
+    assert by_id["r-step"].output == "false" and type(by_id["r-step"].output) is str
+    assert by_id["t-otel-attr"].input == {"x": 1}
+    assert by_id["t-otel-attr"].output is False
+
+
+def test_doctor_iso_timestamp_preserves_full_nanosecond_precision_and_timestamp_free_order():
+    """Findings 4 & 5 (P2): Doctor preserves nanosecond precision on ISO timestamps (distinguishing
+    .000000001Z vs .000000002Z) AND does not falsely fail timestamp-free child-first snapshots."""
+    # Finding 4: .000000001Z (seq=2) vs .000000002Z (seq=1) -> inversion MUST FAIL
+    inv_ns_spans = [
+        {
+            "span_id": "root-1",
+            "parent_span_id": None,
+            "name": "wf",
+            "span_type": "WORKFLOW",
+            "input": {"q": 1},
+            "output": {"a": 2},
+            "start_time": "2026-11-20T00:00:01.000000001Z",
+            "attributes": {"neatlogs.step.seq": 2, "neatlogs.provenance.release": "v1"},
+        },
+        {
+            "span_id": "tool-1",
+            "parent_span_id": "root-1",
+            "name": "op",
+            "span_type": "TOOL",
+            "tool_input": {"k": 1},
+            "tool_output": {"v": 1},
+            "start_time": "2026-11-20T00:00:01.000000002Z",
+            "attributes": {"neatlogs.step.seq": 1},
+        },
+    ]
+    inv_report = audit_trace(
+        {"trace_id": "t-ns-inv", "finalizationStatus": "finalized"}, inv_ns_spans
+    )
+    inv_checks = {c["name"]: c["status"] for c in inv_report["checks"]}
+    assert inv_checks["step_ordering_clean"] == "fail"
+    assert inv_report["replay_ready"] is False
+
+    # Same nanosecond timestamps in monotonic order (seq=1 at .000000001Z, seq=2 at .000000002Z) -> PASS
+    ok_ns_spans = [
+        {
+            **inv_ns_spans[0],
+            "attributes": {"neatlogs.step.seq": 1, "neatlogs.provenance.release": "v1"},
+        },
+        {**inv_ns_spans[1], "attributes": {"neatlogs.step.seq": 2}},
+    ]
+    ok_report = audit_trace({"trace_id": "t-ns-ok", "finalizationStatus": "finalized"}, ok_ns_spans)
+    ok_checks = {c["name"]: c["status"] for c in ok_report["checks"]}
+    assert ok_checks["step_ordering_clean"] == "pass"
+    assert ok_report["replay_ready"] is True
+
+    # Finding 5: Timestamp-free child-first snapshot (seq=2, 1) -> MUST PASS
+    child_first_no_ts = [
+        {
+            "span_id": "tool-1",
+            "parent_span_id": "root-1",
+            "name": "op",
+            "span_type": "TOOL",
+            "tool_input": {"k": 1},
+            "tool_output": {"v": 1},
+            "attributes": {"neatlogs.step.seq": 2},
+        },
+        {
+            "span_id": "root-1",
+            "parent_span_id": None,
+            "name": "wf",
+            "span_type": "WORKFLOW",
+            "input": {"q": 1},
+            "output": {"a": 2},
+            "attributes": {"neatlogs.step.seq": 1, "neatlogs.provenance.release": "v1"},
+        },
+    ]
+    cf_report = audit_trace(
+        {"trace_id": "t-cf-nots", "finalizationStatus": "finalized"}, child_first_no_ts
+    )
+    cf_checks = {c["name"]: c["status"] for c in cf_report["checks"]}
+    assert cf_checks["step_ordering_clean"] == "pass"
+    assert cf_report["replay_ready"] is True
+
+    # Timestamp-free duplicate seq (1, 1) still FAILS
+    dup_no_ts = [
+        {**child_first_no_ts[0], "attributes": {"neatlogs.step.seq": 1}},
+        child_first_no_ts[1],
+    ]
+    dup_report = audit_trace(
+        {"trace_id": "t-dup-nots", "finalizationStatus": "finalized"}, dup_no_ts
+    )
+    dup_checks = {c["name"]: c["status"] for c in dup_report["checks"]}
+    assert dup_checks["step_ordering_clean"] == "fail"
+    assert dup_report["replay_ready"] is False
+
+
+def test_doctor_json_encoded_semantic_tool_and_empty_attributes_metadata_only():
+    """Findings 6 & 7 (P2): Doctor parses JSON-encoded `semantic` strings when resolving tool kind
+    (including rejecting missing call.arguments) and treats empty `attributes: {}` with no
+    payloads as metadata-only."""
+    root = {
+        "span_id": "root-1",
+        "parent_span_id": None,
+        "name": "wf",
+        "span_type": "WORKFLOW",
+        "input": {"q": "hi"},
+        "output": {"a": "ok"},
+        "attributes": {"neatlogs.step.seq": 1, "neatlogs.provenance.release": "v1"},
+    }
+
+    # Finding 6: JSON-encoded semantic string without span_type and missing call.arguments -> FAIL
+    bad_sem_str_tool = {
+        "span_id": "tool-1",
+        "parent_span_id": "root-1",
+        "attributes": {"neatlogs.step.seq": 2},
+        "semantic": json.dumps(
+            {
+                "kind": "tool",
+                "call": {"id": "c1", "name": "ping"},
+                "result": {"call_id": "c1", "is_error": False, "value": "pong"},
+                "definition": {"name": "ping"},
+            }
+        ),
+    }
+    bad_spans = [root, bad_sem_str_tool]
+    conv_bad = replay_recording_from_case(
+        {"source": {"kind": "trace", "traceId": "t-semstr-bad"}, "context": {"spans": bad_spans}}
+    )
+    audit_bad = audit_trace(
+        {"trace_id": "t-semstr-bad", "finalizationStatus": "finalized"}, bad_spans
+    )
+    by_name_bad = {c["name"]: c["status"] for c in audit_bad["checks"]}
+    assert conv_bad["skippedTools"] == 1
+    assert by_name_bad["tool_linkage_valid"] == "fail"
+    assert audit_bad["replay_ready"] is False
+
+    # Same JSON-encoded semantic string WITH arguments={} -> PASS in both
+    good_sem_str_tool = {
+        "span_id": "tool-1",
+        "parent_span_id": "root-1",
+        "attributes": {"neatlogs.step.seq": 2},
+        "semantic": json.dumps(
+            {
+                "kind": "tool",
+                "call": {"id": "c1", "name": "ping", "arguments": {}},
+                "result": {"call_id": "c1", "is_error": False, "value": "pong"},
+                "definition": {"name": "ping"},
+            }
+        ),
+    }
+    good_spans = [root, good_sem_str_tool]
+    conv_good = replay_recording_from_case(
+        {"source": {"kind": "trace", "traceId": "t-semstr-ok"}, "context": {"spans": good_spans}}
+    )
+    audit_good = audit_trace(
+        {"trace_id": "t-semstr-ok", "finalizationStatus": "finalized"}, good_spans
+    )
+    assert conv_good["skippedTools"] == 0
+    assert audit_good["replay_ready"] is True
+
+    # Finding 7: Empty `attributes: {}` with no payloads is NOT full capture evidence
+    empty_attr_report = audit_trace(
+        {"trace_id": "t-empty-attrs", "finalizationStatus": "finalized"},
+        [
+            {
+                "span_id": "s1",
+                "parent_span_id": None,
+                "name": "wf",
+                "type": "workflow",
+                "attributes": {},
+            },
+            {
+                "span_id": "s2",
+                "parent_span_id": "s1",
+                "name": "lookup",
+                "type": "tool",
+                "attributes": {},
+            },
+        ],
+    )
+    assert empty_attr_report["replay_ready"] is False
+    assert empty_attr_report["jev_ready"] is False
+    assert empty_attr_report["replay_readiness_verified"] is False
+
+
+def test_eu_host_resolution_handles_trailing_fqdn_dot_and_eu_app_endpoint():
+    """Finding 8 (P2): Trailing FQDN dot and eu.app.neatlogs.com in NEATLOGS_ENDPOINT must
+    resolve cleanly to https://eu.app.neatlogs.com (and eu.ingest.neatlogs.com for v3)."""
+    from neatlogs.trace_cli import resolve_public_api_host
+
+    assert (
+        resolve_public_api_host(
+            {"NEATLOGS_ENDPOINT": "https://eu.ingest.neatlogs.com./api/v1/traces"}
+        )
+        == "https://eu.app.neatlogs.com"
+    )
+    assert (
+        resolve_public_api_host({"NEATLOGS_ENDPOINT": "https://eu.app.neatlogs.com"})
+        == "https://eu.app.neatlogs.com"
+    )
+    assert (
+        resolve_public_api_host({"NEATLOGS_ENDPOINT": "https://eu.app.neatlogs.com."})
+        == "https://eu.app.neatlogs.com"
+    )
+    assert (
+        resolve_public_api_host({}, endpoint="https://eu.ingest.neatlogs.com./api/v1/traces")
+        == "https://eu.app.neatlogs.com"
+    )
+
+    urls_v3: list[str] = []
+
+    def fetch_v3(url, headers, timeout):
+        urls_v3.append(url)
+        return (
+            200,
+            json.dumps(
+                {
+                    "_id": "t-eu-dot",
+                    "status": "success",
+                    "spans": [
+                        {
+                            "span_id": "s1",
+                            "node_name": "wf",
+                            "node_type": "workflow",
+                            "data": {"input_value": "hi", "output_value": "ok"},
+                            "span_metadata": {"neatlogs.step.seq": 1},
+                        }
+                    ],
+                }
+            ).encode(),
+        )
+
+    run_trace_audit(
+        "t-eu-dot",
+        as_json=True,
+        env={"NEATLOGS_API_KEY": "key-eu", "NEATLOGS_HOST": "https://eu.app.neatlogs.com."},
+        fetch=fetch_v3,
+        out=lambda _: None,
+        err=lambda _: None,
+    )
+    assert urls_v3 == ["https://eu.ingest.neatlogs.com/api/traces/v3/t-eu-dot"]
+
+
+def test_huge_json_integer_raises_replay_error_instead_of_overflow_error():
+    """Finding 9 (P2): A 310-digit JSON integer must raise ReplayError (never uncaught
+    OverflowError from math.isfinite/float coercion) across json_value, parse_json_bytes,
+    and parse_replay_recording."""
+    from neatlogs.replay import ReplayError, parse_replay_recording
+    from neatlogs.replay.contracts import json_value, parse_json_bytes
+
+    huge = int("9" * 310)
+    with pytest.raises(ReplayError, match="exactly representable"):
+        json_value({"n": huge})
+    with pytest.raises(ReplayError, match="exactly representable"):
+        json_value({"n": huge}, allow_int64=True)
+
+    raw_bytes = (
+        b'{"version":1,"sourceTraceId":"t","entries":[{"spanId":"s1","kind":"tool","name":"f","input":{"n":'
+        + (b"9" * 310)
+        + b'},"output":"ok"}]}'
+    )
+    with pytest.raises(ReplayError):
+        parse_json_bytes(raw_bytes)
+    with pytest.raises(ReplayError):
+        parse_json_bytes(raw_bytes, allow_int64=True)
+    with pytest.raises(ReplayError):
+        parse_replay_recording(
+            {
+                "version": 1,
+                "sourceTraceId": "t",
+                "entries": [
+                    {
+                        "spanId": "s1",
+                        "kind": "tool",
+                        "name": "f",
+                        "input": {"n": huge},
+                        "output": "ok",
+                    }
+                ],
+            }
+        )

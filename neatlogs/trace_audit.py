@@ -5,12 +5,13 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 import sys
 import urllib.error
 import urllib.request
 from collections import Counter
 from collections.abc import Callable, Sequence
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urlparse
@@ -48,36 +49,48 @@ _KIND_ALIASES = {
     "VECTOR": "VECTOR_STORE",
     "AGENT_ACTION": "AGENT",
 }
-_FULL_SPAN_EVIDENCE_KEYS = frozenset(
-    {
-        "attributes",
-        "span_metadata",
-        "data",
-        "semantic",
-        "input",
-        "output",
-        "input_value",
-        "output_value",
-        "inputValue",
-        "outputValue",
-        "tool_input",
-        "tool_output",
-        "payload_state",
-        "input_content_state",
-        "output_content_state",
-        "redacted",
-        "masked",
-        "input_truncated",
-        "output_truncated",
-    }
+_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+_ISO_TS_RE = re.compile(
+    r"^(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2})(?:\.(\d+))?(Z|[+-]\d{2}:?\d{2})?$",
+    re.ASCII,
+)
+_FULL_CONTAINER_EVIDENCE_KEYS = ("attributes", "span_metadata", "data", "semantic")
+_FULL_VALUE_EVIDENCE_KEYS = (
+    "input",
+    "output",
+    "input_value",
+    "output_value",
+    "inputValue",
+    "outputValue",
+    "tool_input",
+    "tool_output",
+    "payload_state",
+    "input_content_state",
+    "output_content_state",
+    "redacted",
+    "masked",
+    "input_truncated",
+    "output_truncated",
 )
 
 
+def _span_has_full_capture_evidence(span: dict[str, Any]) -> bool:
+    for key in _FULL_CONTAINER_EVIDENCE_KEYS:
+        val = span.get(key)
+        if isinstance(val, dict) and bool(val):
+            return True
+        if isinstance(val, str):
+            stripped = val.strip()
+            if stripped and stripped != "{}":
+                return True
+    return any(span.get(key) is not None for key in _FULL_VALUE_EVIDENCE_KEYS)
+
+
 def _is_metadata_only_spans(spans: Sequence[dict[str, Any]]) -> bool:
-    """Return True when spans carry only summary/metadata fields and zero payload/attribute keys."""
+    """Return True when spans carry only summary/metadata fields and no full capture evidence."""
     if not spans:
         return False
-    return not any(any(key in span for key in _FULL_SPAN_EVIDENCE_KEYS) for span in spans)
+    return not any(_span_has_full_capture_evidence(span) for span in spans)
 
 
 class _ResponseTooLargeError(ValueError):
@@ -130,11 +143,28 @@ def _parse_ts_ns(span: dict[str, Any]) -> int | None:
                 return int(text)
             except ValueError:
                 return None
+        match = _ISO_TS_RE.match(text)
+        if match:
+            base, frac, tz = match.groups()
+            frac = frac or ""
+            micro = frac[:6].ljust(6, "0") if frac else ""
+            tz_norm = "+00:00" if tz == "Z" else (tz or "+00:00")
+            if len(tz_norm) == 5 and tz_norm[0] in "+-":
+                tz_norm = f"{tz_norm[:3]}:{tz_norm[3:]}"
+            iso = f"{base}{'.' + micro if micro else ''}{tz_norm}"
+            try:
+                extra_ns = int(frac[6:9].ljust(3, "0")) if len(frac) > 6 else 0
+                dt = datetime.fromisoformat(iso)
+                delta = dt.astimezone(timezone.utc) - _EPOCH
+                return (delta // timedelta(microseconds=1)) * 1_000 + extra_ns
+            except ValueError:
+                return None
         try:
             dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
             if dt.tzinfo is None:
                 dt = dt.replace(tzinfo=timezone.utc)
-            return int(dt.timestamp() * 1_000_000_000)
+            delta = dt.astimezone(timezone.utc) - _EPOCH
+            return (delta // timedelta(microseconds=1)) * 1_000
         except ValueError:
             return None
     return None
@@ -230,9 +260,19 @@ def _tool_is_replay_acceptable(span: dict[str, Any], span_id_counts: Counter[str
     return validate_tool_span_for_replay(span, span_id_counts)
 
 
+def _semantic(span: dict[str, Any]) -> dict[str, Any]:
+    raw = span.get("semantic")
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except ValueError:
+            return {}
+    return raw if isinstance(raw, dict) else {}
+
+
 def _span_kind(span: dict[str, Any]) -> str:
     attrs = _attrs(span)
-    semantic = span.get("semantic") if isinstance(span.get("semantic"), dict) else {}
+    semantic = _semantic(span)
     raw = (
         semantic.get("kind")
         or span.get("spanType")
@@ -529,28 +569,26 @@ def audit_trace(
             seq_entries.append((ts, seq))
     seqs = [seq for _, seq in seq_entries]
     if seqs:
-        all_have_ts = all(ts is not None for ts, _ in seq_entries)
-        if all_have_ts:
-            # Real OTLP exports spans in child-first end order; validate unique positive
-            # sequences whose values never invert when start_time strictly advances.
-            unique_positive = min(seqs) >= 1 and len(set(seqs)) == len(seqs)
-            ordered = sorted(seq_entries, key=lambda pair: (pair[0], pair[1]))
-            strictly_inc = unique_positive
-            if strictly_inc:
-                prev_ts = ordered[0][0]
-                prev_max_seq = 0
-                cur_max_seq = ordered[0][1]
-                for ts, seq in ordered[1:]:
-                    if ts != prev_ts:
-                        prev_ts = ts
-                        prev_max_seq = cur_max_seq
-                    if seq <= prev_max_seq:
-                        strictly_inc = False
-                        break
-                    if seq > cur_max_seq:
-                        cur_max_seq = seq
-        else:
-            strictly_inc = all(a < b for a, b in zip(seqs, seqs[1:])) and seqs[0] >= 1
+        # Real OTLP exports spans in child-first end order; require unique positive sequences
+        # and, among spans with start timestamps, verify step.seq never inverts when start
+        # time strictly advances. Without timestamps, unique positive step.seq defines order.
+        unique_positive = min(seqs) >= 1 and len(set(seqs)) == len(seqs)
+        strictly_inc = unique_positive
+        ts_entries = [(ts, seq) for ts, seq in seq_entries if ts is not None]
+        if strictly_inc and len(ts_entries) >= 2:
+            ordered = sorted(ts_entries, key=lambda pair: (pair[0], pair[1]))
+            prev_ts = ordered[0][0]
+            prev_max_seq = 0
+            cur_max_seq = ordered[0][1]
+            for ts, seq in ordered[1:]:
+                if ts != prev_ts:
+                    prev_ts = ts
+                    prev_max_seq = cur_max_seq
+                if seq <= prev_max_seq:
+                    strictly_inc = False
+                    break
+                if seq > cur_max_seq:
+                    cur_max_seq = seq
         if strictly_inc:
             record(
                 "step_ordering_clean", "pass", 10, f"Monotonic step sequence ({len(seqs)} steps)"
@@ -883,7 +921,7 @@ def _fetch_v3_trace_with_project_key(
         "app.neatlogs.com": "ingest.neatlogs.com",
         "eu.app.neatlogs.com": "eu.ingest.neatlogs.com",
     }
-    mapped_host = app_to_ingest.get(parsed.hostname.lower())
+    mapped_host = app_to_ingest.get(parsed.hostname.rstrip(".").lower())
     if mapped_host is not None:
         port = f":{parsed.port}" if parsed.port is not None else ""
         netloc = f"{mapped_host}{port}"

@@ -96,10 +96,10 @@ def _patch_models(models: Any) -> None:
         capture = prepare_provider_capture(
             span, "google_genai.models.generate_content", kwargs, supported=not args
         )
-        saved = provider_replay(
-            "google_genai.models.generate_content", kwargs, supported=not args, span=span
-        )
         try:
+            saved = provider_replay(
+                "google_genai.models.generate_content", kwargs, supported=not args, span=span
+            )
             response = saved if saved is not None else orig_generate(*args, **kwargs)
         except Exception as e:
             span.set_status(StatusCode.ERROR, str(e))
@@ -139,11 +139,11 @@ def _patch_models(models: Any) -> None:
             )
 
             _set_input_attributes(span, contents, kwargs)
-            provider_replay(
-                "google_genai.models.generate_content", None, supported=False, span=span
-            )
 
             try:
+                provider_replay(
+                    "google_genai.models.generate_content", None, supported=False, span=span
+                )
                 stream = orig_stream(*args, **kwargs)
             except Exception as e:
                 _err(span, e)
@@ -188,10 +188,10 @@ def _patch_async_models(models: Any) -> None:
         capture = prepare_provider_capture(
             span, "google_genai.models.generate_content", kwargs, supported=not args
         )
-        saved = provider_replay(
-            "google_genai.models.generate_content", kwargs, supported=not args, span=span
-        )
         try:
+            saved = provider_replay(
+                "google_genai.models.generate_content", kwargs, supported=not args, span=span
+            )
             response = saved if saved is not None else await orig_generate(*args, **kwargs)
         except Exception as e:
             span.set_status(StatusCode.ERROR, str(e))
@@ -237,11 +237,11 @@ def _patch_async_models(models: Any) -> None:
             )
 
             _set_input_attributes(span, contents, kwargs)
-            provider_replay(
-                "google_genai.models.generate_content", None, supported=False, span=span
-            )
 
             try:
+                provider_replay(
+                    "google_genai.models.generate_content", None, supported=False, span=span
+                )
                 stream = await orig_stream(*args, **kwargs)
             except Exception as e:
                 span.set_status(StatusCode.ERROR, str(e))

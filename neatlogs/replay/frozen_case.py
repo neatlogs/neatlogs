@@ -87,6 +87,13 @@ def _first(*values):
     )
 
 
+def _first_io(*candidates: tuple[object, bool]):
+    for value, decode_json_string in candidates:
+        if value is not None and value is not _MISSING:
+            return value, decode_json_string
+    return _MISSING, False
+
+
 def _stored(value):
     if type(value) is str:
         try:
@@ -94,6 +101,10 @@ def _stored(value):
         except ReplayError:
             return value
     return json_value(value)
+
+
+def _decode_io(value, *, decode_json_string: bool):
+    return _stored(value) if decode_json_string else json_value(value)
 
 
 def _complete(span, attributes, *, allow_error: bool = False):
@@ -216,43 +227,51 @@ def _parse_start_ts_ns(span) -> int | None:
     return None
 
 
-def _sort_spans_for_replay(spans: list[dict]) -> list[dict]:
-    annotated = [
-        (orig_idx, span, _validated_step_seq(span), _parse_start_ts_ns(span))
-        for orig_idx, span in enumerate(spans)
-    ]
-    if not annotated:
+def _sort_replay_candidates(
+    candidates: list[tuple[int, int | None, int | None, dict]],
+) -> list[dict]:
+    if not candidates:
         return []
 
-    all_have_seq = all(seq is not None for _, _, seq, _ in annotated)
-    all_have_ts = all(ts is not None for _, _, _, ts in annotated)
-    any_have_ts = any(ts is not None for _, _, _, ts in annotated)
+    all_have_seq = all(seq is not None for _, seq, _, _ in candidates)
+    if all_have_seq:
+        # When every eligible replay entry carries a valid step.seq, step.seq is the
+        # primary deterministic order (taking precedence over skewed/clock-jitter timestamps).
+        return [
+            entry
+            for _, _, _, entry in sorted(
+                candidates,
+                key=lambda item: (
+                    item[1],
+                    0 if item[2] is not None else 1,
+                    item[2] if item[2] is not None else 0,
+                    item[0],
+                ),
+            )
+        ]
 
-    # When every span carries a valid step.seq and timestamps are absent (or partial),
-    # step.seq is the authoritative deterministic ordering.
-    if all_have_seq and not all_have_ts:
-        return [span for _, span, _, _ in sorted(annotated, key=lambda item: (item[2], item[0]))]
-
-    # When no span has a timestamp and step.seq is incomplete/absent, preserve snapshot order
-    # rather than jumping partially-sequenced spans ahead of unsequenced siblings.
+    any_have_ts = any(ts is not None for _, _, ts, _ in candidates)
     if not any_have_ts:
-        return list(spans)
+        return [entry for _, _, _, entry in candidates]
 
-    # Otherwise sort chronologically by start timestamp first; use step.seq to disambiguate
-    # equal-timestamp groups when every span in that group carries a valid step.seq.
+    # Mixed or unsequenced entries: sort chronologically by start timestamp so an earlier
+    # unsequenced call is never moved behind a later sequenced call; break equal-timestamp
+    # ties with step.seq only when every entry at that timestamp carries a valid step.seq.
     ts_group_all_seq: dict[int, bool] = {}
-    for _, _, seq, ts in annotated:
+    for _, seq, ts, _ in candidates:
         if ts is not None:
             ts_group_all_seq[ts] = ts_group_all_seq.get(ts, True) and (seq is not None)
 
-    def sort_key(item: tuple[int, dict, int | None, int | None]) -> tuple[int, int, int, int]:
-        orig_idx, _, seq, ts = item
+    def sort_key(
+        item: tuple[int, int | None, int | None, dict],
+    ) -> tuple[int, int, int, int]:
+        orig_idx, seq, ts, _ = item
         if ts is not None:
             tie = seq if (ts_group_all_seq.get(ts) and seq is not None) else orig_idx
             return (0, ts, tie, orig_idx)
         return (1, 0, orig_idx, orig_idx)
 
-    return [span for _, span, _, _ in sorted(annotated, key=sort_key)]
+    return [entry for _, _, _, entry in sorted(candidates, key=sort_key)]
 
 
 def _normalize_kind(kind):
@@ -311,37 +330,41 @@ def _extract_tool_entry(span, attributes, semantic, kind, span_id, *, error_reco
             span.get("spanName"),
             span.get("node_name"),
         )
-        raw_in = _first(
-            attributes.get("neatlogs.tool.input"),
-            attributes.get("neatlogs.raw.tool.input"),
-            attributes.get("input.value"),
-            span.get("tool_input"),
-            span.get("input_value", _MISSING),
-            span.get("inputValue", _MISSING),
-            span.get("input", _MISSING),
-            data.get("tool_input", _MISSING),
-            data.get("tool_arguments", _MISSING),
-            data.get("input_value", _MISSING),
-            data.get("input", _MISSING),
+        raw_in, decode_in = _first_io(
+            (attributes.get("neatlogs.tool.input"), True),
+            (attributes.get("neatlogs.raw.tool.input"), True),
+            (attributes.get("input.value"), True),
+            (span.get("tool_input"), True),
+            (span.get("input_value", _MISSING), True),
+            (span.get("inputValue", _MISSING), True),
+            (span.get("input", _MISSING), False),
+            (data.get("tool_input", _MISSING), True),
+            (data.get("tool_arguments", _MISSING), True),
+            (data.get("input_value", _MISSING), True),
+            (data.get("input", _MISSING), True),
         )
-        raw_out = _first(
-            attributes.get("neatlogs.tool.output"),
-            attributes.get("neatlogs.raw.tool.output"),
-            attributes.get("output.value"),
-            span.get("tool_output"),
-            span.get("output_value", _MISSING),
-            span.get("outputValue", _MISSING),
-            span.get("output", _MISSING),
-            data.get("tool_output", _MISSING),
-            data.get("tool_result", _MISSING),
-            data.get("output_value", _MISSING),
-            data.get("output", _MISSING),
-            data.get("result", _MISSING),
+        raw_out, decode_out = _first_io(
+            (attributes.get("neatlogs.tool.output"), True),
+            (attributes.get("neatlogs.raw.tool.output"), True),
+            (attributes.get("output.value"), True),
+            (span.get("tool_output"), True),
+            (span.get("output_value", _MISSING), True),
+            (span.get("outputValue", _MISSING), True),
+            (span.get("output", _MISSING), False),
+            (data.get("tool_output", _MISSING), True),
+            (data.get("tool_result", _MISSING), True),
+            (data.get("output_value", _MISSING), True),
+            (data.get("output", _MISSING), True),
+            (data.get("result", _MISSING), True),
         )
         if raw_in is _MISSING or (raw_out is _MISSING and error_record is None):
             raise ReplayError("Saved tool replay entry is missing I/O.")
-        input = _stored(raw_in)
-        output = None if (raw_out is _MISSING and error_record is not None) else _stored(raw_out)
+        input = _decode_io(raw_in, decode_json_string=decode_in)
+        output = (
+            None
+            if (raw_out is _MISSING and error_record is not None)
+            else _decode_io(raw_out, decode_json_string=decode_out)
+        )
         if (
             error_record is None
             and kind == "MCP_TOOL"
@@ -471,12 +494,9 @@ def replay_recording_from_case(value, *, include_steps: bool = False, include_er
     counts = Counter(
         sid for sid in (_span_id_value(span) for span in spans) if type(sid) is str and sid
     )
-    allowed_kinds = {"LLM", "TOOL", "MCP_TOOL"} | (_STEP_REPLAY_KINDS if include_steps else set())
-    replay_spans = _sort_spans_for_replay(
-        [span for span in spans if _span_kind_best_effort(span) in allowed_kinds]
-    )
-    entries, skipped = [], 0
-    for span in replay_spans:
+    candidates: list[tuple[int, int | None, int | None, dict]] = []
+    skipped = 0
+    for orig_idx, span in enumerate(spans):
         kind = _span_kind_best_effort(span)
         try:
             semantic = _object(span.get("semantic"))
@@ -492,9 +512,8 @@ def replay_recording_from_case(value, *, include_steps: bool = False, include_er
             error_record = _span_error_record(span, attributes) if allow_err else None
             if kind == "LLM":
                 captured = read_provider_capture(attributes.get(MODEL_CAPTURE_ATTRIBUTE))
-                entries.append({"spanId": span_id, "kind": "model", **captured})
-                continue
-            if is_step:
+                entry_dict = {"spanId": span_id, "kind": "model", **captured}
+            elif is_step:
                 kind_lower = kind.lower()
                 data = span.get("data") if type(span.get("data")) is dict else {}
                 name = _first(
@@ -503,29 +522,31 @@ def replay_recording_from_case(value, *, include_steps: bool = False, include_er
                     span.get("spanName"),
                     span.get("node_name"),
                 )
-                raw_in = _first(
-                    attributes.get(f"neatlogs.{kind_lower}.input"),
-                    attributes.get("input.value"),
-                    span.get("input_value", _MISSING),
-                    span.get("inputValue", _MISSING),
-                    span.get("input", _MISSING),
-                    data.get("input_value", _MISSING),
-                    data.get("input", _MISSING),
+                raw_in, decode_in = _first_io(
+                    (attributes.get(f"neatlogs.{kind_lower}.input"), True),
+                    (attributes.get("input.value"), True),
+                    (span.get("input_value", _MISSING), True),
+                    (span.get("inputValue", _MISSING), True),
+                    (span.get("input", _MISSING), False),
+                    (data.get("input_value", _MISSING), True),
+                    (data.get("input", _MISSING), True),
                 )
-                raw_out = _first(
-                    attributes.get(f"neatlogs.{kind_lower}.output"),
-                    attributes.get("output.value"),
-                    span.get("output_value", _MISSING),
-                    span.get("outputValue", _MISSING),
-                    span.get("output", _MISSING),
-                    data.get("output_value", _MISSING),
-                    data.get("output", _MISSING),
+                raw_out, decode_out = _first_io(
+                    (attributes.get(f"neatlogs.{kind_lower}.output"), True),
+                    (attributes.get("output.value"), True),
+                    (span.get("output_value", _MISSING), True),
+                    (span.get("outputValue", _MISSING), True),
+                    (span.get("output", _MISSING), False),
+                    (data.get("output_value", _MISSING), True),
+                    (data.get("output", _MISSING), True),
                 )
                 if raw_in is _MISSING or (raw_out is _MISSING and error_record is None):
                     raise ReplayError("Saved step replay entry is missing I/O.")
-                input = _stored(raw_in)
+                input = _decode_io(raw_in, decode_json_string=decode_in)
                 output = (
-                    None if (raw_out is _MISSING and error_record is not None) else _stored(raw_out)
+                    None
+                    if (raw_out is _MISSING and error_record is not None)
+                    else _decode_io(raw_out, decode_json_string=decode_out)
                 )
                 safe_body(input, provider_transport=False)
                 safe_body(output, provider_transport=False)
@@ -538,16 +559,17 @@ def replay_recording_from_case(value, *, include_steps: bool = False, include_er
                 }
                 if error_record is not None:
                     entry_dict["error"] = error_record
-                entries.append(entry_dict)
-                continue
-            entries.append(
-                _extract_tool_entry(
+            else:
+                entry_dict = _extract_tool_entry(
                     span, attributes, semantic, kind, span_id, error_record=error_record
                 )
+            candidates.append(
+                (orig_idx, _validated_step_seq(span), _parse_start_ts_ns(span), entry_dict)
             )
         except (ReplayError, ValueError, TypeError, KeyError):
             if kind in ("TOOL", "MCP_TOOL"):
                 skipped += 1
+    entries = _sort_replay_candidates(candidates)
     version = 2 if (include_steps or include_errors) else 1
     return {
         "recording": parse_replay_recording(

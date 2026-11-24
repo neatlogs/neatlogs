@@ -310,3 +310,82 @@ def test_numeric_property_order_handles_many_keys_and_very_long_digits():
     parsed = json.loads(serialized)
     assert list(parsed)[:3] == ["0", "1", "2"]
     assert list(parsed)[-1] == long_key
+
+
+@pytest.mark.parametrize("operation", [CHAT, RESPONSES, GOOGLE])
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.asyncio
+async def test_provider_wrapper_closes_span_and_records_error_on_recorded_model_error(
+    tracer_provider, in_memory_span_exporter, operation, asynchronous
+):
+    """When a wrapped OpenAI/Google call hits a v2 recorded model error, ReplayRecordedError
+    must be caught by the span error handler so the span is ended (not leaked open)."""
+    from opentelemetry.trace import StatusCode
+
+    from neatlogs.replay import ReplayRecordedError
+
+    neatlogs.init(
+        tracer_provider=tracer_provider,
+        disable_export=True,
+        register_shutdown_handlers=False,
+        instrumentations=[],
+    )
+    calls = []
+
+    def sync_live(**kwargs):
+        calls.append(kwargs)
+        raise AssertionError("live provider must not execute on recorded error hit")
+
+    async def async_live(**kwargs):
+        calls.append(kwargs)
+        raise AssertionError("live provider must not execute on recorded error hit")
+
+    live = async_live if asynchronous else sync_live
+    resource = (
+        SimpleNamespace(generate_content=live)
+        if operation == GOOGLE
+        else SimpleNamespace(create=live)
+    )
+    call = wrapper(operation, resource, asynchronous=asynchronous)
+    saved = {
+        "version": 2,
+        "sourceTraceId": "fixture-trace",
+        "entries": [
+            {
+                "spanId": "model-err",
+                "kind": "model",
+                "name": operation,
+                "input": REQUESTS[operation],
+                "output": None,
+                "error": {"type": "RateLimitError", "message": "429 quota"},
+            },
+            {
+                "spanId": "checkpoint",
+                "kind": "tool",
+                "name": "checkpoint",
+                "input": {},
+                "output": {},
+            },
+        ],
+    }
+
+    with ReplaySession(saved, mode="until_span", until_span="checkpoint") as session:
+        with pytest.raises(ReplayRecordedError, match="RateLimitError: 429 quota"):
+            if asynchronous:
+                await call(**REQUESTS[operation])
+            else:
+                call(**REQUESTS[operation])
+        status = session.get_status()
+
+    assert calls == []
+    assert status["hits"] == 1
+    assert status["liveCalls"] == 0
+    finished = [
+        s
+        for s in in_memory_span_exporter.get_finished_spans()
+        if s.name != "neatlogs.trace.complete"
+    ]
+    assert len(finished) == 1
+    assert finished[0].status.status_code == StatusCode.ERROR
+    assert finished[0].attributes["neatlogs.replay.outcome"] == "ERROR_HIT"
+    assert finished[0].attributes["neatlogs.replay.source_span_id"] == "model-err"

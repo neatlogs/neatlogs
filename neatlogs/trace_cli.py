@@ -14,7 +14,9 @@ from urllib.parse import quote, urlparse
 DEFAULT_HOST = "https://app.neatlogs.com"
 _INGEST_TO_APP_HOSTS = {
     "ingest.neatlogs.com": "app.neatlogs.com",
+    "app.neatlogs.com": "app.neatlogs.com",
     "eu.ingest.neatlogs.com": "eu.app.neatlogs.com",
+    "eu.app.neatlogs.com": "eu.app.neatlogs.com",
 }
 PAGE_LIMIT = 50
 MAX_PAGES = 200
@@ -116,7 +118,7 @@ def _map_ingest_to_app_origin(url: str) -> str:
         or parsed.password
     ):
         return stripped
-    mapped_host = _INGEST_TO_APP_HOSTS.get(parsed.hostname.lower())
+    mapped_host = _INGEST_TO_APP_HOSTS.get(parsed.hostname.rstrip(".").lower())
     if mapped_host is not None:
         port = f":{parsed.port}" if parsed.port is not None else ""
         return f"{parsed.scheme}://{mapped_host}{port}"
@@ -127,10 +129,10 @@ def resolve_public_api_host(env: dict[str, Any], *, endpoint: str | None = None)
     """Resolve the app-API origin for NEATLOGS_TOKEN requests.
 
     Precedence:
-    1. Explicit ``endpoint`` override (mapping known Neatlogs ingest hosts such as
-       ``eu.ingest.neatlogs.com`` to ``eu.app.neatlogs.com``).
+    1. Explicit ``endpoint`` override (mapping known Neatlogs hosts such as
+       ``eu.ingest.neatlogs.com`` / ``eu.app.neatlogs.com`` to ``eu.app.neatlogs.com``).
     2. Explicit ``NEATLOGS_HOST`` env var (respected verbatim).
-    3. ``NEATLOGS_ENDPOINT`` env var when it targets a known Neatlogs ingest host.
+    3. ``NEATLOGS_ENDPOINT`` env var when it targets a known Neatlogs ingest/app host.
     4. Default ``https://app.neatlogs.com``.
     """
     explicit_endpoint = (endpoint or "").strip()
@@ -148,7 +150,7 @@ def resolve_public_api_host(env: dict[str, Any], *, endpoint: str | None = None)
             and not parsed.username
             and not parsed.password
         ):
-            mapped_host = _INGEST_TO_APP_HOSTS.get(parsed.hostname.lower())
+            mapped_host = _INGEST_TO_APP_HOSTS.get(parsed.hostname.rstrip(".").lower())
             if mapped_host is not None:
                 port = f":{parsed.port}" if parsed.port is not None else ""
                 return f"{parsed.scheme}://{mapped_host}{port}"

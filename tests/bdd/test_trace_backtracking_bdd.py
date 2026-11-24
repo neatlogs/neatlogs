@@ -327,7 +327,8 @@ def test_bdd_scenario_2_and_3_backtrack_to_any_span_and_fork_with_override(real_
     extracted = replay_recording_from_case(frozen_case, include_steps=True)
     recording = extracted["recording"]
     assert extracted["skippedTools"] == 0
-    assert [e.kind for e in recording.entries] == ["step", "tool", "tool"]
+    assert recording.version == 2
+    assert [e.kind for e in recording.entries] == ["retriever", "tool", "tool"]
 
     policy_span_id = recording.entries[0].span_id
     decide_span_id = recording.entries[2].span_id
@@ -430,7 +431,9 @@ def test_bdd_scenario_4_error_span_replay_and_recovery(real_otlp_pipeline):
         include_errors=True,
     )
     recording = extracted["recording"]
+    assert recording.version == 2
     assert len(recording.entries) == 2
+    assert [e.kind for e in recording.entries] == ["retriever", "tool"]
     assert recording.entries[1].error is not None
     assert "sk-leak-999" not in recording.entries[1].error["message"]
 

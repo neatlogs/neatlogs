@@ -428,7 +428,7 @@ def span(
         # Export the same default identity used by replay lookup.
         if kind_upper == "TOOL" and not tool_name:
             extra["tool.name"] = name or func.__name__
-        replay_kind = "tool" if kind_upper == "TOOL" else "step"
+        replay_kind = "tool" if kind_upper == "TOOL" else kind_upper.lower()
         return decorate(
             replay_tool(
                 func,

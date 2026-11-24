@@ -7,6 +7,7 @@ import os
 import sys
 import urllib.error
 import urllib.request
+from collections import Counter
 from collections.abc import Callable, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
@@ -27,6 +28,16 @@ from .trace_cli import (
 
 _FRESHNESS_KEYS = ("updated_at", "created_at", "timestamp", "last_modified", "date")
 _TRUNCATION_KEYS = ("neatlogs.payload.truncated", "neatlogs.capture.truncated")
+_UNAVAILABLE_STATES = frozenset(
+    {"unavailable", "retentionExpired", "truncated", "previewOnly", "redacted", "masked", "lossy"}
+)
+_INCOMPLETE_ATTR_FLAGS = (
+    "pii.server_redacted",
+    "pii.server_redaction_failed",
+    "neatlogs.payload.truncated",
+    "neatlogs.capture.truncated",
+    "neatlogs.stream.incomplete",
+)
 MAX_V3_TRACE_BYTES = 16 * 1024 * 1024
 _KIND_ALIASES = {
     "TOOL_CALL": "TOOL",
@@ -138,6 +149,119 @@ def _span_name(span: dict[str, Any]) -> str | None:
         or _text(span.get("node_name"))
         or _text(span.get("name"))
     )
+
+
+def _tool_name(span: dict[str, Any]) -> str | None:
+    attrs = _attrs(span)
+    return (
+        _text(span.get("tool_name"))
+        or _text(attrs.get("tool.name"))
+        or _text(attrs.get("neatlogs.tool.name"))
+        or _text(attrs.get("neatlogs.raw.tool.name"))
+        or _span_name(span)
+    )
+
+
+def _is_lossy_or_incomplete(span: dict[str, Any]) -> bool:
+    attrs = _attrs(span)
+    states = (
+        span.get("payload_state"),
+        span.get("input_content_state"),
+        span.get("output_content_state"),
+        attrs.get("neatlogs.capture_fidelity"),
+    )
+    if any(state in _UNAVAILABLE_STATES for state in states if isinstance(state, str)):
+        return True
+    if attrs.get("pii.server_redaction_status") == "redacted":
+        return True
+    span_flags = (
+        span.get("redacted"),
+        span.get("masked"),
+        span.get("input_truncated"),
+        span.get("output_truncated"),
+    )
+    attr_flags = tuple(attrs.get(k) for k in _INCOMPLETE_ATTR_FLAGS)
+    return any(flag is True or flag == "true" for flag in (*span_flags, *attr_flags))
+
+
+def _normalize_tool_span_for_replay(span: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(span)
+    sid = _span_id(span)
+    if sid is not None:
+        normalized["span_id"] = sid
+    normalized["span_type"] = _span_kind(span)
+    name = _span_name(span)
+    if name is not None and not normalized.get("name"):
+        normalized["name"] = name
+    raw_attrs = span.get("attributes")
+    if raw_attrs is None or isinstance(raw_attrs, dict):
+        normalized["attributes"] = _attrs(span)
+    elif isinstance(span.get("span_metadata"), dict):
+        # Preserve raw_attrs string/value if malformed so frozen_case rejects it; merge only valid JSON.
+        try:
+            parsed = json.loads(raw_attrs) if isinstance(raw_attrs, str) else None
+        except ValueError:
+            parsed = None
+        if isinstance(parsed, dict):
+            normalized["attributes"] = {**span["span_metadata"], **parsed}
+    if span.get("input_truncated") is True and "input_content_state" not in normalized:
+        normalized["input_content_state"] = "truncated"
+    if span.get("output_truncated") is True and "output_content_state" not in normalized:
+        normalized["output_content_state"] = "truncated"
+    data = span.get("data") if isinstance(span.get("data"), dict) else {}
+    attrs = normalized["attributes"] if isinstance(normalized.get("attributes"), dict) else {}
+    has_canonical_in = any(
+        val is not None
+        for val in (
+            attrs.get("neatlogs.tool.input"),
+            attrs.get("neatlogs.raw.tool.input"),
+            attrs.get("input.value"),
+            span.get("tool_input"),
+            span.get("input_value"),
+        )
+    )
+    if not has_canonical_in:
+        for candidate in (
+            span.get("inputValue"),
+            span.get("input"),
+            data.get("tool_input"),
+            data.get("tool_arguments"),
+            data.get("input_value"),
+            data.get("input"),
+        ):
+            if candidate is not None and not (isinstance(candidate, str) and not candidate.strip()):
+                normalized["tool_input"] = candidate
+                break
+    has_canonical_out = any(
+        val is not None
+        for val in (
+            attrs.get("neatlogs.tool.output"),
+            attrs.get("neatlogs.raw.tool.output"),
+            attrs.get("output.value"),
+            span.get("tool_output"),
+            span.get("output_value"),
+        )
+    )
+    if not has_canonical_out:
+        for candidate in (
+            span.get("outputValue"),
+            span.get("output"),
+            data.get("tool_output"),
+            data.get("tool_result"),
+            data.get("output_value"),
+            data.get("output"),
+            data.get("result"),
+        ):
+            if candidate is not None and not (isinstance(candidate, str) and not candidate.strip()):
+                normalized["tool_output"] = candidate
+                break
+    return normalized
+
+
+def _tool_is_replay_acceptable(span: dict[str, Any], span_id_counts: Counter[str]) -> bool:
+    from .replay.frozen_case import validate_tool_span_for_replay
+
+    return validate_tool_span_for_replay(_normalize_tool_span_for_replay(span), span_id_counts)
 
 
 def _span_kind(span: dict[str, Any]) -> str:
@@ -490,8 +614,11 @@ def audit_trace(
 
     # 6. tool_linkage_valid (10)
     tool_spans = [s for s in work_spans if _span_kind(s) in {"TOOL", "MCP_TOOL"}]
+    span_id_counts: Counter[str] = Counter(
+        sid for sid in (_span_id(s) for s in dict_spans) if sid is not None
+    )
     if metadata_only:
-        unnamed_tools = [s for s in tool_spans if not _span_name(s)]
+        unnamed_tools = [s for s in tool_spans if not _tool_name(s)]
         if unnamed_tools:
             record(
                 "tool_linkage_valid",
@@ -511,25 +638,21 @@ def audit_trace(
         else:
             record("tool_linkage_valid", "pass", 10, "0 tool span(s) have names and I/O")
     else:
-        bad_tools = [
-            s
-            for s in tool_spans
-            if not (_span_name(s) and (_non_empty(_span_input(s)) or _non_empty(_span_output(s))))
-        ]
+        bad_tools = [s for s in tool_spans if not _tool_is_replay_acceptable(s, span_id_counts)]
         if not bad_tools:
             record(
                 "tool_linkage_valid",
                 "pass",
                 10,
-                f"{len(tool_spans)} tool span(s) have names and I/O",
+                f"{len(tool_spans)} tool span(s) satisfy replay builder acceptance rules",
             )
         else:
             record(
                 "tool_linkage_valid",
                 "fail",
                 10,
-                f"{len(bad_tools)} tool span(s) missing name or I/O",
-                "Decorate custom tools with @neatlogs.span(kind='TOOL', tool_name='...', replay=True).",
+                f"{len(bad_tools)} tool span(s) would be skipped by replay builder (missing name, both I/O sides, or lossless capture)",
+                "Decorate custom tools with @neatlogs.span(kind='TOOL', tool_name='...', replay=True) and ensure complete lossless input and output.",
             )
 
     # 7. retriever_freshness (10)
@@ -625,14 +748,7 @@ def audit_trace(
         record("session_hygiene", "pass", 10, "Single-turn trace (session_id not required)")
 
     # 9. provenance_and_replayability (5)
-    truncated = any(
-        _attrs(s).get(k) is True
-        or _attrs(s).get("neatlogs.capture_fidelity") == "lossy"
-        or s.get("input_truncated") is True
-        or s.get("output_truncated") is True
-        for s in work_spans
-        for k in _TRUNCATION_KEYS
-    )
+    truncated = any(_is_lossy_or_incomplete(s) for s in work_spans)
     has_provenance = any(
         _attrs(s).get("neatlogs.provenance.release")
         or _attrs(s).get("neatlogs.prompt.version")
@@ -645,7 +761,7 @@ def audit_trace(
             "provenance_and_replayability",
             "fail",
             5,
-            "One or more spans are truncated or lossy (blocks lossless ReplaySession)",
+            "One or more spans are truncated, redacted, or lossy (blocks lossless ReplaySession)",
             "Avoid lossy return types on replayable tools/retrievers or enable presigned overflow.",
         )
     elif metadata_only and not has_provenance:
@@ -673,7 +789,7 @@ def audit_trace(
         )
 
     failed = {c["name"] for c in checks if c["status"] == "fail"}
-    jev_ready = not (
+    jev_ready = not metadata_only and not (
         failed
         & {
             "has_spans",
@@ -683,7 +799,7 @@ def audit_trace(
             "session_hygiene",
         }
     )
-    replay_ready = not (
+    replay_ready = not metadata_only and not (
         failed
         & {
             "has_spans",
@@ -703,6 +819,7 @@ def audit_trace(
         "grade": grade,
         "jev_ready": jev_ready,
         "replay_ready": replay_ready,
+        "replay_readiness_verified": not metadata_only,
         "span_count": len(work_spans),
         "checks": checks,
         "recommendations": recommendations,
@@ -894,10 +1011,15 @@ def run_trace_audit(
     if as_json:
         out(json.dumps(report, indent=2, sort_keys=True))
     else:
+        replay_label = (
+            "False (unverified: metadata-only)"
+            if not report["replay_readiness_verified"]
+            else str(report["replay_ready"])
+        )
         out(
             f"trace {report['trace_id'] or '(file)'}: {report['grade'].upper()} "
             f"(score={report['score']}/100, jev_ready={report['jev_ready']}, "
-            f"replay_ready={report['replay_ready']})"
+            f"replay_ready={replay_label})"
         )
         for check in report["checks"]:
             out(f"  {check['status'].upper():4s} {check['name']}: {check['message']}")

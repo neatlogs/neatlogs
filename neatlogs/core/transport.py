@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 import random
 import threading
@@ -114,11 +115,14 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
-def _retry_after_seconds(value: str | None, fallback: float) -> float:
+def _parse_retry_after_seconds(value: str | None) -> float | None:
     if not value:
-        return fallback
+        return None
     try:
-        return max(0.0, float(value))
+        parsed = float(value)
+        if not math.isfinite(parsed):
+            return None
+        return max(0.0, parsed)
     except ValueError:
         try:
             when = parsedate_to_datetime(value)
@@ -126,7 +130,12 @@ def _retry_after_seconds(value: str | None, fallback: float) -> float:
                 when = when.replace(tzinfo=timezone.utc)
             return max(0.0, (when - datetime.now(timezone.utc)).total_seconds())
         except (TypeError, ValueError, OverflowError):
-            return fallback
+            return None
+
+
+def _retry_after_seconds(value: str | None, fallback: float) -> float:
+    parsed = _parse_retry_after_seconds(value)
+    return fallback if parsed is None else parsed
 
 
 def _trace_receipt(response, url):
@@ -227,16 +236,24 @@ class _OtlpSession(requests.Session):
                         settled = True
                     return checked
 
-                base_delay = min(
-                    _MAX_RETRY_AFTER_SECONDS,
-                    _retry_after_seconds(response.headers.get("Retry-After"), 0.1 * (2**attempt)),
-                )
-                delay = base_delay * random.uniform(0.8, 1.2) if base_delay > 0 else 0.0
-                delay = min(_MAX_RETRY_AFTER_SECONDS, delay)
-                if delay >= deadline - time.monotonic():
-                    self._circuit_breaker.record_failure()
-                    settled = True
-                    return response
+                server_delay = _parse_retry_after_seconds(response.headers.get("Retry-After"))
+                remaining = deadline - time.monotonic()
+                if server_delay is not None:
+                    # Never shorten a server-provided Retry-After minimum via cap or negative
+                    # jitter. If the required wait exceeds our delay cap or remaining deadline,
+                    # skip the internal retry immediately rather than retrying early.
+                    if server_delay > _MAX_RETRY_AFTER_SECONDS or server_delay >= remaining:
+                        self._circuit_breaker.record_failure()
+                        settled = True
+                        return response
+                    delay = server_delay
+                else:
+                    base_delay = min(_MAX_RETRY_AFTER_SECONDS, 0.1 * (2**attempt))
+                    delay = min(_MAX_RETRY_AFTER_SECONDS, base_delay * random.uniform(0.8, 1.2))
+                    if delay >= remaining:
+                        self._circuit_breaker.record_failure()
+                        settled = True
+                        return response
                 response.close()
                 if delay:
                     time.sleep(delay)

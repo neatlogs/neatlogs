@@ -480,6 +480,9 @@ def test_doctor_trace_public_api_metadata_only_warns_instead_of_false_payload_fa
     assert code == 1  # needs_attention (cannot confirm ready without payloads)
     report = json.loads(out[0])
     assert report["grade"] == "needs_attention"
+    assert report["replay_ready"] is False
+    assert report["jev_ready"] is False
+    assert report["replay_readiness_verified"] is False
     by_name = {c["name"]: c["status"] for c in report["checks"]}
     assert by_name["has_spans"] == "pass"
     assert by_name["single_workflow_root"] == "pass"
@@ -537,3 +540,492 @@ def test_doctor_trace_public_api_metadata_only_warns_instead_of_false_payload_fa
     assert code2 == 0
     assert called_urls == [f"https://ingest.neatlogs.com/api/traces/v3/{trace_id}"]
     assert json.loads(out2[0])["grade"] == "ready"
+
+
+# ---------------------------------------------------------------------------
+# PR #290 review Finding 1: Recorded step order and semantic kind identity
+# ---------------------------------------------------------------------------
+
+
+def test_frozen_case_sorts_overlapping_spans_by_step_seq_for_fifo_and_checkpoints():
+    """Overlapping spans exported out of start order must be sorted deterministically by
+    validated integer neatlogs.step.seq so FIFO matching and until_span cutoffs stay exact."""
+    frozen_case = {
+        "source": {"kind": "trace", "traceId": "trace-overlap-1"},
+        "context": {
+            "spans": [
+                # Exported in end-time order (3, 2, 1), NOT start/seq order (1, 2, 3)!
+                {
+                    "span_id": "call-3",
+                    "span_type": "TOOL",
+                    "tool_name": "after",
+                    "tool_input": {"q": "y"},
+                    "tool_output": {"v": 3},
+                    "start_time_unix_nano": 3000,
+                    "attributes": {"neatlogs.step.seq": 3},
+                },
+                {
+                    "span_id": "call-2",
+                    "span_type": "TOOL",
+                    "tool_name": "lookup",
+                    "tool_input": {"q": "x"},
+                    "tool_output": {"v": 2},
+                    "start_time_unix_nano": 2000,
+                    "attributes": {"neatlogs.step.seq": 2},
+                },
+                {
+                    "span_id": "call-1",
+                    "span_type": "TOOL",
+                    "tool_name": "lookup",
+                    "tool_input": {"q": "x"},
+                    "tool_output": {"v": 1},
+                    "start_time_unix_nano": 1000,
+                    "attributes": {"neatlogs.step.seq": 1},
+                },
+            ]
+        },
+    }
+    converted = replay_recording_from_case(frozen_case)
+    recording = converted["recording"]
+    assert recording.version == 1
+    assert [e.span_id for e in recording.entries] == ["call-1", "call-2", "call-3"]
+
+    # FIFO returns v=1 before v=2 despite call-2 appearing first in the raw snapshot
+    with ReplaySession(recording, mode="tools_only"):
+        first = lookup_replay("tool", "lookup", {"q": "x"})
+        second = lookup_replay("tool", "lookup", {"q": "x"})
+        assert first.entry.output == {"v": 1}
+        assert second.entry.output == {"v": 2}
+
+    # Checkpoint at call-2 must replay call-1 (before checkpoint), then go LIVE at call-2 & call-3
+    with ReplaySession(recording, mode="until_span", until_span="call-2") as session:
+        d1 = lookup_replay("tool", "lookup", {"q": "x"})
+        d2 = lookup_replay("tool", "lookup", {"q": "x"})
+        d3 = lookup_replay("tool", "after", {"q": "y"})
+        assert d1.outcome == "HIT" and d1.entry.output == {"v": 1}
+        assert d2.outcome == "LIVE"
+        assert d3.outcome == "LIVE"
+        assert session.get_status()["reason"] == "checkpoint"
+
+
+def test_frozen_case_legacy_fallback_ordering_by_timestamp_and_snapshot_index():
+    """When neatlogs.step.seq is absent or invalid (bool, 0, negative, non-int), fall back
+    deterministically to start timestamp, and then original snapshot index."""
+    # 1. Invalid/missing step.seq with ISO (sub-microsecond) & unix timestamps -> timestamp order
+    ts_case = {
+        "source": {"kind": "trace", "traceId": "trace-legacy-ts"},
+        "context": {
+            "spans": [
+                {
+                    "span_id": "late",
+                    "span_type": "TOOL",
+                    "tool_name": "op",
+                    "tool_input": {"k": 1},
+                    "tool_output": {"seq": "late"},
+                    "start_time": "2026-11-20T00:00:01.000000900Z",
+                    "attributes": {"neatlogs.step.seq": True},  # bool is invalid
+                },
+                {
+                    "span_id": "early",
+                    "span_type": "TOOL",
+                    "tool_name": "op",
+                    "tool_input": {"k": 1},
+                    "tool_output": {"seq": "early"},
+                    "start_time": "2026-11-20T00:00:01.000000100Z",
+                    "attributes": {"neatlogs.step.seq": -1},  # negative is invalid
+                },
+                {
+                    "span_id": "mid",
+                    "span_type": "TOOL",
+                    "tool_name": "op",
+                    "tool_input": {"k": 1},
+                    "tool_output": {"seq": "mid"},
+                    "start_time": "2026-11-20T00:00:01.000000500Z",
+                    "attributes": {"neatlogs.step.seq": "not-an-int"},
+                },
+            ]
+        },
+    }
+    ts_rec = replay_recording_from_case(ts_case)["recording"]
+    assert [e.span_id for e in ts_rec.entries] == ["early", "mid", "late"]
+
+    # 2. No step.seq and no timestamps -> preserve original snapshot array order
+    no_ts_case = {
+        "source": {"kind": "trace", "traceId": "trace-legacy-idx"},
+        "context": {
+            "spans": [
+                {
+                    "span_id": "first-in-array",
+                    "span_type": "TOOL",
+                    "tool_name": "op",
+                    "tool_input": {"k": 1},
+                    "tool_output": {"order": 1},
+                    "attributes": {},
+                },
+                {
+                    "span_id": "second-in-array",
+                    "span_type": "TOOL",
+                    "tool_name": "op",
+                    "tool_input": {"k": 1},
+                    "tool_output": {"order": 2},
+                    "attributes": {},
+                },
+            ]
+        },
+    }
+    idx_rec = replay_recording_from_case(no_ts_case)["recording"]
+    assert [e.span_id for e in idx_rec.entries] == ["first-in-array", "second-in-array"]
+
+
+def test_semantic_kinds_preserve_identity_and_never_collide_on_same_name_and_input():
+    """Distinct span kinds (RETRIEVER, MEMORY, GUARDRAIL, TOOL) sharing the exact same name
+    and input must preserve their semantic kind in recording and lookup keys and never consume
+    each other's recorded results."""
+    from neatlogs.replay.contracts import replay_key
+
+    live_calls = {"retriever": 0, "memory": 0, "guardrail": 0, "tool": 0}
+
+    @neatlogs.span(kind="RETRIEVER", name="lookup", replay=True)
+    def lookup_retriever(query: str) -> dict[str, str]:
+        live_calls["retriever"] += 1
+        return {"live": "retriever"}
+
+    @neatlogs.span(kind="MEMORY", name="lookup", replay=True)
+    def lookup_memory(query: str) -> dict[str, str]:
+        live_calls["memory"] += 1
+        return {"live": "memory"}
+
+    @neatlogs.span(kind="GUARDRAIL", name="lookup", replay=True)
+    def lookup_guardrail(query: str) -> dict[str, str]:
+        live_calls["guardrail"] += 1
+        return {"live": "guardrail"}
+
+    @neatlogs.span(kind="TOOL", tool_name="lookup", replay=True)
+    def lookup_tool(query: str) -> dict[str, str]:
+        live_calls["tool"] += 1
+        return {"live": "tool"}
+
+    # Keys for distinct kinds with identical name and input must all differ
+    keys = {
+        replay_key(k, "lookup", {"query": "refund"})
+        for k in ("retriever", "memory", "guardrail", "reranker", "vector_store", "tool", "model")
+    }
+    assert len(keys) == 7
+
+    frozen_case = {
+        "source": {"kind": "trace", "traceId": "trace-kinds-1"},
+        "context": {
+            "spans": [
+                {
+                    "span_id": "s-ret",
+                    "span_type": "RETRIEVER",
+                    "name": "lookup",
+                    "input_value": json.dumps({"query": "refund"}),
+                    "output_value": json.dumps({"saved": "retriever"}),
+                    "attributes": {"neatlogs.step.seq": 1},
+                },
+                {
+                    "span_id": "s-mem",
+                    "span_type": "MEMORY",
+                    "name": "lookup",
+                    "input_value": json.dumps({"query": "refund"}),
+                    "output_value": json.dumps({"saved": "memory"}),
+                    "attributes": {"neatlogs.step.seq": 2},
+                },
+                {
+                    "span_id": "s-grd",
+                    "span_type": "GUARDRAIL",
+                    "name": "lookup",
+                    "input_value": json.dumps({"query": "refund"}),
+                    "output_value": json.dumps({"saved": "guardrail"}),
+                    "attributes": {"neatlogs.step.seq": 3},
+                },
+                {
+                    "span_id": "s-tool",
+                    "span_type": "TOOL",
+                    "tool_name": "lookup",
+                    "tool_input": {"query": "refund"},
+                    "tool_output": {"saved": "tool"},
+                    "attributes": {"neatlogs.step.seq": 4},
+                },
+            ]
+        },
+    }
+    extracted = replay_recording_from_case(frozen_case, include_steps=True)
+    recording = extracted["recording"]
+    assert recording.version == 2
+    assert [e.kind for e in recording.entries] == ["retriever", "memory", "guardrail", "tool"]
+
+    # Call in reverse order with identical arguments — each kind hits ONLY its own entry
+    with ReplaySession(recording, mode="tools_only") as session:
+        assert lookup_tool("refund") == {"saved": "tool"}
+        assert lookup_guardrail("refund") == {"saved": "guardrail"}
+        assert lookup_memory("refund") == {"saved": "memory"}
+        assert lookup_retriever("refund") == {"saved": "retriever"}
+        assert session.get_status()["hits"] == 4
+        assert session.get_status()["liveCalls"] == 0
+    assert live_calls == {"retriever": 0, "memory": 0, "guardrail": 0, "tool": 0}
+
+
+# ---------------------------------------------------------------------------
+# PR #290 review Finding 2: Strict shared v1 contract vs opted-in v2 contract
+# ---------------------------------------------------------------------------
+
+
+def test_replay_contract_v1_strictly_excludes_step_and_error_entries():
+    """Default replay_recording_from_case() must emit strict version=1 recordings matching
+    the shared TS validator (tool/model only, no error field). Extended step/error entries
+    are emitted ONLY under version=2 and rejected under version=1."""
+    from neatlogs.replay import ReplayError, parse_replay_recording
+
+    mixed_case = {
+        "source": {"kind": "trace", "traceId": "trace-contract-1"},
+        "context": {
+            "spans": [
+                {
+                    "span_id": "r1",
+                    "span_type": "RETRIEVER",
+                    "name": "fetch",
+                    "input_value": json.dumps({"q": "hi"}),
+                    "output_value": json.dumps([{"id": "1"}]),
+                    "attributes": {"neatlogs.step.seq": 1},
+                },
+                {
+                    "span_id": "t1",
+                    "span_type": "TOOL",
+                    "tool_name": "ok_tool",
+                    "tool_input": {"x": 1},
+                    "tool_output": {"y": 2},
+                    "attributes": {"neatlogs.step.seq": 2},
+                },
+                {
+                    "span_id": "t2",
+                    "span_type": "TOOL",
+                    "tool_name": "bad_tool",
+                    "tool_input": {"x": 2},
+                    "status": "ERROR",
+                    "error_message": "boom",
+                    "attributes": {"neatlogs.step.seq": 3},
+                },
+            ]
+        },
+    }
+
+    # Default (v1): only valid v1 tool/model entries, no error field, version == 1
+    v1_out = replay_recording_from_case(mixed_case)
+    v1_dict = v1_out["recording"].to_dict()
+    assert v1_dict["version"] == 1
+    assert v1_out["skippedTools"] == 1
+    assert len(v1_dict["entries"]) == 1
+    assert set(v1_dict["entries"][0]) == {"spanId", "kind", "name", "input", "output"}
+    assert v1_dict["entries"][0]["kind"] == "tool"
+    assert parse_replay_recording(v1_dict).version == 1
+
+    # Opted-in include_steps / include_errors: emits version == 2 and round-trips cleanly
+    v2_steps = replay_recording_from_case(mixed_case, include_steps=True)["recording"].to_dict()
+    assert v2_steps["version"] == 2
+    assert [e["kind"] for e in v2_steps["entries"]] == ["retriever", "tool"]
+    assert parse_replay_recording(v2_steps).version == 2
+
+    v2_errors = replay_recording_from_case(mixed_case, include_errors=True)["recording"].to_dict()
+    assert v2_errors["version"] == 2
+    assert v2_errors["entries"][1]["error"]["message"] == "boom"
+    assert parse_replay_recording(v2_errors).version == 2
+
+    # Strict v1 validation MUST reject step kinds, collapsed "step", and "error" fields
+    for bad_v1_entry in (
+        {"spanId": "s1", "kind": "step", "name": "f", "input": {}, "output": {}},
+        {"spanId": "s1", "kind": "retriever", "name": "f", "input": {}, "output": {}},
+        {
+            "spanId": "s1",
+            "kind": "tool",
+            "name": "f",
+            "input": {},
+            "output": None,
+            "error": {"type": "RuntimeError", "message": "boom"},
+        },
+    ):
+        with pytest.raises(ReplayError):
+            parse_replay_recording({"version": 1, "sourceTraceId": "t", "entries": [bad_v1_entry]})
+
+    # Even in v2, collapsed "step" kind is rejected in favor of real semantic kinds
+    with pytest.raises(ReplayError):
+        parse_replay_recording(
+            {
+                "version": 2,
+                "sourceTraceId": "t",
+                "entries": [
+                    {"spanId": "s1", "kind": "step", "name": "f", "input": {}, "output": {}}
+                ],
+            }
+        )
+
+
+# ---------------------------------------------------------------------------
+# PR #290 review Finding 3: Align trace_audit replay readiness with frozen_case
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "defect",
+    [
+        "missing_output",
+        "missing_input",
+        "error_tool",
+        "truncated_state",
+        "redacted_tool",
+        "credential_in_output",
+        "legacy_mcp_string",
+        "duplicate_span_id",
+    ],
+)
+def test_trace_audit_never_marks_replay_ready_when_replay_builder_skips_tool(defect: str):
+    """Any tool span that replay_recording_from_case() skips MUST fail tool_linkage_valid
+    and set replay_ready=False in audit_trace()."""
+    root = {
+        "span_id": "root-1",
+        "parent_span_id": None,
+        "name": "wf",
+        "span_type": "WORKFLOW",
+        "input": {"q": "help"},
+        "output": {"a": "done"},
+        "start_time_unix_nano": 1000,
+        "attributes": {"neatlogs.step.seq": 1, "neatlogs.provenance.release": "v1"},
+    }
+    tool: dict[str, Any] = {
+        "span_id": "tool-1",
+        "parent_span_id": "root-1",
+        "name": "lookup",
+        "span_type": "TOOL",
+        "tool_name": "lookup",
+        "tool_input": {"order_id": "1"},
+        "tool_output": {"ok": True},
+        "start_time_unix_nano": 2000,
+        "attributes": {"neatlogs.step.seq": 2},
+    }
+    spans = [root, tool]
+    if defect == "missing_output":
+        del tool["tool_output"]
+    elif defect == "missing_input":
+        del tool["tool_input"]
+    elif defect == "error_tool":
+        tool["status"] = "ERROR"
+    elif defect == "truncated_state":
+        tool["output_content_state"] = "truncated"
+    elif defect == "redacted_tool":
+        tool["redacted"] = True
+    elif defect == "credential_in_output":
+        tool["tool_output"] = {"api_key": "sk-secret-123"}
+    elif defect == "legacy_mcp_string":
+        tool["span_type"] = "MCP_TOOL"
+        tool["tool_output"] = {"result": "plain string"}
+    elif defect == "duplicate_span_id":
+        spans.append(dict(tool))
+
+    converted = replay_recording_from_case(
+        {"source": {"kind": "trace", "traceId": "t-align"}, "context": {"spans": spans}}
+    )
+    assert converted["skippedTools"] >= 1
+
+    report = audit_trace({"trace_id": "t-align", "finalizationStatus": "finalized"}, spans)
+    by_name = {c["name"]: c["status"] for c in report["checks"]}
+    assert by_name["tool_linkage_valid"] == "fail"
+    assert report["replay_ready"] is False
+    assert report["replay_readiness_verified"] is True
+
+
+def test_trace_audit_accepts_zero_arg_tool_and_marks_metadata_only_unverified():
+    """A zero-arg tool with empty dict input and valid output passes both frozen_case and
+    audit_trace; metadata-only reads MUST report replay_ready=False and unverified even with
+    0 tool spans."""
+    spans = [
+        {
+            "span_id": "root-1",
+            "parent_span_id": None,
+            "name": "wf",
+            "span_type": "WORKFLOW",
+            "input": {"q": "ping"},
+            "output": {"a": "pong"},
+            "start_time_unix_nano": 1000,
+            "attributes": {"neatlogs.step.seq": 1, "neatlogs.provenance.release": "v1"},
+        },
+        {
+            "span_id": "tool-1",
+            "parent_span_id": "root-1",
+            "name": "healthcheck",
+            "span_type": "TOOL",
+            "tool_name": "healthcheck",
+            "tool_input": {},
+            "tool_output": {"healthy": True},
+            "start_time_unix_nano": 2000,
+            "attributes": {"neatlogs.step.seq": 2},
+        },
+    ]
+    converted = replay_recording_from_case(
+        {"source": {"kind": "trace", "traceId": "t-zero"}, "context": {"spans": spans}}
+    )
+    assert converted["skippedTools"] == 0
+    full_report = audit_trace({"trace_id": "t-zero", "finalizationStatus": "finalized"}, spans)
+    assert full_report["replay_ready"] is True
+    assert full_report["replay_readiness_verified"] is True
+
+    # Metadata-only with zero tool spans must STILL never claim replay_ready=True
+    meta_only_report = audit_trace(
+        {"traceId": "t-meta", "finalizationStatus": "finalized"},
+        [
+            {
+                "spanId": "s1",
+                "parentSpanId": None,
+                "spanName": "wf",
+                "spanType": "workflow",
+                "startedAt": "2026-11-20T00:00:01Z",
+                "status": "OK",
+            }
+        ],
+        metadata_only=True,
+    )
+    assert meta_only_report["replay_ready"] is False
+    assert meta_only_report["jev_ready"] is False
+    assert meta_only_report["replay_readiness_verified"] is False
+
+    # Text output explicitly labels metadata-only replay readiness as unverified
+    text_lines: list[str] = []
+
+    def pub_fetch(url, headers, timeout):
+        if "/spans" in url:
+            body = json.dumps(
+                {
+                    "success": True,
+                    "data": {
+                        "spans": [
+                            {
+                                "spanId": "s1",
+                                "parentSpanId": None,
+                                "spanName": "wf",
+                                "spanType": "workflow",
+                                "startedAt": "2026-11-20T00:00:01Z",
+                                "status": "OK",
+                            }
+                        ],
+                        "page": {"nextCursor": None},
+                    },
+                }
+            ).encode()
+        else:
+            body = json.dumps(
+                {
+                    "success": True,
+                    "data": {"traceId": "t-meta", "finalizationStatus": "finalized"},
+                }
+            ).encode()
+        return 200, body
+
+    run_trace_audit(
+        "t-meta",
+        as_json=False,
+        env={"NEATLOGS_TOKEN": "tok", "NEATLOGS_PROJECT_ID": "proj"},
+        fetch=pub_fetch,
+        out=text_lines.append,
+        err=lambda _: None,
+    )
+    assert any("unverified: metadata-only" in line for line in text_lines)

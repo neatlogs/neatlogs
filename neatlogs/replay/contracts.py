@@ -14,7 +14,18 @@ import rfc8785
 from ..errors import NeatlogsError
 
 Json = Union[None, bool, int, float, str, list["Json"], dict[str, "Json"]]
-Kind = Literal["tool", "model", "step"]
+V1_KINDS = frozenset({"tool", "model"})
+STEP_KINDS = frozenset({"retriever", "reranker", "vector_store", "memory", "guardrail"})
+V2_KINDS = V1_KINDS | STEP_KINDS
+Kind = Literal[
+    "tool",
+    "model",
+    "retriever",
+    "reranker",
+    "vector_store",
+    "memory",
+    "guardrail",
+]
 MAX_RECORDING_BYTES = 16 * 1024 * 1024
 MAX_INPUT_BYTES = 1024 * 1024
 
@@ -133,10 +144,11 @@ class ReplayEntry:
 class ReplayRecording:
     source_trace_id: str
     entries: tuple[ReplayEntry, ...]
+    version: int = 1
 
     def to_dict(self):
         return {
-            "version": 1,
+            "version": self.version,
             "sourceTraceId": self.source_trace_id,
             "entries": [entry.to_dict() for entry in self.entries],
         }
@@ -162,15 +174,20 @@ def parse_replay_recording(value: object) -> ReplayRecording:
         value = value.to_dict()
     copied = json_value(value)
     fields = object_fields(copied, {"version", "sourceTraceId", "entries"})
-    if type(fields["version"]) is not int or fields["version"] != 1:
+    version = fields["version"]
+    if type(version) is not int or version not in (1, 2):
         raise ReplayError("Unsupported local replay recording version.")
     entries = fields["entries"]
     if type(entries) is not list or len(entries) > 5000:
         raise ReplayError("Replay recordings allow at most 5000 entries.")
+    allowed_kinds = V1_KINDS if version == 1 else V2_KINDS
+    optional_fields = frozenset() if version == 1 else frozenset({"error"})
     result = []
     for raw in entries:
-        item = object_fields(raw, {"spanId", "kind", "name", "input", "output"}, optional={"error"})
-        if item["kind"] not in ("tool", "model", "step"):
+        item = object_fields(
+            raw, {"spanId", "kind", "name", "input", "output"}, optional=optional_fields
+        )
+        if item["kind"] not in allowed_kinds:
             raise ReplayError("Unsupported local replay entry kind.")
         raw_error = item.get("error")
         parsed_error = None
@@ -193,7 +210,7 @@ def parse_replay_recording(value: object) -> ReplayRecording:
         )
     if len({entry.span_id for entry in result}) != len(result):
         raise ReplayError("Replay span identities must be unique.")
-    return ReplayRecording(identifier(fields["sourceTraceId"]), tuple(result))
+    return ReplayRecording(identifier(fields["sourceTraceId"]), tuple(result), version=version)
 
 
 def parse_json_bytes(content: bytes, *, limit=MAX_RECORDING_BYTES):

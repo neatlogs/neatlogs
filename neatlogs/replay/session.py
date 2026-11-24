@@ -12,6 +12,7 @@ from typing import Literal
 from opentelemetry import context as otel_context
 
 from .contracts import (
+    STEP_KINDS,
     ReplayEntry,
     ReplayError,
     ReplayRunBinding,
@@ -220,11 +221,11 @@ class ReplaySession:
             try:
                 key = replay_key(kind, name, input)
             except ReplayError:
-                return self._live_step() if kind == "step" else self._miss(kind, name)
+                return self._live_step() if kind in STEP_KINDS else self._miss(kind, name)
             position = self._positions.get(key, 0)
             sequence = self._entries.get(key, [])
             if position >= len(sequence):
-                return self._live_step() if kind == "step" else self._miss(kind, name)
+                return self._live_step() if kind in STEP_KINDS else self._miss(kind, name)
             index, entry = sequence[position]
             if entry.span_id == self.until_span:
                 if entry.span_id in self._overrides:
@@ -239,7 +240,7 @@ class ReplaySession:
                 self._status["liveCalls"] += 1
                 return ReplayLive("LIVE")
             if self.until_span is not None and index > self._checkpoint:
-                return self._live_step() if kind == "step" else self._miss(kind, name)
+                return self._live_step() if kind in STEP_KINDS else self._miss(kind, name)
             if entry.span_id in self._overrides:
                 overridden_entry = self._resolve_override(entry)
                 self._positions[key] = position + 1
@@ -252,7 +253,7 @@ class ReplaySession:
                 self._status["hits"] += 1
                 return ReplayErrorHit(copy.deepcopy(entry))
             if can_restore is not None and not can_restore(entry.output):
-                return self._live_step() if kind == "step" else self._miss(kind, name)
+                return self._live_step() if kind in STEP_KINDS else self._miss(kind, name)
             self._positions[key] = position + 1
             self._status["hits"] += 1
             return ReplayHit(copy.deepcopy(entry))

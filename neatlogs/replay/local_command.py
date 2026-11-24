@@ -141,7 +141,7 @@ def parse_report(value):
     if miss is not None:
         object_fields(miss, {"kind", "name"})
         if (
-            miss["kind"] not in {"tool", "model", "step"}
+            miss["kind"] not in {"tool", "model"}
             or type(miss["name"]) is not str
             or len(miss["name"]) > 200
         ):

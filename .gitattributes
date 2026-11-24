@@ -1,0 +1,4 @@
+# Keep the canonical telemetry contract byte-identical on every OS.
+# Without this, Windows checkouts (core.autocrlf=true) convert LF -> CRLF
+# and any raw SHA-256 check on the schema file fails.
+neatlogs/contracts/**/*.json text eol=lf

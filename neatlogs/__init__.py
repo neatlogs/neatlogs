@@ -93,6 +93,7 @@ from .schema_v2 import (
     TELEMETRY_SCHEMA_VERSION,
     telemetry_schema,
     telemetry_schema_bytes,
+    telemetry_schema_digest,
     verify_telemetry_schema,
 )
 from .version import __version__
@@ -384,5 +385,12 @@ __all__ = [
     "doctor_local_v2",
     "doctor_probe_v2",
     "doctor_semantic_digest",
+    "TELEMETRY_CONTRACT_VERSION",
+    "TELEMETRY_SCHEMA_SHA256",
+    "TELEMETRY_SCHEMA_VERSION",
+    "telemetry_schema",
+    "telemetry_schema_bytes",
+    "telemetry_schema_digest",
+    "verify_telemetry_schema",
     "__version__",
 ]

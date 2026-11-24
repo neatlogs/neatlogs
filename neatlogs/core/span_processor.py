@@ -802,8 +802,11 @@ class NeatlogsSpanProcessor(SpanProcessor):
             span_attrs = span._attributes
             if span_attrs is None:
                 return
+            stream_incomplete = attrs.get("neatlogs.stream.incomplete") in (True, "true")
             want_in = _nonempty("input.value") is None and agg.get("in_val")
-            want_out = _nonempty("output.value") is None and agg.get("out_val")
+            want_out = (
+                not stream_incomplete and _nonempty("output.value") is None and agg.get("out_val")
+            )
             if not (want_in or want_out):
                 return
             # A root created by neatlogs.trace()/@span is already ended (immutable

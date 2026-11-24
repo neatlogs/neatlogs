@@ -213,11 +213,11 @@ def _attrs(span: dict[str, Any]) -> dict[str, Any]:
 
 
 def _span_id(span: dict[str, Any]) -> str | None:
-    return _text(span.get("spanId")) or _text(span.get("span_id"))
+    return _text(span.get("span_id")) or _text(span.get("spanId"))
 
 
 def _parent_id(span: dict[str, Any]) -> str | None:
-    return _text(span.get("parentSpanId")) or _text(span.get("parent_span_id"))
+    return _text(span.get("parent_span_id")) or _text(span.get("parentSpanId"))
 
 
 def _span_name(span: dict[str, Any]) -> str | None:
@@ -640,6 +640,7 @@ def audit_trace(
     span_id_counts: Counter[str] = Counter(
         sid for sid in (_span_id(s) for s in dict_spans) if sid is not None
     )
+    valid_tool_count = 0
     if metadata_only:
         unnamed_tools = [s for s in tool_spans if not _tool_name(s)]
         if unnamed_tools:
@@ -662,6 +663,7 @@ def audit_trace(
             record("tool_linkage_valid", "pass", 10, "0 tool span(s) have names and I/O")
     else:
         bad_tools = [s for s in tool_spans if not _tool_is_replay_acceptable(s, span_id_counts)]
+        valid_tool_count = len(tool_spans) - len(bad_tools)
         if not bad_tools:
             record(
                 "tool_linkage_valid",
@@ -823,15 +825,22 @@ def audit_trace(
         )
 
     failed = {c["name"] for c in checks if c["status"] == "fail"}
-    jev_ready = not metadata_only and not (
-        failed
-        & {
-            "has_spans",
-            "single_workflow_root",
-            "root_io_present",
-            "trace_finalized",
-            "session_hygiene",
-        }
+    root_stream_incomplete = bool(
+        root is not None and _attrs(root).get("neatlogs.stream.incomplete") in (True, "true")
+    )
+    jev_ready = (
+        not metadata_only
+        and not root_stream_incomplete
+        and not (
+            failed
+            & {
+                "has_spans",
+                "single_workflow_root",
+                "root_io_present",
+                "trace_finalized",
+                "session_hygiene",
+            }
+        )
     )
     llm_spans = [s for s in work_spans if _span_kind(s) == "LLM"]
     bad_models = (
@@ -844,11 +853,6 @@ def audit_trace(
             f"{len(bad_models)}/{len(llm_spans)} LLM span(s) lack valid neatlogs.replay.model_capture "
             "(model replay unavailable; use supported non-streaming OpenAI/Google wrappers for model replay)."
         )
-    valid_tool_count = (
-        0
-        if metadata_only
-        else sum(1 for s in tool_spans if _tool_is_replay_acceptable(s, span_id_counts))
-    )
     base_replay_checks_ok = (
         not metadata_only
         and not exceeds_replay_span_limit

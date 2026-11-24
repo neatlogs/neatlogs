@@ -2458,3 +2458,118 @@ def test_doctor_does_not_mark_model_only_trace_replay_ready_without_provider_cap
     assert report_partial["replay_ready"] is False
     assert report_partial["model_replay_ready"] is False
     assert report_partial["replay_scope"] == "none"
+
+    # 6. Duplicate span_id with distinct aliased spanId is rejected identically to frozen_case
+    dup_alias_spans = [
+        root,
+        {
+            **valid_tool,
+            "span_id": "dup-id",
+            "spanId": "alias-1",
+            "attributes": {"neatlogs.step.seq": 2},
+        },
+        {
+            **valid_tool,
+            "span_id": "dup-id",
+            "spanId": "alias-2",
+            "attributes": {"neatlogs.step.seq": 3},
+        },
+    ]
+    assert (
+        replay_recording_from_case(
+            {
+                "source": {"kind": "trace", "traceId": "t-dup-alias"},
+                "context": {"spans": dup_alias_spans},
+            }
+        )["skippedTools"]
+        == 2
+    )
+    dup_alias_report = audit_trace(
+        {"trace_id": "t-dup-alias", "finalizationStatus": "finalized"}, dup_alias_spans
+    )
+    assert {c["name"]: c["status"] for c in dup_alias_report["checks"]}[
+        "tool_linkage_valid"
+    ] == "fail"
+    assert dup_alias_report["replay_ready"] is False
+
+
+def test_aborted_stream_root_does_not_backfill_child_output_and_fails_jev_and_replay_readiness():
+    """When a workflow root carries neatlogs.stream.incomplete=True and no output.value,
+    NeatlogsSpanProcessor must NOT promote an intermediate child tool output onto the root,
+    and audit_readable_spans must mark both jev_ready=False and replay_ready=False."""
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    from neatlogs.core.span_processor import NeatlogsSpanProcessor
+    from neatlogs.trace_audit import audit_readable_spans
+
+    provider = TracerProvider()
+    sink = InMemorySpanExporter()
+    provider.add_span_processor(
+        NeatlogsSpanProcessor(
+            emit_completion_markers=False,
+            own_all_spans=True,
+            release="v1",
+        )
+    )
+    provider.add_span_processor(SimpleSpanProcessor(sink))
+    tracer = provider.get_tracer("neatlogs.test")
+
+    try:
+        with tracer.start_as_current_span(
+            "sse_workflow",
+            attributes={
+                "neatlogs.span.kind": "WORKFLOW",
+                "input.value": json.dumps({"query": "stream answer"}),
+            },
+        ) as root_span:
+            with tracer.start_as_current_span(
+                "lookup_tool",
+                attributes={
+                    "neatlogs.span.kind": "TOOL",
+                    "neatlogs.tool.name": "lookup_tool",
+                    "input.value": json.dumps({"id": "1"}),
+                    "output.value": json.dumps({"intermediate": "child-tool-result"}),
+                },
+            ):
+                pass
+            # Stream aborted before final reply was produced
+            root_span.set_attribute("neatlogs.stream.incomplete", True)
+    finally:
+        provider.shutdown()
+
+    finished = sink.get_finished_spans()
+    root_finished = next(s for s in finished if s.name == "sse_workflow")
+    root_attrs = dict(root_finished.attributes or {})
+    assert root_attrs.get("neatlogs.stream.incomplete") is True
+    assert "output.value" not in root_attrs
+    assert "neatlogs.workflow.output" not in root_attrs
+
+    report = audit_readable_spans(finished)
+    by_name = {c["name"]: c["status"] for c in report["checks"]}
+    assert by_name["root_io_present"] == "fail"
+    assert by_name["provenance_and_replayability"] == "fail"
+    assert report["jev_ready"] is False
+    assert report["replay_ready"] is False
+
+    # Even if partial output.value was manually stamped on an incomplete root stream,
+    # jev_ready and replay_ready MUST both remain False.
+    partial_report = audit_trace(
+        {"trace_id": "t-partial-stream", "finalizationStatus": "finalized"},
+        [
+            {
+                "span_id": "root-1",
+                "parent_span_id": None,
+                "name": "sse_workflow",
+                "span_type": "WORKFLOW",
+                "input": {"query": "stream answer"},
+                "output": {"partial": "half a token"},
+                "attributes": {
+                    "neatlogs.step.seq": 1,
+                    "neatlogs.provenance.release": "v1",
+                    "neatlogs.stream.incomplete": True,
+                },
+            }
+        ],
+    )
+    assert partial_report["jev_ready"] is False
+    assert partial_report["replay_ready"] is False

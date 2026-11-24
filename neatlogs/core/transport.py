@@ -118,14 +118,21 @@ def _env_float(name: str, default: float) -> float:
 def _parse_retry_after_seconds(value: str | None) -> float | None:
     if not value:
         return None
+    text = value.strip()
+    if not text:
+        return None
     try:
-        parsed = float(value)
-        if not math.isfinite(parsed):
+        parsed = float(text)
+        if math.isnan(parsed):
+            return None
+        if math.isinf(parsed):
+            if parsed > 0 and text.lower().lstrip("+") not in ("inf", "infinity"):
+                return float("inf")
             return None
         return max(0.0, parsed)
     except ValueError:
         try:
-            when = parsedate_to_datetime(value)
+            when = parsedate_to_datetime(text)
             if when.tzinfo is None:
                 when = when.replace(tzinfo=timezone.utc)
             return max(0.0, (when - datetime.now(timezone.utc)).total_seconds())

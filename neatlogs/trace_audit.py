@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import sys
 import urllib.error
@@ -24,6 +25,7 @@ from .trace_cli import (
     Fetcher,
     _NoRedirect,
     fetch_public_trace,
+    resolve_public_api_host,
 )
 
 _FRESHNESS_KEYS = ("updated_at", "created_at", "timestamp", "last_modified", "date")
@@ -46,6 +48,36 @@ _KIND_ALIASES = {
     "VECTOR": "VECTOR_STORE",
     "AGENT_ACTION": "AGENT",
 }
+_FULL_SPAN_EVIDENCE_KEYS = frozenset(
+    {
+        "attributes",
+        "span_metadata",
+        "data",
+        "semantic",
+        "input",
+        "output",
+        "input_value",
+        "output_value",
+        "inputValue",
+        "outputValue",
+        "tool_input",
+        "tool_output",
+        "payload_state",
+        "input_content_state",
+        "output_content_state",
+        "redacted",
+        "masked",
+        "input_truncated",
+        "output_truncated",
+    }
+)
+
+
+def _is_metadata_only_spans(spans: Sequence[dict[str, Any]]) -> bool:
+    """Return True when spans carry only summary/metadata fields and zero payload/attribute keys."""
+    if not spans:
+        return False
+    return not any(any(key in span for key in _FULL_SPAN_EVIDENCE_KEYS) for span in spans)
 
 
 class _ResponseTooLargeError(ValueError):
@@ -88,13 +120,16 @@ def _parse_ts_ns(span: dict[str, Any]) -> int | None:
     if isinstance(raw, int):
         return raw
     if isinstance(raw, float):
-        return int(raw)
+        return int(raw) if math.isfinite(raw) else None
     if isinstance(raw, str):
         text = raw.strip()
         if not text:
             return None
-        if text.isdigit():
-            return int(text)
+        if text.isascii() and text.isdigit():
+            try:
+                return int(text)
+            except ValueError:
+                return None
         try:
             dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
             if dt.tzinfo is None:
@@ -109,8 +144,13 @@ def _step_seq(span: dict[str, Any]) -> int | None:
     raw = _attrs(span).get("neatlogs.step.seq")
     if isinstance(raw, int) and not isinstance(raw, bool):
         return raw
-    if isinstance(raw, str) and raw.strip().isdigit():
-        return int(raw.strip())
+    if isinstance(raw, str):
+        text = raw.strip()
+        if text.isascii() and text.isdigit():
+            try:
+                return int(text)
+            except ValueError:
+                return None
     return None
 
 
@@ -184,84 +224,10 @@ def _is_lossy_or_incomplete(span: dict[str, Any]) -> bool:
     return any(flag is True or flag == "true" for flag in (*span_flags, *attr_flags))
 
 
-def _normalize_tool_span_for_replay(span: dict[str, Any]) -> dict[str, Any]:
-    normalized = dict(span)
-    sid = _span_id(span)
-    if sid is not None:
-        normalized["span_id"] = sid
-    normalized["span_type"] = _span_kind(span)
-    name = _span_name(span)
-    if name is not None and not normalized.get("name"):
-        normalized["name"] = name
-    raw_attrs = span.get("attributes")
-    if raw_attrs is None or isinstance(raw_attrs, dict):
-        normalized["attributes"] = _attrs(span)
-    elif isinstance(span.get("span_metadata"), dict):
-        # Preserve raw_attrs string/value if malformed so frozen_case rejects it; merge only valid JSON.
-        try:
-            parsed = json.loads(raw_attrs) if isinstance(raw_attrs, str) else None
-        except ValueError:
-            parsed = None
-        if isinstance(parsed, dict):
-            normalized["attributes"] = {**span["span_metadata"], **parsed}
-    if span.get("input_truncated") is True and "input_content_state" not in normalized:
-        normalized["input_content_state"] = "truncated"
-    if span.get("output_truncated") is True and "output_content_state" not in normalized:
-        normalized["output_content_state"] = "truncated"
-    data = span.get("data") if isinstance(span.get("data"), dict) else {}
-    attrs = normalized["attributes"] if isinstance(normalized.get("attributes"), dict) else {}
-    has_canonical_in = any(
-        val is not None
-        for val in (
-            attrs.get("neatlogs.tool.input"),
-            attrs.get("neatlogs.raw.tool.input"),
-            attrs.get("input.value"),
-            span.get("tool_input"),
-            span.get("input_value"),
-        )
-    )
-    if not has_canonical_in:
-        for candidate in (
-            span.get("inputValue"),
-            span.get("input"),
-            data.get("tool_input"),
-            data.get("tool_arguments"),
-            data.get("input_value"),
-            data.get("input"),
-        ):
-            if candidate is not None and not (isinstance(candidate, str) and not candidate.strip()):
-                normalized["tool_input"] = candidate
-                break
-    has_canonical_out = any(
-        val is not None
-        for val in (
-            attrs.get("neatlogs.tool.output"),
-            attrs.get("neatlogs.raw.tool.output"),
-            attrs.get("output.value"),
-            span.get("tool_output"),
-            span.get("output_value"),
-        )
-    )
-    if not has_canonical_out:
-        for candidate in (
-            span.get("outputValue"),
-            span.get("output"),
-            data.get("tool_output"),
-            data.get("tool_result"),
-            data.get("output_value"),
-            data.get("output"),
-            data.get("result"),
-        ):
-            if candidate is not None and not (isinstance(candidate, str) and not candidate.strip()):
-                normalized["tool_output"] = candidate
-                break
-    return normalized
-
-
 def _tool_is_replay_acceptable(span: dict[str, Any], span_id_counts: Counter[str]) -> bool:
     from .replay.frozen_case import validate_tool_span_for_replay
 
-    return validate_tool_span_for_replay(_normalize_tool_span_for_replay(span), span_id_counts)
+    return validate_tool_span_for_replay(span, span_id_counts)
 
 
 def _span_kind(span: dict[str, Any]) -> str:
@@ -275,6 +241,7 @@ def _span_kind(span: dict[str, Any]) -> str:
         or span.get("kind")
         or attrs.get("neatlogs.span.kind")
         or attrs.get("openinference.span.kind")
+        or span.get("type")
         or ""
     )
     normalized = str(raw).strip().upper()
@@ -464,6 +431,7 @@ def audit_trace(
     )
     has_marker = any(_is_completion_marker(s) for s in dict_spans)
     work_spans = [s for s in dict_spans if not _is_completion_marker(s)]
+    metadata_only = metadata_only or _is_metadata_only_spans(work_spans)
 
     checks: list[dict[str, Any]] = []
     recommendations: list[str] = []
@@ -748,6 +716,9 @@ def audit_trace(
         record("session_hygiene", "pass", 10, "Single-turn trace (session_id not required)")
 
     # 9. provenance_and_replayability (5)
+    from .replay.frozen_case import MAX_FROZEN_CASE_SPANS
+
+    exceeds_replay_span_limit = len(dict_spans) > MAX_FROZEN_CASE_SPANS
     truncated = any(_is_lossy_or_incomplete(s) for s in work_spans)
     has_provenance = any(
         _attrs(s).get("neatlogs.provenance.release")
@@ -763,6 +734,14 @@ def audit_trace(
             5,
             "One or more spans are truncated, redacted, or lossy (blocks lossless ReplaySession)",
             "Avoid lossy return types on replayable tools/retrievers or enable presigned overflow.",
+        )
+    elif exceeds_replay_span_limit:
+        record(
+            "provenance_and_replayability",
+            "fail",
+            5,
+            f"Trace has {len(dict_spans)} spans, exceeding the replay builder limit of {MAX_FROZEN_CASE_SPANS}",
+            f"Split long runs or replay a narrower span subtree within {MAX_FROZEN_CASE_SPANS} spans.",
         )
     elif metadata_only and not has_provenance:
         record(
@@ -799,14 +778,19 @@ def audit_trace(
             "session_hygiene",
         }
     )
-    replay_ready = not metadata_only and not (
-        failed
-        & {
-            "has_spans",
-            "single_workflow_root",
-            "tool_linkage_valid",
-            "provenance_and_replayability",
-        }
+    replay_ready = (
+        not metadata_only
+        and not exceeds_replay_span_limit
+        and not (
+            failed
+            & {
+                "has_spans",
+                "single_workflow_root",
+                "step_ordering_clean",
+                "tool_linkage_valid",
+                "provenance_and_replayability",
+            }
+        )
     )
     grade = (
         "ready"
@@ -895,7 +879,17 @@ def _fetch_v3_trace_with_project_key(
     ):
         err("NEATLOGS_ENDPOINT must be an absolute http(s) URL")
         return EXIT_USAGE
-    url = f"{parsed.scheme}://{parsed.netloc}/api/traces/v3/{quote(trace_id, safe='')}"
+    app_to_ingest = {
+        "app.neatlogs.com": "ingest.neatlogs.com",
+        "eu.app.neatlogs.com": "eu.ingest.neatlogs.com",
+    }
+    mapped_host = app_to_ingest.get(parsed.hostname.lower())
+    if mapped_host is not None:
+        port = f":{parsed.port}" if parsed.port is not None else ""
+        netloc = f"{mapped_host}{port}"
+    else:
+        netloc = parsed.netloc
+    url = f"{parsed.scheme}://{netloc}/api/traces/v3/{quote(trace_id, safe='')}"
     fetcher = fetch or _v3_default_fetch
     headers = {"Authorization": f"Bearer {api_key}", "x-api-key": api_key}
     try:
@@ -983,8 +977,7 @@ def run_trace_audit(
             v3_session_fallback = True
         elif (effective_env.get("NEATLOGS_TOKEN") or "").strip():
             public_env = dict(effective_env)
-            if endpoint:
-                public_env["NEATLOGS_HOST"] = endpoint
+            public_env["NEATLOGS_HOST"] = resolve_public_api_host(effective_env, endpoint=endpoint)
             fetched = fetch_public_trace(
                 str(trace_id), env=public_env, fetch=fetch, timeout=timeout, err=err
             )

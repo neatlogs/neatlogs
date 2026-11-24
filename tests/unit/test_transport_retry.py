@@ -326,3 +326,32 @@ def test_fallback_backoff_without_retry_after_still_applies_client_jitter(monkey
         assert sleeps[0] == pytest.approx(0.08)
     finally:
         session.close()
+
+
+@pytest.mark.parametrize("retry_after", ["9" * 310, "1e400"])
+def test_overflowing_numeric_retry_after_skips_retry_instead_of_retrying_early(
+    monkeypatch, retry_after
+):
+    """A 429 with an overflowing numeric Retry-After (e.g. 310 nines -> float('inf')) must
+    NOT be treated as absent and retried after ~80ms; it must skip internal retry immediately."""
+    from neatlogs.core import transport
+
+    sleeps: list[float] = []
+    calls: list[int] = []
+
+    def fake_request(self, method, url, **kwargs):
+        calls.append(1)
+        return _fake_response(429, retry_after=retry_after)
+
+    monkeypatch.setattr(requests.Session, "request", fake_request)
+    monkeypatch.setattr(transport.time, "sleep", sleeps.append)
+
+    session = build_otlp_session(circuit_breaker_threshold=1)
+    try:
+        resp = session.post("https://ingest.example.com/v1/traces", data=b"", timeout=15.0)
+        assert resp.status_code == 429
+        assert len(calls) == 1
+        assert sleeps == []
+        assert session.circuit_breaker_state == "open"
+    finally:
+        session.close()

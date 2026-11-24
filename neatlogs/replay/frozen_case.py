@@ -8,18 +8,28 @@ from collections import Counter
 from datetime import datetime, timedelta, timezone
 
 from ..core.error_sanitization import sanitize_error_text
-from .contracts import ReplayError, identifier, json_value, parse_json_bytes, parse_replay_recording
+from .contracts import (
+    MAX_REPLAY_ENTRIES,
+    ReplayError,
+    identifier,
+    json_value,
+    parse_json_bytes,
+    parse_replay_recording,
+)
 from .provider import MODEL_CAPTURE_ATTRIBUTE, read_provider_capture, safe_body
 
+MAX_FROZEN_CASE_SPANS = MAX_REPLAY_ENTRIES
 _STEP_REPLAY_KINDS = frozenset({"RETRIEVER", "RERANKER", "VECTOR_STORE", "MEMORY", "GUARDRAIL"})
 _KIND_ALIASES = {
     "TOOL_CALL": "TOOL",
+    "MCP": "MCP_TOOL",
     "RE_RANKER": "RERANKER",
     "VECTOR": "VECTOR_STORE",
 }
 _EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 _ISO_TS_RE = re.compile(
-    r"^(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2})(?:\.(\d+))?(Z|[+-]\d{2}:?\d{2})?$"
+    r"^(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2})(?:\.(\d+))?(Z|[+-]\d{2}:?\d{2})?$",
+    re.ASCII,
 )
 _MISSING = object()
 _UNAVAILABLE = {
@@ -37,10 +47,38 @@ def _object(value):
     if value is None:
         return {}
     if type(value) is str:
-        value = parse_json_bytes(value.encode())
+        value = parse_json_bytes(value.encode(), allow_int64=True)
     if type(value) is not dict:
         raise ReplayError("Saved execution metadata must be an object.")
     return value
+
+
+def _merge_attributes(span):
+    attrs = _object(span.get("attributes"))
+    meta = span.get("span_metadata")
+    if type(meta) is dict:
+        return {**meta, **attrs}
+    return attrs
+
+
+def _span_id_value(span):
+    sid = span.get("span_id")
+    if type(sid) is str and sid:
+        return sid
+    alt = span.get("spanId")
+    if type(alt) is str and alt:
+        return alt
+    return sid
+
+
+def _parent_span_id_value(span):
+    pid = span.get("parent_span_id")
+    if type(pid) is str and pid:
+        return pid
+    alt = span.get("parentSpanId")
+    if type(alt) is str and alt:
+        return alt
+    return pid
 
 
 def _first(*values):
@@ -67,7 +105,12 @@ def _complete(span, attributes, *, allow_error: bool = False):
     states = [
         span.get(key) for key in ("payload_state", "input_content_state", "output_content_state")
     ]
-    flags = [span.get("redacted"), span.get("masked")] + [
+    flags = [
+        span.get("redacted"),
+        span.get("masked"),
+        span.get("input_truncated"),
+        span.get("output_truncated"),
+    ] + [
         attributes.get(key)
         for key in (
             "pii.server_redacted",
@@ -77,10 +120,11 @@ def _complete(span, attributes, *, allow_error: bool = False):
             "neatlogs.stream.incomplete",
         )
     ]
+    capture_fidelity = attributes.get("neatlogs.capture_fidelity")
     base_ok = (
         not any(state in _UNAVAILABLE for state in states if type(state) is str)
         and not any(flag is True or flag == "true" for flag in flags)
-        and attributes.get("neatlogs.capture_fidelity") not in _UNAVAILABLE
+        and not (type(capture_fidelity) is str and capture_fidelity in _UNAVAILABLE)
         and attributes.get("pii.server_redaction_status") != "redacted"
     )
     if not base_ok:
@@ -98,19 +142,20 @@ def _complete(span, attributes, *, allow_error: bool = False):
 def _validated_step_seq(span) -> int | None:
     raw = None
     try:
-        attrs = _object(span.get("attributes"))
+        attrs = _merge_attributes(span)
     except ReplayError:
-        attrs = {}
+        attrs = span.get("span_metadata") if type(span.get("span_metadata")) is dict else {}
     if "neatlogs.step.seq" in attrs:
         raw = attrs["neatlogs.step.seq"]
-    elif type(span.get("span_metadata")) is dict and "neatlogs.step.seq" in span["span_metadata"]:
-        raw = span["span_metadata"]["neatlogs.step.seq"]
     if type(raw) is int and raw >= 1:
         return raw
     if type(raw) is str:
         text = raw.strip()
-        if text.isdigit():
-            parsed = int(text)
+        if text.isascii() and text.isdigit():
+            try:
+                parsed = int(text)
+            except ValueError:
+                return None
             if parsed >= 1:
                 return parsed
     return None
@@ -139,19 +184,22 @@ def _parse_start_ts_ns(span) -> int | None:
         text = raw.strip()
         if not text:
             return None
-        if text.isdigit():
-            return int(text)
+        if text.isascii() and text.isdigit():
+            try:
+                return int(text)
+            except ValueError:
+                return None
         match = _ISO_TS_RE.match(text)
         if match:
             base, frac, tz = match.groups()
             frac = frac or ""
             micro = frac[:6].ljust(6, "0") if frac else ""
-            extra_ns = int(frac[6:9].ljust(3, "0")) if len(frac) > 6 else 0
             tz_norm = "+00:00" if tz == "Z" else (tz or "+00:00")
             if len(tz_norm) == 5 and tz_norm[0] in "+-":
                 tz_norm = f"{tz_norm[:3]}:{tz_norm[3:]}"
             iso = f"{base}{'.' + micro if micro else ''}{tz_norm}"
             try:
+                extra_ns = int(frac[6:9].ljust(3, "0")) if len(frac) > 6 else 0
                 dt = datetime.fromisoformat(iso)
                 delta = dt.astimezone(timezone.utc) - _EPOCH
                 return (delta // timedelta(microseconds=1)) * 1_000 + extra_ns
@@ -169,24 +217,65 @@ def _parse_start_ts_ns(span) -> int | None:
 
 
 def _sort_spans_for_replay(spans: list[dict]) -> list[dict]:
-    def sort_key(pair: tuple[int, dict]) -> tuple[int, int, int, int]:
-        orig_idx, span = pair
-        seq = _validated_step_seq(span)
-        ts = _parse_start_ts_ns(span)
-        if seq is not None:
-            return (0, seq, ts if ts is not None else 0, orig_idx)
-        if ts is not None:
-            return (1, 0, ts, orig_idx)
-        return (2, 0, 0, orig_idx)
+    annotated = [
+        (orig_idx, span, _validated_step_seq(span), _parse_start_ts_ns(span))
+        for orig_idx, span in enumerate(spans)
+    ]
+    if not annotated:
+        return []
 
-    return [span for _, span in sorted(enumerate(spans), key=sort_key)]
+    all_have_seq = all(seq is not None for _, _, seq, _ in annotated)
+    all_have_ts = all(ts is not None for _, _, _, ts in annotated)
+    any_have_ts = any(ts is not None for _, _, _, ts in annotated)
+
+    # When every span carries a valid step.seq and timestamps are absent (or partial),
+    # step.seq is the authoritative deterministic ordering.
+    if all_have_seq and not all_have_ts:
+        return [span for _, span, _, _ in sorted(annotated, key=lambda item: (item[2], item[0]))]
+
+    # When no span has a timestamp and step.seq is incomplete/absent, preserve snapshot order
+    # rather than jumping partially-sequenced spans ahead of unsequenced siblings.
+    if not any_have_ts:
+        return list(spans)
+
+    # Otherwise sort chronologically by start timestamp first; use step.seq to disambiguate
+    # equal-timestamp groups when every span in that group carries a valid step.seq.
+    ts_group_all_seq: dict[int, bool] = {}
+    for _, _, seq, ts in annotated:
+        if ts is not None:
+            ts_group_all_seq[ts] = ts_group_all_seq.get(ts, True) and (seq is not None)
+
+    def sort_key(item: tuple[int, dict, int | None, int | None]) -> tuple[int, int, int, int]:
+        orig_idx, _, seq, ts = item
+        if ts is not None:
+            tie = seq if (ts_group_all_seq.get(ts) and seq is not None) else orig_idx
+            return (0, ts, tie, orig_idx)
+        return (1, 0, orig_idx, orig_idx)
+
+    return [span for _, span, _, _ in sorted(annotated, key=sort_key)]
 
 
 def _normalize_kind(kind):
     if isinstance(kind, str):
         upper = kind.strip().upper()
         return _KIND_ALIASES.get(upper, upper)
-    return kind
+    return ""
+
+
+def _resolve_span_kind(span, attributes, semantic):
+    for candidate in (
+        semantic.get("kind"),
+        span.get("spanType"),
+        span.get("span_type"),
+        span.get("node_type"),
+        span.get("kind"),
+        attributes.get("neatlogs.span.kind"),
+        attributes.get("openinference.span.kind"),
+        span.get("type"),
+    ):
+        if isinstance(candidate, str) and candidate.strip():
+            return _normalize_kind(candidate)
+    return ""
 
 
 def _extract_tool_entry(span, attributes, semantic, kind, span_id, *, error_record=None):
@@ -199,16 +288,19 @@ def _extract_tool_entry(span, attributes, semantic, kind, span_id, *, error_reco
             or result.get("call_id") != call["id"]
             or definition.get("name") != call.get("name")
             or result.get("is_error") is not False
+            or "arguments" not in call
+            or call["arguments"] is None
             or "value" not in result
             or result.get("media")
         ):
             raise ReplayError("Saved tool result has inconsistent linkage.")
         name, input, output = (
             call.get("name"),
-            json_value(call.get("arguments")),
+            json_value(call["arguments"]),
             json_value(result["value"]),
         )
     else:
+        data = span.get("data") if type(span.get("data")) is dict else {}
         name = _first(
             span.get("tool_name"),
             attributes.get("tool.name"),
@@ -225,6 +317,12 @@ def _extract_tool_entry(span, attributes, semantic, kind, span_id, *, error_reco
             attributes.get("input.value"),
             span.get("tool_input"),
             span.get("input_value", _MISSING),
+            span.get("inputValue", _MISSING),
+            span.get("input", _MISSING),
+            data.get("tool_input", _MISSING),
+            data.get("tool_arguments", _MISSING),
+            data.get("input_value", _MISSING),
+            data.get("input", _MISSING),
         )
         raw_out = _first(
             attributes.get("neatlogs.tool.output"),
@@ -232,6 +330,13 @@ def _extract_tool_entry(span, attributes, semantic, kind, span_id, *, error_reco
             attributes.get("output.value"),
             span.get("tool_output"),
             span.get("output_value", _MISSING),
+            span.get("outputValue", _MISSING),
+            span.get("output", _MISSING),
+            data.get("tool_output", _MISSING),
+            data.get("tool_result", _MISSING),
+            data.get("output_value", _MISSING),
+            data.get("output", _MISSING),
+            data.get("result", _MISSING),
         )
         if raw_in is _MISSING or (raw_out is _MISSING and error_record is None):
             raise ReplayError("Saved tool replay entry is missing I/O.")
@@ -263,11 +368,11 @@ def validate_tool_span_for_replay(span: dict, span_id_counts: Counter) -> bool:
     """Return True iff the default v1 replay builder would accept this tool span."""
     try:
         semantic = _object(span.get("semantic"))
-        kind = _normalize_kind(semantic.get("kind", span.get("span_type")))
+        attributes = _merge_attributes(span)
+        kind = _resolve_span_kind(span, attributes, semantic)
         if kind not in ("TOOL", "MCP_TOOL"):
             return False
-        attributes = _object(span.get("attributes"))
-        span_id = identifier(span.get("span_id"))
+        span_id = identifier(_span_id_value(span))
         if span_id_counts[span_id] != 1 or not _complete(span, attributes, allow_error=False):
             return False
         _extract_tool_entry(span, attributes, semantic, kind, span_id, error_record=None)
@@ -322,8 +427,20 @@ def _span_error_record(span, attributes):
     return {"type": err_type, "message": sanitize_error_text(str(raw_msg))[:1024]}
 
 
+def _span_kind_best_effort(span: dict) -> str:
+    try:
+        semantic = _object(span.get("semantic"))
+    except ReplayError:
+        semantic = {}
+    try:
+        attributes = _merge_attributes(span)
+    except ReplayError:
+        attributes = span.get("span_metadata") if type(span.get("span_metadata")) is dict else {}
+    return _resolve_span_kind(span, attributes, semantic)
+
+
 def replay_recording_from_case(value, *, include_steps: bool = False, include_errors: bool = False):
-    item = json_value(value)
+    item = json_value(value, allow_int64=True)
     if type(item) is not dict or type(item.get("source")) is not dict:
         raise ReplayError("A frozen case needs its recorded source trace.")
     source = identifier(item["source"].get("traceId"))
@@ -331,38 +448,44 @@ def replay_recording_from_case(value, *, include_steps: bool = False, include_er
     spans = context.get("spans")
     if (
         type(spans) is not list
-        or len(spans) > 5000
+        or len(spans) > MAX_FROZEN_CASE_SPANS
         or any(type(span) is not dict for span in spans)
     ):
         raise ReplayError("A frozen case needs a bounded saved span list.")
     if item["source"].get("kind") == "span":
         selected = identifier(item["source"].get("spanId"))
-        if sum(span.get("span_id") == selected for span in spans) != 1:
+        if sum(_span_id_value(span) == selected for span in spans) != 1:
             raise ReplayError("Selected span is missing or ambiguous.")
         children = {}
         for span in spans:
-            if type(span.get("span_id")) is str:
-                children.setdefault(span.get("parent_span_id"), []).append(span["span_id"])
+            sid = _span_id_value(span)
+            if type(sid) is str:
+                children.setdefault(_parent_span_id_value(span), []).append(sid)
         subtree, pending = set(), [selected]
         while pending:
             identity = pending.pop()
             if identity not in subtree:
                 subtree.add(identity)
                 pending.extend(children.get(identity, []))
-        spans = [span for span in spans if span.get("span_id") in subtree]
-    spans = _sort_spans_for_replay(spans)
-    counts = Counter(span.get("span_id") for span in spans if type(span.get("span_id")) is str)
+        spans = [span for span in spans if _span_id_value(span) in subtree]
+    counts = Counter(
+        sid for sid in (_span_id_value(span) for span in spans) if type(sid) is str and sid
+    )
+    allowed_kinds = {"LLM", "TOOL", "MCP_TOOL"} | (_STEP_REPLAY_KINDS if include_steps else set())
+    replay_spans = _sort_spans_for_replay(
+        [span for span in spans if _span_kind_best_effort(span) in allowed_kinds]
+    )
     entries, skipped = [], 0
-    for span in spans:
-        kind = _normalize_kind(span.get("span_type"))
+    for span in replay_spans:
+        kind = _span_kind_best_effort(span)
         try:
             semantic = _object(span.get("semantic"))
-            kind = _normalize_kind(semantic.get("kind", kind))
-            attributes = _object(span.get("attributes"))
+            attributes = _merge_attributes(span)
+            kind = _resolve_span_kind(span, attributes, semantic)
             is_step = include_steps and kind in _STEP_REPLAY_KINDS
             if kind not in ("LLM", "TOOL", "MCP_TOOL") and not is_step:
                 continue
-            span_id = identifier(span.get("span_id"))
+            span_id = identifier(_span_id_value(span))
             allow_err = include_errors and kind != "LLM"
             if counts[span_id] != 1 or not _complete(span, attributes, allow_error=allow_err):
                 raise ReplayError("Saved replay execution is incomplete or ambiguous.")
@@ -373,22 +496,30 @@ def replay_recording_from_case(value, *, include_steps: bool = False, include_er
                 continue
             if is_step:
                 kind_lower = kind.lower()
+                data = span.get("data") if type(span.get("data")) is dict else {}
                 name = _first(
                     span.get("name"),
                     span.get("span_name"),
                     span.get("spanName"),
+                    span.get("node_name"),
                 )
                 raw_in = _first(
                     attributes.get(f"neatlogs.{kind_lower}.input"),
                     attributes.get("input.value"),
                     span.get("input_value", _MISSING),
+                    span.get("inputValue", _MISSING),
                     span.get("input", _MISSING),
+                    data.get("input_value", _MISSING),
+                    data.get("input", _MISSING),
                 )
                 raw_out = _first(
                     attributes.get(f"neatlogs.{kind_lower}.output"),
                     attributes.get("output.value"),
                     span.get("output_value", _MISSING),
+                    span.get("outputValue", _MISSING),
                     span.get("output", _MISSING),
+                    data.get("output_value", _MISSING),
+                    data.get("output", _MISSING),
                 )
                 if raw_in is _MISSING or (raw_out is _MISSING and error_record is None):
                     raise ReplayError("Saved step replay entry is missing I/O.")

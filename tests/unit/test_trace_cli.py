@@ -166,6 +166,22 @@ def test_host_override_and_id_encoding():
     assert calls[0][0] == "https://eu.app.neatlogs.com/api/v1/public/traces/a%2Fb"
 
 
+def test_eu_ingest_endpoint_derives_eu_app_host_unless_explicit_host_set():
+    _, _, _, calls = run(
+        env=dict(ENV, NEATLOGS_ENDPOINT="https://eu.ingest.neatlogs.com/api/v1/traces")
+    )
+    assert calls[0][0] == "https://eu.app.neatlogs.com/api/v1/public/traces/t1"
+
+    _, _, _, explicit_calls = run(
+        env=dict(
+            ENV,
+            NEATLOGS_HOST="https://custom.app.example",
+            NEATLOGS_ENDPOINT="https://eu.ingest.neatlogs.com/api/v1/traces",
+        )
+    )
+    assert explicit_calls[0][0] == "https://custom.app.example/api/v1/public/traces/t1"
+
+
 def test_check_trace_empty():
     assert check_trace({}, [])[0]["status"] == "fail"
 

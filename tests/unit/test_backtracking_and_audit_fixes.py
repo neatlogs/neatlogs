@@ -1029,3 +1029,738 @@ def test_trace_audit_accepts_zero_arg_tool_and_marks_metadata_only_unverified():
         err=lambda _: None,
     )
     assert any("unverified: metadata-only" in line for line in text_lines)
+
+
+# ---------------------------------------------------------------------------
+# PR #290 Codex adversarial review P1/P2 regression tests
+# ---------------------------------------------------------------------------
+
+
+def test_mixed_step_seq_and_unsequenced_spans_preserve_chronological_order_and_until_span():
+    """Finding 1 (P1): An earlier span (ts=100) without step.seq must sort BEFORE a later span
+    (ts=200) with step.seq=2 so identical tool calls match in chronological FIFO order and
+    until_span on the second call replays the first before switching live."""
+    first_span = {
+        "span_id": "call-1",
+        "span_type": "TOOL",
+        "tool_name": "lookup",
+        "tool_input": {"q": "same"},
+        "tool_output": {"res": "first"},
+        "start_time_unix_nano": 100,
+        "attributes": {},
+    }
+    second_span = {
+        "span_id": "call-2",
+        "span_type": "TOOL",
+        "tool_name": "lookup",
+        "tool_input": {"q": "same"},
+        "tool_output": {"res": "second"},
+        "start_time_unix_nano": 200,
+        "attributes": {"neatlogs.step.seq": 2},
+    }
+    for raw_order in ([first_span, second_span], [second_span, first_span]):
+        converted = replay_recording_from_case(
+            {"source": {"kind": "trace", "traceId": "t-mixed"}, "context": {"spans": raw_order}}
+        )
+        rec = converted["recording"]
+        assert [e.span_id for e in rec.entries] == ["call-1", "call-2"]
+
+        with ReplaySession(rec, mode="tools_only"):
+            assert lookup_replay("tool", "lookup", {"q": "same"}).entry.output == {"res": "first"}
+            assert lookup_replay("tool", "lookup", {"q": "same"}).entry.output == {"res": "second"}
+
+        with ReplaySession(rec, mode="until_span", until_span="call-2") as session:
+            d1 = lookup_replay("tool", "lookup", {"q": "same"})
+            d2 = lookup_replay("tool", "lookup", {"q": "same"})
+            assert d1.outcome == "HIT" and d1.entry.output == {"res": "first"}
+            assert d2.outcome == "LIVE"
+            assert session.get_status()["reason"] == "checkpoint"
+
+    # Equal timestamps with complete step.seq still disambiguate by step.seq
+    equal_ts_case = {
+        "source": {"kind": "trace", "traceId": "t-eq-ts"},
+        "context": {
+            "spans": [
+                {
+                    "span_id": "s2",
+                    "span_type": "TOOL",
+                    "tool_name": "lookup",
+                    "tool_input": {"q": "same"},
+                    "tool_output": {"res": 2},
+                    "start_time_unix_nano": 100,
+                    "attributes": {"neatlogs.step.seq": 2},
+                },
+                {
+                    "span_id": "s1",
+                    "span_type": "TOOL",
+                    "tool_name": "lookup",
+                    "tool_input": {"q": "same"},
+                    "tool_output": {"res": 1},
+                    "start_time_unix_nano": 100,
+                    "attributes": {"neatlogs.step.seq": 1},
+                },
+            ]
+        },
+    }
+    eq_rec = replay_recording_from_case(equal_ts_case)["recording"]
+    assert [e.span_id for e in eq_rec.entries] == ["s1", "s2"]
+
+    # Absent timestamps with complete step.seq still sort by step.seq even alongside a WORKFLOW span
+    no_ts_case = {
+        "source": {"kind": "trace", "traceId": "t-no-ts"},
+        "context": {
+            "spans": [
+                {"span_id": "wf", "span_type": "WORKFLOW", "name": "wf", "attributes": {}},
+                {
+                    "span_id": "s2",
+                    "span_type": "TOOL",
+                    "tool_name": "lookup",
+                    "tool_input": {"q": "same"},
+                    "tool_output": {"res": 2},
+                    "attributes": {"neatlogs.step.seq": 2},
+                },
+                {
+                    "span_id": "s1",
+                    "span_type": "TOOL",
+                    "tool_name": "lookup",
+                    "tool_input": {"q": "same"},
+                    "tool_output": {"res": 1},
+                    "attributes": {"neatlogs.step.seq": 1},
+                },
+            ]
+        },
+    }
+    no_ts_rec = replay_recording_from_case(no_ts_case)["recording"]
+    assert [e.span_id for e in no_ts_rec.entries] == ["s1", "s2"]
+
+
+def test_64bit_otlp_nanosecond_timestamps_do_not_break_frozen_case_replay(tmp_path: Path):
+    """Finding 2 (P1): Standard 64-bit integer OTLP timestamps (> 2^53) must be accepted and
+    ordered with exact nanosecond precision while strict float53 checks remain enforced on I/O."""
+    from neatlogs.replay import ReplayError, parse_replay_recording
+    from neatlogs.replay.contracts import parse_json_bytes
+
+    frozen_case = {
+        "source": {"kind": "trace", "traceId": "t-ns64"},
+        "context": {
+            "spans": [
+                {
+                    "span_id": "second",
+                    "span_type": "TOOL",
+                    "tool_name": "lookup",
+                    "tool_input": {"k": 1},
+                    "tool_output": {"order": 2},
+                    "start_time_unix_nano": 1700000000000000002,
+                    "end_time_unix_nano": 1700000000000000999,
+                    "attributes": {"neatlogs.step.seq": 2},
+                },
+                {
+                    "span_id": "first",
+                    "span_type": "TOOL",
+                    "tool_name": "lookup",
+                    "tool_input": {"k": 1},
+                    "tool_output": {"order": 1},
+                    "start_time_unix_nano": 1700000000000000001,
+                    "end_time_unix_nano": 1700000000000000500,
+                    "attributes": {"neatlogs.step.seq": 1},
+                },
+            ]
+        },
+    }
+    converted = replay_recording_from_case(frozen_case)
+    assert converted["skippedTools"] == 0
+    assert [e.span_id for e in converted["recording"].entries] == ["first", "second"]
+
+    # CLI file loading (allow_int64=True) parses 64-bit ns frozen case without ReplayError
+    raw_bytes = json.dumps(frozen_case).encode("utf-8")
+    loaded = parse_json_bytes(raw_bytes, allow_int64=True)
+    assert loaded["context"]["spans"][1]["start_time_unix_nano"] == 1700000000000000001
+    assert [e.span_id for e in replay_recording_from_case(loaded)["recording"].entries] == [
+        "first",
+        "second",
+    ]
+
+    # Strict float53 representability check MUST still reject 2^53+1 inside replay I/O payloads
+    bad_io_case = {
+        "source": {"kind": "trace", "traceId": "t-ns64-bad-io"},
+        "context": {
+            "spans": [
+                {
+                    "span_id": "bad",
+                    "span_type": "TOOL",
+                    "tool_name": "lookup",
+                    "tool_input": {"unsafe_int": 1700000000000000001},
+                    "tool_output": {"ok": True},
+                    "start_time_unix_nano": 1700000000000000001,
+                }
+            ]
+        },
+    }
+    bad_io_converted = replay_recording_from_case(bad_io_case)
+    assert bad_io_converted["skippedTools"] == 1
+    assert bad_io_converted["recording"].entries == ()
+
+    with pytest.raises(ReplayError):
+        parse_replay_recording(
+            {
+                "version": 1,
+                "sourceTraceId": "t",
+                "entries": [
+                    {
+                        "spanId": "s1",
+                        "kind": "tool",
+                        "name": "lookup",
+                        "input": {"unsafe_int": 1700000000000000001},
+                        "output": "ok",
+                    }
+                ],
+            }
+        )
+
+
+def test_doctor_and_replay_builder_agree_on_input_output_aliases_and_truncation_flags():
+    """Finding 3 (P2): Doctor and replay_recording_from_case must agree 100% on normalized
+    TOOL spans (input={}, output='ok') AND on input_truncated / output_truncated flags."""
+    root = {
+        "span_id": "root-1",
+        "parent_span_id": None,
+        "name": "wf",
+        "span_type": "WORKFLOW",
+        "input": {"q": "hi"},
+        "output": {"a": "bye"},
+        "start_time_unix_nano": 1000,
+        "attributes": {"neatlogs.step.seq": 1, "neatlogs.provenance.release": "v1"},
+    }
+
+    # Case A: TOOL with input={} and output="ok" -> BOTH accept
+    tool_alias = {
+        "span_id": "tool-1",
+        "parent_span_id": "root-1",
+        "name": "ping",
+        "span_type": "TOOL",
+        "input": {},
+        "output": "ok",
+        "start_time_unix_nano": 2000,
+        "attributes": {"neatlogs.step.seq": 2},
+    }
+    spans_a = [root, tool_alias]
+    conv_a = replay_recording_from_case(
+        {"source": {"kind": "trace", "traceId": "t-a"}, "context": {"spans": spans_a}}
+    )
+    audit_a = audit_trace({"trace_id": "t-a", "finalizationStatus": "finalized"}, spans_a)
+    assert conv_a["skippedTools"] == 0
+    assert len(conv_a["recording"].entries) == 1
+    assert conv_a["recording"].entries[0].input == {}
+    assert conv_a["recording"].entries[0].output == "ok"
+    assert audit_a["replay_ready"] is True
+
+    # Case B: TOOL with canonical I/O + output_truncated=True (or input_truncated=True) -> BOTH reject
+    for trunc_field in ("output_truncated", "input_truncated"):
+        tool_trunc = {
+            "span_id": "tool-1",
+            "parent_span_id": "root-1",
+            "name": "fetch",
+            "span_type": "TOOL",
+            "tool_name": "fetch",
+            "tool_input": {"id": 1},
+            "tool_output": {"data": "partial"},
+            trunc_field: True,
+            "start_time_unix_nano": 2000,
+            "attributes": {"neatlogs.step.seq": 2},
+        }
+        spans_b = [root, tool_trunc]
+        conv_b = replay_recording_from_case(
+            {"source": {"kind": "trace", "traceId": "t-b"}, "context": {"spans": spans_b}}
+        )
+        audit_b = audit_trace({"trace_id": "t-b", "finalizationStatus": "finalized"}, spans_b)
+        by_name_b = {c["name"]: c["status"] for c in audit_b["checks"]}
+        assert conv_b["skippedTools"] == 1
+        assert conv_b["recording"].entries == ()
+        assert by_name_b["tool_linkage_valid"] == "fail"
+        assert audit_b["replay_ready"] is False
+
+
+def test_offline_trace_get_json_export_is_detected_as_metadata_only_and_not_replay_ready(
+    tmp_path: Path,
+):
+    """Finding 4 (P2): Passing `neatlogs trace get --json` summary output to `doctor --file`
+    must detect metadata-only spans (including `type` span kind) and NEVER report replay_ready."""
+    from neatlogs.trace_cli import run_trace_get
+
+    public_trace = {
+        "traceId": "t-summary-1",
+        "status": "success",
+        "finalizationStatus": "finalized",
+        "spansCount": 2,
+        "totalTokens": 10,
+    }
+    public_spans = [
+        {"spanId": "s1", "parentSpanId": None, "spanName": "wf", "spanType": "workflow"},
+        {"spanId": "s2", "parentSpanId": "s1", "spanName": "lookup", "spanType": "tool"},
+    ]
+
+    def fake_fetch(url, headers, timeout):
+        if "/spans" in url:
+            body = json.dumps(
+                {"success": True, "data": {"spans": public_spans, "page": {"nextCursor": None}}}
+            ).encode()
+        else:
+            body = json.dumps({"success": True, "data": public_trace}).encode()
+        return 200, body
+
+    exported_lines: list[str] = []
+    rc_get = run_trace_get(
+        "t-summary-1",
+        True,
+        env={"NEATLOGS_TOKEN": "tok", "NEATLOGS_PROJECT_ID": "proj"},
+        fetch=fake_fetch,
+        out=exported_lines.append,
+        err=lambda _: None,
+    )
+    assert rc_get == 0
+    summary_file = tmp_path / "trace_get_export.json"
+    summary_file.write_text(exported_lines[0], encoding="utf-8")
+
+    audit_out: list[str] = []
+    rc_doc = run_trace_audit(
+        None,
+        file_path=str(summary_file),
+        as_json=True,
+        out=audit_out.append,
+        err=lambda _: None,
+    )
+    assert rc_doc == 1
+    report = json.loads(audit_out[0])
+    assert report["replay_ready"] is False
+    assert report["jev_ready"] is False
+    assert report["replay_readiness_verified"] is False
+    by_name = {c["name"]: c["status"] for c in report["checks"]}
+    assert by_name["tool_linkage_valid"] == "warn"
+    assert by_name["root_io_present"] == "warn"
+
+
+def test_replay_ready_rejects_inverted_step_seq_and_over_5000_span_traces():
+    """Finding 5 (P2): Doctor replay_ready must be False when step_ordering_clean fails
+    (inverted step.seq) OR when span count exceeds the replay builder's 5000-span cap."""
+    from neatlogs.replay import ReplayError
+    from neatlogs.replay.frozen_case import MAX_FROZEN_CASE_SPANS
+
+    # 1. Inverted step.seq across two identical tool calls
+    inverted_spans = [
+        {
+            "span_id": "root-1",
+            "parent_span_id": None,
+            "name": "wf",
+            "span_type": "WORKFLOW",
+            "input": {"q": 1},
+            "output": {"a": 2},
+            "start_time_unix_nano": 1000,
+            "attributes": {"neatlogs.step.seq": 1, "neatlogs.provenance.release": "v1"},
+        },
+        {
+            "span_id": "tool-1",
+            "parent_span_id": "root-1",
+            "name": "lookup",
+            "span_type": "TOOL",
+            "tool_name": "lookup",
+            "tool_input": {"k": "same"},
+            "tool_output": {"v": 1},
+            "start_time_unix_nano": 2000,
+            "attributes": {"neatlogs.step.seq": 3},
+        },
+        {
+            "span_id": "tool-2",
+            "parent_span_id": "root-1",
+            "name": "lookup",
+            "span_type": "TOOL",
+            "tool_name": "lookup",
+            "tool_input": {"k": "same"},
+            "tool_output": {"v": 2},
+            "start_time_unix_nano": 3000,
+            "attributes": {"neatlogs.step.seq": 2},
+        },
+    ]
+    inv_report = audit_trace(
+        {"trace_id": "t-inv", "finalizationStatus": "finalized"}, inverted_spans
+    )
+    inv_checks = {c["name"]: c["status"] for c in inv_report["checks"]}
+    assert inv_checks["step_ordering_clean"] == "fail"
+    assert inv_report["replay_ready"] is False
+
+    # 2. 5,001-span trace rejected by replay builder -> replay_ready MUST be False
+    many_spans = [
+        {
+            "span_id": "s-0",
+            "parent_span_id": None,
+            "name": "wf",
+            "span_type": "WORKFLOW",
+            "input": {"q": 1},
+            "output": {"a": 2},
+            "start_time_unix_nano": 1000,
+            "attributes": {"neatlogs.step.seq": 1, "neatlogs.provenance.release": "v1"},
+        }
+    ] + [
+        {
+            "span_id": f"s-{i}",
+            "parent_span_id": "s-0",
+            "name": "step",
+            "span_type": "CHAIN",
+            "start_time_unix_nano": 1000 + i,
+            "attributes": {"neatlogs.step.seq": i + 1},
+        }
+        for i in range(1, MAX_FROZEN_CASE_SPANS + 1)
+    ]
+    assert len(many_spans) == MAX_FROZEN_CASE_SPANS + 1
+    with pytest.raises(ReplayError):
+        replay_recording_from_case(
+            {"source": {"kind": "trace", "traceId": "t-5001"}, "context": {"spans": many_spans}}
+        )
+    many_report = audit_trace({"trace_id": "t-5001", "finalizationStatus": "finalized"}, many_spans)
+    many_checks = {c["name"]: c["status"] for c in many_report["checks"]}
+    assert many_checks["provenance_and_replayability"] == "fail"
+    assert many_report["replay_ready"] is False
+
+
+def test_semantic_tool_call_missing_arguments_rejected_by_both_builder_and_doctor():
+    """Finding 6 (P2): Omitting call.arguments (or setting it to None) on a semantic tool span
+    must fail both replay_recording_from_case and Doctor; explicit {} must pass both."""
+    root = {
+        "span_id": "root-1",
+        "parent_span_id": None,
+        "name": "wf",
+        "span_type": "WORKFLOW",
+        "input": {"q": "ping"},
+        "output": {"a": "pong"},
+        "start_time_unix_nano": 1000,
+        "attributes": {"neatlogs.step.seq": 1, "neatlogs.provenance.release": "v1"},
+    }
+
+    for bad_call in (
+        {"id": "c1", "name": "ping"},  # missing arguments
+        {"id": "c1", "name": "ping", "arguments": None},  # null arguments
+    ):
+        sem_tool = {
+            "span_id": "tool-1",
+            "parent_span_id": "root-1",
+            "span_type": "TOOL",
+            "start_time_unix_nano": 2000,
+            "attributes": {"neatlogs.step.seq": 2},
+            "semantic": {
+                "kind": "TOOL",
+                "call": bad_call,
+                "result": {"call_id": "c1", "is_error": False, "value": "pong"},
+                "definition": {"name": "ping"},
+            },
+        }
+        spans = [root, sem_tool]
+        conv = replay_recording_from_case(
+            {"source": {"kind": "trace", "traceId": "t-sem-bad"}, "context": {"spans": spans}}
+        )
+        audit = audit_trace({"trace_id": "t-sem-bad", "finalizationStatus": "finalized"}, spans)
+        assert conv["skippedTools"] == 1
+        assert conv["recording"].entries == ()
+        assert audit["replay_ready"] is False
+
+    # Valid zero-arg semantic tool with arguments={} passes both and matches decorated tool
+    good_sem_tool = {
+        "span_id": "tool-1",
+        "parent_span_id": "root-1",
+        "span_type": "TOOL",
+        "start_time_unix_nano": 2000,
+        "attributes": {"neatlogs.step.seq": 2},
+        "semantic": {
+            "kind": "TOOL",
+            "call": {"id": "c1", "name": "ping", "arguments": {}},
+            "result": {"call_id": "c1", "is_error": False, "value": "pong"},
+            "definition": {"name": "ping"},
+        },
+    }
+    good_spans = [root, good_sem_tool]
+    conv_good = replay_recording_from_case(
+        {"source": {"kind": "trace", "traceId": "t-sem-ok"}, "context": {"spans": good_spans}}
+    )
+    audit_good = audit_trace(
+        {"trace_id": "t-sem-ok", "finalizationStatus": "finalized"}, good_spans
+    )
+    assert conv_good["skippedTools"] == 0
+    assert conv_good["recording"].entries[0].input == {}
+    assert audit_good["replay_ready"] is True
+
+    live_runs = 0
+
+    @neatlogs.span(kind="TOOL", tool_name="ping", replay=True)
+    def ping() -> str:
+        nonlocal live_runs
+        live_runs += 1
+        return "live-pong"
+
+    with ReplaySession(conv_good["recording"], mode="tools_only"):
+        assert ping() == "pong"
+    assert live_runs == 0
+
+
+def test_v2_model_error_entry_replays_recorded_error_without_running_live_callback():
+    """Finding 7 (P2): A cached v2 model entry with error before until_span must raise
+    ReplayRecordedError instead of falling through to live() while reporting hits=1."""
+    from neatlogs.replay import ReplayRecordedError, replay_model
+    from neatlogs.replay.provider import provider_replay
+
+    recording_v2 = {
+        "version": 2,
+        "sourceTraceId": "t-model-err",
+        "entries": [
+            {
+                "spanId": "m-err",
+                "kind": "model",
+                "name": "openai.chat.completions.create",
+                "input": {"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]},
+                "output": None,
+                "error": {"type": "RateLimitError", "message": "429 quota exceeded"},
+            },
+            {
+                "spanId": "cp-tool",
+                "kind": "tool",
+                "name": "after",
+                "input": {},
+                "output": "ok",
+            },
+        ],
+    }
+
+    live_calls = 0
+
+    def live():
+        nonlocal live_calls
+        live_calls += 1
+        return {"text": "should-never-run"}
+
+    with ReplaySession(recording_v2, mode="until_span", until_span="cp-tool") as session:
+        with pytest.raises(ReplayRecordedError, match="RateLimitError: 429 quota exceeded"):
+            replay_model(
+                "openai.chat.completions.create",
+                {"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]},
+                lambda v: v,
+                live,
+            )
+        status = session.get_status()
+    assert live_calls == 0
+    assert status["hits"] == 1
+    assert status["liveCalls"] == 0
+
+    # provider_replay must also raise ReplayRecordedError instead of returning None (live fallback)
+    with ReplaySession(recording_v2, mode="until_span", until_span="cp-tool") as session2:
+        with pytest.raises(ReplayRecordedError, match="RateLimitError"):
+            provider_replay(
+                "openai.chat.completions.create",
+                {"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]},
+                supported=True,
+                span=None,
+            )
+        status2 = session2.get_status()
+    assert status2["hits"] == 1
+    assert status2["liveCalls"] == 0
+
+
+def test_malformed_unicode_ordering_metadata_does_not_abort_recording_or_audit():
+    """Finding 8 (P2): Unicode superscript '²' passes str.isdigit() in Python but raises
+    ValueError in int(); malformed step.seq / timestamp strings must be safely ignored."""
+    spans = [
+        {
+            "span_id": "root-1",
+            "parent_span_id": None,
+            "name": "wf",
+            "span_type": "WORKFLOW",
+            "input": {"q": 1},
+            "output": {"a": 2},
+            "start_time": "²",
+            "attributes": {"neatlogs.step.seq": "²", "neatlogs.provenance.release": "v1"},
+        },
+        {
+            "span_id": "tool-1",
+            "parent_span_id": "root-1",
+            "name": "ok_tool",
+            "span_type": "TOOL",
+            "tool_name": "ok_tool",
+            "tool_input": {"x": 1},
+            "tool_output": {"y": 2},
+            "start_time": "9" * 5000,
+            "attributes": {"neatlogs.step.seq": "²"},
+        },
+    ]
+    converted = replay_recording_from_case(
+        {"source": {"kind": "trace", "traceId": "t-unicode-meta"}, "context": {"spans": spans}}
+    )
+    assert converted["skippedTools"] == 0
+    assert [e.span_id for e in converted["recording"].entries] == ["tool-1"]
+
+    report = audit_trace({"trace_id": "t-unicode-meta", "finalizationStatus": "finalized"}, spans)
+    assert report["span_count"] == 2
+    assert report["replay_ready"] is True
+
+
+def test_unhashable_entry_kind_raises_replay_error_and_is_caught_by_cli(tmp_path: Path, capsys):
+    """Finding 9 (P2): Non-string / unhashable entry kinds (list, dict) must raise ReplayError
+    rather than leaking TypeError out of parse_replay_recording and run_simulate_cli."""
+    from neatlogs.replay import ReplayError, parse_replay_recording
+    from neatlogs.replay.cli import run_simulate_cli
+
+    for bad_kind in (["tool"], {"kind": "tool"}, 123):
+        bad_recording = {
+            "version": 1,
+            "sourceTraceId": "t-bad-kind",
+            "entries": [
+                {"spanId": "s1", "kind": bad_kind, "name": "op", "input": {}, "output": {}}
+            ],
+        }
+        with pytest.raises(ReplayError, match="Unsupported local replay entry kind"):
+            parse_replay_recording(bad_recording)
+
+    agent_cfg = tmp_path / "agent.yaml"
+    agent_cfg.write_text("command: ['python', '-c', 'pass']\n", encoding="utf-8")
+    rec_file = tmp_path / "bad_kind.json"
+    rec_file.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "sourceTraceId": "t-bad-kind",
+                "entries": [
+                    {"spanId": "s1", "kind": ["tool"], "name": "op", "input": {}, "output": {}}
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    rc = run_simulate_cli(
+        ["simulate", "local", "--recording", str(rec_file), "--agent", str(agent_cfg)]
+    )
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "Unsupported local replay entry kind" in captured.err
+
+
+def test_doctor_eu_endpoint_resolves_eu_app_host_for_token_and_respects_explicit_host():
+    """Finding 11 (P1): With NEATLOGS_TOKEN + NEATLOGS_PROJECT_ID and EU NEATLOGS_ENDPOINT
+    (or --endpoint https://eu.ingest.neatlogs.com/...), Doctor must hit eu.app.neatlogs.com
+    rather than US app.neatlogs.com, while respecting explicit NEATLOGS_HOST."""
+
+    def _ok_public(url, headers, timeout):
+        if "/spans" in url:
+            body = json.dumps(
+                {
+                    "success": True,
+                    "data": {
+                        "spans": [
+                            {
+                                "spanId": "s1",
+                                "parentSpanId": None,
+                                "spanName": "wf",
+                                "spanType": "workflow",
+                            }
+                        ],
+                        "page": {"nextCursor": None},
+                    },
+                }
+            ).encode()
+        else:
+            body = json.dumps(
+                {
+                    "success": True,
+                    "data": {"traceId": "t-eu", "finalizationStatus": "finalized"},
+                }
+            ).encode()
+        return 200, body
+
+    # 1. EU NEATLOGS_ENDPOINT without NEATLOGS_HOST -> derives https://eu.app.neatlogs.com
+    urls_env: list[str] = []
+
+    def fetch_env(url, headers, timeout):
+        urls_env.append(url)
+        return _ok_public(url, headers, timeout)
+
+    run_trace_audit(
+        "t-eu",
+        as_json=True,
+        env={
+            "NEATLOGS_TOKEN": "tok-eu",
+            "NEATLOGS_PROJECT_ID": "proj-eu",
+            "NEATLOGS_ENDPOINT": "https://eu.ingest.neatlogs.com/api/v1/traces",
+        },
+        fetch=fetch_env,
+        out=lambda _: None,
+        err=lambda _: None,
+    )
+    assert urls_env[0] == "https://eu.app.neatlogs.com/api/v1/public/traces/t-eu"
+
+    # 2. Explicit --endpoint https://eu.ingest.neatlogs.com/api/v1/traces -> maps to eu.app.neatlogs.com
+    urls_flag: list[str] = []
+
+    def fetch_flag(url, headers, timeout):
+        urls_flag.append(url)
+        return _ok_public(url, headers, timeout)
+
+    run_trace_audit(
+        "t-eu",
+        endpoint="https://eu.ingest.neatlogs.com/api/v1/traces",
+        as_json=True,
+        env={"NEATLOGS_TOKEN": "tok-eu", "NEATLOGS_PROJECT_ID": "proj-eu"},
+        fetch=fetch_flag,
+        out=lambda _: None,
+        err=lambda _: None,
+    )
+    assert urls_flag[0] == "https://eu.app.neatlogs.com/api/v1/public/traces/t-eu"
+
+    # 3. Explicit NEATLOGS_HOST wins over NEATLOGS_ENDPOINT when --endpoint is not passed
+    urls_host: list[str] = []
+
+    def fetch_host(url, headers, timeout):
+        urls_host.append(url)
+        return _ok_public(url, headers, timeout)
+
+    run_trace_audit(
+        "t-eu",
+        as_json=True,
+        env={
+            "NEATLOGS_TOKEN": "tok-eu",
+            "NEATLOGS_PROJECT_ID": "proj-eu",
+            "NEATLOGS_HOST": "https://custom.eu.internal",
+            "NEATLOGS_ENDPOINT": "https://eu.ingest.neatlogs.com/api/v1/traces",
+        },
+        fetch=fetch_host,
+        out=lambda _: None,
+        err=lambda _: None,
+    )
+    assert urls_host[0] == "https://custom.eu.internal/api/v1/public/traces/t-eu"
+
+    # 4. NEATLOGS_API_KEY + NEATLOGS_HOST=https://eu.app.neatlogs.com -> maps to eu.ingest.neatlogs.com
+    urls_v3: list[str] = []
+
+    def fetch_v3(url, headers, timeout):
+        urls_v3.append(url)
+        return (
+            200,
+            json.dumps(
+                {
+                    "_id": "t-eu",
+                    "status": "success",
+                    "spans": [
+                        {
+                            "span_id": "s1",
+                            "node_name": "wf",
+                            "node_type": "workflow",
+                            "data": {"input_value": "hi", "output_value": "ok"},
+                            "span_metadata": {"neatlogs.step.seq": 1},
+                        }
+                    ],
+                }
+            ).encode(),
+        )
+
+    run_trace_audit(
+        "t-eu",
+        as_json=True,
+        env={"NEATLOGS_API_KEY": "key-eu", "NEATLOGS_HOST": "https://eu.app.neatlogs.com"},
+        fetch=fetch_v3,
+        out=lambda _: None,
+        err=lambda _: None,
+    )
+    assert urls_v3 == ["https://eu.ingest.neatlogs.com/api/traces/v3/t-eu"]

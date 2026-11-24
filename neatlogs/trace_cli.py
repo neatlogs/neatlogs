@@ -12,6 +12,10 @@ from typing import Any
 from urllib.parse import quote, urlparse
 
 DEFAULT_HOST = "https://app.neatlogs.com"
+_INGEST_TO_APP_HOSTS = {
+    "ingest.neatlogs.com": "app.neatlogs.com",
+    "eu.ingest.neatlogs.com": "eu.app.neatlogs.com",
+}
 PAGE_LIMIT = 50
 MAX_PAGES = 200
 EXIT_OK, EXIT_CHECKS_FAILED, EXIT_NOT_READY, EXIT_AUTH, EXIT_USAGE, EXIT_ERROR = (
@@ -102,6 +106,55 @@ def usage() -> str:
     )
 
 
+def _map_ingest_to_app_origin(url: str) -> str:
+    stripped = url.strip()
+    parsed = urlparse(stripped)
+    if (
+        parsed.scheme not in ("http", "https")
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+    ):
+        return stripped
+    mapped_host = _INGEST_TO_APP_HOSTS.get(parsed.hostname.lower())
+    if mapped_host is not None:
+        port = f":{parsed.port}" if parsed.port is not None else ""
+        return f"{parsed.scheme}://{mapped_host}{port}"
+    return f"{parsed.scheme}://{parsed.netloc}"
+
+
+def resolve_public_api_host(env: dict[str, Any], *, endpoint: str | None = None) -> str:
+    """Resolve the app-API origin for NEATLOGS_TOKEN requests.
+
+    Precedence:
+    1. Explicit ``endpoint`` override (mapping known Neatlogs ingest hosts such as
+       ``eu.ingest.neatlogs.com`` to ``eu.app.neatlogs.com``).
+    2. Explicit ``NEATLOGS_HOST`` env var (respected verbatim).
+    3. ``NEATLOGS_ENDPOINT`` env var when it targets a known Neatlogs ingest host.
+    4. Default ``https://app.neatlogs.com``.
+    """
+    explicit_endpoint = (endpoint or "").strip()
+    if explicit_endpoint:
+        return _map_ingest_to_app_origin(explicit_endpoint)
+    explicit_host = (env.get("NEATLOGS_HOST") or "").strip()
+    if explicit_host:
+        return explicit_host
+    env_endpoint = (env.get("NEATLOGS_ENDPOINT") or "").strip()
+    if env_endpoint:
+        parsed = urlparse(env_endpoint)
+        if (
+            parsed.scheme in ("http", "https")
+            and parsed.hostname
+            and not parsed.username
+            and not parsed.password
+        ):
+            mapped_host = _INGEST_TO_APP_HOSTS.get(parsed.hostname.lower())
+            if mapped_host is not None:
+                port = f":{parsed.port}" if parsed.port is not None else ""
+                return f"{parsed.scheme}://{mapped_host}{port}"
+    return DEFAULT_HOST
+
+
 def fetch_public_trace(
     trace_id: str,
     *,
@@ -122,7 +175,7 @@ def fetch_public_trace(
     if not project_id:
         err("NEATLOGS_PROJECT_ID is not set")
         return EXIT_AUTH
-    host = (env.get("NEATLOGS_HOST") or DEFAULT_HOST).strip()
+    host = resolve_public_api_host(env)
     parsed = urlparse(host)
     if (
         parsed.scheme not in ("http", "https")

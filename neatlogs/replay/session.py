@@ -15,6 +15,7 @@ from .contracts import (
     STEP_KINDS,
     ReplayEntry,
     ReplayError,
+    ReplayRecordedError,
     ReplayRunBinding,
     json_value,
     parse_replay_recording,
@@ -355,4 +356,7 @@ def lookup_replay(kind, name, input, *, span=None, can_restore=None):
 
 def replay_model(name, input, decode, live, *, span=None):
     decision = lookup_replay("model", name, input, span=span)
+    if isinstance(decision, ReplayErrorHit):
+        err = decision.entry.error or {}
+        raise ReplayRecordedError(err.get("type", "RecordedError"), err.get("message", ""))
     return decode(decision.entry.output) if isinstance(decision, ReplayHit) else live()

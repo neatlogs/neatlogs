@@ -182,7 +182,9 @@ def run_simulate_cli(argv):
             item = (
                 api.frozen_case(dataset, version, case_id).get("case")
                 if case_id
-                else parse_json_bytes(bounded_file(args.recording, MAX_RECORDING_BYTES))
+                else parse_json_bytes(
+                    bounded_file(args.recording, MAX_RECORDING_BYTES), allow_int64=True
+                )
             )
             if type(item) is not dict or case_id and item.get("caseId") != case_id:
                 raise ReplayError("The saved source does not match the requested example.")

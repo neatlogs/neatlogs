@@ -12,12 +12,13 @@ from ..core.media import media_references, sanitize_media_payload
 from .contracts import (
     MAX_INPUT_BYTES,
     ReplayError,
+    ReplayRecordedError,
     canonical_json,
     json_value,
     object_fields,
     parse_json_bytes,
 )
-from .session import ReplayHit, current_replay, lookup_replay
+from .session import ReplayErrorHit, ReplayHit, current_replay, lookup_replay
 
 MODEL_CAPTURE_ATTRIBUTE = "neatlogs.replay.model_capture"
 OPERATIONS = {
@@ -217,6 +218,9 @@ def provider_replay(operation, input, *, supported, span):
         span=span,
         can_restore=lambda output: _can_restore(operation, output),
     )
+    if isinstance(decision, ReplayErrorHit):
+        err = decision.entry.error or {}
+        raise ReplayRecordedError(err.get("type", "RecordedError"), err.get("message", ""))
     return (
         restore_response(operation, decision.entry.output)
         if isinstance(decision, ReplayHit)

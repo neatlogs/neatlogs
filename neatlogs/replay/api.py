@@ -57,7 +57,17 @@ class LocalRunApi:
         self._token = token.strip()
         self._refresh_access_token = refresh_access_token
 
-    def request(self, method, path, body=None, *, key=None, limit=64 * 1024, timeout=30):
+    def request(
+        self,
+        method,
+        path,
+        body=None,
+        *,
+        key=None,
+        limit=64 * 1024,
+        timeout=30,
+        allow_int64: bool = False,
+    ):
         evaluation_dispatch = re.fullmatch(r"/evaluations/[0-9a-fA-F-]{36}/ai-dispatches", path)
         if (
             not (
@@ -135,7 +145,7 @@ class LocalRunApi:
                             raise LocalRunApiError(
                                 "Local replay API response exceeds its size limit."
                             )
-                    raw = parse_json_bytes(bytes(data), limit=limit)
+                    raw = parse_json_bytes(bytes(data), limit=limit, allow_int64=allow_int64)
                     if not response.is_success:
                         code = raw.get("code") if type(raw) is dict else None
                         if type(raw) is dict and type(raw.get("error")) is dict:
@@ -181,6 +191,7 @@ class LocalRunApi:
             "GET",
             f"/datasets/{uuid(dataset_id)}/cases/{uuid(case_id)}?versionId={uuid(version_id)}",
             limit=17 * 1024 * 1024,
+            allow_int64=True,
         )
 
     def comparison(

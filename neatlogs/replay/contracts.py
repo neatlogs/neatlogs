@@ -28,6 +28,7 @@ Kind = Literal[
 ]
 MAX_RECORDING_BYTES = 16 * 1024 * 1024
 MAX_INPUT_BYTES = 1024 * 1024
+MAX_REPLAY_ENTRIES = 5000
 
 
 class ReplayError(NeatlogsError, ValueError):
@@ -46,7 +47,9 @@ class ReplayRecordedError(NeatlogsError, RuntimeError):
         super().__init__(detail)
 
 
-def json_value(value: object, *, limit: int = MAX_RECORDING_BYTES) -> Json:
+def json_value(
+    value: object, *, limit: int = MAX_RECORDING_BYTES, allow_int64: bool = False
+) -> Json:
     ancestors: set[int] = set()
     nodes = 0
 
@@ -61,6 +64,8 @@ def json_value(value: object, *, limit: int = MAX_RECORDING_BYTES) -> Json:
             if not math.isfinite(item):
                 raise ReplayError("Replay JSON numbers must be finite.")
             if type(item) is int and abs(item) > 2**53 - 1:
+                if allow_int64 and -(2**63) <= item <= 2**64 - 1:
+                    return item
                 number = float(item)
                 if int(number) != item:
                     raise ReplayError("Replay JSON integers must be exactly representable.")
@@ -78,13 +83,19 @@ def json_value(value: object, *, limit: int = MAX_RECORDING_BYTES) -> Json:
         finally:
             ancestors.remove(id(item))
 
+    result = visit(value, 0)
     try:
-        result = visit(value, 0)
-        if len(rfc8785.dumps(result)) > limit:
-            raise ReplayError("Replay JSON exceeds its size limit.")
-        return result
-    except (rfc8785.CanonicalizationError, UnicodeError, OverflowError):
+        if allow_int64:
+            encoded = json.dumps(
+                result, allow_nan=False, ensure_ascii=False, separators=(",", ":")
+            ).encode("utf-8")
+        else:
+            encoded = rfc8785.dumps(result)
+    except (rfc8785.CanonicalizationError, ValueError, TypeError, UnicodeError, OverflowError):
         raise ReplayError("Replay value is not lossless JSON.") from None
+    if len(encoded) > limit:
+        raise ReplayError("Replay JSON exceeds its size limit.")
+    return result
 
 
 def canonical_json(value: object, *, limit: int = MAX_RECORDING_BYTES) -> bytes:
@@ -178,8 +189,8 @@ def parse_replay_recording(value: object) -> ReplayRecording:
     if type(version) is not int or version not in (1, 2):
         raise ReplayError("Unsupported local replay recording version.")
     entries = fields["entries"]
-    if type(entries) is not list or len(entries) > 5000:
-        raise ReplayError("Replay recordings allow at most 5000 entries.")
+    if type(entries) is not list or len(entries) > MAX_REPLAY_ENTRIES:
+        raise ReplayError(f"Replay recordings allow at most {MAX_REPLAY_ENTRIES} entries.")
     allowed_kinds = V1_KINDS if version == 1 else V2_KINDS
     optional_fields = frozenset() if version == 1 else frozenset({"error"})
     result = []
@@ -187,7 +198,7 @@ def parse_replay_recording(value: object) -> ReplayRecording:
         item = object_fields(
             raw, {"spanId", "kind", "name", "input", "output"}, optional=optional_fields
         )
-        if item["kind"] not in allowed_kinds:
+        if type(item["kind"]) is not str or item["kind"] not in allowed_kinds:
             raise ReplayError("Unsupported local replay entry kind.")
         raw_error = item.get("error")
         parsed_error = None
@@ -213,7 +224,7 @@ def parse_replay_recording(value: object) -> ReplayRecording:
     return ReplayRecording(identifier(fields["sourceTraceId"]), tuple(result), version=version)
 
 
-def parse_json_bytes(content: bytes, *, limit=MAX_RECORDING_BYTES):
+def parse_json_bytes(content: bytes, *, limit=MAX_RECORDING_BYTES, allow_int64: bool = False):
     if len(content) > limit:
         raise ReplayError("Replay file exceeds its size limit.")
 
@@ -227,6 +238,8 @@ def parse_json_bytes(content: bytes, *, limit=MAX_RECORDING_BYTES):
 
     try:
         value = json.loads(content, object_pairs_hook=pairs)
-        return json_value(value, limit=limit)
+        return json_value(value, limit=limit, allow_int64=allow_int64)
+    except ReplayError:
+        raise
     except (ValueError, TypeError, RecursionError, UnicodeError):
         raise ReplayError("Replay file must contain bounded, valid JSON.") from None

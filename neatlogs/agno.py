@@ -245,7 +245,7 @@ def _patch_agent(agent: Any) -> None:
                     _err(span, e)
                     detach(token)
                     raise
-                return _AgnoStreamIter(iterator, span, token, start, sync=True)
+                return _wrap_stream_iter(iterator, span, token, start)
 
             try:
                 result = orig_run(*args, **kwargs)
@@ -334,7 +334,7 @@ def _patch_workflow(workflow: Any) -> None:
                     _err(span, e)
                     detach(token)
                     raise
-                return _AgnoStreamIter(iterator, span, token, start, sync=True, workflow=True)
+                return _wrap_stream_iter(iterator, span, token, start, workflow=True)
             try:
                 result = orig_run(*args, **kwargs)
             except Exception as e:
@@ -398,6 +398,22 @@ def _finalize_workflow_span(span: Any, result: Any, duration_ms: float) -> None:
 # ---------------------------------------------------------------------------
 # Streaming iterators (keep parent span active across iteration)
 # ---------------------------------------------------------------------------
+
+
+def _wrap_stream_iter(iterator, span, token, start, workflow=False):
+    """Generator passthrough: finalizes the span on exhaustion, error, or early close.
+
+    A plain-iterator wrapper never sees the caller stop iterating, so the span
+    (and its attached context) would leak. As a generator this gets GeneratorExit
+    when the caller abandons iteration, and finalizes instead.
+    """
+    helper = _AgnoStreamIter(iterator, span, token, start, sync=True, workflow=workflow)
+    try:
+        for ev in helper:
+            yield ev
+    except GeneratorExit:
+        helper._finalize()
+        raise
 
 
 class _AgnoStreamIter:

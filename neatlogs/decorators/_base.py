@@ -39,10 +39,12 @@ def _capture_code_attrs(func: Callable[..., Any]) -> Dict[str, Any]:
     attrs: Dict[str, Any] = {}
     try:
         abs_path = inspect.getfile(target)
-        home = str(Path.home())
-        attrs["code.file.path"] = (
-            abs_path[len(home) :].lstrip("/") if abs_path.startswith(home) else abs_path
-        )
+        try:
+            # Compare whole path components: a plain string prefix would turn /home/alice/app.py
+            # into "ice/app.py" for a home of /home/al, and leave a leading "\" on Windows.
+            attrs["code.file.path"] = Path(abs_path).relative_to(Path.home()).as_posix()
+        except ValueError:
+            attrs["code.file.path"] = abs_path
     except (TypeError, OSError):
         pass
     attrs["code.function.name"] = getattr(target, "__qualname__", target.__name__)

@@ -2,12 +2,39 @@
 Context managers for manual span creation.
 """
 
+import sys
 from contextlib import contextmanager
+from functools import wraps
 from typing import Any, Callable, Dict, Optional, Union
 
 from opentelemetry import trace as otel_trace
 
 from ..errors import NeatlogsConfigurationError
+from .code_location import code_file_path
+
+
+def _with_code_location(create_context):
+    @wraps(create_context)
+    def wrapper(*args, **kwargs):
+        try:
+            caller = sys._getframe(1)
+            code = caller.f_code
+            attributes = {
+                "code.file.path": code_file_path(code.co_filename),
+                "code.line.number": caller.f_lineno,
+                "code.function.name": getattr(code, "co_qualname", code.co_name),
+                "code.namespace": caller.f_globals.get("__name__"),
+            }
+        except Exception:
+            # A host audit hook can deny frame inspection. Source capture is optional.
+            attributes = {}
+
+        for key, value in attributes.items():
+            if value is not None and f"neatlogs.{key}" not in kwargs:
+                kwargs.setdefault(key, value)
+        return create_context(*args, **kwargs)
+
+    return wrapper
 
 
 def _reject_http_span_kind(kind: Any, attributes: Dict[str, Any]) -> None:
@@ -23,6 +50,8 @@ def _reject_http_span_kind(kind: Any, attributes: Dict[str, Any]) -> None:
         )
 
 
+# Capture the call to trace(), before contextlib enters the generator.
+@_with_code_location
 @contextmanager
 def trace(
     name: str,
@@ -45,6 +74,8 @@ def trace(
 ):
     """
     Context manager for prompt tracking and session management.
+
+    Records the call site's code location. Explicit source attributes take precedence.
 
     IMPORTANT: This is NOT required for basic tracing!
     - Framework code (LangChain, OpenAI, etc.) is auto-instrumented

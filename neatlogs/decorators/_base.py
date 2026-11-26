@@ -8,11 +8,12 @@ import asyncio
 import functools
 import inspect
 import json
-from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple, TypeVar, Union
 
 from opentelemetry import trace as otel_trace
 from opentelemetry.trace import Status, StatusCode
+
+from ..core.code_location import code_file_path
 
 F = TypeVar("F", bound=Callable[..., Any])
 _MAX_SEMANTIC_STREAM_EVENTS = 128
@@ -38,11 +39,7 @@ def _capture_code_attrs(func: Callable[..., Any]) -> Dict[str, Any]:
 
     attrs: Dict[str, Any] = {}
     try:
-        abs_path = inspect.getfile(target)
-        home = str(Path.home())
-        attrs["code.file.path"] = (
-            abs_path[len(home) :].lstrip("/") if abs_path.startswith(home) else abs_path
-        )
+        attrs["code.file.path"] = code_file_path(inspect.getfile(target))
     except (TypeError, OSError):
         pass
     attrs["code.function.name"] = getattr(target, "__qualname__", target.__name__)

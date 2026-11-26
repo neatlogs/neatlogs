@@ -1,13 +1,11 @@
 """
-Tests that @neatlogs.span() decorators auto-capture code location attributes
-(code.file.path, code.function.name, code.line.number, code.namespace) on the
-resulting span, and that auto-instrumented spans (not decorated) do NOT carry
-these attributes.
+Source-location capture for decorated and inline Neatlogs spans.
 """
 
 import asyncio
 import functools
 import inspect
+from contextlib import ExitStack
 from pathlib import Path
 
 import pytest
@@ -185,7 +183,7 @@ def test_user_supplied_code_attrs_take_precedence(tracer_provider, in_memory_spa
 
 
 def test_code_attrs_do_not_appear_on_plain_otel_span(tracer_provider, in_memory_span_exporter):
-    """Spans created without the neatlogs decorator should not have code params."""
+    """A span opened directly with OpenTelemetry has no SDK source attributes."""
     _install(tracer_provider)
 
     tracer = trace.get_tracer("test")
@@ -198,6 +196,39 @@ def test_code_attrs_do_not_appear_on_plain_otel_span(tracer_provider, in_memory_
     assert "code.file.path" not in attrs
     assert "code.function.name" not in attrs
     assert "code.line.number" not in attrs
+
+
+def test_inline_trace_records_call_site(tracer_provider, in_memory_span_exporter):
+    _install(tracer_provider)
+
+    expected_line = inspect.currentframe().f_lineno + 1
+    operation = neatlogs_trace("inline", kind="WORKFLOW")
+    with ExitStack() as stack:
+        stack.enter_context(operation)
+
+    attrs = _semantic_span(in_memory_span_exporter.get_finished_spans(), "WORKFLOW").attributes
+    assert Path(attrs["code.file.path"]).name == Path(__file__).name
+    assert attrs["code.line.number"] == expected_line
+    assert attrs["code.function.name"] == "test_inline_trace_records_call_site"
+    assert attrs["code.namespace"] == __name__
+
+
+def test_inline_trace_respects_explicit_code_attrs(tracer_provider, in_memory_span_exporter):
+    _install(tracer_provider)
+    overrides = {
+        "neatlogs.code.file.path": "published/handler.py",
+        "code.line.number": 12,
+        "custom.attribute": "retained",
+    }
+
+    with neatlogs_trace("inline", kind="WORKFLOW", **overrides):
+        pass
+
+    attrs = _semantic_span(in_memory_span_exporter.get_finished_spans(), "WORKFLOW").attributes
+    for key, value in overrides.items():
+        assert attrs[key] == value
+    assert "code.file.path" not in attrs
+    assert attrs["code.function.name"] == "test_inline_trace_respects_explicit_code_attrs"
 
 
 # ---------------------------------------------------------------------------

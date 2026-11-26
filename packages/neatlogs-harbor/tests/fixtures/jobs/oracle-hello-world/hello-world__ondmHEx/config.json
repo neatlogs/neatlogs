@@ -1,0 +1,9 @@
+{
+    "task": {
+        "name": "hello-world/hello-world",
+        "ref": "latest"
+    },
+    "trial_name": "hello-world__ondmHEx",
+    "trials_dir": "jobs/oracle-hello-world",
+    "job_id": "e9ca0456-5d7c-48ce-abce-31036f3fd18b"
+}

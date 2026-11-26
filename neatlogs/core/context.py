@@ -18,16 +18,17 @@ def _with_code_location(create_context):
     def wrapper(*args, **kwargs):
         try:
             caller = sys._getframe(1)
-        except (AttributeError, ValueError):
-            return create_context(*args, **kwargs)
+            code = caller.f_code
+            attributes = {
+                "code.file.path": code_file_path(code.co_filename),
+                "code.line.number": caller.f_lineno,
+                "code.function.name": getattr(code, "co_qualname", code.co_name),
+                "code.namespace": caller.f_globals.get("__name__"),
+            }
+        except Exception:
+            # A host audit hook can deny frame inspection. Source capture is optional.
+            attributes = {}
 
-        code = caller.f_code
-        attributes = {
-            "code.file.path": code_file_path(code.co_filename),
-            "code.line.number": caller.f_lineno,
-            "code.function.name": getattr(code, "co_qualname", code.co_name),
-            "code.namespace": caller.f_globals.get("__name__"),
-        }
         for key, value in attributes.items():
             if value is not None and f"neatlogs.{key}" not in kwargs:
                 kwargs.setdefault(key, value)

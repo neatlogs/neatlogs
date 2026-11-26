@@ -7,11 +7,13 @@ import functools
 import inspect
 from contextlib import ExitStack
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from opentelemetry import trace
 
 from neatlogs._wrap_utils import set_neatlogs_provider
+from neatlogs.core import context as trace_context
 from neatlogs.core.context import trace as neatlogs_trace
 from neatlogs.decorators._base import _decorate_span
 from neatlogs.decorators.orchestration import span as neatlogs_span
@@ -229,6 +231,26 @@ def test_inline_trace_respects_explicit_code_attrs(tracer_provider, in_memory_sp
         assert attrs[key] == value
     assert "code.file.path" not in attrs
     assert attrs["code.function.name"] == "test_inline_trace_respects_explicit_code_attrs"
+
+
+@pytest.mark.parametrize("error_type", [PermissionError, RuntimeError])
+def test_inline_trace_records_span_when_frame_access_is_denied(
+    error_type, monkeypatch, tracer_provider, in_memory_span_exporter
+):
+    _install(tracer_provider)
+
+    def deny_frame_access(_depth):
+        raise error_type("frame access denied")
+
+    monkeypatch.setattr(trace_context, "sys", SimpleNamespace(_getframe=deny_frame_access))
+    with neatlogs_trace("inline", kind="WORKFLOW", **{"code.file.path": "explicit.py"}) as span:
+        assert span.is_recording()
+
+    attrs = _semantic_span(in_memory_span_exporter.get_finished_spans(), "WORKFLOW").attributes
+    assert attrs["code.file.path"] == "explicit.py"
+    assert "code.line.number" not in attrs
+    assert "code.function.name" not in attrs
+    assert "code.namespace" not in attrs
 
 
 # ---------------------------------------------------------------------------

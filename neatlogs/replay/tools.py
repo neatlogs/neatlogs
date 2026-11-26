@@ -5,11 +5,16 @@ from __future__ import annotations
 import functools
 import inspect
 
-from .contracts import ReplayError
-from .session import ReplayHit, current_replay, lookup_replay
+from .contracts import ReplayError, ReplayRecordedError
+from .session import ReplayErrorHit, ReplayHit, current_replay, lookup_replay
 
 
-def replay_tool(func, *, name, result):
+def _raise_recorded_error(hit: ReplayErrorHit) -> None:
+    err = hit.entry.error or {}
+    raise ReplayRecordedError(err.get("type", "RecordedError"), err.get("message", ""))
+
+
+def replay_tool(func, *, name, result, kind="tool"):
     if result is not True and result != "awaitable":
         raise ReplayError("Tool replay accepts True or 'awaitable'.")
     if inspect.isgeneratorfunction(func) or inspect.isasyncgenfunction(func):
@@ -25,13 +30,19 @@ def replay_tool(func, *, name, result):
         for key, parameter in signature.parameters.items():
             if parameter.kind == inspect.Parameter.VAR_POSITIONAL:
                 values[key] = list(values[key])
-        return lookup_replay("tool", name, values)
+        return lookup_replay(kind, name, values)
 
     if result == "awaitable" and not inspect.iscoroutinefunction(func):
 
         @functools.wraps(func)
         def awaitable_wrapper(*args, **kwargs):
             replay = decision(args, kwargs)
+            if isinstance(replay, ReplayErrorHit):
+
+                async def failed():
+                    _raise_recorded_error(replay)
+
+                return failed()
             if isinstance(replay, ReplayHit):
 
                 async def saved():
@@ -50,6 +61,8 @@ def replay_tool(func, *, name, result):
         @functools.wraps(func)
         async def async_wrapper(*args, **kwargs):
             replay = decision(args, kwargs)
+            if isinstance(replay, ReplayErrorHit):
+                _raise_recorded_error(replay)
             if isinstance(replay, ReplayHit):
                 return replay.entry.output
             value = func(*args, **kwargs)
@@ -62,6 +75,8 @@ def replay_tool(func, *, name, result):
     @functools.wraps(func)
     def sync_wrapper(*args, **kwargs):
         replay = decision(args, kwargs)
+        if isinstance(replay, ReplayErrorHit):
+            _raise_recorded_error(replay)
         if isinstance(replay, ReplayHit):
             return replay.entry.output
         return func(*args, **kwargs)

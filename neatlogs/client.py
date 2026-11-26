@@ -99,6 +99,8 @@ class Client:
         disable_export: bool = False,
         tracer_provider: TracerProvider | None = None,
         uploads_enabled: bool | None = None,
+        environment: str | None = None,
+        release: str | None = None,
     ) -> None:
         key = str(api_key or "").strip()
         name = str(workflow_name or "").strip()
@@ -161,6 +163,9 @@ class Client:
 
         ensure_provider_preprocessor(self.tracer_provider)
 
+        from .core.backtracking import resolve_provenance
+
+        resolved_env, resolved_rel = resolve_provenance(environment, release)
         self._span_processor = NeatlogsSpanProcessor(
             mask=mask,
             emit_completion_markers=False,
@@ -168,6 +173,8 @@ class Client:
             # provider may be shared with host telemetry, so ownership is marked
             # per Client tracer start instead of claiming every provider span.
             own_all_spans=self._owns_provider,
+            environment=resolved_env,
+            release=resolved_rel,
         )
         self.tracer_provider.add_span_processor(self._span_processor)
         self._transport_processors: list[Any] = []

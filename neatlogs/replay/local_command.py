@@ -122,14 +122,19 @@ def parse_report(value):
             "firstMiss",
             "traceIds",
         },
+        optional={"overridesApplied"},
     )
     if (
         type(data["sourceTraceId"]) is not str
         or not 1 <= len(data["sourceTraceId"]) <= 200
         or data["mode"] not in {"tools_only", "until_span"}
         or any(type(data[key]) is not int or data[key] < 0 for key in ("hits", "liveCalls"))
+        or (
+            "overridesApplied" in data
+            and (type(data["overridesApplied"]) is not int or data["overridesApplied"] < 0)
+        )
         or type(data["switchedToLive"]) is not bool
-        or data["reason"] not in {None, "checkpoint", "missing_recording"}
+        or data["reason"] not in {None, "checkpoint", "missing_recording", "override_fork"}
     ):
         raise ReplayError("Invalid local replay activity report.")
     miss = data["firstMiss"]

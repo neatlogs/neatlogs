@@ -39,6 +39,8 @@ def trace(
     session_id: Optional[str] = None,
     end_user_id: Optional[str] = None,
     end_user_metadata: Optional[Dict[str, Any]] = None,
+    prompt_version: Optional[str] = None,
+    checkpoint_id: Optional[str] = None,
     **attributes,
 ):
     """
@@ -284,6 +286,10 @@ def trace(
     try:
         logger.debug(f"[trace] Creating {'root' if is_root else 'child'} span '{name}'")
         _set_span_attributes(span, kind, template_string, prompt_variables, version, attributes)
+        if prompt_version:
+            span.set_attribute("neatlogs.prompt.version", str(prompt_version))
+        if checkpoint_id:
+            span.set_attribute("neatlogs.checkpoint.id", str(checkpoint_id)[:200])
         # Session/end-user belong to the trace root only.
         span_is_root = is_root and auto_root is None
         apply_session_attributes(span, session_id, is_root=span_is_root)

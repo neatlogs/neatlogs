@@ -858,8 +858,11 @@ def test_standalone_requires_an_explicit_doctor_mode(capsys):
     assert main(["doctor", "--json"]) == 4
     captured = capsys.readouterr()
     assert captured.out == ""
-    assert "one of the arguments --local --probe is required" in captured.err
-    assert "Usage: neatlogs doctor (--local | --probe) [--json]" in captured.err
+    assert "one of the arguments --local --probe --trace --file is required" in captured.err
+    assert (
+        "Usage: neatlogs doctor (--local | --probe | --trace <trace_id> | --file <path>)"
+        in captured.err
+    )
 
 
 def test_probe_never_treats_processing_readback_as_success(monkeypatch):

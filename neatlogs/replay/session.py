@@ -12,9 +12,12 @@ from typing import Literal
 from opentelemetry import context as otel_context
 
 from .contracts import (
+    STEP_KINDS,
     ReplayEntry,
     ReplayError,
+    ReplayRecordedError,
     ReplayRunBinding,
+    json_value,
     parse_replay_recording,
     replay_key,
 )
@@ -28,6 +31,13 @@ _context_key = otel_context.create_key("neatlogs.local_replay")
 class ReplayHit:
     entry: ReplayEntry
     outcome: Literal["HIT"] = "HIT"
+    overridden: bool = False
+
+
+@dataclass(frozen=True)
+class ReplayErrorHit:
+    entry: ReplayEntry
+    outcome: Literal["ERROR_HIT"] = "ERROR_HIT"
 
 
 @dataclass(frozen=True)
@@ -38,7 +48,15 @@ class ReplayLive:
 class ReplaySession:
     """Replay scoped calls; use Thread(target=...) or explicitly copy thread context."""
 
-    def __init__(self, recording, *, mode="tools_only", until_span=None, run=None):
+    def __init__(
+        self,
+        recording,
+        *,
+        mode="tools_only",
+        until_span=None,
+        run=None,
+        overrides=None,
+    ):
         self.recording = parse_replay_recording(recording)
         if mode not in ("tools_only", "until_span"):
             raise ReplayError("Unsupported local replay mode.")
@@ -47,9 +65,27 @@ class ReplaySession:
         identities = [entry.span_id for entry in self.recording.entries]
         if mode == "until_span" and until_span not in identities:
             raise ReplayError("The replay checkpoint must exist in this recording.")
+        validated_overrides = {}
+        if overrides is not None:
+            from .provider import safe_body
+
+            if not isinstance(overrides, dict):
+                raise ReplayError("Replay overrides must be a mapping of span_id to value.")
+            known = set(identities)
+            for span_id, replacement in overrides.items():
+                if span_id not in known:
+                    raise ReplayError("Replay override target must exist in this recording.")
+                if callable(replacement):
+                    validated_overrides[span_id] = replacement
+                else:
+                    validated_overrides[span_id] = safe_body(
+                        json_value(replacement), provider_transport=False
+                    )
         self.mode = mode
         self.until_span = until_span
         self.run_binding = ReplayRunBinding.parse(run) if run is not None else None
+        self._overrides = validated_overrides
+        self._override_applied = False
         self._checkpoint = identities.index(until_span) if until_span is not None else -1
         self._entries = {}
         self._positions = {}
@@ -73,6 +109,8 @@ class ReplaySession:
             "firstMiss": None,
             "traceIds": [],
         }
+        if overrides is not None:
+            self._status["overridesApplied"] = 0
 
     def __enter__(self):
         if current_replay() is not None:
@@ -125,6 +163,33 @@ class ReplaySession:
             self._raise_if_failed()
             return copy.deepcopy(self._status)
 
+    def get_fork_lineage(self):
+        with self._lock:
+            self._raise_if_failed()
+            return {
+                "forkedFromTraceId": self.recording.source_trace_id,
+                "forkedFromSpanId": self.until_span,
+                "mode": self.mode,
+                "overrideApplied": self._override_applied,
+                "overridesApplied": self._status.get("overridesApplied", 0),
+                "traceIds": list(self._status["traceIds"]),
+            }
+
+    def _resolve_override(self, entry: ReplayEntry) -> ReplayEntry:
+        from .provider import safe_body
+
+        replacement = self._overrides[entry.span_id]
+        value = replacement(copy.deepcopy(entry)) if callable(replacement) else replacement
+        validated = copy.deepcopy(safe_body(json_value(value), provider_transport=False))
+        return ReplayEntry(
+            span_id=entry.span_id,
+            kind=entry.kind,
+            name=entry.name,
+            input=copy.deepcopy(entry.input),
+            output=validated,
+            error=None,
+        )
+
     def _raise_if_failed(self):
         if self._failure:
             raise ReplayError(self._failure)
@@ -141,6 +206,13 @@ class ReplaySession:
         self._status["liveCalls"] += 1
         return ReplayLive("MISS")
 
+    def _live_step(self):
+        # Step spans (RETRIEVER/MEMORY/GUARDRAIL/RERANKER/VECTOR_STORE) are optional
+        # in CLI and App-supplied recordings; a missed step falls back to live for
+        # that call only and must never switch downstream tool/model calls to live.
+        self._status["liveCalls"] += 1
+        return ReplayLive("LIVE")
+
     def decide(self, kind, name, input, can_restore=None):
         with self._lock:
             self._raise_if_failed()
@@ -150,20 +222,39 @@ class ReplaySession:
             try:
                 key = replay_key(kind, name, input)
             except ReplayError:
-                return self._miss(kind, name)
+                return self._live_step() if kind in STEP_KINDS else self._miss(kind, name)
             position = self._positions.get(key, 0)
             sequence = self._entries.get(key, [])
             if position >= len(sequence):
-                return self._miss(kind, name)
+                return self._live_step() if kind in STEP_KINDS else self._miss(kind, name)
             index, entry = sequence[position]
             if entry.span_id == self.until_span:
+                if entry.span_id in self._overrides:
+                    overridden_entry = self._resolve_override(entry)
+                    self._positions[key] = position + 1
+                    self._status["hits"] += 1
+                    self._status["overridesApplied"] = self._status.get("overridesApplied", 0) + 1
+                    self._override_applied = True
+                    self._status.update(switchedToLive=True, reason="override_fork")
+                    return ReplayHit(overridden_entry, overridden=True)
                 self._status.update(switchedToLive=True, reason="checkpoint")
                 self._status["liveCalls"] += 1
                 return ReplayLive("LIVE")
             if self.until_span is not None and index > self._checkpoint:
-                return self._miss(kind, name)
+                return self._live_step() if kind in STEP_KINDS else self._miss(kind, name)
+            if entry.span_id in self._overrides:
+                overridden_entry = self._resolve_override(entry)
+                self._positions[key] = position + 1
+                self._status["hits"] += 1
+                self._status["overridesApplied"] = self._status.get("overridesApplied", 0) + 1
+                self._override_applied = True
+                return ReplayHit(overridden_entry, overridden=True)
+            if entry.error is not None:
+                self._positions[key] = position + 1
+                self._status["hits"] += 1
+                return ReplayErrorHit(copy.deepcopy(entry))
             if can_restore is not None and not can_restore(entry.output):
-                return self._miss(kind, name)
+                return self._live_step() if kind in STEP_KINDS else self._miss(kind, name)
             self._positions[key] = position + 1
             self._status["hits"] += 1
             return ReplayHit(copy.deepcopy(entry))
@@ -175,11 +266,17 @@ class ReplaySession:
             identities = self._status["traceIds"]
             if context.trace_id and trace_id not in identities and len(identities) < 2:
                 identities.append(trace_id)
+            override_applied = self._override_applied
         attributes = {
             "neatlogs.origin": "simulation",
             "neatlogs.replay.source_trace_id": self.recording.source_trace_id,
             "neatlogs.replay.mode": self.mode,
         }
+        if self.until_span is not None:
+            attributes["neatlogs.replay.forked_from_trace_id"] = self.recording.source_trace_id
+            attributes["neatlogs.replay.forked_from_span_id"] = self.until_span
+        if override_applied:
+            attributes["neatlogs.replay.override_applied"] = True
         if self.run_binding is not None:
             attributes.update(
                 {
@@ -250,11 +347,16 @@ def lookup_replay(kind, name, input, *, span=None, can_restore=None):
     if span is not None:
         session.stamp(span)
         span.set_attribute("neatlogs.replay.outcome", decision.outcome)
-        if isinstance(decision, ReplayHit):
+        if isinstance(decision, (ReplayHit, ReplayErrorHit)):
             span.set_attribute("neatlogs.replay.source_span_id", decision.entry.span_id)
+        if isinstance(decision, ReplayHit) and decision.overridden:
+            span.set_attribute("neatlogs.replay.override_applied", True)
     return decision
 
 
 def replay_model(name, input, decode, live, *, span=None):
     decision = lookup_replay("model", name, input, span=span)
+    if isinstance(decision, ReplayErrorHit):
+        err = decision.entry.error or {}
+        raise ReplayRecordedError(err.get("type", "RecordedError"), err.get("message", ""))
     return decode(decision.entry.output) if isinstance(decision, ReplayHit) else live()

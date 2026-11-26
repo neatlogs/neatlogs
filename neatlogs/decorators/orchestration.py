@@ -28,6 +28,8 @@ def _create_mcp_tool_decorator(
     tool_name: Optional[str] = None,
     description: Optional[str] = None,
     tool_json_schema: Optional[dict] = None,
+    prompt_version: Optional[str] = None,
+    checkpoint_id: Optional[str] = None,
 ) -> Callable[[F], F]:
     """
     Create MCP tool decorator with EXACT logic from original mcp_tool.py.
@@ -51,6 +53,10 @@ def _create_mcp_tool_decorator(
         def _apply_code_attrs(span):
             for k, v in code_attrs.items():
                 span.set_attribute(k, v)
+            if prompt_version:
+                span.set_attribute("neatlogs.prompt.version", str(prompt_version))
+            if checkpoint_id:
+                span.set_attribute("neatlogs.checkpoint.id", str(checkpoint_id)[:200])
 
         if inspect.iscoroutinefunction(func):
 
@@ -205,6 +211,9 @@ def span(
     # End-user identity (one end-user per trace; usually set on the WORKFLOW root)
     end_user_id: Optional[str] = None,
     end_user_metadata: Optional[Dict[str, Any]] = None,
+    # Backtracking & provenance metadata
+    prompt_version: Optional[str] = None,
+    checkpoint_id: Optional[str] = None,
 ) -> Callable[[F], F]:
     """
     Universal decorator for instrumenting custom code with observability spans.
@@ -305,18 +314,32 @@ def span(
         "CHAIN",
         "TOOL",
         "RETRIEVER",
+        "RERANKER",
+        "VECTOR_STORE",
         "EMBEDDING",
         "GUARDRAIL",
         "EVALUATOR",
         "MEMORY",
         "MCP_TOOL",
     }
+    replayable_kinds = {
+        "TOOL",
+        "MCP_TOOL",
+        "RETRIEVER",
+        "RERANKER",
+        "VECTOR_STORE",
+        "MEMORY",
+        "GUARDRAIL",
+    }
     kind_upper = kind.upper()
     if kind_upper not in valid_kinds:
         raise ValueError(f"Invalid span kind: {kind}. Must be one of {valid_kinds}")
 
-    if replay is not False and kind_upper not in {"TOOL", "MCP_TOOL"}:
-        raise ValueError("Tool replay is supported only for TOOL and MCP_TOOL spans")
+    if replay is not False and kind_upper not in replayable_kinds:
+        raise ValueError(
+            "Replay is supported only for TOOL, MCP_TOOL, RETRIEVER, RERANKER, "
+            "VECTOR_STORE, MEMORY, and GUARDRAIL spans"
+        )
 
     # MCP_TOOL requires special handling to match exact original logic
     # (needs access to raw args[0] before binding, special output wrapping)
@@ -325,6 +348,8 @@ def span(
             name=name,
             tool_name=tool_name,
             description=description,
+            prompt_version=prompt_version,
+            checkpoint_id=checkpoint_id,
         )
         if replay is False:
             return decorate
@@ -335,12 +360,18 @@ def span(
 
             if replay == "awaitable" and not inspect.iscoroutinefunction(func):
                 raise ReplayError("Use async def for captured awaitable tool replay.")
-            return decorate(replay_tool(func, name=tool_name or func.__name__, result=replay))
+            return decorate(
+                replay_tool(func, name=tool_name or func.__name__, result=replay, kind="tool")
+            )
 
         return replay_mcp
 
     # Build attributes based on kind
     extra: Dict[str, Any] = {}
+    if prompt_version:
+        extra["neatlogs.prompt.version"] = str(prompt_version)
+    if checkpoint_id:
+        extra["neatlogs.checkpoint.id"] = str(checkpoint_id)[:200]
 
     # Agent-specific attributes
     if kind_upper == "AGENT":
@@ -397,7 +428,15 @@ def span(
         # Export the same default identity used by replay lookup.
         if kind_upper == "TOOL" and not tool_name:
             extra["tool.name"] = name or func.__name__
-        return decorate(replay_tool(func, name=tool_name or name or func.__name__, result=replay))
+        replay_kind = "tool" if kind_upper == "TOOL" else kind_upper.lower()
+        return decorate(
+            replay_tool(
+                func,
+                name=tool_name or name or func.__name__,
+                result=replay,
+                kind=replay_kind,
+            )
+        )
 
     return replay_decorator
 
@@ -462,7 +501,12 @@ def _retriever_postprocessor(span: Any, result: Any, bound_inputs: Dict[str, Any
                 (doc[key] for key in ("score", "_score", "distance") if doc.get(key) is not None),
                 score,
             )
-            metadata = doc.get("metadata") or {}
+            metadata = (
+                dict(doc.get("metadata") or {}) if isinstance(doc.get("metadata"), dict) else {}
+            )
+            for freshness_key in ("updated_at", "created_at", "timestamp", "last_modified"):
+                if doc.get(freshness_key) is not None and freshness_key not in metadata:
+                    metadata[freshness_key] = doc[freshness_key]
 
             if doc_id is not None:
                 span.set_attribute(f"neatlogs.retriever.documents.{i}.id", str(doc_id))

@@ -28,6 +28,7 @@ Available span kinds:
 
 from . import datasets
 from .client import Client
+from .core.backtracking import checkpoint, report_diagnostic
 from .core.context import trace
 from .core.crewai_task_registry import register_crewai_task
 from .core.identity import identify
@@ -79,6 +80,7 @@ from .replay import (
     LocalRunApiError,
     ReplayEntry,
     ReplayError,
+    ReplayRecordedError,
     ReplayRecording,
     ReplayRunBinding,
     ReplaySession,
@@ -95,6 +97,7 @@ from .schema_v2 import (
     telemetry_schema_bytes,
     verify_telemetry_schema,
 )
+from .trace_audit import audit_readable_spans, audit_trace
 from .version import __version__
 
 
@@ -331,9 +334,14 @@ __all__ = [
     "LocalRunApiError",
     "ReplayEntry",
     "ReplayError",
+    "ReplayRecordedError",
     "ReplayRecording",
     "ReplayRunBinding",
     "ReplaySession",
+    "audit_readable_spans",
+    "audit_trace",
+    "checkpoint",
+    "report_diagnostic",
     "get_replay_status",
     "parse_replay_recording",
     "replay_model",

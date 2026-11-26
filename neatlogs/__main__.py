@@ -144,12 +144,27 @@ def main(argv: list[str] | None = None) -> int:
     parser = _DoctorParser(prog="neatlogs")
     commands = parser.add_subparsers(dest="command", required=True)
     doctor_parser = commands.add_parser(
-        "doctor", help="run read-only, network-free SDK diagnostics"
+        "doctor",
+        help="run SDK diagnostics or audit a captured trace for judge/replay readiness",
     )
     modes = doctor_parser.add_mutually_exclusive_group(required=True)
     modes.add_argument("--local", action="store_true")
     modes.add_argument("--probe", action="store_true")
+    modes.add_argument(
+        "--trace",
+        dest="trace_id",
+        metavar="TRACE_ID",
+        help="audit a real trace by ID for judge and replay readiness",
+    )
+    modes.add_argument(
+        "--file",
+        dest="file_path",
+        metavar="PATH",
+        help="audit a saved trace JSON file offline for judge and replay readiness",
+    )
     doctor_parser.add_argument("--endpoint")
+    doctor_parser.add_argument("--expect-session", action="store_true")
+    doctor_parser.add_argument("--expect-retriever", action="store_true")
     doctor_parser.add_argument("--json", action="store_true")
     trace_parser = commands.add_parser("trace", help="read a trace back and check it")
     trace_commands = trace_parser.add_subparsers(dest="trace_command", required=True)
@@ -160,7 +175,11 @@ def main(argv: list[str] | None = None) -> int:
         args = parser.parse_args(argv)
     except _UsageError as exc:
         print(f"neatlogs: {exc}", file=sys.stderr)
-        print("Usage: neatlogs doctor (--local | --probe) [--json]", file=sys.stderr)
+        print(
+            "Usage: neatlogs doctor (--local | --probe | --trace <trace_id> | --file <path>) "
+            "[--expect-session] [--expect-retriever] [--json]",
+            file=sys.stderr,
+        )
         print("       neatlogs trace get <trace_id> [--json]", file=sys.stderr)
         return 4
 
@@ -168,6 +187,18 @@ def main(argv: list[str] | None = None) -> int:
         from .trace_cli import run_trace_get
 
         return run_trace_get(args.trace_id, args.json)
+
+    if args.trace_id is not None or args.file_path is not None:
+        from .trace_audit import run_trace_audit
+
+        return run_trace_audit(
+            args.trace_id,
+            file_path=args.file_path,
+            endpoint=args.endpoint,
+            as_json=args.json,
+            expect_session=args.expect_session,
+            expect_retriever=args.expect_retriever,
+        )
 
     result = doctor_probe_v2(endpoint=args.endpoint) if args.probe else _standalone_local()
     _print_v2(result, args.json)

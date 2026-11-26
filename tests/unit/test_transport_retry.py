@@ -197,3 +197,161 @@ def test_upstream_exporter_requires_complete_trace_receipt(monkeypatch, receipt)
         assert len(calls) == 1
     finally:
         exporter.shutdown()
+
+
+def _fake_response(status: int, *, retry_after: str | None = None) -> requests.Response:
+    resp = requests.Response()
+    resp.status_code = status
+    resp._content = b""
+    resp._content_consumed = True
+    if retry_after is not None:
+        resp.headers["Retry-After"] = retry_after
+    return resp
+
+
+def test_retry_after_exceeding_max_cap_skips_retry_immediately_instead_of_capping_early(
+    monkeypatch,
+):
+    """When server sends Retry-After > _MAX_RETRY_AFTER_SECONDS (even inside a larger caller
+    timeout), transport must skip the internal retry immediately rather than capping to 5s
+    and retrying 25s early."""
+    from neatlogs.core import transport
+
+    sleeps: list[float] = []
+    calls: list[int] = []
+
+    def fake_request(self, method, url, **kwargs):
+        calls.append(1)
+        return _fake_response(429, retry_after="30")
+
+    monkeypatch.setattr(requests.Session, "request", fake_request)
+    monkeypatch.setattr(transport.time, "sleep", sleeps.append)
+
+    session = build_otlp_session(circuit_breaker_threshold=1)
+    try:
+        resp = session.post("https://ingest.example.com/v1/traces", data=b"", timeout=15.0)
+        assert resp.status_code == 429
+        assert len(calls) == 1
+        assert sleeps == []
+        assert session.circuit_breaker_state == "open"
+    finally:
+        session.close()
+
+
+def test_retry_after_minimum_is_never_shortened_by_negative_jitter(monkeypatch):
+    """Server-provided Retry-After within budget must never be shortened by negative jitter."""
+    from neatlogs.core import transport
+
+    sleeps: list[float] = []
+    responses = [_fake_response(429, retry_after="2"), _fake_response(200)]
+
+    monkeypatch.setattr(requests.Session, "request", lambda self, m, u, **kw: responses.pop(0))
+    monkeypatch.setattr(transport.random, "uniform", lambda a, b: a)  # force minimum jitter (0.8)
+    monkeypatch.setattr(transport.time, "sleep", sleeps.append)
+
+    session = build_otlp_session()
+    try:
+        resp = session.post("https://ingest.example.com/v1/traces", data=b"", timeout=10.0)
+        assert resp.status_code == 200
+        assert len(sleeps) == 1
+        assert sleeps[0] >= 2.0
+    finally:
+        session.close()
+
+
+def test_retry_after_http_date_honors_minimum_and_skips_when_over_cap(monkeypatch):
+    """HTTP-date Retry-After obeys the exact same no-shortening and over-cap skip rules."""
+    from datetime import datetime, timedelta, timezone
+    from email.utils import format_datetime
+
+    from neatlogs.core import transport
+
+    # 1. HTTP-date 30s in future exceeds 5s cap -> skip internal retry immediately
+    future_far = format_datetime(datetime.now(timezone.utc) + timedelta(seconds=30), usegmt=True)
+    sleeps_far: list[float] = []
+    calls_far: list[int] = []
+
+    def fake_far(self, method, url, **kwargs):
+        calls_far.append(1)
+        return _fake_response(429, retry_after=future_far)
+
+    monkeypatch.setattr(requests.Session, "request", fake_far)
+    monkeypatch.setattr(transport.time, "sleep", sleeps_far.append)
+
+    session = build_otlp_session()
+    try:
+        resp = session.post("https://ingest.example.com/v1/traces", data=b"", timeout=15.0)
+        assert resp.status_code == 429
+        assert len(calls_far) == 1
+        assert sleeps_far == []
+    finally:
+        session.close()
+
+    # 2. HTTP-date ~3s in future -> not shortened by negative jitter
+    future_near = format_datetime(datetime.now(timezone.utc) + timedelta(seconds=3), usegmt=True)
+    sleeps_near: list[float] = []
+    script = [_fake_response(429, retry_after=future_near), _fake_response(200)]
+
+    monkeypatch.setattr(requests.Session, "request", lambda self, m, u, **kw: script.pop(0))
+    monkeypatch.setattr(transport.random, "uniform", lambda a, b: 0.5)
+    monkeypatch.setattr(transport.time, "sleep", sleeps_near.append)
+
+    session2 = build_otlp_session()
+    try:
+        resp2 = session2.post("https://ingest.example.com/v1/traces", data=b"", timeout=10.0)
+        assert resp2.status_code == 200
+        assert len(sleeps_near) == 1
+        # HTTP-date has 1-second resolution; must NOT be multiplied by 0.5 jitter (~1.0s)
+        assert sleeps_near[0] >= 1.9
+    finally:
+        session2.close()
+
+
+def test_fallback_backoff_without_retry_after_still_applies_client_jitter(monkeypatch):
+    """When server omits Retry-After, client-owned exponential backoff still applies jitter."""
+    from neatlogs.core import transport
+
+    sleeps: list[float] = []
+    script = [_fake_response(429), _fake_response(200)]
+
+    monkeypatch.setattr(requests.Session, "request", lambda self, m, u, **kw: script.pop(0))
+    monkeypatch.setattr(transport.random, "uniform", lambda a, b: a)  # 0.8
+    monkeypatch.setattr(transport.time, "sleep", sleeps.append)
+
+    session = build_otlp_session()
+    try:
+        resp = session.post("https://ingest.example.com/v1/traces", data=b"", timeout=5.0)
+        assert resp.status_code == 200
+        assert len(sleeps) == 1
+        assert sleeps[0] == pytest.approx(0.08)
+    finally:
+        session.close()
+
+
+@pytest.mark.parametrize("retry_after", ["9" * 310, "1e400"])
+def test_overflowing_numeric_retry_after_skips_retry_instead_of_retrying_early(
+    monkeypatch, retry_after
+):
+    """A 429 with an overflowing numeric Retry-After (e.g. 310 nines -> float('inf')) must
+    NOT be treated as absent and retried after ~80ms; it must skip internal retry immediately."""
+    from neatlogs.core import transport
+
+    sleeps: list[float] = []
+    calls: list[int] = []
+
+    def fake_request(self, method, url, **kwargs):
+        calls.append(1)
+        return _fake_response(429, retry_after=retry_after)
+
+    monkeypatch.setattr(requests.Session, "request", fake_request)
+    monkeypatch.setattr(transport.time, "sleep", sleeps.append)
+
+    session = build_otlp_session(circuit_breaker_threshold=1)
+    try:
+        resp = session.post("https://ingest.example.com/v1/traces", data=b"", timeout=15.0)
+        assert resp.status_code == 429
+        assert len(calls) == 1
+        assert sleeps == []
+        assert session.circuit_breaker_state == "open"
+    finally:
+        session.close()

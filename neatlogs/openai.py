@@ -197,10 +197,10 @@ def _patch_completions(completions: Any) -> None:
         capture = prepare_provider_capture(
             span, "openai.chat.completions.create", kwargs, supported=supported
         )
-        saved = provider_replay(
-            "openai.chat.completions.create", kwargs, supported=supported, span=span
-        )
         try:
+            saved = provider_replay(
+                "openai.chat.completions.create", kwargs, supported=supported, span=span
+            )
             response = saved if saved is not None else orig_create(*args, **kwargs)
         except Exception as e:
             span.set_status(StatusCode.ERROR, str(e))
@@ -310,10 +310,10 @@ def _patch_async_completions(completions: Any) -> None:
         capture = prepare_provider_capture(
             span, "openai.chat.completions.create", kwargs, supported=supported
         )
-        saved = provider_replay(
-            "openai.chat.completions.create", kwargs, supported=supported, span=span
-        )
         try:
+            saved = provider_replay(
+                "openai.chat.completions.create", kwargs, supported=supported, span=span
+            )
             response = saved if saved is not None else await orig_create(*args, **kwargs)
         except asyncio.CancelledError:
             span.set_attribute("neatlogs.stream.cancelled", True)
@@ -377,8 +377,10 @@ def _patch_responses(responses: Any) -> None:
         capture = prepare_provider_capture(
             span, "openai.responses.create", kwargs, supported=supported
         )
-        saved = provider_replay("openai.responses.create", kwargs, supported=supported, span=span)
         try:
+            saved = provider_replay(
+                "openai.responses.create", kwargs, supported=supported, span=span
+            )
             response = saved if saved is not None else orig_create(*args, **kwargs)
         except Exception as e:
             span.set_status(StatusCode.ERROR, str(e))
@@ -661,8 +663,10 @@ def _patch_async_responses(responses: Any) -> None:
         capture = prepare_provider_capture(
             span, "openai.responses.create", kwargs, supported=supported
         )
-        saved = provider_replay("openai.responses.create", kwargs, supported=supported, span=span)
         try:
+            saved = provider_replay(
+                "openai.responses.create", kwargs, supported=supported, span=span
+            )
             response = saved if saved is not None else await orig_create(*args, **kwargs)
         except asyncio.CancelledError:
             span.set_attribute("neatlogs.stream.cancelled", True)

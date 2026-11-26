@@ -276,6 +276,8 @@ def init(
     isolate: Optional[bool] = None,
     register_shutdown_handlers: bool = True,
     uploads_enabled: Optional[bool] = None,
+    environment: Optional[str] = None,
+    release: Optional[str] = None,
     _doctor_probe: bool = False,
     _doctor_probe_exporter: Optional[Any] = None,
 ) -> None:
@@ -364,9 +366,12 @@ def init(
     from .replay.environment import configure_replay_from_environment
 
     configure_replay_from_environment()
+    from .core.backtracking import resolve_provenance
+
     uploads_enabled_resolved = resolve_uploads_enabled(
         uploads_enabled, os.getenv("NEATLOGS_UPLOADS_ENABLED")
     )
+    environment_resolved, release_resolved = resolve_provenance(environment, release)
     endpoint = _resolve_init_endpoint(endpoint)
 
     candidate_signature = _configuration_signature(
@@ -391,6 +396,8 @@ def init(
         isolate=isolate,
         register_shutdown_handlers=register_shutdown_handlers,
         uploads_enabled=uploads_enabled_resolved,
+        environment=environment_resolved,
+        release=release_resolved,
         _doctor_probe=_doctor_probe,
         _doctor_probe_exporter=_doctor_probe_exporter,
     )
@@ -617,6 +624,8 @@ def init(
         # A private/isolated pipeline contains only Neatlogs execution spans,
         # even when the caller retains provider shutdown ownership.
         own_all_spans=True,
+        environment=environment_resolved,
+        release=release_resolved,
     )
     provider.add_span_processor(_span_processor)
 

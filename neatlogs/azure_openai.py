@@ -23,6 +23,7 @@ This module is intentionally self-contained (it does NOT import
 ``neatlogs.openai``) so importing it never patches the base ``OpenAI`` client.
 """
 
+import asyncio
 import time
 from typing import Any, List, Optional
 
@@ -292,7 +293,12 @@ def _patch_async_responses(responses: Any) -> None:
         start = time.perf_counter()
         try:
             response = await orig_create(*args, **kwargs)
-        except Exception as e:
+        except asyncio.CancelledError:
+            span.set_attribute("neatlogs.stream.cancelled", True)
+            span.set_status(StatusCode.UNSET)
+            span.end()
+            raise
+        except BaseException as e:
             _err(span, e)
             raise
         if kwargs.get("stream", False):
@@ -382,7 +388,12 @@ def _patch_embeddings(embeddings: Any, sync: bool = True) -> None:
             start = time.perf_counter()
             try:
                 response = await orig(*args, **kwargs)
-            except Exception as e:
+            except asyncio.CancelledError:
+                span.set_attribute("neatlogs.stream.cancelled", True)
+                span.set_status(StatusCode.UNSET)
+                span.end()
+                raise
+            except BaseException as e:
                 _err(span, e)
                 raise
             _finalize(span, response, (time.perf_counter() - start) * 1000)
@@ -627,7 +638,12 @@ def _patch_method(
             start = time.perf_counter()
             try:
                 response = await orig(*args, **kwargs)
-            except Exception as e:
+            except asyncio.CancelledError:
+                span.set_attribute("neatlogs.stream.cancelled", True)
+                span.set_status(StatusCode.UNSET)
+                span.end()
+                raise
+            except BaseException as e:
                 _err(span, e)
                 raise
             try:

@@ -586,7 +586,12 @@ def _patch_method(
             start = time.perf_counter()
             try:
                 response = await orig(*args, **kwargs)
-            except Exception as e:
+            except asyncio.CancelledError:
+                span.set_attribute("neatlogs.stream.cancelled", True)
+                span.set_status(StatusCode.UNSET)
+                span.end()
+                raise
+            except BaseException as e:
                 span.set_status(StatusCode.ERROR, str(e))
                 span.record_exception(e)
                 span.end()

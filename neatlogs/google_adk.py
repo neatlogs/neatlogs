@@ -424,6 +424,10 @@ def _patch_run_async(runner: Any) -> None:
             async for event in run_async(*args, **kwargs):
                 collected.append(event)
                 yield event
+        except GeneratorExit:
+            # The caller stopped consuming early: keep partial telemetry and end
+            # the span OK instead of recording a routine close as an error.
+            raise
         except BaseException as exc:
             failure = exc
             span.set_status(StatusCode.ERROR, str(exc))
